@@ -1,10 +1,15 @@
 """
-Alembic async environment for Vigil.
+Alembic async environment for Nodeglow.
 
 Supports both SQLite (aiosqlite) and PostgreSQL (asyncpg).
 """
 import asyncio
+import os
+import sys
 from logging.config import fileConfig
+
+# Ensure the app root is on the path (needed when running alembic CLI directly)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
