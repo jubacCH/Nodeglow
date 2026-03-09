@@ -34,10 +34,10 @@ DEFAULT_LAYOUT = [
     {"id": "offline",       "x": 0, "y": 15, "w": 6,  "h": 5},
     {"id": "hosts",         "x": 6, "y": 15, "w": 6,  "h": 8},
     # Row 2 – Analytics (6+6)
-    {"id": "heatmap",       "x": 0, "y": 23, "w": 6,  "h": 7},
-    {"id": "uptime",        "x": 6, "y": 23, "w": 6,  "h": 7},
+    {"id": "heatmap",       "x": 0, "y": 23, "w": 6,  "h": 10},
+    {"id": "uptime",        "x": 6, "y": 23, "w": 6,  "h": 10},
     # Row 3 – Top 10 resource tables (full width)
-    {"id": "top10",         "x": 0, "y": 30, "w": 12, "h": 10},
+    {"id": "top10",         "x": 0, "y": 33, "w": 12, "h": 10},
 ]
 
 
