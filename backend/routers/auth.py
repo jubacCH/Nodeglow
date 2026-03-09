@@ -42,7 +42,8 @@ async def login(
     db.add(Session(token=token, user_id=user.id, expires_at=expires))
     await db.commit()
     response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie("vigil_session", token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax")
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie("vigil_session", token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax", secure=is_https)
     return response
 
 

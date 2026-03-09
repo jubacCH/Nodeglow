@@ -37,6 +37,10 @@ def generate_csrf_token(request: Request) -> str:
     return signed
 
 
+def _is_https(request: Request) -> bool:
+    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+
+
 def set_csrf_cookie(request: Request, response):
     """Set CSRF cookie on response if newly generated."""
     if getattr(request.state, "_csrf_new", False):
@@ -45,6 +49,7 @@ def set_csrf_cookie(request: Request, response):
             request.state._csrf_token,
             httponly=False,  # JS needs to read it
             samesite="lax",
+            secure=_is_https(request),
             max_age=86400 * 30,
         )
 

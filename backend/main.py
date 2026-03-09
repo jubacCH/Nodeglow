@@ -44,13 +44,14 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
+_debug = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
 app = FastAPI(
     title="NODEGLOW",
     version="1.0.0",
     description="Network monitoring and incident correlation platform",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
+    docs_url="/api/docs" if _debug else None,
+    redoc_url="/api/redoc" if _debug else None,
+    openapi_url="/api/openapi.json" if _debug else None,
     lifespan=lifespan,
 )
 
@@ -113,7 +114,9 @@ async def inject_globals(request: Request, call_next):
             or request.url.path.startswith("/api/openapi") \
             or request.url.path.startswith("/ws/") \
             or request.url.path.startswith("/install/") or "/download/" in request.url.path:
-        return await call_next(request)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     # CSRF protection for state-changing methods
     from csrf import generate_csrf_token, set_csrf_cookie, validate_csrf, csrf_error_response
@@ -194,6 +197,14 @@ async def inject_globals(request: Request, call_next):
 
     response = await call_next(request)
     set_csrf_cookie(request, response)
+
+    # Security headers
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+
     return response
 
 
