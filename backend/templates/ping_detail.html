@@ -1242,17 +1242,34 @@
   updateEditPort();
 
   const chartRanges = {
-    '2h':  { labels: {{ chart_2h_labels  | tojson }}, data: {{ chart_2h_latency  | tojson }} },
-    '24h': { labels: {{ chart_labels     | tojson }}, data: {{ chart_latency     | tojson }} },
-    '15d': { labels: {{ chart_15d_labels | tojson }}, data: {{ chart_15d_latency | tojson }} },
+    '2h':  { labels: {{ chart_2h_labels  | tojson }}, data: {{ chart_2h_latency  | tojson }}, offline: {{ chart_2h_offline  | tojson }} },
+    '24h': { labels: {{ chart_labels     | tojson }}, data: {{ chart_latency     | tojson }}, offline: {{ chart_offline     | tojson }} },
+    '15d': { labels: {{ chart_15d_labels | tojson }}, data: {{ chart_15d_latency | tojson }}, offline: {{ chart_15d_offline | tojson }} },
   };
+  const latencyThreshold = {{ latency_threshold_ms | tojson }};
+
+  // Build offline background highlight dataset
+  function buildOfflineBg(data, offline) {
+    // Returns array: null where online, max chart value where offline (to fill red bg)
+    if (!offline || !offline.length) return data.map(() => null);
+    const maxVal = Math.max(...data.filter(v => v > 0), 1) * 1.3;
+    return offline.map((off, i) => off ? maxVal : null);
+  }
 
   const latencyChart = new Chart(document.getElementById('latencyChart').getContext('2d'), {
     type: 'line',
-    data: { labels: [], datasets: [{ label: 'Latency (ms)', data: [],
-      borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.06)',
-      borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4, fill: true, tension: 0.3, spanGaps: true,
-    }] },
+    data: { labels: [], datasets: [
+      { label: 'Latency (ms)', data: [],
+        borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.06)',
+        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4, fill: true, tension: 0.3, spanGaps: true,
+        order: 1,
+      },
+      { label: 'Offline', data: [],
+        borderColor: 'transparent', backgroundColor: 'rgba(251,113,133,0.15)',
+        borderWidth: 0, pointRadius: 0, pointHoverRadius: 0, fill: true, tension: 0.3, spanGaps: false,
+        order: 2,
+      },
+    ] },
     options: {
       responsive: true,
       plugins: {
@@ -1260,6 +1277,7 @@
         tooltip: {
           backgroundColor: 'rgba(15,20,35,0.95)', borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1,
           titleColor: '#94a3b8', bodyColor: '#e2e8f0',
+          filter: item => item.datasetIndex === 0,
           callbacks: { label: c => c.parsed.y === 0 ? 'Offline' : `${c.parsed.y} ms` }
         }
       },
@@ -1271,10 +1289,51 @@
     }
   });
 
+  // Threshold line plugin
+  const thresholdPlugin = {
+    id: 'thresholdLine',
+    afterDraw(chart) {
+      if (!latencyThreshold) return;
+      const yScale = chart.scales.y;
+      const yPos = yScale.getPixelForValue(latencyThreshold);
+      if (yPos < yScale.top || yPos > yScale.bottom) return;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.beginPath();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = 'rgba(251,191,36,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(chart.chartArea.left, yPos);
+      ctx.lineTo(chart.chartArea.right, yPos);
+      ctx.stroke();
+      // Label
+      ctx.fillStyle = 'rgba(251,191,36,0.8)';
+      ctx.font = '10px "JetBrains Mono", monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`Threshold ${latencyThreshold}ms`, chart.chartArea.right - 4, yPos - 4);
+      ctx.restore();
+    }
+  };
+  latencyChart.config.plugins = [thresholdPlugin];
+
   function setRange(rng) {
     const r = chartRanges[rng];
+    const latData = r.data.map(v => v === null ? 0 : v);
     latencyChart.data.labels = r.labels;
-    latencyChart.data.datasets[0].data = r.data.map(v => v === null ? 0 : v);
+    latencyChart.data.datasets[0].data = latData;
+    latencyChart.data.datasets[1].data = buildOfflineBg(latData, r.offline);
+    // Color points that exceed threshold as warning
+    if (latencyThreshold) {
+      latencyChart.data.datasets[0].pointBackgroundColor = latData.map(v =>
+        v > latencyThreshold ? '#FBBF24' : 'transparent'
+      );
+      latencyChart.data.datasets[0].pointRadius = latData.map(v =>
+        v > latencyThreshold ? 3 : 0
+      );
+      latencyChart.data.datasets[0].pointBorderColor = latData.map(v =>
+        v > latencyThreshold ? '#FBBF24' : 'transparent'
+      );
+    }
     latencyChart.update();
     document.querySelectorAll('.range-btn').forEach(b => {
       const active = b.id === 'range-btn-' + rng;

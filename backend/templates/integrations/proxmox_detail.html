@@ -1,41 +1,12 @@
 {% extends "base.html" %}
+{% from "macros/cards.html" import integration_header %}
 {% block title %}{{ config.name }} – Proxmox VE{% endblock %}
 
 {% block content %}
 <div class="p-8">
 
-<div class="flex items-center justify-between mb-6">
-    <div class="flex items-center gap-3">
-        <a href="/integration/proxmox" title="Back to Proxmox VE" class="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-white/[0.06] transition-colors">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-            </svg>
-        </a>
-        <img src="https://cdn.simpleicons.org/proxmox/94a3b8" class="w-6 h-6" alt="">
-        <h1 class="ng-heading text-2xl text-[--ng-text-primary]">{{ config.name }}</h1>
-        {% if quorum_ok is defined %}
-        <span class="ml-2 px-2 py-0.5 rounded text-[10px] font-mono {% if quorum_ok %}bg-ng-success/15 text-ng-success{% else %}bg-ng-critical/15 text-ng-critical{% endif %}">
-            {% if quorum_ok %}Quorum OK{% else %}No Quorum{% endif %}
-        </span>
-        {% endif %}
-    </div>
-    <div class="flex gap-2">
-        <form method="post" action="/integration/proxmox/{{ config.id }}/refresh">
-            <button type="submit" class="ng-btn ng-btn-ghost flex items-center gap-1.5">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                </svg>
-                Refresh
-            </button>
-        </form>
-        <button onclick="document.getElementById('editModal').classList.remove('hidden')"
-                class="ng-btn ng-btn-ghost">Edit</button>
-        <form method="post" action="/integration/proxmox/{{ config.id }}/delete"
-              onsubmit="return confirm('Delete this instance?')">
-            <button type="submit" class="bg-ng-critical/10 hover:bg-ng-critical/20 text-ng-critical border border-ng-critical/20 px-3 py-1.5 rounded-lg text-sm transition-colors">Delete</button>
-        </form>
-    </div>
-</div>
+{% set status = "Quorum OK" if quorum_ok is defined and quorum_ok else ("No Quorum" if quorum_ok is defined else "") %}
+{{ integration_header("proxmox", "Proxmox VE", config, icon="proxmox", status_label=status, status_ok=quorum_ok|default(true)) }}
 
 {% if saved == "1" %}
 <div class="bg-ng-success/10 border border-ng-success/20 text-ng-success px-4 py-2 rounded-lg mb-4 text-sm">Saved successfully.</div>

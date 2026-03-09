@@ -55,6 +55,44 @@
 </div>
 {% endmacro %}
 
+{# Integration detail page header — back, icon, title, status, refresh/edit/delete buttons #}
+{% macro integration_header(type_name, display_name, config, icon="", icon_svg="", status_label="", status_ok=true) %}
+<div class="flex items-center justify-between mb-6">
+  <div class="flex items-center gap-3">
+    <a href="/integration/{{ type_name }}" title="Back to {{ display_name }}" class="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-white/[0.06] transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </a>
+    {% if icon_svg %}
+    <span class="w-6 h-6 text-[--ng-text-secondary]">{{ icon_svg | safe }}</span>
+    {% elif icon %}
+    <img src="https://cdn.simpleicons.org/{{ icon }}/94a3b8" class="w-6 h-6" alt="">
+    {% endif %}
+    <h1 class="ng-heading text-2xl text-[--ng-text-primary]">{{ config.name }}</h1>
+    {% if status_label %}
+    <span class="ml-2 px-2 py-0.5 rounded text-[10px] font-mono {% if status_ok %}bg-ng-success/15 text-ng-success{% else %}bg-ng-critical/15 text-ng-critical{% endif %}">
+      {{ status_label }}
+    </span>
+    {% endif %}
+  </div>
+  <div class="flex gap-2">
+    <form method="post" action="/integration/{{ type_name }}/{{ config.id }}/refresh">
+      <button type="submit" class="ng-btn ng-btn-ghost flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Refresh
+      </button>
+    </form>
+    <button onclick="document.getElementById('editModal').classList.remove('hidden')" class="ng-btn ng-btn-ghost">Edit</button>
+    <form method="post" action="/integration/{{ type_name }}/{{ config.id }}/delete" onsubmit="return confirm('Delete this instance?')">
+      <button type="submit" class="bg-ng-critical/10 hover:bg-ng-critical/20 text-ng-critical border border-ng-critical/20 px-3 py-1.5 rounded-lg text-sm transition-colors">Delete</button>
+    </form>
+  </div>
+</div>
+{% endmacro %}
+
 {# Standard delete button #}
 {% macro delete_btn(url, label="Delete", confirm_msg="Are you sure?") %}
 <form method="post" action="{{ url }}" onsubmit="return confirm('{{ confirm_msg }}')" class="inline">

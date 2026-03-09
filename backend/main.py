@@ -61,7 +61,18 @@ async def health():
 # ── Nav counts cache (60s TTL, single GROUP BY query) ────────────────────────
 
 _nav_cache: dict = {"counts": {}, "ts": 0.0}
+_settings_cache: dict = {"site_name": "NODEGLOW", "timezone": "UTC", "ts": 0.0}
 _NAV_CACHE_TTL = 60
+
+
+def invalidate_settings_cache():
+    """Call after saving settings to force refresh on next request."""
+    _settings_cache["ts"] = 0.0
+
+
+def invalidate_nav_cache():
+    """Call after adding/removing integrations to force refresh on next request."""
+    _nav_cache["ts"] = 0.0
 
 _NAV_KEYS = (
     "proxmox", "unifi", "unas", "pihole", "adguard", "portainer",
@@ -134,11 +145,21 @@ async def inject_globals(request: Request, call_next):
         request.state.current_user = None
 
     from templating import current_tz
+    now = time.time()
+    if now - _settings_cache["ts"] < _NAV_CACHE_TTL:
+        request.state.site_name = _settings_cache["site_name"]
+        tz_name = _settings_cache["timezone"]
+    else:
+        async with AsyncSessionLocal() as db:
+            _settings_cache["site_name"] = await get_setting(db, "site_name", "NODEGLOW")
+            _settings_cache["timezone"] = await get_setting(db, "timezone", "UTC")
+            _settings_cache["ts"] = now
+        request.state.site_name = _settings_cache["site_name"]
+        tz_name = _settings_cache["timezone"]
+
     async with AsyncSessionLocal() as db:
-        request.state.site_name = await get_setting(db, "site_name", "NODEGLOW")
         request.state.nav_counts = await _get_nav_counts(db)
-        tz_name = await get_setting(db, "timezone", "UTC")
-        current_tz.set(tz_name)
+    current_tz.set(tz_name)
     return await call_next(request)
 
 

@@ -199,6 +199,8 @@ async def add_instance(
 
     config_dict = _parse_form_config(integration_cls, dict(form))
     await int_svc.create_config(db, integration_type, name, config_dict)
+    from main import invalidate_nav_cache
+    invalidate_nav_cache()
     return RedirectResponse(
         url=f"/integration/{integration_type}?saved=1",
         status_code=303,
@@ -246,6 +248,8 @@ async def delete_instance(
     db: AsyncSession = Depends(get_db),
 ):
     await int_svc.delete_config(db, config_id)
+    from main import invalidate_nav_cache
+    invalidate_nav_cache()
     return RedirectResponse(
         url=f"/integration/{integration_type}?saved=deleted",
         status_code=303,

@@ -190,6 +190,9 @@ async def save_settings(
     if px_job:
         px_job.reschedule(trigger="interval", seconds=px_interval)
 
+    from main import invalidate_settings_cache
+    invalidate_settings_cache()
+
     return RedirectResponse(url="/settings?saved=1", status_code=303)
 
 

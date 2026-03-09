@@ -259,29 +259,33 @@ async def ping_detail(host_id: int, request: Request, db: AsyncSession = Depends
     results_2h = [r for r in results_15d_all if r.timestamp >= window_2h]
 
     def _build_chart(rows, window_start, window_end, fmt="%d.%m %H:%M", max_pts=600):
-        """Downsample rows and pad to full window so axis always spans the range."""
+        """Downsample rows and pad to full window so axis always spans the range.
+        Returns (labels, latency_values, offline_flags)."""
         if rows:
             step = max(1, len(rows) // max_pts)
             sampled = rows[::step]
             labels = [localtime(r.timestamp, fmt) for r in sampled]
             values = [round(r.latency_ms, 2) if r.success and r.latency_ms else 0 for r in sampled]
+            offline = [not r.success for r in sampled]
         else:
-            labels, values = [], []
+            labels, values, offline = [], [], []
         # Prepend window start if not already there
         start_lbl = localtime(window_start, fmt)
         if not labels or labels[0] != start_lbl:
             labels.insert(0, start_lbl)
             values.insert(0, 0)
+            offline.insert(0, False)
         # Append window end (now)
         end_lbl = localtime(window_end, fmt)
         if labels[-1] != end_lbl:
             labels.append(end_lbl)
             values.append(values[-1])
-        return labels, values
+            offline.append(False)
+        return labels, values, offline
 
-    chart_labels,     chart_latency     = _build_chart(results,         window_24h, now)
-    chart_2h_labels,  chart_2h_latency  = _build_chart(results_2h,      window_2h,  now, fmt="%H:%M", max_pts=120)
-    chart_15d_labels, chart_15d_latency = _build_chart(results_15d_all, window_15d, now)
+    chart_labels,     chart_latency,     chart_offline     = _build_chart(results,         window_24h, now)
+    chart_2h_labels,  chart_2h_latency,  chart_2h_offline  = _build_chart(results_2h,      window_2h,  now, fmt="%H:%M", max_pts=120)
+    chart_15d_labels, chart_15d_latency, chart_15d_offline = _build_chart(results_15d_all, window_15d, now)
 
     total = len(results)
     success_c = sum(1 for r in results if r.success)
@@ -573,10 +577,14 @@ async def ping_detail(host_id: int, request: Request, db: AsyncSession = Depends
         "max_latency": max_lat,
         "chart_labels": chart_labels,
         "chart_latency": chart_latency,
+        "chart_offline": chart_offline,
         "chart_2h_labels": chart_2h_labels,
         "chart_2h_latency": chart_2h_latency,
+        "chart_2h_offline": chart_2h_offline,
         "chart_15d_labels": chart_15d_labels,
         "chart_15d_latency": chart_15d_latency,
+        "chart_15d_offline": chart_15d_offline,
+        "latency_threshold_ms": host.latency_threshold_ms,
         "heatmap_30d": heatmap_30d,
         "threshold_alarm": threshold_alarm,
         "proxmox_guest": proxmox_guest,
