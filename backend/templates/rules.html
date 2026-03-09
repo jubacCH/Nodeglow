@@ -288,8 +288,7 @@
 
 {% endblock %}
 
-{% block page_scripts %}
-<div id="page-scripts">
+{% block scripts %}
 <script>
 // Source data from server
 const _sources = {{ sources|tojson }};
@@ -383,5 +382,4 @@ function openEditModal(id, name, sourceType, sourceId, fieldPath, operator, thre
     document.getElementById('editModal').classList.remove('hidden');
 }
 </script>
-</div>
 {% endblock %}
