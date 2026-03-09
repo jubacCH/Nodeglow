@@ -77,7 +77,7 @@ body {
   background: var(--ng-glass-bg);
   border: 1px solid var(--ng-glass-border);
   /* backdrop-filter removed — causes stripe artifacts on some GPUs */
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 18px 22px;
   transition: background 0.2s, border-color 0.2s;
 }
@@ -91,7 +91,7 @@ body {
   background: var(--ng-glass-bg);
   border: 1px solid var(--ng-glass-border);
   /* backdrop-filter removed — causes stripe artifacts on some GPUs */
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 18px 22px;
 }
 
@@ -100,7 +100,7 @@ body {
   border: 1px solid var(--ng-glass-highlight);
   /* backdrop-filter removed — causes stripe artifacts on some GPUs */
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  border-radius: 14px;
+  border-radius: 12px;
 }
 
 /* ── Metric Cards ────────────────────────────────────────────────────────── */
@@ -204,26 +204,6 @@ body {
   border-radius: 0 3px 3px 0;
 }
 
-/* ── Ambient Orbs ────────────────────────────────────────────────────────── */
-
-.ambient-orb {
-  position: fixed;
-  border-radius: 50%;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.ambient-orb-blue {
-  width: 450px; height: 450px;
-  background: radial-gradient(circle, rgba(56, 189, 248, 0.06) 0%, transparent 70%);
-  top: 8%; left: 12%;
-}
-
-.ambient-orb-violet {
-  width: 380px; height: 380px;
-  background: radial-gradient(circle, rgba(167, 139, 250, 0.05) 0%, transparent 70%);
-  bottom: 15%; right: 8%;
-}
 
 /* ── Node Pulse Animations ───────────────────────────────────────────────── */
 

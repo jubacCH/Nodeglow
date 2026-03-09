@@ -14,14 +14,14 @@
   /* Fade in grid items — prevents flash of unstyled vertical strips before GridStack positions them */
   .grid-stack:not(.grid-stack-instance) > .grid-stack-item { animation: gs-fadein 0.3s ease 0.15s both; }
   @keyframes gs-fadein { from { opacity: 0; } to { opacity: 1; } }
-  .grid-stack-item-content { overflow: hidden; overflow-y: auto; border-radius: 8px; }
+  .grid-stack-item-content { overflow: hidden; overflow-y: auto; border-radius: 12px; }
   .grid-stack-item-content::-webkit-scrollbar { width: 4px; }
   .grid-stack-item-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
   .grid-stack-item-content::-webkit-scrollbar-track { background: transparent; }
   /* Edit mode styles */
   .gs-editing .grid-stack-item-content { outline: 1px dashed rgba(99,102,241,0.3); outline-offset: -1px; }
   .gs-editing .grid-stack-item-content:hover { outline-color: rgba(99,102,241,0.6); }
-  .gs-editing .grid-stack-placeholder > .placeholder-content { background: rgba(99,102,241,0.08) !important; border: 2px dashed rgba(99,102,241,0.4) !important; border-radius: 8px; }
+  .gs-editing .grid-stack-placeholder > .placeholder-content { background: rgba(99,102,241,0.08) !important; border: 2px dashed rgba(99,102,241,0.4) !important; border-radius: 12px; }
   .gs-editing .widget-remove-btn { display: flex !important; }
   /* Widget library */
   .widget-library { transition: transform 0.3s ease, opacity 0.3s ease; }
@@ -34,80 +34,66 @@
 
 <div class="p-5">
 
-  <!-- ── HEADER: Metric Cards ─────────────────────────────────────────── -->
-  <div class="flex items-center justify-between mb-5">
-    <div class="flex items-center gap-4">
+  <!-- ── HEADER ───────────────────────────────────────────────────────── -->
+  <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center gap-3">
 
       <!-- Health pill -->
       {% if offline_hosts %}
-      <div class="glass-card-static flex items-center gap-2.5 px-4 py-2.5 !border-ng-critical/30 !bg-ng-critical/[0.06]">
-        <span class="w-2.5 h-2.5 rounded-full bg-ng-critical node-critical shrink-0"></span>
-        <span class="text-ng-critical font-display font-normal text-sm tracking-wider">{{ offline_hosts|length }} OFFLINE</span>
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-ng-critical/25 bg-ng-critical/[0.06]">
+        <span class="w-2 h-2 rounded-full bg-ng-critical node-critical shrink-0"></span>
+        <span class="text-ng-critical text-xs font-mono font-medium tracking-wider">{{ offline_hosts|length }} OFFLINE</span>
       </div>
       {% elif online_count == 0 and total_count > 0 %}
-      <div class="glass-card-static flex items-center gap-2.5 px-4 py-2.5 !border-ng-warning/25 !bg-ng-warning/[0.06]">
-        <span class="w-2.5 h-2.5 rounded-full bg-ng-warning shrink-0" style="animation: pulse-soft 2s ease-in-out infinite"></span>
-        <span class="text-ng-warning font-display font-normal text-sm tracking-wider">PENDING</span>
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-ng-warning/20 bg-ng-warning/[0.06]">
+        <span class="w-2 h-2 rounded-full bg-ng-warning shrink-0" style="animation: pulse-soft 2s ease-in-out infinite"></span>
+        <span class="text-ng-warning text-xs font-mono font-medium tracking-wider">PENDING</span>
       </div>
       {% else %}
-      <div class="glass-card-static flex items-center gap-2.5 px-4 py-2.5 !border-ng-success/25 !bg-ng-success/[0.06]">
-        <span class="w-2.5 h-2.5 rounded-full bg-ng-success shrink-0" style="animation: pulse-soft 2s ease-in-out infinite"></span>
-        <span class="text-ng-success font-display font-normal text-sm tracking-wider">ALL ONLINE</span>
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-ng-success/20 bg-ng-success/[0.06]">
+        <span class="w-2 h-2 rounded-full bg-ng-success shrink-0" style="animation: pulse-soft 2s ease-in-out infinite"></span>
+        <span class="text-ng-success text-xs font-mono font-medium tracking-wider">ALL ONLINE</span>
       </div>
       {% endif %}
 
-      <!-- KPI counters -->
-      <div class="flex items-center divide-x divide-white/[0.06]">
-        <div class="pr-5 text-center">
-          <p class="metric-value text-[--ng-text-primary] !text-2xl">{{ total_count }}</p>
-          <p class="metric-label">Hosts</p>
-        </div>
-        <div class="px-5 text-center">
-          <p class="metric-value text-ng-success !text-2xl">{{ online_count }}</p>
-          <p class="metric-label">Online</p>
-        </div>
+      <!-- KPI counters (inline) -->
+      <div class="flex items-center gap-1 text-[--ng-text-muted] text-xs font-mono">
+        <span class="text-[--ng-text-primary] font-medium">{{ total_count }}</span> Hosts
+        <span class="mx-1 text-white/10">|</span>
+        <span class="text-ng-success font-medium">{{ online_count }}</span> Online
         {% if offline_count > 0 %}
-        <div class="px-5 text-center">
-          <p class="metric-value text-ng-critical !text-2xl">{{ offline_count }}</p>
-          <p class="metric-label">Offline</p>
-        </div>
+        <span class="mx-1 text-white/10">|</span>
+        <span class="text-ng-critical font-medium">{{ offline_count }}</span> Offline
         {% endif %}
         {% if maint_count > 0 %}
-        <div class="px-5 text-center">
-          <p class="metric-value text-ng-warning !text-2xl">{{ maint_count }}</p>
-          <p class="metric-label">Maint.</p>
-        </div>
+        <span class="mx-1 text-white/10">|</span>
+        <span class="text-ng-warning font-medium">{{ maint_count }}</span> Maint.
         {% endif %}
         {% if total_count > 0 %}
-        <div class="pl-5 text-center">
-          {% set pct = ((online_count / total_count) * 100) | round(1) %}
-          <p class="metric-value !text-2xl {% if pct >= 99 %}text-ng-success{% elif pct >= 90 %}text-ng-warning{% else %}text-ng-critical{% endif %}">{{ pct }}%</p>
-          <p class="metric-label">Uptime</p>
-        </div>
+        <span class="mx-1 text-white/10">|</span>
+        {% set pct = ((online_count / total_count) * 100) | round(1) %}
+        <span class="font-medium {% if pct >= 99 %}text-ng-success{% elif pct >= 90 %}text-ng-warning{% else %}text-ng-critical{% endif %}">{{ pct }}%</span>
         {% endif %}
       </div>
     </div>
 
     <!-- Clock + refresh + edit -->
-    <div class="flex items-center gap-5">
+    <div class="flex items-center gap-4">
       <button id="edit-layout-btn" type="button" title="Edit layout"
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.08] text-[--ng-text-secondary] hover:text-ng-primary hover:border-ng-primary/30 hover:bg-ng-primary/[0.06] transition-colors">
+              class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-white/[0.08] text-[--ng-text-secondary] hover:text-ng-primary hover:border-ng-primary/30 hover:bg-ng-primary/[0.06] transition-colors">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/>
         </svg>
         <span class="text-[10px] font-mono tracking-wider">Layout</span>
       </button>
       <div class="text-right">
-        <p id="live-clock" class="text-2xl font-mono font-medium text-[--ng-text-primary] tabular-nums leading-none"></p>
-        <p id="live-date" class="text-xs text-[--ng-text-muted] font-mono mt-0.5 tabular-nums"></p>
+        <p id="live-clock" class="text-lg font-mono font-medium text-[--ng-text-primary] tabular-nums leading-none"></p>
+        <p id="live-date" class="text-[10px] text-[--ng-text-muted] font-mono mt-0.5 tabular-nums"></p>
       </div>
-      <div class="flex flex-col items-end gap-1">
-        <div class="flex items-center gap-2">
-          <span class="metric-label">Refresh</span>
-          <span class="text-[10px] text-[--ng-text-secondary] font-mono tabular-nums" id="refresh-countdown">30s</span>
-        </div>
-        <div class="w-24 h-1 bg-white/[0.06] rounded-full overflow-hidden">
-          <div id="refresh-bar" class="h-full bg-ng-primary rounded-full transition-none glow-primary" style="width:0%"></div>
+      <div class="flex items-center gap-2">
+        <span class="text-[10px] text-[--ng-text-secondary] font-mono tabular-nums" id="refresh-countdown">30s</span>
+        <div class="w-16 h-1 bg-white/[0.06] rounded-full overflow-hidden">
+          <div id="refresh-bar" class="h-full bg-ng-primary rounded-full transition-none" style="width:0%"></div>
         </div>
       </div>
     </div>
@@ -182,15 +168,13 @@
 
   <!-- ── THRESHOLD WARNINGS (persistent resource pressure) ──────────────── -->
   {% if warnings %}
-  <div class="mb-5 glass-card-static !bg-ng-warning/[0.04] !border-ng-warning/15 !p-4">
-    <div class="flex items-center gap-2 mb-3">
-      <svg class="w-4 h-4 text-ng-warning shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <div class="mb-4 flex items-center gap-2 flex-wrap px-3 py-2 rounded-lg border border-ng-warning/15 bg-ng-warning/[0.04]">
+    <div class="flex items-center gap-1.5 shrink-0">
+      <svg class="w-3.5 h-3.5 text-ng-warning shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
       </svg>
-      <span class="text-ng-warning font-display font-normal text-sm tracking-wider">{{ warnings|length }} WARNING{{ 'S' if warnings|length != 1 else '' }}</span>
-      <span class="text-[--ng-text-muted] text-[10px] font-mono ml-1">above threshold</span>
+      <span class="text-ng-warning text-xs font-mono font-medium">{{ warnings|length }} WARNING{{ 'S' if warnings|length != 1 else '' }}</span>
     </div>
-    <div class="flex flex-wrap gap-2">
       {% for w in warnings %}
       {% set w_link = ping_host_map.get(w.name) %}
       {% set w_metric = w.metric | lower %}
@@ -209,7 +193,6 @@
         <span class="text-[--ng-text-muted] text-[10px] font-mono">≥{{ w.threshold }}%</span>
       {% if w_link %}</a>{% else %}</div>{% endif %}
       {% endfor %}
-    </div>
   </div>
   {% endif %}
 
