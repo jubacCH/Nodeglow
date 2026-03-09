@@ -1226,7 +1226,7 @@
   };
   window._slPage = function(p) { _slLoad(p); };
 
-  function switchTab(name) {
+  window.switchTab = function(name) {
     ['info', 'monitoring', 'ports', 'syslog', 'snmp'].forEach(t => {
       const btn = document.getElementById('tab-' + t);
       const panel = document.getElementById('panel-' + t);
@@ -1251,7 +1251,7 @@
 
   switchTab(activeTab);
 
-  function updateEditPort() {
+  window.updateEditPort = function() {
     const checked = [...document.querySelectorAll('input[name="check_types"]:checked')].map(c => c.value);
     const wrap = document.getElementById('edit-port-wrap');
     wrap.style.display = checked.some(c => ['http','https','tcp'].includes(c)) ? '' : 'none';
@@ -1333,7 +1333,7 @@
   };
   latencyChart.config.plugins = [thresholdPlugin];
 
-  function setRange(rng) {
+  window.setRange = function(rng) {
     const r = chartRanges[rng];
     const latData = r.data.map(v => v === null ? 0 : v);
     latencyChart.data.labels = r.labels;

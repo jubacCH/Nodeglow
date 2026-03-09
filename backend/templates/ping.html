@@ -327,7 +327,7 @@
 const _filters = { status: 'all', source: 'all', type: 'all' };
 let _sortCol = null, _sortAsc = true;
 
-function toggleDropdown(id) {
+window.toggleDropdown = function(id) {
   const el = document.getElementById(id);
   // Close all other dropdowns first
   document.querySelectorAll('[id^="filter-"]:not([id$="-wrap"]):not([id$="-btn"]):not([id$="-label"])').forEach(d => {
@@ -346,14 +346,14 @@ document.addEventListener('click', e => {
   });
 });
 
-function setFilter(key, val, label) {
+window.setFilter = function(key, val, label) {
   _filters[key] = val;
   document.getElementById('filter-' + key + '-label').textContent = label;
   document.getElementById('filter-' + key).classList.add('hidden');
   applyFilters();
 }
 
-function resetFilters() {
+window.resetFilters = function() {
   _filters.status = 'all'; _filters.source = 'all'; _filters.type = 'all';
   document.getElementById('filter-status-label').textContent = 'All';
   document.getElementById('filter-source-label').textContent = 'All';
@@ -362,7 +362,7 @@ function resetFilters() {
   applyFilters();
 }
 
-function applyFilters() {
+window.applyFilters = function() {
   const term = (document.getElementById('host-search')?.value || '').trim().toLowerCase();
   let visible = 0;
   document.querySelectorAll('.host-row').forEach(row => {
@@ -392,7 +392,7 @@ function applyFilters() {
 /* ── Sorting ───────────────────────────────────────────────────────────── */
 const _statusOrder = { online: 0, maintenance: 1, nodata: 2, offline: 3, disabled: 4 };
 
-function sortTable(col) {
+window.sortTable = function(col) {
   if (_sortCol === col) {
     _sortAsc = !_sortAsc;
   } else {
@@ -438,7 +438,7 @@ function sortTable(col) {
   if (emptyRow) tbody.appendChild(emptyRow);
 }
 
-function updateAddPort() {
+window.updateAddPort = function() {
   const checked = [...document.querySelectorAll('input[name="check_types"]:checked')].map(c => c.value);
   const portEl = document.getElementById('add-port');
   const needsPort = checked.some(c => ['http', 'https', 'tcp'].includes(c));

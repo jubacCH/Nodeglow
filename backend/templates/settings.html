@@ -990,7 +990,7 @@ window.resetAllAppearance = function() {
   highlightAppearanceOptions();
 })();
 
-async function testNotification(channel) {
+window.testNotification = async function(channel) {
   const result = document.getElementById('test-result');
   result.textContent = 'Sending…';
   result.className = 'text-sm text-slate-400';
@@ -1007,7 +1007,7 @@ async function testNotification(channel) {
   }
 }
 
-async function runPhpIpamSync() {
+window.runPhpIpamSync = async function() {
   const btn  = document.getElementById('phpipam-sync-btn');
   const spin = document.getElementById('phpipam-spin');
   const box  = document.getElementById('phpipam-result');
@@ -1038,13 +1038,13 @@ async function runPhpIpamSync() {
 }
 
 // ── API Key Management ───────────────────────────────────────────────
-function showCreateKeyForm() {
+window.showCreateKeyForm = function() {
   document.getElementById('api-key-form').classList.remove('hidden');
   document.getElementById('api-key-created').classList.add('hidden');
   document.getElementById('ak-name').focus();
 }
 
-async function loadApiKeys() {
+window.loadApiKeys = async function() {
   try {
     const resp = await fetch('/settings/api-keys');
     const keys = await resp.json();
@@ -1081,7 +1081,7 @@ async function loadApiKeys() {
   }
 }
 
-async function createApiKey() {
+window.createApiKey = async function() {
   const name = document.getElementById('ak-name').value.trim();
   const role = document.getElementById('ak-role').value;
   if (!name) return;
@@ -1102,7 +1102,7 @@ async function createApiKey() {
   } catch(e) {}
 }
 
-async function deleteApiKey(id, name) {
+window.deleteApiKey = async function(id, name) {
   if (!confirm(`Delete API key "${name}"?`)) return;
   await fetch(`/settings/api-keys/${id}`, {method: 'DELETE'});
   loadApiKeys();

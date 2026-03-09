@@ -526,7 +526,7 @@
     3:'bg-orange-500/[0.03]', 4:'bg-yellow-500/[0.02]'
   };
 
-  function toggleLive() {
+  window.toggleLive = function() {
     liveActive = !liveActive;
     const btn = document.getElementById('live-toggle');
     const dot = document.getElementById('live-dot');
