@@ -115,6 +115,22 @@ async def inject_globals(request: Request, call_next):
             or request.url.path.startswith("/install/") or "/download/" in request.url.path:
         return await call_next(request)
 
+    # CSRF protection for state-changing methods
+    from csrf import generate_csrf_token, set_csrf_cookie, validate_csrf, csrf_error_response
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        # Skip CSRF for API endpoints that use their own auth (Bearer tokens, API keys)
+        if not request.url.path.startswith("/api/"):
+            content_type = request.headers.get("content-type", "")
+            form_data = None
+            if "form" in content_type:
+                form_data = dict(await request.form())
+            if not validate_csrf(request, form_data):
+                return csrf_error_response(request)
+        else:
+            # For /api/* endpoints: check CSRF header (set by fetch patch in app.js)
+            if not validate_csrf(request):
+                return csrf_error_response(request)
+
     PUBLIC_PATHS = {"/login", "/logout"}
     is_public = request.url.path in PUBLIC_PATHS or request.url.path.startswith("/setup")
 
@@ -172,7 +188,13 @@ async def inject_globals(request: Request, call_next):
     async with AsyncSessionLocal() as db:
         request.state.nav_counts = await _get_nav_counts(db)
     current_tz.set(tz_name)
-    return await call_next(request)
+
+    # Generate CSRF token for templates
+    request.state.csrf_token = generate_csrf_token(request)
+
+    response = await call_next(request)
+    set_csrf_cookie(request, response)
+    return response
 
 
 # ── Global WebSocket ─────────────────────────────────────────────────────────

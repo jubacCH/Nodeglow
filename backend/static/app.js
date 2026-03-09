@@ -3,6 +3,46 @@
  * SPA navigation, toast notifications, Cmd+K search, sidebar toggle
  */
 
+// ── CSRF Protection ─────────────────────────────────────────────────────────
+(function() {
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  }
+
+  // Auto-inject CSRF hidden field into all POST forms
+  function injectCsrfFields() {
+    document.querySelectorAll('form[method="post"], form[method="POST"]').forEach(function(form) {
+      if (!form.querySelector('input[name="csrf_token"]')) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'csrf_token';
+        input.value = getCsrfToken();
+        form.appendChild(input);
+      }
+    });
+  }
+  // Run on load and observe DOM changes (SPA navigation)
+  document.addEventListener('DOMContentLoaded', injectCsrfFields);
+  new MutationObserver(injectCsrfFields).observe(document.body || document.documentElement, {childList: true, subtree: true});
+
+  // Patch fetch to auto-include CSRF header on mutating requests
+  const _origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const method = (opts.method || 'GET').toUpperCase();
+    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+      opts.headers = opts.headers || {};
+      if (opts.headers instanceof Headers) {
+        if (!opts.headers.has('x-csrf-token')) opts.headers.set('x-csrf-token', getCsrfToken());
+      } else {
+        if (!opts.headers['x-csrf-token']) opts.headers['x-csrf-token'] = getCsrfToken();
+      }
+    }
+    return _origFetch.call(this, url, opts);
+  };
+})();
+
 // ── Sidebar & Integrations Toggle ─────────────────────────────────────────
 function toggleIntegrations() {
   document.getElementById('integrations-submenu').classList.toggle('hidden');

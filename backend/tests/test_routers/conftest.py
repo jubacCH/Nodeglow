@@ -90,6 +90,11 @@ async def client():
         from main import app
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            # Seed CSRF token: visit login page to get the cookie, then use it for all requests
+            resp = await ac.get("/login")
+            csrf_token = ac.cookies.get("ng_csrf", "")
+            if csrf_token:
+                ac.headers["x-csrf-token"] = csrf_token
             yield ac
 
     await engine.dispose()

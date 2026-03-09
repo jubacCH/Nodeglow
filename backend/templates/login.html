@@ -79,6 +79,7 @@
       {% endif %}
 
       <form method="post" action="/login" class="space-y-4">
+        {{ csrf_input(request)|safe }}
         <div>
           <label class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Username</label>
           <input type="text" name="username" autofocus required autocomplete="username"

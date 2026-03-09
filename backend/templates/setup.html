@@ -70,6 +70,7 @@
       <p class="text-[--ng-text-muted] text-xs font-mono mb-6">Configure your NODEGLOW instance to get started.</p>
 
       <form method="post" action="/setup/complete" class="space-y-4">
+        {{ csrf_input(request)|safe }}
         <div>
           <label class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Site name</label>
           <input type="text" name="site_name" value="NODEGLOW"
