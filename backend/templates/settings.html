@@ -27,6 +27,7 @@
       ('import',        'Import',          'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12'),
       ('notifications', 'Notifications',  'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9'),
       ('appearance',    'Appearance',     'M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01'),
+      ('api',           'API',            'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4'),
     ] %}
     <button onclick="switchTab('{{ id }}')" id="tab-btn-{{ id }}"
             class="tab-btn flex items-center gap-2 flex-1 justify-center px-3 py-2 rounded-lg text-sm font-medium transition-all">
@@ -515,6 +516,85 @@
     </form>
   </div>
 
+  <!-- ── API Keys Tab ──────────────────────────────────────────────────── -->
+  <div id="tab-api" class="tab-panel hidden space-y-5">
+    <div class="glass-card-static !p-5">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h3 class="text-white font-medium">API Keys</h3>
+          <p class="text-slate-500 text-xs mt-0.5">Manage API keys for external REST API access at <code class="text-slate-400">/api/v1/</code></p>
+        </div>
+        <button onclick="showCreateKeyForm()" class="ng-btn ng-btn-primary text-xs">Create API Key</button>
+      </div>
+
+      <!-- Create form (hidden) -->
+      <div id="api-key-form" class="hidden mb-4 p-4 bg-white/[0.03] rounded-lg border border-[--ng-glass-border]">
+        <div class="grid grid-cols-2 gap-3 mb-3">
+          <input type="text" id="ak-name" placeholder="Key name (e.g. Grafana, Home Assistant)" class="ng-input">
+          <select id="ak-role" class="ng-input">
+            <option value="readonly">Read-only</option>
+            <option value="editor">Editor</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="createApiKey()" class="ng-btn ng-btn-primary text-xs">Create</button>
+          <button onclick="document.getElementById('api-key-form').classList.add('hidden')" class="ng-btn ng-btn-ghost text-xs">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Newly created key (shown once) -->
+      <div id="api-key-created" class="hidden mb-4 p-4 bg-emerald-500/[0.06] border border-emerald-500/20 rounded-lg">
+        <p class="text-emerald-400 text-sm font-medium mb-1">API Key created — copy it now, it won't be shown again!</p>
+        <div class="flex items-center gap-2">
+          <code id="api-key-value" class="flex-1 text-sm text-white bg-black/30 px-3 py-2 rounded font-mono select-all"></code>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('api-key-value').textContent)" class="ng-btn ng-btn-ghost text-xs">Copy</button>
+        </div>
+      </div>
+
+      <!-- Key list -->
+      <div id="api-key-list" class="space-y-2">
+        <p class="text-slate-600 text-sm">Loading...</p>
+      </div>
+    </div>
+
+    <!-- API Documentation -->
+    <div class="glass-card-static !p-5">
+      <h3 class="text-white font-medium mb-3">API Documentation</h3>
+      <p class="text-slate-400 text-sm mb-3">All endpoints require an API key via <code class="text-slate-300">X-API-Key</code> header.</p>
+      <div class="space-y-1 text-xs font-mono">
+        {% for method, path, desc in [
+          ("GET",    "/api/v1/status",                  "System overview"),
+          ("GET",    "/api/v1/hosts",                   "List hosts (filter: status, source, enabled)"),
+          ("GET",    "/api/v1/hosts/{id}",              "Host detail"),
+          ("GET",    "/api/v1/hosts/{id}/history",      "Ping history (query: hours, limit)"),
+          ("POST",   "/api/v1/hosts",                   "Create host"),
+          ("PATCH",  "/api/v1/hosts/{id}",              "Update host"),
+          ("DELETE", "/api/v1/hosts/{id}",              "Delete host"),
+          ("GET",    "/api/v1/agents",                  "List agents"),
+          ("GET",    "/api/v1/agents/{id}",             "Agent detail + metrics"),
+          ("GET",    "/api/v1/integrations",            "List integrations (filter: type)"),
+          ("GET",    "/api/v1/integrations/{id}",       "Integration detail + snapshot"),
+          ("GET",    "/api/v1/incidents",               "List incidents (filter: status)"),
+          ("GET",    "/api/v1/incidents/{id}",          "Incident detail + events"),
+          ("POST",   "/api/v1/incidents/{id}/acknowledge", "Acknowledge incident"),
+          ("POST",   "/api/v1/incidents/{id}/resolve",  "Resolve incident"),
+          ("GET",    "/api/v1/syslog",                  "Query syslog (filter: host_id, severity, search, hours)"),
+          ("GET",    "/api/v1/keys",                    "List API keys (admin)"),
+          ("POST",   "/api/v1/keys",                    "Create API key (admin)"),
+          ("DELETE", "/api/v1/keys/{id}",               "Delete API key (admin)"),
+        ] %}
+        <div class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.03]">
+          <span class="w-14 shrink-0 {% if method == 'GET' %}text-emerald-400{% elif method == 'POST' %}text-blue-400{% elif method == 'PATCH' %}text-yellow-400{% else %}text-red-400{% endif %}">{{ method }}</span>
+          <span class="text-slate-300">{{ path }}</span>
+          <span class="text-slate-600 ml-auto">{{ desc }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <p class="text-slate-500 text-xs mt-3">Roles: <strong>readonly</strong> = GET only, <strong>editor</strong> = GET + POST/PATCH/DELETE, <strong>admin</strong> = all + key management</p>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -536,7 +616,7 @@
   };
 
   const tab = (location.hash.slice(1)) || '{{ request.query_params.get("tab", "system") }}';
-  window.switchTab(['system','monitoring','import','notifications','appearance'].includes(tab) ? tab : 'system');
+  window.switchTab(['system','monitoring','import','notifications','appearance','api'].includes(tab) ? tab : 'system');
 })();
 
 // ── Accent Color Picker ───────────────────────────────────────────────
@@ -610,5 +690,83 @@ async function runPhpIpamSync() {
     spin.classList.add('hidden');
   }
 }
+
+// ── API Key Management ───────────────────────────────────────────────
+function showCreateKeyForm() {
+  document.getElementById('api-key-form').classList.remove('hidden');
+  document.getElementById('api-key-created').classList.add('hidden');
+  document.getElementById('ak-name').focus();
+}
+
+async function loadApiKeys() {
+  try {
+    const resp = await fetch('/settings/api-keys');
+    const keys = await resp.json();
+    const list = document.getElementById('api-key-list');
+    if (!keys.length) {
+      list.innerHTML = '<p class="text-slate-600 text-sm">No API keys created yet.</p>';
+      return;
+    }
+    list.innerHTML = keys.map(k => `
+      <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-white/[0.02] border border-[--ng-glass-border]">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2">
+            <span class="text-white text-sm font-medium">${k.name}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-mono
+              ${k.role === 'admin' ? 'bg-red-500/10 text-red-400' : k.role === 'editor' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'}">${k.role}</span>
+            ${k.enabled ? '' : '<span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-500/10 text-slate-500">disabled</span>'}
+          </div>
+          <div class="text-slate-600 text-[11px] mt-0.5">
+            <code>${k.prefix}...</code> &middot;
+            ${k.last_used ? 'Last used ' + new Date(k.last_used).toLocaleDateString() : 'Never used'} &middot;
+            Created ${new Date(k.created_at).toLocaleDateString()}
+          </div>
+        </div>
+        <button onclick="deleteApiKey(${k.id}, '${k.name}')"
+                class="text-slate-600 hover:text-red-400 transition-colors p-1" title="Delete">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+          </svg>
+        </button>
+      </div>
+    `).join('');
+  } catch(e) {
+    document.getElementById('api-key-list').innerHTML = '<p class="text-red-400 text-sm">Failed to load keys</p>';
+  }
+}
+
+async function createApiKey() {
+  const name = document.getElementById('ak-name').value.trim();
+  const role = document.getElementById('ak-role').value;
+  if (!name) return;
+  try {
+    const resp = await fetch('/settings/api-keys/create', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, role})
+    });
+    const data = await resp.json();
+    if (data.key) {
+      document.getElementById('api-key-form').classList.add('hidden');
+      document.getElementById('api-key-created').classList.remove('hidden');
+      document.getElementById('api-key-value').textContent = data.key;
+      document.getElementById('ak-name').value = '';
+      loadApiKeys();
+    }
+  } catch(e) {}
+}
+
+async function deleteApiKey(id, name) {
+  if (!confirm(`Delete API key "${name}"?`)) return;
+  await fetch(`/settings/api-keys/${id}`, {method: 'DELETE'});
+  loadApiKeys();
+}
+
+// Load keys when API tab is shown
+const _origSwitch = window.switchTab;
+window.switchTab = function(id) {
+  _origSwitch(id);
+  if (id === 'api') loadApiKeys();
+};
 </script>
 {% endblock %}

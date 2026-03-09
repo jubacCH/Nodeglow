@@ -31,6 +31,7 @@ from models.agent import Agent, AgentSnapshot
 from models.scanner import SubnetScanSchedule
 from models.credential import Credential
 from models.snmp import SnmpMib, SnmpOid, SnmpHostConfig, SnmpResult
+from models.api_key import ApiKey
 
 
 async def init_db():
@@ -79,5 +80,6 @@ __all__ = [
     "SubnetScanSchedule",
     "Credential",
     "SnmpMib", "SnmpOid", "SnmpHostConfig", "SnmpResult",
+    "ApiKey",
     "init_db",
 ]

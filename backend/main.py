@@ -19,6 +19,7 @@ from routers import (
     subnet_scanner,
     credentials,
     snmp as snmp_router,
+    api_v1,
 )
 
 
@@ -86,7 +87,8 @@ async def _get_nav_counts(db) -> dict:
 @app.middleware("http")
 async def inject_globals(request: Request, call_next):
     if request.url.path.startswith("/static/") or request.url.path == "/health" \
-            or request.url.path.startswith("/api/agent/") or request.url.path.startswith("/ws/") \
+            or request.url.path.startswith("/api/agent/") or request.url.path.startswith("/api/v1/") \
+            or request.url.path.startswith("/ws/") \
             or request.url.path.startswith("/install/") or "/download/" in request.url.path:
         return await call_next(request)
 
@@ -182,3 +184,4 @@ app.include_router(agents_router.router)
 app.include_router(subnet_scanner.router)
 app.include_router(credentials.router)
 app.include_router(snmp_router.router)
+app.include_router(api_v1.router)
