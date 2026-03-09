@@ -111,7 +111,7 @@
                     <th class="px-3 py-2.5 text-left font-medium w-8">
                         <input type="checkbox" id="selectAll" onchange="_toggleSelectAll()" class="rounded bg-white/[0.03] border-[--ng-glass-border] accent-[--ng-primary]">
                     </th>
-                    <th class="px-3 py-2.5 text-left font-medium">IP Address</th>
+                    <th class="px-3 py-2.5 text-left font-medium">IP / Hostname</th>
                     <th class="px-3 py-2.5 text-left font-medium">Status</th>
                     <th class="px-3 py-2.5 text-right font-medium">Latency</th>
                     <th class="px-3 py-2.5 text-left font-medium">Monitoring</th>
@@ -222,7 +222,8 @@
       else if (!r.alive && r.monitored) { bg = 'bg-ng-critical/40 hover:bg-ng-critical/60'; }
       else { bg = 'bg-white/[0.04] hover:bg-white/[0.08]'; }
       if (_selected.has(r.ip)) ring = 'ring-2 ring-ng-primary ring-offset-1 ring-offset-[--ng-bg]';
-      const title = `${r.ip}${r.host_name ? ' (' + r.host_name + ')' : ''} – ${r.alive ? r.latency_ms + 'ms' : 'offline'}${r.monitored ? ' [monitored]' : ''}`;
+      const label = r.dns_name || r.host_name || '';
+      const title = `${r.ip}${label ? ' (' + label + ')' : ''} – ${r.alive ? r.latency_ms + 'ms' : 'offline'}${r.monitored ? ' [monitored]' : ''}`;
       return `<div class="ip-cell ${bg} ${ring}" title="${title}" onclick="_scrollToIp('${r.ip}')">
         <span class="ip-cell-label">${lastOctet}</span>
       </div>`;
@@ -238,10 +239,14 @@
       const checked = _selected.has(r.ip) ? 'checked' : '';
       const showCb = !r.monitored && r.alive;
       const lastOctet = r.ip.split('.').pop();
+      const dnsShort = r.dns_name ? r.dns_name.split('.')[0] : '';
       return `<tr class="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors" id="row-${r.ip.replace(/\./g,'-')}">
         <td class="px-3 py-2">${showCb ? `<input type="checkbox" ${checked} onchange="_toggleSelect('${r.ip}')" class="rounded bg-white/[0.03] border-[--ng-glass-border] accent-[--ng-primary]">` : ''}</td>
-        <td class="px-3 py-2 font-mono text-xs">
-          <span class="text-[--ng-text-muted]">${r.ip.substring(0, r.ip.lastIndexOf('.') + 1)}</span><span class="text-[--ng-text-primary] font-semibold">${lastOctet}</span>
+        <td class="px-3 py-2">
+          <div class="font-mono text-xs">
+            <span class="text-[--ng-text-muted]">${r.ip.substring(0, r.ip.lastIndexOf('.') + 1)}</span><span class="text-[--ng-text-primary] font-semibold">${lastOctet}</span>
+          </div>
+          ${dnsShort ? `<div class="text-[11px] text-[--ng-text-secondary] mt-0.5">${dnsShort}</div>` : ''}
         </td>
         <td class="px-3 py-2">
           <span class="inline-flex items-center gap-1.5">
@@ -302,17 +307,20 @@
 
   window._addSelected = async function() {
     if (_selected.size === 0) return;
-    const ips = Array.from(_selected);
+    const hosts = Array.from(_selected).map(ip => {
+      const r = _results.find(x => x.ip === ip);
+      return {ip, dns_name: r ? r.dns_name || '' : ''};
+    });
     try {
       const resp = await fetch('/api/subnet-scanner/add-hosts', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ips})
+        body: JSON.stringify({hosts})
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'Failed');
-      ips.forEach(ip => {
-        const r = _results.find(x => x.ip === ip);
+      hosts.forEach(h => {
+        const r = _results.find(x => x.ip === h.ip);
         if (r) { r.monitored = true; r.source = 'scanner'; }
       });
       _selected.clear();

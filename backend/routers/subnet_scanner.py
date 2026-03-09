@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import socket
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
@@ -23,10 +24,33 @@ MAX_SUBNET_SIZE = 1024  # /22 max to prevent accidental /8 scans
 CONCURRENT_PINGS = 100
 
 
+async def _reverse_dns(ip: str) -> str | None:
+    """Reverse DNS lookup, returns hostname or None."""
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, socket.gethostbyaddr, ip),
+            timeout=2,
+        )
+        hostname = result[0]
+        # Ignore if it just returns the IP back
+        if hostname and hostname != ip:
+            return hostname
+    except (socket.herror, socket.gaierror, OSError, asyncio.TimeoutError):
+        pass
+    return None
+
+
 async def _ping_one(sem: asyncio.Semaphore, ip: str) -> dict:
     async with sem:
         ok, latency = await ping_host(ip, timeout=1)
-        return {"ip": ip, "alive": ok, "latency_ms": round(latency, 1) if latency else None}
+        dns_name = await _reverse_dns(ip) if ok else None
+        return {
+            "ip": ip,
+            "alive": ok,
+            "latency_ms": round(latency, 1) if latency else None,
+            "dns_name": dns_name,
+        }
 
 
 async def scan_subnet(cidr: str) -> list[dict]:
@@ -71,10 +95,10 @@ async def api_scan_subnet(request: Request, db: AsyncSession = Depends(get_db)):
             status_code=400,
         )
 
-    # Get all monitored hosts for cross-reference
+    # Get all monitored hosts for cross-reference (by IP and by hostname)
     q = await db.execute(select(PingHost))
     all_hosts = q.scalars().all()
-    monitored_by_ip: dict[str, PingHost] = {}
+    monitored_by_key: dict[str, PingHost] = {}
     for h in all_hosts:
         hostname = (h.hostname or "").strip()
         # Strip protocol/port for matching
@@ -83,15 +107,26 @@ async def api_scan_subnet(request: Request, db: AsyncSession = Depends(get_db)):
                 hostname = hostname[len(prefix):]
         hostname = hostname.split("/")[0].split(":")[0]
         if hostname:
-            monitored_by_ip[hostname] = h
+            monitored_by_key[hostname.lower()] = h
+        # Also index by display name for hostname matching
+        name = (h.name or "").strip()
+        if name:
+            monitored_by_key[name.lower()] = h
 
     # Scan
     scan_results = await scan_subnet(cidr)
 
-    # Enrich with monitoring info
+    # Enrich with monitoring info – match by IP first, then by DNS name
     results = []
     for r in scan_results:
-        host = monitored_by_ip.get(r["ip"])
+        host = monitored_by_key.get(r["ip"])
+        if not host and r.get("dns_name"):
+            # Try matching by full DNS name, then short hostname
+            dns = r["dns_name"]
+            host = monitored_by_key.get(dns.lower())
+            if not host:
+                short = dns.split(".")[0]
+                host = monitored_by_key.get(short.lower())
         results.append({
             **r,
             "monitored": host is not None,
@@ -120,18 +155,24 @@ async def api_scan_subnet(request: Request, db: AsyncSession = Depends(get_db)):
 async def api_add_hosts(request: Request, db: AsyncSession = Depends(get_db)):
     """Add discovered IPs as monitored hosts."""
     body = await request.json()
-    ips = body.get("ips", [])
+    hosts_to_add = body.get("hosts", [])  # [{ip, dns_name}, ...]
 
-    if not ips or not isinstance(ips, list):
-        return JSONResponse({"error": "No IPs provided"}, status_code=400)
+    # Backward compat: also accept flat "ips" list
+    if not hosts_to_add:
+        ips = body.get("ips", [])
+        hosts_to_add = [{"ip": ip} for ip in ips] if ips else []
+
+    if not hosts_to_add or not isinstance(hosts_to_add, list):
+        return JSONResponse({"error": "No hosts provided"}, status_code=400)
 
     # Check which already exist
     q = await db.execute(select(PingHost))
     existing = {(h.hostname or "").strip() for h in q.scalars().all()}
 
     added = 0
-    for ip in ips:
-        ip = ip.strip()
+    for entry in hosts_to_add:
+        ip = (entry.get("ip") or "").strip() if isinstance(entry, dict) else str(entry).strip()
+        dns_name = (entry.get("dns_name") or "").strip() if isinstance(entry, dict) else ""
         if not ip or ip in existing:
             continue
         try:
@@ -139,13 +180,16 @@ async def api_add_hosts(request: Request, db: AsyncSession = Depends(get_db)):
         except ValueError:
             continue
 
+        # Use short hostname as display name if available
+        display_name = dns_name.split(".")[0] if dns_name else ip
+
         host = PingHost(
-            name=ip,
+            name=display_name,
             hostname=ip,
             check_type="icmp",
             enabled=True,
             source="scanner",
-            source_detail="Subnet Scanner",
+            source_detail=f"Subnet Scanner ({dns_name})" if dns_name else "Subnet Scanner",
         )
         db.add(host)
         existing.add(ip)
