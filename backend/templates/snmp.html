@@ -24,6 +24,10 @@
     <button onclick="_switchTab('oids')" id="tab-oids" class="snmp-tab px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
         OID Browser <span class="text-[10px] text-[--ng-text-muted] ml-1">({{ oid_count }})</span>
     </button>
+    <button onclick="_switchTab('library')" id="tab-library" class="snmp-tab px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
+        MIB Library
+        <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-indigo-500/15 text-indigo-400">Online</span>
+    </button>
 </div>
 
 <!-- ═══ Hosts Tab ═══ -->
@@ -178,13 +182,43 @@
     </div>
 </div>
 
+<!-- ═══ MIB Library Tab ═══ -->
+<div id="panel-library" class="hidden">
+    <div class="glass-card p-5 mb-6">
+        <h2 class="text-sm font-medium text-[--ng-text-secondary] mb-1">Online MIB Database</h2>
+        <p class="text-xs text-[--ng-text-muted] mb-4">Search thousands of vendor MIBs and import them with one click. Powered by Observium MIB database.</p>
+        <div class="flex gap-3">
+            <input type="text" id="libSearch" class="ng-input text-sm flex-1" placeholder="Search MIBs (e.g. SYNOLOGY, UBNT, CISCO, HOST-RESOURCES, IF-MIB...)" onkeydown="if(event.key==='Enter')_searchLibrary()">
+            <button onclick="_searchLibrary()" class="ng-btn ng-btn-primary text-sm" id="libSearchBtn">Search</button>
+        </div>
+    </div>
+
+    <div id="libResults" class="space-y-2"></div>
+    <div id="libEmpty" class="glass-card p-8 text-center">
+        <svg class="w-10 h-10 mx-auto mb-3 text-[--ng-text-muted] opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <p class="text-[--ng-text-muted] text-sm">Search for vendor MIBs to get started.</p>
+        <div class="flex flex-wrap justify-center gap-2 mt-3">
+            <button onclick="document.getElementById('libSearch').value='SYNOLOGY';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">Synology</button>
+            <button onclick="document.getElementById('libSearch').value='UBNT';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">Ubiquiti</button>
+            <button onclick="document.getElementById('libSearch').value='CISCO';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">Cisco</button>
+            <button onclick="document.getElementById('libSearch').value='PROXMOX';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">Proxmox</button>
+            <button onclick="document.getElementById('libSearch').value='NET-SNMP';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">Net-SNMP</button>
+            <button onclick="document.getElementById('libSearch').value='MIKROTIK';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">MikroTik</button>
+            <button onclick="document.getElementById('libSearch').value='FORTINET';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">Fortinet</button>
+            <button onclick="document.getElementById('libSearch').value='HP';_searchLibrary()" class="text-xs px-2 py-1 rounded bg-white/[0.04] text-[--ng-text-secondary] hover:bg-white/[0.08] transition-colors">HP</button>
+        </div>
+    </div>
+</div>
+
 <script>
 (function() {
   // Tab switching
   window._switchTab = function(tab) {
     document.querySelectorAll('.snmp-tab').forEach(t => t.classList.remove('active'));
     document.getElementById('tab-' + tab).classList.add('active');
-    ['hosts', 'mibs', 'oids'].forEach(p => {
+    ['hosts', 'mibs', 'oids', 'library'].forEach(p => {
       document.getElementById('panel-' + p).classList.toggle('hidden', p !== tab);
     });
   };
@@ -306,6 +340,87 @@
         </tr>
       `).join('');
     }, 300);
+  };
+
+  // ── MIB Library ──
+  // Track which MIBs are already imported (by name)
+  const _importedMibs = new Set([{% for m in mibs %}'{{ m.name }}',{% endfor %}]);
+
+  window._searchLibrary = async function() {
+    const q = document.getElementById('libSearch').value.trim();
+    if (q.length < 2) return;
+
+    const btn = document.getElementById('libSearchBtn');
+    const results = document.getElementById('libResults');
+    const empty = document.getElementById('libEmpty');
+    btn.textContent = 'Searching...';
+    btn.disabled = true;
+
+    try {
+      const resp = await fetch('/api/snmp/mibs/library/search?q=' + encodeURIComponent(q));
+      const data = await resp.json();
+
+      if (!data.results || data.results.length === 0) {
+        results.innerHTML = '';
+        empty.innerHTML = '<p class="text-[--ng-text-muted] text-sm py-4">No MIBs found for "' + q + '"</p>';
+        empty.classList.remove('hidden');
+        return;
+      }
+
+      empty.classList.add('hidden');
+      results.innerHTML = data.results.map(m => {
+        const imported = _importedMibs.has(m.name);
+        return `
+        <div class="glass-card p-4 flex items-center justify-between" id="lib-${m.name}">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-0.5">
+              <span class="text-[--ng-text-primary] font-medium font-mono">${m.name}</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-[--ng-text-muted]">${m.vendor || 'unknown'}</span>
+              <span class="text-[10px] text-[--ng-text-muted]">${m.oid_count} OIDs</span>
+              ${imported ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">Imported</span>' : ''}
+            </div>
+            <p class="text-xs text-[--ng-text-muted] truncate">${m.description || ''}</p>
+          </div>
+          <button onclick="_importMib('${m.name}', '${m.vendor || ''}', this)"
+                  class="ng-btn ${imported ? 'ng-btn-ghost text-emerald-400' : 'ng-btn-primary'} text-xs ml-4 shrink-0"
+                  ${imported ? 'disabled' : ''}>
+            ${imported ? 'Imported' : 'Import'}
+          </button>
+        </div>`;
+      }).join('');
+    } catch(e) {
+      results.innerHTML = '<div class="glass-card p-4 text-center text-ng-critical text-sm">Search failed: ' + e.message + '</div>';
+    } finally {
+      btn.textContent = 'Search';
+      btn.disabled = false;
+    }
+  };
+
+  window._importMib = async function(name, vendor, btn) {
+    btn.textContent = 'Importing...';
+    btn.disabled = true;
+
+    try {
+      const resp = await fetch('/api/snmp/mibs/library/import', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, vendor})
+      });
+      const data = await resp.json();
+
+      if (resp.ok && data.ok) {
+        btn.textContent = `Imported (${data.oids_added} OIDs)`;
+        btn.className = 'ng-btn ng-btn-ghost text-emerald-400 text-xs ml-4 shrink-0';
+        _importedMibs.add(name);
+      } else {
+        btn.textContent = data.error || 'Failed';
+        btn.className = 'ng-btn ng-btn-ghost text-ng-critical text-xs ml-4 shrink-0';
+        setTimeout(() => { btn.textContent = 'Retry'; btn.disabled = false; btn.className = 'ng-btn ng-btn-primary text-xs ml-4 shrink-0'; }, 3000);
+      }
+    } catch(e) {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.textContent = 'Retry'; btn.disabled = false; btn.className = 'ng-btn ng-btn-primary text-xs ml-4 shrink-0'; }, 3000);
+    }
   };
 })();
 </script>

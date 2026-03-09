@@ -16,6 +16,7 @@ from models.ping import PingHost
 from models.snmp import SnmpHostConfig, SnmpMib, SnmpOid, SnmpResult
 from services.snmp import (
     DEFAULT_OIDS, OID_PRESETS, import_mib, poll_host, seed_default_oids,
+    search_mib_library, download_mib_from_library,
 )
 
 router = APIRouter()
@@ -105,6 +106,53 @@ async def api_seed_defaults(db: AsyncSession = Depends(get_db)):
     """Seed default OID definitions."""
     added = await seed_default_oids(db)
     return JSONResponse({"added": added})
+
+
+# ── MIB Library (online) ───────────────────────────────────────────────────
+
+
+@router.get("/api/snmp/mibs/library/search")
+async def api_search_mib_library(q: str = ""):
+    """Search the online MIB library."""
+    if len(q) < 2:
+        return JSONResponse({"results": [], "query": q})
+    results = await search_mib_library(q)
+    return JSONResponse({"results": results, "query": q})
+
+
+@router.post("/api/snmp/mibs/library/import")
+async def api_import_from_library(request: Request,
+                                  db: AsyncSession = Depends(get_db)):
+    """Download a MIB from the online library and import it."""
+    body = await request.json()
+    mib_name = body.get("name", "").strip()
+    vendor = body.get("vendor", "").strip()
+
+    if not mib_name:
+        return JSONResponse({"error": "MIB name required"}, status_code=400)
+
+    # Check if already imported
+    existing = await db.execute(
+        select(SnmpMib).where(SnmpMib.name == mib_name)
+    )
+    if existing.scalar_one_or_none():
+        return JSONResponse({"error": f"{mib_name} is already imported"}, status_code=409)
+
+    # Download
+    mib_text = await download_mib_from_library(mib_name, vendor)
+    if not mib_text:
+        return JSONResponse(
+            {"error": f"Could not download {mib_name}. Try uploading manually."},
+            status_code=404,
+        )
+
+    # Parse & import
+    module_name, oid_count = await import_mib(db, f"{mib_name}.mib", mib_text)
+    return JSONResponse({
+        "ok": True,
+        "module": module_name,
+        "oids_added": oid_count,
+    })
 
 
 @router.get("/api/snmp/oids")
