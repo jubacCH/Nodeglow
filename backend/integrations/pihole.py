@@ -50,33 +50,30 @@ class PiholeAPI:
                                 top_blocked = [{"domain": d.get("domain", ""), "count": d.get("count", 0)}
                                                for d in domains[:10]]
 
-                            # Fetch local DNS records (v6)
+                            # Fetch local DNS records (v6: /api/config/dns/hosts)
                             local_dns = []
                             try:
                                 dns_resp = await client.get(
-                                    f"{self.base}/api/dns/records", headers=headers,
-                                    params={"type": "A"})
+                                    f"{self.base}/api/config/dns/hosts", headers=headers)
                                 if dns_resp.status_code == 200:
-                                    for r in dns_resp.json().get("records", []):
-                                        local_dns.append({
-                                            "domain": r.get("domain", ""),
-                                            "ip": r.get("ip", r.get("answer", "")),
-                                        })
+                                    entries = dns_resp.json().get("config", {}).get("dns", {}).get("hosts", [])
+                                    for entry in entries:
+                                        parts = entry.split(None, 1)
+                                        if len(parts) == 2:
+                                            local_dns.append({"domain": parts[1], "ip": parts[0]})
                             except Exception:
                                 pass
 
                             # Fetch local CNAME records (v6)
                             try:
                                 cname_resp = await client.get(
-                                    f"{self.base}/api/dns/records", headers=headers,
-                                    params={"type": "CNAME"})
+                                    f"{self.base}/api/config/dns/cnameRecords", headers=headers)
                                 if cname_resp.status_code == 200:
-                                    for r in cname_resp.json().get("records", []):
-                                        local_dns.append({
-                                            "domain": r.get("domain", ""),
-                                            "ip": r.get("answer", ""),
-                                            "type": "CNAME",
-                                        })
+                                    cnames = cname_resp.json().get("config", {}).get("dns", {}).get("cnameRecords", [])
+                                    for entry in cnames:
+                                        if isinstance(entry, str) and "," in entry:
+                                            domain, target = entry.split(",", 1)
+                                            local_dns.append({"domain": domain, "ip": target, "type": "CNAME"})
                             except Exception:
                                 pass
 
