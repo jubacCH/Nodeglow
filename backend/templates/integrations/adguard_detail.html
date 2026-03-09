@@ -61,10 +61,10 @@
     <div class="glass-card p-4">
         <h2 class="metric-label !text-[10px] mb-3">Top Queries</h2>
         <div class="space-y-1.5">
-            {% for domain, count in (data.get('top_queries', {}).items() if data.get('top_queries') is mapping else []) %}
+            {% for item in data.get('top_queries', []) %}
             <div class="flex justify-between gap-4">
-                <span class="text-[--ng-text-primary] text-xs font-mono truncate">{{ domain }}</span>
-                <span class="text-[--ng-text-muted] text-xs font-mono shrink-0">{{ "{:,}".format(count) }}</span>
+                <span class="text-[--ng-text-primary] text-xs font-mono truncate">{{ item.domain }}</span>
+                <span class="text-[--ng-text-muted] text-xs font-mono shrink-0">{{ "{:,}".format(item.count|int) }}</span>
             </div>
             {% endfor %}
         </div>
@@ -74,10 +74,10 @@
     <div class="glass-card p-4">
         <h2 class="metric-label !text-[10px] mb-3">Top Blocked</h2>
         <div class="space-y-1.5">
-            {% for domain, count in (data.get('top_blocked', {}).items() if data.get('top_blocked') is mapping else []) %}
+            {% for item in data.get('top_blocked', []) %}
             <div class="flex justify-between gap-4">
-                <span class="text-ng-critical text-xs font-mono truncate">{{ domain }}</span>
-                <span class="text-[--ng-text-muted] text-xs font-mono shrink-0">{{ "{:,}".format(count) }}</span>
+                <span class="text-ng-critical text-xs font-mono truncate">{{ item.domain }}</span>
+                <span class="text-[--ng-text-muted] text-xs font-mono shrink-0">{{ "{:,}".format(item.count|int) }}</span>
             </div>
             {% endfor %}
         </div>

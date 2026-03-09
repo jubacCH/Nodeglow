@@ -50,12 +50,42 @@ class PiholeAPI:
                                 top_blocked = [{"domain": d.get("domain", ""), "count": d.get("count", 0)}
                                                for d in domains[:10]]
 
+                            # Fetch local DNS records (v6)
+                            local_dns = []
+                            try:
+                                dns_resp = await client.get(
+                                    f"{self.base}/api/dns/records", headers=headers,
+                                    params={"type": "A"})
+                                if dns_resp.status_code == 200:
+                                    for r in dns_resp.json().get("records", []):
+                                        local_dns.append({
+                                            "domain": r.get("domain", ""),
+                                            "ip": r.get("ip", r.get("answer", "")),
+                                        })
+                            except Exception:
+                                pass
+
+                            # Fetch local CNAME records (v6)
+                            try:
+                                cname_resp = await client.get(
+                                    f"{self.base}/api/dns/records", headers=headers,
+                                    params={"type": "CNAME"})
+                                if cname_resp.status_code == 200:
+                                    for r in cname_resp.json().get("records", []):
+                                        local_dns.append({
+                                            "domain": r.get("domain", ""),
+                                            "ip": r.get("answer", ""),
+                                            "type": "CNAME",
+                                        })
+                            except Exception:
+                                pass
+
                             try:
                                 await client.delete(f"{self.base}/api/auth", headers=headers)
                             except Exception:
                                 pass
 
-                            return parse_pihole_v6_data(raw, top_queries, top_blocked)
+                            return parse_pihole_v6_data(raw, top_queries, top_blocked, local_dns)
                 except Exception:
                     pass
 
@@ -90,7 +120,32 @@ class PiholeAPI:
             except Exception:
                 pass
 
-            return parse_pihole_data(raw, top_queries, top_blocked)
+            # Fetch local DNS records (v5)
+            local_dns = []
+            if self.api_key:
+                try:
+                    dns_params = {"customdns": "", "action": "get", "auth": self.api_key}
+                    dns_resp = await client.get(f"{self.base}/admin/api.php", params=dns_params)
+                    if dns_resp.status_code == 200:
+                        dns_data = dns_resp.json()
+                        for entry in dns_data.get("data", []):
+                            if isinstance(entry, list) and len(entry) >= 2:
+                                local_dns.append({"domain": entry[0], "ip": entry[1]})
+                except Exception:
+                    pass
+                # Also try CNAME records
+                try:
+                    cname_params = {"customcname": "", "action": "get", "auth": self.api_key}
+                    cname_resp = await client.get(f"{self.base}/admin/api.php", params=cname_params)
+                    if cname_resp.status_code == 200:
+                        cname_data = cname_resp.json()
+                        for entry in cname_data.get("data", []):
+                            if isinstance(entry, list) and len(entry) >= 2:
+                                local_dns.append({"domain": entry[0], "ip": entry[1], "type": "CNAME"})
+                except Exception:
+                    pass
+
+            return parse_pihole_data(raw, top_queries, top_blocked, local_dns)
 
     async def health_check(self) -> bool:
         try:
@@ -103,7 +158,7 @@ class PiholeAPI:
 # ── Parsers ───────────────────────────────────────────────────────────────────
 
 
-def parse_pihole_data(raw: dict, top_queries: list, top_blocked: list) -> dict:
+def parse_pihole_data(raw: dict, top_queries: list, top_blocked: list, local_dns: list | None = None) -> dict:
     queries_today = int(raw.get("dns_queries_today", 0))
     blocked_today = int(raw.get("ads_blocked_today", 0))
     blocked_pct = float(raw.get("ads_percentage_today", 0.0))
@@ -141,10 +196,11 @@ def parse_pihole_data(raw: dict, top_queries: list, top_blocked: list) -> dict:
         "reply_types": reply_types, "top_queries": top_queries,
         "top_blocked": top_blocked, "clients": clients,
         "gravity_last_updated": gravity_str, "api_version": 5,
+        "local_dns": local_dns or [],
     }
 
 
-def parse_pihole_v6_data(raw: dict, top_queries: list, top_blocked: list) -> dict:
+def parse_pihole_v6_data(raw: dict, top_queries: list, top_blocked: list, local_dns: list | None = None) -> dict:
     queries = raw.get("queries", {})
     gravity = raw.get("gravity", {})
     clients = raw.get("clients", {})
@@ -164,6 +220,7 @@ def parse_pihole_v6_data(raw: dict, top_queries: list, top_blocked: list) -> dic
         "reply_types": {}, "top_queries": top_queries,
         "top_blocked": top_blocked, "clients": unique_clients,
         "gravity_last_updated": "", "api_version": 6,
+        "local_dns": local_dns or [],
     }
 
 
