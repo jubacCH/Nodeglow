@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+{% block title %}SNMP Monitoring{% endblock %}
+
+{% block content %}
+<div class="p-8">
+
+<div class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-3">
+        <svg class="w-6 h-6 text-ng-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+        </svg>
+        <h1 class="ng-heading text-2xl text-[--ng-text-primary]">SNMP Monitoring</h1>
+    </div>
+</div>
+
+<!-- Tabs -->
+<div class="flex gap-1 mb-6 border-b border-white/[0.08]">
+    <button onclick="_switchTab('hosts')" id="tab-hosts" class="snmp-tab px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px active">
+        Hosts <span class="text-[10px] text-[--ng-text-muted] ml-1">({{ host_configs | length }})</span>
+    </button>
+    <button onclick="_switchTab('mibs')" id="tab-mibs" class="snmp-tab px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
+        MIBs <span class="text-[10px] text-[--ng-text-muted] ml-1">({{ mibs | length }})</span>
+    </button>
+    <button onclick="_switchTab('oids')" id="tab-oids" class="snmp-tab px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
+        OID Browser <span class="text-[10px] text-[--ng-text-muted] ml-1">({{ oid_count }})</span>
+    </button>
+</div>
+
+<!-- ═══ Hosts Tab ═══ -->
+<div id="panel-hosts">
+    <!-- Add Host Form -->
+    <div class="glass-card p-5 mb-6">
+        <h2 class="text-sm font-medium text-[--ng-text-secondary] mb-3">Add SNMP Host</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 mb-3">
+            <select id="snmpHostId" class="ng-input text-sm">
+                <option value="">Select host...</option>
+                {% for h in available_hosts %}
+                <option value="{{ h.id }}">{{ h.name }} ({{ h.hostname }})</option>
+                {% endfor %}
+            </select>
+            <select id="snmpCredId" class="ng-input text-sm">
+                <option value="">No credential (public)</option>
+                {% for c in credentials %}
+                <option value="{{ c.id }}">{{ c.name }} ({{ c.type }})</option>
+                {% endfor %}
+            </select>
+            <input type="number" id="snmpPort" class="ng-input text-sm" placeholder="Port" value="161">
+            <select id="snmpPreset" class="ng-input text-sm">
+                {% for p in oid_presets %}
+                <option value="{{ p }}" {{ 'selected' if p == 'full' }}>{{ p }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="_addSnmpHost()" class="ng-btn ng-btn-primary text-sm">Add</button>
+        </div>
+    </div>
+
+    <!-- Host List -->
+    {% if host_configs %}
+    <div class="glass-card overflow-hidden">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-white/[0.06] text-[--ng-text-muted] text-[10px] uppercase tracking-wider">
+                    <th class="px-3 py-2.5 text-left font-medium">Host</th>
+                    <th class="px-3 py-2.5 text-left font-medium">IP</th>
+                    <th class="px-3 py-2.5 text-left font-medium">Port</th>
+                    <th class="px-3 py-2.5 text-left font-medium">Interval</th>
+                    <th class="px-3 py-2.5 text-left font-medium">Last Poll</th>
+                    <th class="px-3 py-2.5 text-left font-medium">Status</th>
+                    <th class="px-3 py-2.5 text-right font-medium">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for hc in host_configs %}
+                <tr class="border-b border-white/[0.03] hover:bg-white/[0.02]" id="snmp-host-{{ hc.config.id }}">
+                    <td class="px-3 py-2 text-[--ng-text-primary] font-medium">{{ hc.host_name }}</td>
+                    <td class="px-3 py-2 font-mono text-xs text-[--ng-text-secondary]">{{ hc.hostname }}</td>
+                    <td class="px-3 py-2 text-[--ng-text-muted]">{{ hc.config.port }}</td>
+                    <td class="px-3 py-2 text-[--ng-text-muted]">{{ hc.config.poll_interval }}s</td>
+                    <td class="px-3 py-2 text-xs text-[--ng-text-muted]">
+                        {{ hc.config.last_poll.strftime('%H:%M:%S') if hc.config.last_poll else '—' }}
+                    </td>
+                    <td class="px-3 py-2">
+                        {% if hc.config.last_ok is none %}
+                        <span class="text-[--ng-text-muted] text-xs">Pending</span>
+                        {% elif hc.config.last_ok %}
+                        <span class="w-2 h-2 rounded-full bg-ng-success inline-block"></span>
+                        {% else %}
+                        <span class="w-2 h-2 rounded-full bg-ng-critical inline-block"></span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        <button onclick="_pollHost({{ hc.config.id }})" class="text-ng-primary hover:underline text-xs mr-2">Poll Now</button>
+                        <button onclick="_removeSnmpHost({{ hc.config.id }})" class="text-[--ng-text-muted] hover:text-ng-critical text-xs">Remove</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="glass-card p-8 text-center">
+        <p class="text-[--ng-text-muted] text-sm">No hosts configured for SNMP monitoring. Select a host above to start.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ═══ MIBs Tab ═══ -->
+<div id="panel-mibs" class="hidden">
+    <!-- Upload -->
+    <div class="glass-card p-5 mb-6">
+        <h2 class="text-sm font-medium text-[--ng-text-secondary] mb-3">Upload MIB File</h2>
+        <div class="flex gap-3 items-center">
+            <input type="file" id="mibFile" accept=".mib,.txt,.my" class="text-sm text-[--ng-text-secondary]">
+            <button onclick="_uploadMib()" class="ng-btn ng-btn-primary text-sm">Upload & Parse</button>
+            <button onclick="_seedDefaults()" class="ng-btn ng-btn-ghost text-sm">Load Default OIDs</button>
+        </div>
+        <p id="mibStatus" class="text-xs text-[--ng-text-muted] mt-2 hidden"></p>
+    </div>
+
+    <!-- MIB List -->
+    {% if mibs %}
+    <div class="grid gap-3">
+        {% for m in mibs %}
+        <div class="glass-card p-4" id="mib-{{ m.id }}">
+            <div class="flex items-center justify-between">
+                <div>
+                    <span class="text-[--ng-text-primary] font-medium font-mono">{{ m.name }}</span>
+                    <span class="text-xs text-[--ng-text-muted] ml-2">{{ m.oid_count }} OIDs</span>
+                    {% if m.filename %}
+                    <span class="text-[10px] text-[--ng-text-muted] ml-2">({{ m.filename }})</span>
+                    {% endif %}
+                </div>
+                <button onclick="_deleteMib({{ m.id }})" class="text-[--ng-text-muted] hover:text-ng-critical p-1">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="glass-card p-8 text-center">
+        <p class="text-[--ng-text-muted] text-sm">No MIBs imported. Click "Load Default OIDs" to add standard SNMP OIDs, or upload your own MIB files.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ═══ OID Browser Tab ═══ -->
+<div id="panel-oids" class="hidden">
+    <div class="glass-card p-5 mb-6">
+        <div class="flex gap-3">
+            <input type="text" id="oidSearch" class="ng-input text-sm flex-1" placeholder="Search OIDs by name or number..." oninput="_searchOids()">
+            <select id="oidMibFilter" class="ng-input text-sm w-48" onchange="_searchOids()">
+                <option value="">All MIBs</option>
+                {% for m in mibs %}
+                <option value="{{ m.name }}">{{ m.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="glass-card overflow-hidden">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-white/[0.06] text-[--ng-text-muted] text-[10px] uppercase tracking-wider">
+                    <th class="px-3 py-2.5 text-left font-medium">OID</th>
+                    <th class="px-3 py-2.5 text-left font-medium">Name</th>
+                    <th class="px-3 py-2.5 text-left font-medium">MIB</th>
+                    <th class="px-3 py-2.5 text-left font-medium">Syntax</th>
+                    <th class="px-3 py-2.5 text-left font-medium">Description</th>
+                </tr>
+            </thead>
+            <tbody id="oidTable">
+                <tr><td colspan="5" class="px-3 py-8 text-center text-[--ng-text-muted]">Search or load OIDs to browse</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+(function() {
+  // Tab switching
+  window._switchTab = function(tab) {
+    document.querySelectorAll('.snmp-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    ['hosts', 'mibs', 'oids'].forEach(p => {
+      document.getElementById('panel-' + p).classList.toggle('hidden', p !== tab);
+    });
+  };
+
+  // ── Hosts ──
+  window._addSnmpHost = async function() {
+    const host_id = document.getElementById('snmpHostId').value;
+    if (!host_id) return;
+    const resp = await fetch('/api/snmp/hosts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        host_id: parseInt(host_id),
+        credential_id: document.getElementById('snmpCredId').value || null,
+        port: parseInt(document.getElementById('snmpPort').value) || 161,
+        preset: document.getElementById('snmpPreset').value,
+      })
+    });
+    if (resp.ok) location.reload();
+    else alert((await resp.json()).error || 'Failed');
+  };
+
+  window._removeSnmpHost = async function(id) {
+    if (!confirm('Remove SNMP config?')) return;
+    await fetch('/api/snmp/hosts/' + id, {method: 'DELETE'});
+    document.getElementById('snmp-host-' + id)?.remove();
+  };
+
+  window._pollHost = async function(id) {
+    const btn = event.target;
+    btn.textContent = 'Polling...';
+    btn.disabled = true;
+    try {
+      const resp = await fetch('/api/snmp/hosts/' + id + '/poll', {method: 'POST'});
+      const data = await resp.json();
+      if (data.ok) {
+        btn.textContent = 'Done!';
+        setTimeout(() => { btn.textContent = 'Poll Now'; btn.disabled = false; }, 2000);
+      } else {
+        btn.textContent = 'Failed';
+        setTimeout(() => { btn.textContent = 'Poll Now'; btn.disabled = false; }, 2000);
+      }
+    } catch(e) {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.textContent = 'Poll Now'; btn.disabled = false; }, 2000);
+    }
+  };
+
+  // ── MIBs ──
+  window._uploadMib = async function() {
+    const file = document.getElementById('mibFile').files[0];
+    if (!file) return;
+    const status = document.getElementById('mibStatus');
+    status.classList.remove('hidden');
+    status.textContent = 'Uploading & parsing...';
+
+    const form = new FormData();
+    form.append('file', file);
+
+    try {
+      const resp = await fetch('/api/snmp/mibs/upload', {method: 'POST', body: form});
+      const data = await resp.json();
+      if (resp.ok) {
+        status.textContent = `Imported ${data.module}: ${data.oids_added} OIDs added`;
+        status.className = 'text-xs text-ng-success mt-2';
+        setTimeout(() => location.reload(), 1500);
+      } else {
+        status.textContent = data.error || 'Failed';
+        status.className = 'text-xs text-ng-critical mt-2';
+      }
+    } catch(e) {
+      status.textContent = 'Upload failed: ' + e.message;
+      status.className = 'text-xs text-ng-critical mt-2';
+    }
+  };
+
+  window._seedDefaults = async function() {
+    const resp = await fetch('/api/snmp/mibs/seed-defaults', {method: 'POST'});
+    const data = await resp.json();
+    alert(`${data.added} default OIDs added`);
+    if (data.added > 0) location.reload();
+  };
+
+  window._deleteMib = async function(id) {
+    if (!confirm('Delete this MIB and its OIDs?')) return;
+    await fetch('/api/snmp/mibs/' + id, {method: 'DELETE'});
+    document.getElementById('mib-' + id)?.remove();
+  };
+
+  // ── OID Browser ──
+  let _searchTimer;
+  window._searchOids = function() {
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(async () => {
+      const search = document.getElementById('oidSearch').value.trim();
+      const mib = document.getElementById('oidMibFilter').value;
+      if (!search && !mib) return;
+
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (mib) params.set('mib', mib);
+
+      const resp = await fetch('/api/snmp/oids?' + params);
+      const data = await resp.json();
+      const tbody = document.getElementById('oidTable');
+
+      if (data.oids.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-8 text-center text-[--ng-text-muted]">No OIDs found</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = data.oids.map(o => `
+        <tr class="border-b border-white/[0.03] hover:bg-white/[0.02]">
+          <td class="px-3 py-2 font-mono text-xs text-[--ng-text-muted]">${o.oid}</td>
+          <td class="px-3 py-2 text-[--ng-text-primary] font-medium">${o.name}</td>
+          <td class="px-3 py-2 text-xs text-[--ng-text-muted]">${o.mib || ''}</td>
+          <td class="px-3 py-2 text-xs text-[--ng-text-muted]">${o.syntax || ''}</td>
+          <td class="px-3 py-2 text-xs text-[--ng-text-muted] max-w-xs truncate">${o.description || ''}</td>
+        </tr>
+      `).join('');
+    }, 300);
+  };
+})();
+</script>
+<style>
+  .snmp-tab { border-color: transparent; color: var(--ng-text-muted); }
+  .snmp-tab:hover { color: var(--ng-text-secondary); }
+  .snmp-tab.active { border-color: var(--ng-primary); color: var(--ng-primary); }
+</style>
+
+</div>
+{% endblock %}

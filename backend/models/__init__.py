@@ -29,6 +29,8 @@ from models.incident import Incident, IncidentEvent
 from models.log_template import LogTemplate, HostBaseline, PrecursorPattern
 from models.agent import Agent, AgentSnapshot
 from models.scanner import SubnetScanSchedule
+from models.credential import Credential
+from models.snmp import SnmpMib, SnmpOid, SnmpHostConfig, SnmpResult
 
 
 async def init_db():
@@ -75,5 +77,7 @@ __all__ = [
     "LogTemplate", "HostBaseline", "PrecursorPattern",
     "Agent", "AgentSnapshot",
     "SubnetScanSchedule",
+    "Credential",
+    "SnmpMib", "SnmpOid", "SnmpHostConfig", "SnmpResult",
     "init_db",
 ]

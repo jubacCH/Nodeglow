@@ -271,6 +271,10 @@ async def cleanup_old_results():
         from models.agent import AgentSnapshot
         agent_cutoff = datetime.utcnow() - timedelta(days=7)
         await db.execute(delete(AgentSnapshot).where(AgentSnapshot.timestamp < agent_cutoff))
+        # SNMP results: keep 7 days
+        from models.snmp import SnmpResult
+        snmp_cutoff = datetime.utcnow() - timedelta(days=7)
+        await db.execute(delete(SnmpResult).where(SnmpResult.timestamp < snmp_cutoff))
         await db.commit()
 
     logger.info("Cleanup done (ping: %dd, integrations: %dd, syslog: %d msgs)", ping_ret, int_ret, total_deleted)
@@ -297,6 +301,12 @@ async def run_scheduled_scans():
     await _run()
 
 
+async def run_snmp_polls():
+    """Run due SNMP polls."""
+    from routers.snmp import run_snmp_polls as _run
+    await _run()
+
+
 async def start_scheduler():
     """Read intervals from DB, then register and start all jobs."""
     from database import get_setting
@@ -319,7 +329,17 @@ async def start_scheduler():
                       id="log_intelligence", replace_existing=True)
     scheduler.add_job(run_scheduled_scans, "interval", seconds=60,
                       id="subnet_scans", replace_existing=True)
+    scheduler.add_job(run_snmp_polls, "interval", seconds=30,
+                      id="snmp_polls", replace_existing=True)
     scheduler.start()
+
+    # Seed default SNMP OIDs
+    try:
+        from services.snmp import seed_default_oids
+        async with AsyncSessionLocal() as db:
+            await seed_default_oids(db)
+    except Exception:
+        pass
     logger.info("Scheduler started (ping=%ds, integrations=%ds)",
                 ping_interval, integration_interval)
 

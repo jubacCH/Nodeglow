@@ -17,6 +17,8 @@ from routers import (
     integrations as integrations_router,
     agents as agents_router,
     subnet_scanner,
+    credentials,
+    snmp as snmp_router,
 )
 
 
@@ -166,3 +168,5 @@ app.include_router(system.router)
 app.include_router(integrations_router.router)
 app.include_router(agents_router.router)
 app.include_router(subnet_scanner.router)
+app.include_router(credentials.router)
+app.include_router(snmp_router.router)
