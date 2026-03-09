@@ -416,6 +416,11 @@ async def agent_delete(request: Request, agent_id: int):
             )
             ping_host = ph.scalar_one_or_none()
             if ping_host:
+                # Nullify syslog references before deleting
+                from models.syslog import SyslogMessage
+                await db.execute(
+                    update(SyslogMessage).where(SyslogMessage.host_id == ping_host.id).values(host_id=None)
+                )
                 await db.execute(delete(PingResult).where(PingResult.host_id == ping_host.id))
                 await db.execute(delete(PingHost).where(PingHost.id == ping_host.id))
         await db.execute(delete(AgentSnapshot).where(AgentSnapshot.agent_id == agent_id))
