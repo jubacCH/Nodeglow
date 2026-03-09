@@ -37,7 +37,7 @@
         <p class="metric-label !text-[10px]">Total Storage</p>
     </div>
     <div class="glass-card p-4 text-center">
-        {% set used_pct = totals.get('used_pct', 0) %}
+        {% set used_pct = totals.get('used_pct', 0)|float %}
         <p class="text-2xl font-bold {% if used_pct > 85 %}text-ng-critical{% elif used_pct > 70 %}text-ng-warning{% else %}text-ng-success{% endif %}">{{ used_pct }}%</p>
         <p class="metric-label !text-[10px]">Used</p>
     </div>
@@ -63,7 +63,7 @@
                 <span>{{ p.get('pct', 0) }}%</span>
             </div>
             <div class="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                <div class="h-full rounded-full {% if p.get('pct', 0) > 85 %}bg-ng-critical{% elif p.get('pct', 0) > 70 %}bg-ng-warning{% else %}bg-ng-primary{% endif %}" style="width:{{ p.get('pct', 0) }}%"></div>
+                <div class="h-full rounded-full {% if p.get('pct', 0)|float > 85 %}bg-ng-critical{% elif p.get('pct', 0)|float > 70 %}bg-ng-warning{% else %}bg-ng-primary{% endif %}" style="width:{{ p.get('pct', 0) }}%"></div>
             </div>
         </div>
     </div>
@@ -92,7 +92,7 @@
                 <td class="px-4 py-2 text-[--ng-text-primary] font-medium">{{ d.get('name', '?') }}</td>
                 <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono truncate max-w-[200px]">{{ d.get('model', '') }}</td>
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-secondary]">{{ d.get('size_gb', 0) }} GB</td>
-                <td class="px-4 py-2 text-right text-xs font-mono {% if d.get('temp', 0) > 50 %}text-ng-critical{% elif d.get('temp', 0) > 40 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{% if d.get('temp') %}{{ d.get('temp') }}°C{% else %}—{% endif %}</td>
+                <td class="px-4 py-2 text-right text-xs font-mono {% if d.get('temp', 0)|float > 50 %}text-ng-critical{% elif d.get('temp', 0)|float > 40 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{% if d.get('temp') %}{{ d.get('temp') }}°C{% else %}—{% endif %}</td>
                 <td class="px-4 py-2 text-xs">
                     <span class="px-1.5 py-0.5 rounded text-[9px] font-mono {% if d.get('type') == 'SSD' %}bg-blue-500/15 text-blue-400{% else %}bg-slate-500/15 text-slate-400{% endif %}">{{ d.get('type', 'HDD') }}</span>
                 </td>

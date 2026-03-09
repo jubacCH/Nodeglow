@@ -35,7 +35,7 @@
         <p class="metric-label !text-[10px]">Running</p>
     </div>
     <div class="glass-card p-4 text-center">
-        <p class="text-2xl font-bold {% if totals.get('stopped', 0) > 0 %}text-ng-warning{% else %}text-[--ng-text-primary]{% endif %}">{{ totals.get('stopped', 0) }}</p>
+        <p class="text-2xl font-bold {% if totals.get('stopped', 0)|int > 0 %}text-ng-warning{% else %}text-[--ng-text-primary]{% endif %}">{{ totals.get('stopped', 0) }}</p>
         <p class="metric-label !text-[10px]">Stopped</p>
     </div>
 </div>

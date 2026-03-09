@@ -60,7 +60,7 @@
             {% for t in temps %}
             <div class="flex justify-between gap-4">
                 <span class="text-[--ng-text-secondary] text-xs truncate">{{ t.get('name', '?') }}</span>
-                <span class="text-xs font-mono {% if t.get('reading_c', 0) > (t.get('threshold_c', 80)) %}text-ng-critical{% elif t.get('reading_c', 0) > 70 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{{ t.get('reading_c', '—') }}°C</span>
+                <span class="text-xs font-mono {% if t.get('reading_c', 0)|float > (t.get('threshold_c', 80)|float) %}text-ng-critical{% elif t.get('reading_c', 0)|float > 70 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{{ t.get('reading_c', '—') }}°C</span>
             </div>
             {% endfor %}
         </div>

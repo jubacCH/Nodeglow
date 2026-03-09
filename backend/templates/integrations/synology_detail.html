@@ -23,14 +23,14 @@
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
     {% if sys.get('cpu_pct') is not none %}
     <div class="glass-card p-4 text-center">
-        {% set cpu = sys.get('cpu_pct', 0) %}
+        {% set cpu = sys.get('cpu_pct', 0)|float %}
         <p class="text-2xl font-bold {% if cpu > 85 %}text-ng-critical{% elif cpu > 70 %}text-ng-warning{% else %}text-ng-success{% endif %}">{{ cpu }}%</p>
         <p class="metric-label !text-[10px]">CPU</p>
     </div>
     {% endif %}
     {% if sys.get('mem_used_pct') is not none %}
     <div class="glass-card p-4 text-center">
-        {% set mem = sys.get('mem_used_pct', 0) %}
+        {% set mem = sys.get('mem_used_pct', 0)|float %}
         <p class="text-2xl font-bold {% if mem > 85 %}text-ng-critical{% elif mem > 70 %}text-ng-warning{% else %}text-ng-success{% endif %}">{{ mem }}%</p>
         <p class="metric-label !text-[10px]">Memory</p>
     </div>
@@ -64,7 +64,7 @@
                 <span>{{ v.get('used_gb', 0) }} / {{ v.get('size_gb', 0) }} GB</span><span>{{ v.get('pct', 0) }}%</span>
             </div>
             <div class="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                <div class="h-full rounded-full {% if v.get('pct', 0) > 85 %}bg-ng-critical{% elif v.get('pct', 0) > 70 %}bg-ng-warning{% else %}bg-ng-primary{% endif %}" style="width:{{ v.get('pct', 0) }}%"></div>
+                <div class="h-full rounded-full {% if v.get('pct', 0)|float > 85 %}bg-ng-critical{% elif v.get('pct', 0)|float > 70 %}bg-ng-warning{% else %}bg-ng-primary{% endif %}" style="width:{{ v.get('pct', 0) }}%"></div>
             </div>
         </div>
     </div>
@@ -94,7 +94,7 @@
                 <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono truncate max-w-[200px]">{{ d.get('model', '') }}</td>
                 <td class="px-4 py-2"><span class="px-1.5 py-0.5 rounded text-[9px] {% if d.get('status') == 'normal' %}bg-ng-success/15 text-ng-success{% else %}bg-ng-critical/15 text-ng-critical{% endif %}">{{ d.get('status', '?') }}</span></td>
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-secondary]">{{ d.get('size_gb', 0) }} GB</td>
-                <td class="px-4 py-2 text-right text-xs font-mono {% if d.get('temp', 0) > 50 %}text-ng-critical{% elif d.get('temp', 0) > 40 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{% if d.get('temp') %}{{ d.get('temp') }}°C{% else %}—{% endif %}</td>
+                <td class="px-4 py-2 text-right text-xs font-mono {% if d.get('temp', 0)|float > 50 %}text-ng-critical{% elif d.get('temp', 0)|float > 40 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{% if d.get('temp') %}{{ d.get('temp') }}°C{% else %}—{% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>

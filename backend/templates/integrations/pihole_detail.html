@@ -31,7 +31,7 @@
         <p class="metric-label !text-[10px]">Blocked</p>
     </div>
     <div class="glass-card p-4 text-center">
-        <p class="text-2xl font-bold {% if data.get('blocked_pct', 0) > 30 %}text-ng-warning{% else %}text-ng-success{% endif %}">{{ data.get('blocked_pct', 0) }}%</p>
+        <p class="text-2xl font-bold {% if data.get('blocked_pct', 0)|float > 30 %}text-ng-warning{% else %}text-ng-success{% endif %}">{{ data.get('blocked_pct', 0) }}%</p>
         <p class="metric-label !text-[10px]">Block Rate</p>
     </div>
     <div class="glass-card p-4 text-center">

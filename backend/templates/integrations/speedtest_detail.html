@@ -29,7 +29,7 @@
         <p class="metric-label !text-[10px] mt-1">Upload Mbps</p>
     </div>
     <div class="glass-card p-6 text-center">
-        <p class="text-4xl font-bold {% if data.get('ping_ms', 0) > 50 %}text-ng-warning{% else %}text-[--ng-text-primary]{% endif %}">{{ data.get('ping_ms', 0) }}</p>
+        <p class="text-4xl font-bold {% if data.get('ping_ms', 0)|float > 50 %}text-ng-warning{% else %}text-[--ng-text-primary]{% endif %}">{{ data.get('ping_ms', 0) }}</p>
         <p class="metric-label !text-[10px] mt-1">Ping ms</p>
     </div>
 </div>
