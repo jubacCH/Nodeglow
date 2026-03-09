@@ -201,6 +201,8 @@ async def api_update_snmp_host(config_id: int, request: Request,
         cfg.poll_interval = max(10, int(body["poll_interval"]))
     if "oids" in body:
         cfg.oids_json = json.dumps(body["oids"]) if body["oids"] else None
+    if "thresholds_json" in body:
+        cfg.thresholds_json = body["thresholds_json"] if body["thresholds_json"] else None
 
     await db.commit()
     return JSONResponse({"ok": True})

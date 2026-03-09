@@ -126,6 +126,16 @@
       <span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-500/10 text-slate-500">{{ syslog_count }}</span>
       {% endif %}
     </button>
+    <button type="button" id="tab-snmp"
+            onclick="switchTab('snmp')"
+            class="tab-btn px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
+      SNMP
+      {% if snmp_alerts %}
+      <span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-red-500/10 text-red-400">{{ snmp_alerts | length }}</span>
+      {% elif snmp_config and snmp_config.last_ok %}
+      <span class="ml-1.5 w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+      {% endif %}
+    </button>
   </div>
 
   <!-- ── INFO TAB ──────────────────────────────────────────────────────────── -->
@@ -941,6 +951,204 @@
     </div>
   </div>
 
+  <!-- ── SNMP TAB ──────────────────────────────────────────────────────── -->
+  <div id="panel-snmp" class="hidden">
+
+    {% if not snmp_config %}
+    <!-- No SNMP configured — setup form -->
+    <div class="glass-card p-6">
+      <h2 class="ng-heading text-sm text-[--ng-text-secondary] mb-4">Configure SNMP Monitoring</h2>
+      {% if snmp_credentials %}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        <div>
+          <label class="text-xs text-[--ng-text-muted] mb-1 block">Credential</label>
+          <select id="snmp-cred" class="ng-input text-sm">
+            {% for c in snmp_credentials %}
+            <option value="{{ c.id }}">{{ c.name }} ({{ c.type }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-[--ng-text-muted] mb-1 block">Port</label>
+          <input type="number" id="snmp-port" class="ng-input text-sm" value="161" min="1" max="65535">
+        </div>
+        <div>
+          <label class="text-xs text-[--ng-text-muted] mb-1 block">OID Preset</label>
+          <select id="snmp-preset" class="ng-input text-sm">
+            <option value="system">System (basic)</option>
+            <option value="host_resources">Host Resources (CPU/Mem)</option>
+            <option value="interfaces">Interfaces</option>
+            <option value="full" selected>Full (all default OIDs)</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-[--ng-text-muted] mb-1 block">Poll Interval (s)</label>
+          <input type="number" id="snmp-interval" class="ng-input text-sm" value="60" min="10" max="3600">
+        </div>
+      </div>
+      <button onclick="snmpSaveConfig()" class="ng-btn ng-btn-primary text-xs">Enable SNMP</button>
+      {% else %}
+      <div class="text-center py-4">
+        <p class="text-[--ng-text-muted] text-sm mb-3">No SNMP credentials configured yet.</p>
+        <a href="/credentials" class="ng-btn ng-btn-primary text-xs">Add Credentials</a>
+      </div>
+      {% endif %}
+    </div>
+
+    {% else %}
+    <!-- SNMP is configured -->
+    <div class="space-y-4">
+
+      <!-- Config summary + controls -->
+      <div class="glass-card p-4">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-3">
+            <h2 class="ng-heading text-sm text-[--ng-text-secondary]">SNMP Configuration</h2>
+            {% if snmp_config.enabled %}
+            <span class="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/10 text-emerald-400">Active</span>
+            {% else %}
+            <span class="px-2 py-0.5 rounded-full text-[10px] bg-slate-500/10 text-slate-500">Disabled</span>
+            {% endif %}
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="snmpPollNow()" class="ng-btn ng-btn-ghost text-xs flex items-center gap-1.5" id="snmp-poll-btn">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+              </svg>
+              Poll Now
+            </button>
+            <button onclick="snmpToggle()" class="ng-btn ng-btn-ghost text-xs">
+              {{ "Disable" if snmp_config.enabled else "Enable" }}
+            </button>
+            <button onclick="snmpRemove()" class="ng-btn ng-btn-ghost text-xs text-red-400 hover:text-red-300">Remove</button>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div>
+            <span class="text-[--ng-text-muted]">Credential:</span>
+            <span class="text-[--ng-text-secondary] ml-1">{{ snmp_credential.name if snmp_credential else "—" }}</span>
+          </div>
+          <div>
+            <span class="text-[--ng-text-muted]">Port:</span>
+            <span class="text-[--ng-text-secondary] ml-1">{{ snmp_config.port }}</span>
+          </div>
+          <div>
+            <span class="text-[--ng-text-muted]">Interval:</span>
+            <span class="text-[--ng-text-secondary] ml-1">{{ snmp_config.poll_interval }}s</span>
+          </div>
+          <div>
+            <span class="text-[--ng-text-muted]">Last Poll:</span>
+            <span class="text-[--ng-text-secondary] ml-1">{{ snmp_config.last_poll.strftime('%d.%m %H:%M') if snmp_config.last_poll else "never" }}</span>
+          </div>
+        </div>
+      </div>
+
+      {% if snmp_alerts %}
+      <!-- Threshold alerts -->
+      <div class="glass-card p-4 border-l-2 border-red-500">
+        <h3 class="text-xs font-medium text-red-400 mb-2">Threshold Alerts</h3>
+        <div class="space-y-1.5">
+          {% for a in snmp_alerts %}
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-[--ng-text-primary]">{{ a.metric }}</span>
+            <div class="flex items-center gap-2">
+              <span class="font-mono text-[--ng-text-secondary]">{{ a.value }}</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] {% if a.level == 'critical' %}bg-red-500/15 text-red-400{% else %}bg-yellow-500/15 text-yellow-400{% endif %}">
+                {{ a.level | upper }}
+              </span>
+              <span class="text-[--ng-text-muted]">
+                ({{ a.op }}{{ a.warn if a.level == 'warning' else a.crit }})
+              </span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if snmp_latest %}
+      <!-- Current values -->
+      <div class="glass-card overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-white/[0.08]">
+          <h3 class="ng-heading text-sm text-[--ng-text-secondary]">Current Values</h3>
+          <button onclick="document.getElementById('snmp-thresh-form').classList.toggle('hidden')" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+            Configure Thresholds
+          </button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="text-[--ng-text-muted] border-b border-white/[0.06]">
+                <th class="text-left px-4 py-2 font-medium">Metric</th>
+                <th class="text-right px-4 py-2 font-medium">Value</th>
+                <th class="text-center px-4 py-2 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for key, val in snmp_latest.items() %}
+              {% set thresh = snmp_thresholds.get(key) %}
+              {% set alert = snmp_alerts | selectattr('metric', 'equalto', key) | list %}
+              {% set alert = alert[0] if alert else none %}
+              <tr class="border-b border-white/[0.04] hover:bg-white/[0.02]">
+                <td class="px-4 py-2 text-[--ng-text-primary] font-mono">{{ key }}</td>
+                <td class="px-4 py-2 text-right text-[--ng-text-secondary] font-mono">{{ val }}</td>
+                <td class="px-4 py-2 text-center">
+                  {% if alert %}
+                    <span class="px-1.5 py-0.5 rounded text-[10px] {% if alert.level == 'critical' %}bg-red-500/15 text-red-400{% else %}bg-yellow-500/15 text-yellow-400{% endif %}">
+                      {{ alert.level | upper }}
+                    </span>
+                  {% elif thresh %}
+                    <span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400">OK</span>
+                  {% else %}
+                    <span class="text-[--ng-text-muted]">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Threshold config form (hidden by default) -->
+      <div id="snmp-thresh-form" class="glass-card p-4 hidden">
+        <h3 class="text-xs font-medium text-[--ng-text-secondary] mb-3">Threshold Configuration</h3>
+        <p class="text-[10px] text-[--ng-text-muted] mb-3">Set warning and critical thresholds for numeric metrics. Leave blank to disable.</p>
+        <div class="space-y-2" id="snmp-thresh-rows">
+          {% for key, val in snmp_latest.items() %}
+          {% if val is number %}
+          {% set thresh = snmp_thresholds.get(key, {}) %}
+          <div class="grid grid-cols-[1fr_80px_80px_80px_60px] gap-2 items-center text-xs">
+            <span class="font-mono text-[--ng-text-primary] truncate">{{ key }}</span>
+            <input type="number" step="any" class="ng-input text-xs py-1 text-center snmp-thresh-warn" data-metric="{{ key }}"
+                   value="{{ thresh.get('warn', '') }}" placeholder="Warn">
+            <input type="number" step="any" class="ng-input text-xs py-1 text-center snmp-thresh-crit" data-metric="{{ key }}"
+                   value="{{ thresh.get('crit', '') }}" placeholder="Crit">
+            <span class="text-[--ng-text-muted] text-center">curr: {{ val }}</span>
+            <select class="ng-input text-xs py-1 snmp-thresh-op" data-metric="{{ key }}">
+              <option value=">" {{ 'selected' if thresh.get('op', '>') == '>' else '' }}>&gt;</option>
+              <option value="<" {{ 'selected' if thresh.get('op', '>') == '<' else '' }}>&lt;</option>
+            </select>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+        <div class="flex gap-2 mt-3">
+          <button onclick="snmpSaveThresholds()" class="ng-btn ng-btn-primary text-xs">Save Thresholds</button>
+          <button onclick="document.getElementById('snmp-thresh-form').classList.add('hidden')" class="ng-btn ng-btn-ghost text-xs">Cancel</button>
+        </div>
+      </div>
+      {% else %}
+      <!-- No data yet -->
+      <div class="glass-card p-6 text-center">
+        <p class="text-[--ng-text-muted] text-sm">No SNMP data collected yet. Click "Poll Now" to run the first poll.</p>
+      </div>
+      {% endif %}
+
+    </div>
+    {% endif %}
+  </div>
+
 </div>
 {% endblock %}
 
@@ -1002,7 +1210,7 @@
   window._slPage = function(p) { _slLoad(p); };
 
   function switchTab(name) {
-    ['info', 'monitoring', 'ports', 'syslog'].forEach(t => {
+    ['info', 'monitoring', 'ports', 'syslog', 'snmp'].forEach(t => {
       const btn = document.getElementById('tab-' + t);
       const panel = document.getElementById('panel-' + t);
       if (!btn || !panel) return;
@@ -1233,5 +1441,79 @@
     }
   })();
   {% endif %}
+
+  // ── SNMP functions ─────────────────────────────────────────────────────
+  const _snmpHostId = {{ host.id }};
+  const _snmpConfigId = {{ snmp_config.id if snmp_config else 0 }};
+
+  window.snmpSaveConfig = async function() {
+    const cred = document.getElementById('snmp-cred')?.value;
+    const port = document.getElementById('snmp-port')?.value || 161;
+    const preset = document.getElementById('snmp-preset')?.value || 'full';
+    const interval = document.getElementById('snmp-interval')?.value || 60;
+    if (!cred) return alert('Select a credential');
+    const resp = await fetch('/api/snmp/hosts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({host_id: _snmpHostId, credential_id: parseInt(cred), port: parseInt(port), preset, poll_interval: parseInt(interval)})
+    });
+    if (resp.ok) location.reload();
+    else alert((await resp.json()).error || 'Failed');
+  };
+
+  window.snmpPollNow = async function() {
+    if (!_snmpConfigId) return;
+    const btn = document.getElementById('snmp-poll-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Polling...'; }
+    try {
+      const resp = await fetch(`/api/snmp/hosts/${_snmpConfigId}/poll`, {method: 'POST'});
+      const data = await resp.json();
+      if (data.ok) location.reload();
+      else alert(data.error || 'Poll failed');
+    } catch(e) { alert('Poll failed: ' + e.message); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'Poll Now'; } }
+  };
+
+  window.snmpToggle = async function() {
+    if (!_snmpConfigId) return;
+    const resp = await fetch(`/api/snmp/hosts/${_snmpConfigId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: {{ 'false' if snmp_config and snmp_config.enabled else 'true' }}})
+    });
+    if (resp.ok) location.reload();
+    else alert('Failed');
+  };
+
+  window.snmpRemove = async function() {
+    if (!_snmpConfigId) return;
+    if (!confirm('Remove SNMP monitoring from this host?')) return;
+    const resp = await fetch(`/api/snmp/hosts/${_snmpConfigId}`, {method: 'DELETE'});
+    if (resp.ok) location.reload();
+    else alert('Failed');
+  };
+
+  window.snmpSaveThresholds = async function() {
+    if (!_snmpConfigId) return;
+    const thresholds = {};
+    document.querySelectorAll('.snmp-thresh-warn').forEach(el => {
+      const metric = el.dataset.metric;
+      const warn = el.value ? parseFloat(el.value) : null;
+      const critEl = document.querySelector(`.snmp-thresh-crit[data-metric="${metric}"]`);
+      const opEl = document.querySelector(`.snmp-thresh-op[data-metric="${metric}"]`);
+      const crit = critEl?.value ? parseFloat(critEl.value) : null;
+      const op = opEl?.value || '>';
+      if (warn !== null || crit !== null) {
+        thresholds[metric] = {warn, crit, op};
+      }
+    });
+    const resp = await fetch(`/api/snmp/hosts/${_snmpConfigId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({thresholds_json: JSON.stringify(thresholds)})
+    });
+    if (resp.ok) location.reload();
+    else alert('Failed to save thresholds');
+  };
 </script>
 {% endblock %}

@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from utils.ping import check_host
 from database import PingHost, PingResult, get_db
 from models.agent import Agent, AgentSnapshot
+from models.credential import Credential
 from models.integration import IntegrationConfig, Snapshot
+from models.snmp import SnmpHostConfig, SnmpResult
 from models.syslog import SyslogMessage
 from services import integration as int_svc
 from services import snapshot as snap_svc
@@ -505,6 +507,58 @@ async def ping_detail(host_id: int, request: Request, db: AsyncSession = Depends
                 (datetime.utcnow() - agent_obj.last_seen).total_seconds() < 120
             )
 
+    # ── SNMP data ─────────────────────────────────────────────────────────
+    snmp_config = None
+    snmp_credential = None
+    snmp_latest = {}
+    snmp_thresholds = {}
+    snmp_alerts = []
+
+    scq = await db.execute(
+        select(SnmpHostConfig).where(SnmpHostConfig.host_id == host_id)
+    )
+    snmp_config = scq.scalar_one_or_none()
+    if snmp_config:
+        if snmp_config.credential_id:
+            cq = await db.execute(
+                select(Credential).where(Credential.id == snmp_config.credential_id)
+            )
+            snmp_credential = cq.scalar_one_or_none()
+        # Get latest SNMP result
+        srq = await db.execute(
+            select(SnmpResult)
+            .where(SnmpResult.host_id == host_id)
+            .order_by(SnmpResult.timestamp.desc())
+            .limit(1)
+        )
+        sr = srq.scalar_one_or_none()
+        if sr and sr.data_json:
+            snmp_latest = json.loads(sr.data_json)
+        # Parse thresholds
+        if snmp_config.thresholds_json:
+            snmp_thresholds = json.loads(snmp_config.thresholds_json)
+        # Check thresholds against latest values
+        for metric_name, thresh in snmp_thresholds.items():
+            val = snmp_latest.get(metric_name)
+            if val is None or not isinstance(val, (int, float)):
+                continue
+            op = thresh.get("op", ">")
+            crit = thresh.get("crit")
+            warn = thresh.get("warn")
+            level = None
+            if crit is not None and ((op == ">" and val > crit) or (op == "<" and val < crit)):
+                level = "critical"
+            elif warn is not None and ((op == ">" and val > warn) or (op == "<" and val < warn)):
+                level = "warning"
+            if level:
+                snmp_alerts.append({"metric": metric_name, "value": val, "level": level, **thresh})
+
+    # Load SNMP credentials list for config form
+    snmp_creds_q = await db.execute(
+        select(Credential).where(Credential.type.in_(["snmp_v2c", "snmp_v3"]))
+    )
+    snmp_credentials = snmp_creds_q.scalars().all()
+
     return templates.TemplateResponse("ping_detail.html", {
         "request": request,
         "host": host,
@@ -531,6 +585,12 @@ async def ping_detail(host_id: int, request: Request, db: AsyncSession = Depends
         "syslog_count": syslog_count,
         "agent_data": agent_data,
         "agent_snapshots": agent_snapshots,
+        "snmp_config": snmp_config,
+        "snmp_credential": snmp_credential,
+        "snmp_latest": snmp_latest,
+        "snmp_thresholds": snmp_thresholds,
+        "snmp_alerts": snmp_alerts,
+        "snmp_credentials": snmp_credentials,
         "all_hosts": (await db.execute(
             select(PingHost).where(PingHost.id != host.id).order_by(PingHost.name)
         )).scalars().all(),

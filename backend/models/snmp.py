@@ -41,8 +41,9 @@ class SnmpHostConfig(Base):
     credential_id = Column(Integer, ForeignKey("credentials.id", ondelete="SET NULL"),
                            nullable=True)
     port          = Column(Integer, default=161)
-    oids_json     = Column(Text)    # JSON list of OIDs to poll (or null = use defaults)
-    poll_interval = Column(Integer, default=60)  # seconds
+    oids_json       = Column(Text)    # JSON list of OIDs to poll (or null = use defaults)
+    thresholds_json = Column(Text)    # JSON {oid_name: {warn: N, crit: N, op: ">"|"<"}, ...}
+    poll_interval   = Column(Integer, default=60)  # seconds
     enabled       = Column(Boolean, default=True)
     last_poll     = Column(DateTime, nullable=True)
     last_ok       = Column(Boolean, nullable=True)
