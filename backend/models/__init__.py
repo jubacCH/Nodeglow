@@ -28,7 +28,7 @@ from models.syslog import SyslogMessage
 from models.incident import Incident, IncidentEvent
 from models.log_template import LogTemplate, HostBaseline, PrecursorPattern
 from models.agent import Agent, AgentSnapshot
-from models.scanner import SubnetScanSchedule
+from models.scanner import SubnetScanSchedule, SubnetScanLog
 from models.credential import Credential
 from models.snmp import SnmpMib, SnmpOid, SnmpHostConfig, SnmpResult
 from models.api_key import ApiKey
@@ -77,7 +77,7 @@ __all__ = [
     "Incident", "IncidentEvent",
     "LogTemplate", "HostBaseline", "PrecursorPattern",
     "Agent", "AgentSnapshot",
-    "SubnetScanSchedule",
+    "SubnetScanSchedule", "SubnetScanLog",
     "Credential",
     "SnmpMib", "SnmpOid", "SnmpHostConfig", "SnmpResult",
     "ApiKey",

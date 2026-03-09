@@ -9,13 +9,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, delete
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from templating import templates
 
 from models.base import get_db
 from models.ping import PingHost
-from models.scanner import SubnetScanSchedule
+from models.scanner import SubnetScanSchedule, SubnetScanLog
 from utils.ping import ping_host
 
 logger = logging.getLogger(__name__)
@@ -96,14 +96,15 @@ def _match_host(r: dict, idx: dict[str, PingHost]) -> PingHost | None:
     return host
 
 
-async def auto_add_hosts(db: AsyncSession, scan_results: list[dict]) -> int:
-    """Add alive, unmonitored hosts to PingHosts. Returns count added."""
+async def auto_add_hosts(db: AsyncSession, scan_results: list[dict]) -> tuple[int, list[str]]:
+    """Add alive, unmonitored hosts to PingHosts. Returns (count, list of added names)."""
     q = await db.execute(select(PingHost))
     all_hosts = q.scalars().all()
     idx = _build_monitored_index(all_hosts)
     existing_ips = {(h.hostname or "").strip() for h in all_hosts}
 
     added = 0
+    added_names: list[str] = []
     for r in scan_results:
         if not r["alive"]:
             continue
@@ -132,10 +133,11 @@ async def auto_add_hosts(db: AsyncSession, scan_results: list[dict]) -> int:
         existing_ips.add(ip)
         idx[ip] = host
         added += 1
+        added_names.append(f"{display_name} ({ip})")
 
     if added:
         await db.commit()
-    return added
+    return added, added_names
 
 
 # ── Routes – Page ────────────────────────────────────────────────────────────
@@ -147,8 +149,23 @@ async def subnet_scanner_page(request: Request, db: AsyncSession = Depends(get_d
         select(SubnetScanSchedule).order_by(SubnetScanSchedule.created_at.desc())
     )
     schedules = q.scalars().all()
+
+    # Fetch recent scan logs (last 50)
+    q = await db.execute(
+        select(SubnetScanLog).order_by(SubnetScanLog.timestamp.desc()).limit(50)
+    )
+    scan_logs = q.scalars().all()
+
+    # Build schedule name lookup
+    sched_names = {s.id: s.name for s in schedules}
+
     return templates.TemplateResponse(
-        "subnet_scanner.html", {"request": request, "schedules": schedules}
+        "subnet_scanner.html", {
+            "request": request,
+            "schedules": schedules,
+            "scan_logs": scan_logs,
+            "sched_names": sched_names,
+        }
     )
 
 
@@ -336,6 +353,7 @@ async def api_toggle_schedule(schedule_id: int, request: Request, db: AsyncSessi
 
 async def run_scheduled_scans():
     """Run all due scheduled subnet scans."""
+    import json
     from database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
@@ -357,12 +375,13 @@ async def run_scheduled_scans():
             alive = sum(1 for r in scan_results if r["alive"])
             total = len(scan_results)
             added = 0
+            added_names: list[str] = []
 
             if sched.auto_add:
                 async with AsyncSessionLocal() as db:
-                    added = await auto_add_hosts(db, scan_results)
+                    added, added_names = await auto_add_hosts(db, scan_results)
 
-            # Update schedule stats
+            # Update schedule stats + write log entry
             async with AsyncSessionLocal() as db:
                 q = await db.execute(
                     select(SubnetScanSchedule).where(SubnetScanSchedule.id == sched.id)
@@ -373,7 +392,18 @@ async def run_scheduled_scans():
                     s.last_alive = alive
                     s.last_total = total
                     s.last_added = added
-                    await db.commit()
+
+                log = SubnetScanLog(
+                    schedule_id=sched.id,
+                    timestamp=datetime.utcnow(),
+                    cidr=sched.cidr,
+                    alive=alive,
+                    total=total,
+                    added=added,
+                    hosts_added=json.dumps(added_names) if added_names else None,
+                )
+                db.add(log)
+                await db.commit()
 
             logger.info(
                 "Scheduled scan [%s] %s: %d/%d alive, %d added",
@@ -381,3 +411,17 @@ async def run_scheduled_scans():
             )
         except Exception as exc:
             logger.error("Scheduled scan [%s] failed: %s", sched.name, exc)
+            # Log the error too
+            try:
+                async with AsyncSessionLocal() as db:
+                    log = SubnetScanLog(
+                        schedule_id=sched.id,
+                        timestamp=datetime.utcnow(),
+                        cidr=sched.cidr,
+                        alive=0, total=0, added=0,
+                        error=str(exc),
+                    )
+                    db.add(log)
+                    await db.commit()
+            except Exception:
+                pass

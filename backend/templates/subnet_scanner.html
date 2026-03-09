@@ -118,6 +118,78 @@
     </div>
 </div>
 
+<!-- Scan Log -->
+<div class="glass-card p-5 mb-6">
+    <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-[--ng-text-muted]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+            <h2 class="text-sm font-medium text-[--ng-text-secondary]">Scan Log</h2>
+        </div>
+    </div>
+
+    {% if scan_logs %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+            <thead>
+                <tr class="text-[--ng-text-muted] border-b border-white/[0.06]">
+                    <th class="text-left py-2 pr-3 font-medium">Time</th>
+                    <th class="text-left py-2 pr-3 font-medium">Schedule</th>
+                    <th class="text-left py-2 pr-3 font-medium">CIDR</th>
+                    <th class="text-right py-2 pr-3 font-medium">Alive</th>
+                    <th class="text-right py-2 pr-3 font-medium">Total</th>
+                    <th class="text-right py-2 pr-3 font-medium">Added</th>
+                    <th class="text-left py-2 font-medium">Hosts Added</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in scan_logs %}
+                <tr class="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                    <td class="py-2 pr-3 font-mono text-[--ng-text-muted] whitespace-nowrap">
+                        {{ log.timestamp.strftime('%Y-%m-%d %H:%M') }}
+                    </td>
+                    <td class="py-2 pr-3 text-[--ng-text-secondary]">
+                        {{ sched_names.get(log.schedule_id, '—') }}
+                    </td>
+                    <td class="py-2 pr-3 font-mono text-[--ng-text-muted]">{{ log.cidr }}</td>
+                    <td class="py-2 pr-3 text-right text-[--ng-text-secondary]">{{ log.alive }}</td>
+                    <td class="py-2 pr-3 text-right text-[--ng-text-muted]">{{ log.total }}</td>
+                    <td class="py-2 pr-3 text-right">
+                        {% if log.error %}
+                            <span class="text-red-400" title="{{ log.error }}">error</span>
+                        {% elif log.added > 0 %}
+                            <span class="text-emerald-400">+{{ log.added }}</span>
+                        {% else %}
+                            <span class="text-[--ng-text-muted]">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2">
+                        {% if log.hosts_added %}
+                            {% set hosts = log.hosts_added | tojson %}
+                            <div class="flex flex-wrap gap-1">
+                                {% for h in (log.hosts_added | replace('[', '') | replace(']', '') | replace('"', '')).split(',') %}
+                                    {% if h.strip() %}
+                                    <span class="inline-block px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-mono">{{ h.strip() }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        {% elif log.error %}
+                            <span class="text-red-400 text-[10px] truncate block max-w-xs" title="{{ log.error }}">{{ log.error[:80] }}</span>
+                        {% else %}
+                            <span class="text-[--ng-text-muted]">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-[--ng-text-muted] text-xs py-2">No scan logs yet. Logs appear after the first scheduled scan runs.</p>
+    {% endif %}
+</div>
+
 <!-- Progress -->
 <div id="scanProgress" class="hidden mb-6">
     <div class="glass-card p-4">
