@@ -49,8 +49,8 @@ class UnifiAPI:
             health_r = await client.get(f"{base}/stat/health", headers=hdrs)
             events_r = await client.get(f"{base}/stat/event", headers=hdrs,
                                         params={"_limit": 200, "_sort": "-time"})
-            speedtest_r = await client.get(f"{base}/stat/report/archive.speedtest",
-                                           headers=hdrs, params={"attrs": ["xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"})
+            speedtest_r = await client.post(f"{base}/stat/report/archive.speedtest",
+                                            headers=hdrs, json={"attrs": ["xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"})
 
             devices_r.raise_for_status()
             clients_r.raise_for_status()
@@ -207,28 +207,36 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
     clients_wired = len(clients) - clients_wifi
 
     # ── Speedtest results (from UniFi Gateway) ──
+    # xput_download/upload are in Mbps; _id is a MongoDB ObjectID (first 8 hex = unix ts)
     speedtest_results = []
     for st in (raw_speedtest or []):
-        ts = st.get("time") or st.get("datetime") or st.get("_id")
         ts_str = ""
-        if isinstance(ts, (int, float)):
+        oid = st.get("_id", "")
+        ts_raw = st.get("time") or st.get("datetime")
+        if isinstance(ts_raw, (int, float)):
             try:
-                ts_str = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts,
+                ts_str = datetime.fromtimestamp(ts_raw / 1000 if ts_raw > 1e12 else ts_raw,
                                                 tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
             except (ValueError, OSError):
-                ts_str = str(ts)
-        elif isinstance(ts, str):
-            ts_str = ts
+                pass
+        elif isinstance(ts_raw, str):
+            ts_str = ts_raw
+        if not ts_str and isinstance(oid, str) and len(oid) >= 8:
+            try:
+                ts_str = datetime.fromtimestamp(int(oid[:8], 16),
+                                                tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+            except (ValueError, OSError):
+                ts_str = ""
 
-        download = st.get("xput_download", 0) or 0
-        upload = st.get("xput_upload", 0) or 0
-        latency = st.get("latency", 0) or 0
+        download = float(st.get("xput_download", 0) or 0)
+        upload = float(st.get("xput_upload", 0) or 0)
+        latency = float(st.get("latency", 0) or 0)
 
         speedtest_results.append({
             "timestamp": ts_str,
-            "download_mbps": round(float(download), 1),
-            "upload_mbps": round(float(upload), 1),
-            "latency_ms": round(float(latency), 0),
+            "download_mbps": round(download, 1),
+            "upload_mbps": round(upload, 1),
+            "latency_ms": round(latency, 0),
         })
 
     # Latest speedtest for quick summary
