@@ -322,12 +322,12 @@
               </a>
             </th>
             {% endmacro %}
-            {{ sort_header("time", "Time", "w-[150px]") }}
-            {{ sort_header("severity", "Severity", "w-[80px]") }}
-            {{ sort_header("host", "Host", "w-[150px]") }}
-            {{ sort_header("source", "Source IP", "w-[120px]") }}
-            {{ sort_header("app", "App", "w-[100px]") }}
-            <th class="px-4 py-2.5 text-[--ng-text-muted] font-medium text-[10px] uppercase tracking-wider">Message</th>
+            {{ sort_header("time", "Time", "whitespace-nowrap") }}
+            {{ sort_header("severity", "Severity", "whitespace-nowrap") }}
+            {{ sort_header("host", "Host", "whitespace-nowrap") }}
+            {{ sort_header("source", "Source IP", "whitespace-nowrap") }}
+            {{ sort_header("app", "App", "whitespace-nowrap") }}
+            <th class="px-4 py-2.5 text-[--ng-text-muted] font-medium text-[10px] uppercase tracking-wider w-full">Message</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-white/[0.04]" id="syslog-body">
@@ -354,21 +354,21 @@
               {% endif %}
             </td>
             {% set resolved_id = msg.host_id or ip_to_host_id.get(msg.source_ip) or (ip_to_host_id.get((msg.hostname or '').lower())) %}
-            <td class="px-4 py-2 text-xs truncate max-w-[150px]">
+            <td class="px-4 py-2 text-xs whitespace-nowrap">
               {% if resolved_id %}
               <a href="/hosts/{{ resolved_id }}?tab=syslog" class="text-[--ng-text-secondary] hover:text-white transition-colors underline decoration-dotted underline-offset-2" onclick="event.stopPropagation()">{{ msg.hostname or '...' }}</a>
               {% else %}
               <span class="text-[--ng-text-secondary]">{{ msg.hostname or '...' }}</span>
               {% endif %}
             </td>
-            <td class="px-4 py-2 text-xs truncate max-w-[120px] font-mono">
+            <td class="px-4 py-2 text-xs whitespace-nowrap font-mono">
               {% if resolved_id %}
               <a href="/hosts/{{ resolved_id }}?tab=syslog" class="text-[--ng-text-muted] hover:text-white transition-colors" onclick="event.stopPropagation()">{{ msg.source_ip }}</a>
               {% else %}
               <span class="text-[--ng-text-muted]">{{ msg.source_ip }}</span>
               {% endif %}
             </td>
-            <td class="px-4 py-2 text-[--ng-text-muted] text-xs truncate max-w-[100px]">
+            <td class="px-4 py-2 text-[--ng-text-muted] text-xs whitespace-nowrap">
               {% if msg.app_name %}
               <span class="px-1.5 py-0.5 rounded bg-white/5 text-[--ng-text-secondary]">{{ msg.app_name }}</span>
               {% endif %}
@@ -383,7 +383,7 @@
                   {% elif tag == 'auth' %}bg-yellow-500/15 text-yellow-400
                   {% else %}bg-indigo-500/15 text-indigo-400{% endif %}">{{ tag }}</span>
                 {% endfor %}
-                <span class="line-clamp-2 flex-1 text-[--ng-text-primary] {% if (msg._noise_score or 50) > 70 %}opacity-40{% endif %}" title="{{ msg.message }}">{{ msg.message[:500] }}</span>
+                <span class="flex-1 text-[--ng-text-primary] {% if (msg._noise_score or 50) > 70 %}opacity-40{% endif %}">{{ msg.message[:500] }}</span>
                 {% if dedup > 1 %}
                 <span class="shrink-0 px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-400 text-[10px] font-bold tabular-nums" title="Repeated {{ dedup }} times">
                   x{{ dedup }}
@@ -566,15 +566,15 @@
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-white/[0.03] transition-colors ' + rowClass;
         tr.innerHTML = `
-          <td class="px-4 py-2 text-[--ng-text-muted] text-xs tabular-nums whitespace-nowrap font-mono w-[150px]">${msg.timestamp}</td>
-          <td class="px-4 py-2 w-[80px]"><span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${sevClass}">${msg.severity_label}</span></td>
-          <td class="px-4 py-2 text-[--ng-text-secondary] text-xs truncate max-w-[150px]">${msg.hostname || '...'}</td>
-          <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono truncate max-w-[120px]">${msg.source_ip}</td>
-          <td class="px-4 py-2 text-[--ng-text-muted] text-xs truncate max-w-[100px]">${msg.app_name ? '<span class="px-1.5 py-0.5 rounded bg-white/5 text-[--ng-text-secondary]">'+msg.app_name+'</span>' : ''}</td>
+          <td class="px-4 py-2 text-[--ng-text-muted] text-xs tabular-nums whitespace-nowrap font-mono">${msg.timestamp}</td>
+          <td class="px-4 py-2 whitespace-nowrap"><span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${sevClass}">${msg.severity_label}</span></td>
+          <td class="px-4 py-2 text-[--ng-text-secondary] text-xs whitespace-nowrap">${msg.hostname || '...'}</td>
+          <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono whitespace-nowrap">${msg.source_ip}</td>
+          <td class="px-4 py-2 text-[--ng-text-muted] text-xs whitespace-nowrap">${msg.app_name ? '<span class="px-1.5 py-0.5 rounded bg-white/5 text-[--ng-text-secondary]">'+msg.app_name+'</span>' : ''}</td>
           <td class="px-4 py-2 text-xs font-mono break-all">
             ${msg.is_new_template ? '<span class="px-1 py-0 rounded text-[8px] bg-emerald-500/20 text-emerald-400 mr-1">NEW</span>' : ''}
             ${(msg.tags||[]).map(t => '<span class="px-1 py-0 rounded text-[8px] bg-indigo-500/15 text-indigo-400 mr-0.5">' + t + '</span>').join('')}
-            <span class="text-[--ng-text-primary] line-clamp-2 ${msg.noise_score > 70 ? 'opacity-40' : ''}">${msg.message}</span>
+            <span class="text-[--ng-text-primary] ${msg.noise_score > 70 ? 'opacity-40' : ''}">${msg.message}</span>
           </td>
         `;
         const tbody = document.getElementById('live-rows');
