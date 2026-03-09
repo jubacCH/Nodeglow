@@ -182,6 +182,7 @@ function openCmdK() {
 function closeCmdK() {
   document.getElementById('cmdk-modal').classList.add('hidden');
 }
+let _cmdkTimer = null;
 window.cmdkSearch = function(q) {
   const results = document.getElementById('cmdk-results');
   const query = q.toLowerCase().trim();
@@ -189,22 +190,53 @@ window.cmdkSearch = function(q) {
     results.innerHTML = '<p class="text-center text-[--ng-text-muted] text-xs py-6 font-mono">Type to search...</p>';
     return;
   }
+
+  // Static page/integration matches
   const matches = cmdkItems.filter(i => i.name.toLowerCase().includes(query));
-  if (!matches.length) {
+  _renderCmdkResults(matches, []);
+
+  // Debounced host search
+  clearTimeout(_cmdkTimer);
+  _cmdkTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch(`/hosts/api/search?q=${encodeURIComponent(query)}`);
+      if (!resp.ok) return;
+      const hosts = await resp.json();
+      // Re-check input hasn't changed
+      const current = document.getElementById('cmdk-input').value.toLowerCase().trim();
+      if (current === query) _renderCmdkResults(matches, hosts);
+    } catch(e) {}
+  }, 200);
+};
+
+function _renderCmdkResults(staticMatches, hosts) {
+  const results = document.getElementById('cmdk-results');
+  if (!staticMatches.length && !hosts.length) {
     results.innerHTML = '<p class="text-center text-[--ng-text-muted] text-xs py-6 font-mono">No results</p>';
     return;
   }
   let html = '';
+  let idx = 0;
   let lastSection = '';
-  matches.forEach((m, i) => {
+  staticMatches.forEach(m => {
     if (m.section !== lastSection) {
       lastSection = m.section;
       html += `<p class="text-[9px] font-mono uppercase tracking-[2px] text-[--ng-text-muted] px-3 pt-2 pb-1">${m.section}</p>`;
     }
-    html += `<a href="${m.url}" onclick="closeCmdK()" class="cmdk-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-[--ng-text-secondary] hover:bg-white/[0.06] hover:text-[--ng-text-primary] transition-colors ${i === 0 ? 'bg-white/[0.04] text-[--ng-text-primary]' : ''}" data-idx="${i}">${m.name}</a>`;
+    html += `<a href="${m.url}" onclick="closeCmdK()" class="cmdk-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-[--ng-text-secondary] hover:bg-white/[0.06] hover:text-[--ng-text-primary] transition-colors ${idx === 0 ? 'bg-white/[0.04] text-[--ng-text-primary]' : ''}" data-idx="${idx}">${m.name}</a>`;
+    idx++;
   });
+  if (hosts.length) {
+    html += `<p class="text-[9px] font-mono uppercase tracking-[2px] text-[--ng-text-muted] px-3 pt-2 pb-1">Hosts</p>`;
+    hosts.forEach(h => {
+      const status = h.enabled ? '<span class="w-1.5 h-1.5 rounded-full bg-ng-success inline-block"></span>' : '<span class="w-1.5 h-1.5 rounded-full bg-white/20 inline-block"></span>';
+      const sub = h.hostname !== h.name ? `<span class="text-[--ng-text-muted] text-xs font-mono ml-2">${h.hostname}</span>` : '';
+      html += `<a href="/hosts/${h.id}" onclick="closeCmdK()" class="cmdk-item flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-[--ng-text-secondary] hover:bg-white/[0.06] hover:text-[--ng-text-primary] transition-colors ${idx === 0 ? 'bg-white/[0.04] text-[--ng-text-primary]' : ''}" data-idx="${idx}">${status} ${h.name}${sub}</a>`;
+      idx++;
+    });
+  }
   results.innerHTML = html;
-};
+}
 
 // Keyboard shortcuts
 document.addEventListener('keydown', e => {

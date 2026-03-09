@@ -705,3 +705,32 @@ async def toggle_maintenance(host_id: int, db: AsyncSession = Depends(get_db)):
         host.maintenance = not host.maintenance
         await db.commit()
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)
+
+
+@router.get("/api/search")
+async def api_search_hosts(q: str = "", db: AsyncSession = Depends(get_db)):
+    """Search hosts by name, hostname, or IP. Returns JSON for Cmd+K search."""
+    query = (q or "").strip().lower()
+    if not query or len(query) < 2:
+        return []
+
+    result = await db.execute(
+        select(PingHost.id, PingHost.name, PingHost.hostname, PingHost.enabled, PingHost.source)
+        .where(
+            func.lower(PingHost.name).contains(query)
+            | func.lower(PingHost.hostname).contains(query)
+        )
+        .order_by(PingHost.name)
+        .limit(15)
+    )
+    rows = result.all()
+    return [
+        {
+            "id": r.id,
+            "name": r.name or r.hostname,
+            "hostname": r.hostname,
+            "enabled": r.enabled,
+            "source": r.source,
+        }
+        for r in rows
+    ]
