@@ -106,10 +106,11 @@ async def check_for_updates():
             capture_output=True, text=True, timeout=30, cwd=REPO_PATH,
         )
     except Exception as e:
+        log.error("Git fetch failed: %s", e)
         return JSONResponse({
             "local": local,
             "update_available": False,
-            "error": f"Git fetch failed: {e}",
+            "error": "Git fetch failed. Check server logs for details.",
         })
 
     # Count commits behind
@@ -197,12 +198,14 @@ async def apply_update(request: Request):
             capture_output=True, text=True, timeout=60, cwd=REPO_PATH,
         )
         if result.returncode != 0:
+            log.error("Git pull failed: %s", result.stderr.strip())
             return JSONResponse({
-                "error": f"Git pull failed: {result.stderr.strip()}",
+                "error": "Git pull failed. Check server logs for details.",
             }, status_code=500)
         pull_output = result.stdout.strip()
     except Exception as e:
-        return JSONResponse({"error": f"Git pull error: {e}"}, status_code=500)
+        log.error("Git pull error: %s", e)
+        return JSONResponse({"error": "Git pull failed. Check server logs for details."}, status_code=500)
 
     # Step 2: Rebuild and restart (fire-and-forget — container will restart)
     log.info("Update: git pull done (%s). Starting rebuild...", pull_output)

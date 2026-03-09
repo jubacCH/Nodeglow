@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 
+log = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from templating import templates
@@ -280,7 +282,8 @@ async def test_connection(
         ok = await instance.health_check()
         return JSONResponse({"ok": ok})
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)})
+        log.error("Health check failed for %s/%s: %s", integration_type, config_id, exc)
+        return JSONResponse({"ok": False, "error": "Connection failed. Check server logs."})
 
 
 # ── Refresh (trigger immediate re-collect) ────────────────────────────────────

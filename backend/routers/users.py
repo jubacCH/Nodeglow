@@ -27,8 +27,10 @@ async def change_own_password(
     if db_user:
         db_user.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         await db.commit()
-    # Redirect back to referrer or dashboard
+    # Redirect back to referrer (validated) or dashboard
     ref = request.headers.get("referer", "/")
+    if not ref.startswith("/") or ref.startswith("//"):
+        ref = "/"
     return RedirectResponse(url=ref, status_code=303)
 
 

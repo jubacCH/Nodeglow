@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -12,6 +13,7 @@ from models.api_key import ApiKey
 from models.integration import IntegrationConfig
 
 router = APIRouter(prefix="/settings")
+log = logging.getLogger(__name__)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -335,7 +337,8 @@ async def test_notification(channel: str = Form(""), db: AsyncSession = Depends(
             await _send_email(host, port, user, pw, frm, to, "Nodeglow Test", "Notifications are working ✓")
         return JSONResponse({"ok": True, "message": "Test notification sent"})
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
+        log.error("Test notification failed: %s", e)
+        return JSONResponse({"ok": False, "message": "Notification failed. Check server logs."}, status_code=500)
 
 
 # ── API Keys (web UI management) ────────────────────────────────────────────

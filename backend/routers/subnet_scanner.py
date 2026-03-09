@@ -388,7 +388,7 @@ async def api_run_schedule_now(schedule_id: int, db: AsyncSession = Depends(get_
         )
         db.add(log)
         await db.commit()
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"error": "Scan failed. Check server logs."}, status_code=500)
 
 
 @router.patch("/api/subnet-scanner/schedules/{schedule_id}")
