@@ -1,5 +1,7 @@
-"""UniFi Network integration – device health, client stats, WAN metrics."""
+"""UniFi Network integration – device health, client stats, WAN metrics, speedtest."""
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import httpx
 
@@ -47,17 +49,21 @@ class UnifiAPI:
             health_r = await client.get(f"{base}/stat/health", headers=hdrs)
             events_r = await client.get(f"{base}/stat/event", headers=hdrs,
                                         params={"_limit": 200, "_sort": "-time"})
+            speedtest_r = await client.get(f"{base}/stat/report/archive.speedtest",
+                                           headers=hdrs, params={"attrs": ["xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"})
 
             devices_r.raise_for_status()
             clients_r.raise_for_status()
             health_r.raise_for_status()
             raw_events = events_r.json().get("data", []) if events_r.is_success else []
+            raw_speedtest = speedtest_r.json().get("data", []) if speedtest_r.is_success else []
 
             return parse_unifi_data(
                 devices_r.json().get("data", []),
                 clients_r.json().get("data", []),
                 health_r.json().get("data", []),
                 raw_events,
+                raw_speedtest,
             )
 
     async def health_check(self) -> bool:
@@ -96,7 +102,8 @@ _EVENT_KEY_LABELS = {
 
 
 def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
-                     raw_events: list | None = None) -> dict:
+                     raw_events: list | None = None,
+                     raw_speedtest: list | None = None) -> dict:
     devices = []
     for d in raw_devices:
         sys_stats = d.get("system-stats", {})
@@ -199,9 +206,38 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
     clients_wifi = sum(1 for c in clients if c["is_wireless"])
     clients_wired = len(clients) - clients_wifi
 
+    # ── Speedtest results (from UniFi Gateway) ──
+    speedtest_results = []
+    for st in (raw_speedtest or []):
+        ts = st.get("time") or st.get("datetime") or st.get("_id")
+        ts_str = ""
+        if isinstance(ts, (int, float)):
+            try:
+                ts_str = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts,
+                                                tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+            except (ValueError, OSError):
+                ts_str = str(ts)
+        elif isinstance(ts, str):
+            ts_str = ts
+
+        download = st.get("xput_download", 0) or 0
+        upload = st.get("xput_upload", 0) or 0
+        latency = st.get("latency", 0) or 0
+
+        speedtest_results.append({
+            "timestamp": ts_str,
+            "download_mbps": round(float(download), 1),
+            "upload_mbps": round(float(upload), 1),
+            "latency_ms": round(float(latency), 0),
+        })
+
+    # Latest speedtest for quick summary
+    speedtest_latest = speedtest_results[0] if speedtest_results else None
+
     return {
         "devices": devices, "clients": clients, "events": events,
         "wan": wan, "lan": lan, "wlan": wlan,
+        "speedtest": speedtest_results, "speedtest_latest": speedtest_latest,
         "totals": {
             "devices": len(devices), "devices_online": devices_online,
             "clients_total": len(clients), "clients_wifi": clients_wifi,

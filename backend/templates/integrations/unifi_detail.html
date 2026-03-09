@@ -97,6 +97,40 @@
 </div>
 {% endif %}
 
+<!-- Speedtest (Gateway) -->
+{% set st_latest = data.get('speedtest_latest') %}
+{% set st_history = data.get('speedtest', []) %}
+{% if st_latest %}
+<h2 class="metric-label !text-[10px] mb-3">Gateway Speedtest</h2>
+<div class="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-6">
+    <div class="glass-card p-4 text-center">
+        <p class="text-[--ng-text-muted] text-[10px] uppercase tracking-wider mb-1">Download</p>
+        <p class="text-2xl font-bold text-ng-primary font-mono tabular-nums">{{ st_latest.download_mbps }}</p>
+        <p class="text-[--ng-text-muted] text-[10px]">Mbps</p>
+    </div>
+    <div class="glass-card p-4 text-center">
+        <p class="text-[--ng-text-muted] text-[10px] uppercase tracking-wider mb-1">Upload</p>
+        <p class="text-2xl font-bold text-ng-mint font-mono tabular-nums">{{ st_latest.upload_mbps }}</p>
+        <p class="text-[--ng-text-muted] text-[10px]">Mbps</p>
+    </div>
+    <div class="glass-card p-4 text-center">
+        <p class="text-[--ng-text-muted] text-[10px] uppercase tracking-wider mb-1">Latency</p>
+        <p class="text-2xl font-bold text-[--ng-text-primary] font-mono tabular-nums">{{ st_latest.latency_ms|int }}</p>
+        <p class="text-[--ng-text-muted] text-[10px]">ms</p>
+    </div>
+    <div class="glass-card p-4 text-center">
+        <p class="text-[--ng-text-muted] text-[10px] uppercase tracking-wider mb-1">Last Test</p>
+        <p class="text-sm text-[--ng-text-secondary] font-mono mt-1">{{ st_latest.timestamp }}</p>
+    </div>
+</div>
+
+{% if st_history|length > 1 %}
+<div class="glass-card p-4 mb-6">
+    <canvas id="speedtestChart" height="120"></canvas>
+</div>
+{% endif %}
+{% endif %}
+
 <!-- Devices -->
 {% set devices = data.get('devices', []) %}
 {% if devices %}
@@ -247,4 +281,50 @@
 </div>
 
 </div>
+{% endblock %}
+
+{% block page_scripts %}
+{% if data and data.get('speedtest', [])|length > 1 %}
+<script>
+(function() {
+  function _initSpeedChart() {
+    const ctx = document.getElementById('speedtestChart');
+    if (!ctx) return;
+    const history = {{ data.get('speedtest', [])|tojson }};
+    if (history.length < 2) return;
+    const reversed = history.slice().reverse();
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: reversed.map(s => s.timestamp),
+        datasets: [
+          {label: 'Download (Mbps)', data: reversed.map(s => s.download_mbps),
+           borderColor: '#38BDF8', backgroundColor: 'rgba(56,189,248,0.1)',
+           fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2},
+          {label: 'Upload (Mbps)', data: reversed.map(s => s.upload_mbps),
+           borderColor: '#34D399', backgroundColor: 'rgba(52,211,153,0.1)',
+           fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2},
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {legend: {labels: {color: '#94A3B8', font: {size: 11, family: "'JetBrains Mono', monospace"}}}},
+        scales: {
+          x: {ticks: {color: '#475569', font: {size: 9}, maxRotation: 45}, grid: {color: 'rgba(255,255,255,0.04)'}},
+          y: {ticks: {color: '#475569', font: {size: 10}, callback: v => v + ' Mbps'}, grid: {color: 'rgba(255,255,255,0.04)'},
+             beginAtZero: true}
+        }
+      }
+    });
+  }
+  if (typeof Chart !== 'undefined') { _initSpeedChart(); }
+  else {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+    s.onload = _initSpeedChart;
+    document.head.appendChild(s);
+  }
+})();
+</script>
+{% endif %}
 {% endblock %}
