@@ -157,11 +157,13 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
             "port_table": port_table, "has_ports": has_ports and len(port_table) > 0,
         })
 
+    device_names = {d["mac"].lower(): d["name"] for d in devices if d.get("mac")}
     ap_names = {d["mac"]: d["name"] for d in devices}
     clients = []
     for c in raw_clients:
         is_wireless = "ap_mac" in c
         ap_mac = c.get("ap_mac", "")
+        sw_mac = (c.get("sw_mac") or "").strip().lower()
         clients.append({
             "mac": c.get("mac", ""), "hostname": c.get("hostname") or c.get("name") or c.get("mac", ""),
             "ip": c.get("ip", ""), "ap_mac": ap_mac, "ap_name": ap_names.get(ap_mac, ap_mac),
@@ -171,6 +173,9 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
             "uptime": c.get("uptime", 0), "is_wireless": is_wireless,
             "vlan": c.get("vlan", 1) or 1, "ssid": c.get("essid", ""),
             "satisfaction": c.get("satisfaction", -1), "channel": c.get("channel", 0),
+            "sw_mac": sw_mac, "sw_port": c.get("sw_port"),
+            "sw_name": device_names.get(sw_mac, sw_mac) if sw_mac else "",
+            "network": c.get("network", ""),
         })
 
     wan, lan, wlan = {}, {}, {}

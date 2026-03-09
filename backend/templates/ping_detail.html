@@ -532,6 +532,21 @@
           {% if unifi_client.channel %}<p class="text-slate-500 text-xs mt-0.5">Kanal {{ unifi_client.channel }}</p>{% endif %}
         </div>
         {% endif %}
+        {% if unifi_client.get('sw_name') or unifi_client.get('sw_port') %}
+        <div>
+          <p class="text-slate-500 text-xs uppercase tracking-wider mb-1.5">Switch Port</p>
+          <p class="text-white text-sm font-medium">
+            {% if unifi_client.sw_name %}{{ unifi_client.sw_name }}{% endif %}
+            {% if unifi_client.sw_port %}<span class="text-ng-primary"> Port {{ unifi_client.sw_port }}</span>{% endif %}
+          </p>
+          {% if unifi_client.get('network') %}<p class="text-slate-500 text-xs mt-0.5">{{ unifi_client.network }}</p>{% endif %}
+        </div>
+        {% elif unifi_client.get('network') %}
+        <div>
+          <p class="text-slate-500 text-xs uppercase tracking-wider mb-1.5">Network</p>
+          <p class="text-white text-sm font-medium">{{ unifi_client.network }}</p>
+        </div>
+        {% endif %}
         {% if unifi_client.rx_bytes_r is defined or unifi_client.tx_bytes_r is defined %}
         <div>
           <p class="text-slate-500 text-xs uppercase tracking-wider mb-1.5">Traffic (live)</p>
