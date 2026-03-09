@@ -140,7 +140,7 @@
       {% set a_link = a.get('host_id') or ping_host_map.get(a.name) %}
       {% set a_metric = a.metric | lower %}
       {% if a_link %}
-      <a href="/ping/{{ a_link }}?tab=monitoring&highlight={{ a_metric }}"
+      <a href="/hosts/{{ a_link }}?tab=monitoring&highlight={{ a_metric }}"
          class="flex items-center gap-2 px-3 py-1.5 bg-ng-critical/[0.06] border border-ng-critical/15 rounded-lg hover:!bg-ng-critical/[0.12] hover:!border-ng-critical/30 transition-colors">
       {% else %}
       <div class="flex items-center gap-2 px-3 py-1.5 bg-ng-critical/[0.06] border border-ng-critical/15 rounded-lg">
@@ -179,7 +179,7 @@
       {% set w_link = ping_host_map.get(w.name) %}
       {% set w_metric = w.metric | lower %}
       {% if w_link %}
-      <a href="/ping/{{ w_link }}?tab=monitoring&highlight={{ w_metric }}"
+      <a href="/hosts/{{ w_link }}?tab=monitoring&highlight={{ w_metric }}"
          class="flex items-center gap-2 px-3 py-1.5 bg-ng-warning/[0.04] border border-ng-warning/10 rounded-lg hover:!bg-ng-warning/[0.10] hover:!border-ng-warning/25 transition-colors">
       {% else %}
       <div class="flex items-center gap-2 px-3 py-1.5 bg-ng-warning/[0.04] border border-ng-warning/10 rounded-lg">
@@ -216,7 +216,7 @@
   {% if not host_stats %}
   <div class="glass-card-static text-center !p-12 mb-8">
     <p class="text-[--ng-text-secondary] font-display tracking-wider">No hosts configured</p>
-    <a href="/ping" class="inline-block mt-4 ng-btn ng-btn-primary">Add first host</a>
+    <a href="/hosts" class="inline-block mt-4 ng-btn ng-btn-primary">Add first host</a>
   </div>
   {% endif %}
 
@@ -527,7 +527,7 @@
       tooltip.classList.add('hidden');
     });
     canvas.addEventListener('click', () => {
-      if (hoveredIdx >= 0) window.location.href = '/ping/' + _gravityParticles[hoveredIdx].host.id;
+      if (hoveredIdx >= 0) window.location.href = '/hosts/' + _gravityParticles[hoveredIdx].host.id;
     });
 
     draw();
@@ -618,7 +618,7 @@
 
   async function refreshStatus() {
     try {
-      const res = await fetch('/ping/api/status');
+      const res = await fetch('/hosts/api/status');
       const data = await res.json();
       data.forEach(h => {
         const latEl = document.querySelector(`.latency-val-${h.id}`);

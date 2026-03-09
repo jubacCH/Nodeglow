@@ -21,7 +21,7 @@ from models.syslog import SyslogMessage
 from services import integration as int_svc
 from services import snapshot as snap_svc
 
-router = APIRouter(prefix="/ping")
+router = APIRouter(prefix="/hosts")
 
 
 async def _dns_resolve(hostname: str) -> dict:
@@ -227,7 +227,7 @@ async def ping_list(request: Request, db: AsyncSession = Depends(get_db)):
         "request": request,
         "host_data": host_data,
         "uptime_map": uptime_map,
-        "active_page": "ping",
+        "active_page": "hosts",
     })
 
 
@@ -235,7 +235,7 @@ async def ping_list(request: Request, db: AsyncSession = Depends(get_db)):
 async def ping_detail(host_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
     if not host:
-        return RedirectResponse(url="/ping")
+        return RedirectResponse(url="/hosts")
 
     dns_info = await _dns_resolve(host.hostname)
 
@@ -594,7 +594,7 @@ async def ping_detail(host_id: int, request: Request, db: AsyncSession = Depends
         "all_hosts": (await db.execute(
             select(PingHost).where(PingHost.id != host.id).order_by(PingHost.name)
         )).scalars().all(),
-        "active_page": "ping",
+        "active_page": "hosts",
         "saved": request.query_params.get("saved"),
         "active_tab": request.query_params.get("tab", "info"),
     })
@@ -607,7 +607,7 @@ async def ping_check_now(host_id: int, db: AsyncSession = Depends(get_db)):
     """Run an immediate ping check for a single host and store the result."""
     host = await db.get(PingHost, host_id)
     if not host:
-        return RedirectResponse(url="/ping", status_code=303)
+        return RedirectResponse(url="/hosts", status_code=303)
 
     # For agent-sourced hosts, check agent heartbeat instead of ICMP
     if host.source == "agent":
@@ -631,7 +631,7 @@ async def ping_check_now(host_id: int, db: AsyncSession = Depends(get_db)):
     ))
     await db.commit()
 
-    return RedirectResponse(url=f"/ping/{host_id}", status_code=303)
+    return RedirectResponse(url=f"/hosts/{host_id}", status_code=303)
 
 
 # ── CRUD actions ───────────────────────────────────────────────────────────────
@@ -654,7 +654,7 @@ async def add_ping_host(
         latency_threshold_ms=float(latency_threshold_ms) if latency_threshold_ms.strip() else None,
     ))
     await db.commit()
-    return RedirectResponse(url="/ping", status_code=303)
+    return RedirectResponse(url="/hosts", status_code=303)
 
 
 @router.post("/{host_id}/edit")
@@ -677,7 +677,7 @@ async def edit_ping_host(
         host.latency_threshold_ms = float(latency_threshold_ms) if latency_threshold_ms.strip() else None
         host.parent_id = int(parent_id) if parent_id.strip() else None
         await db.commit()
-    return RedirectResponse(url=f"/ping/{host_id}?tab=info&saved=1", status_code=303)
+    return RedirectResponse(url=f"/hosts/{host_id}?tab=info&saved=1", status_code=303)
 
 
 @router.post("/{host_id}/delete")
@@ -686,7 +686,7 @@ async def delete_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     if host:
         await db.delete(host)
         await db.commit()
-    return RedirectResponse(url="/ping", status_code=303)
+    return RedirectResponse(url="/hosts", status_code=303)
 
 
 @router.post("/{host_id}/toggle")
@@ -695,7 +695,7 @@ async def toggle_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     if host:
         host.enabled = not host.enabled
         await db.commit()
-    return RedirectResponse(url=f"/ping/{host_id}?tab=info", status_code=303)
+    return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)
 
 
 @router.post("/{host_id}/maintenance")
@@ -704,4 +704,4 @@ async def toggle_maintenance(host_id: int, db: AsyncSession = Depends(get_db)):
     if host:
         host.maintenance = not host.maintenance
         await db.commit()
-    return RedirectResponse(url=f"/ping/{host_id}?tab=info", status_code=303)
+    return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)

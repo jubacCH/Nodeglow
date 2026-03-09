@@ -21,7 +21,7 @@
           {% for row in heatmap_data %}
           <tr>
             <td class="py-0.5 pr-3 sticky left-0 bg-[--ng-bg]">
-              <a href="/ping/{{ row.host_id }}" class="text-[--ng-text-primary] hover:text-ng-primary transition-colors truncate block max-w-[100px]">{{ row.name }}</a>
+              <a href="/hosts/{{ row.host_id }}" class="text-[--ng-text-primary] hover:text-ng-primary transition-colors truncate block max-w-[100px]">{{ row.name }}</a>
             </td>
             {% for pct in row.days %}
             <td class="py-0.5 px-0.5">

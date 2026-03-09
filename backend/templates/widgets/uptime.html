@@ -9,7 +9,7 @@
     </div>
     <div class="space-y-1 section-body">
       {% for h in uptime_ranking %}
-      <a href="/ping/{{ h.host_id }}" class="flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
+      <a href="/hosts/{{ h.host_id }}" class="flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
         <span class="text-[--ng-text-muted] text-[10px] font-mono tabular-nums w-4 shrink-0">{{ loop.index }}</span>
         <span class="w-2 h-2 rounded-full shrink-0
           {% if h.uptime >= 99.9 %}bg-ng-success

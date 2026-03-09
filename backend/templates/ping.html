@@ -22,7 +22,7 @@
   <!-- Add host form (hidden by default) -->
   <div id="add-form" class="hidden bg-[--ng-glass-bg] border border-[--ng-glass-border] rounded-xl p-5 mb-6">
     <h2 class="text-sm font-medium text-slate-300 mb-4">New host</h2>
-    <form method="post" action="/ping/add" class="grid grid-cols-2 gap-3">
+    <form method="post" action="/hosts/add" class="grid grid-cols-2 gap-3">
       <input type="text" name="name" placeholder="Display name (e.g. Router)"
              class="ng-input" required>
       <input type="text" name="hostname" placeholder="Hostname or IP"
@@ -192,7 +192,7 @@
             data-uptime7="{{ uptime_map.get(d.host.id, {}).get('d7', -1) }}"
             data-uptime30="{{ uptime_map.get(d.host.id, {}).get('d30', -1) }}"
             data-enabled="{{ '1' if d.host.enabled else '0' }}"
-            onclick="window.location='/ping/{{ d.host.id }}'">
+            onclick="window.location='/hosts/{{ d.host.id }}'">
           <td class="px-5 py-3.5">
             <div class="flex items-center gap-2 flex-wrap">
               <p class="text-white font-medium">{{ d.host.name }}</p>
@@ -286,7 +286,7 @@
             </div>
           </td>
           <td class="px-5 py-3.5" onclick="event.stopPropagation()">
-            <form method="post" action="/ping/{{ d.host.id }}/toggle">
+            <form method="post" action="/hosts/{{ d.host.id }}/toggle">
               <button type="submit"
                       title="{% if d.host.enabled %}Disable {{ d.host.name }}{% else %}Enable {{ d.host.name }}{% endif %}"
                       class="relative w-9 h-5 rounded-full transition-colors focus:outline-none

@@ -29,7 +29,7 @@
       </div>
       <div class="md:hidden p-3 grid grid-cols-3 gap-1.5 max-h-64 overflow-y-auto">
         {% for s in host_stats | sort(attribute='host.name') %}
-        <a href="/ping/{{ s.host.id }}" class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
+        <a href="/hosts/{{ s.host.id }}" class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
           <span class="w-1.5 h-1.5 rounded-full shrink-0 {% if s.host.maintenance %}bg-ng-warning{% elif s.online %}bg-ng-success{% elif s.online is false %}bg-ng-critical{% else %}bg-[--ng-text-muted]{% endif %}"></span>
           <span class="text-[--ng-text-primary] text-[10px] font-mono truncate">{{ s.host.name }}</span>
         </a>

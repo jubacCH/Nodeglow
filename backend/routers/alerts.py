@@ -45,7 +45,7 @@ async def alerts_page(request: Request, db: AsyncSession = Depends(get_db)):
                 "category": "Host offline",
                 "name": host.name,
                 "detail": host.hostname,
-                "url": f"/ping/{host.id}",
+                "url": f"/hosts/{host.id}",
                 "time": latest.timestamp,
             })
 
@@ -57,7 +57,7 @@ async def alerts_page(request: Request, db: AsyncSession = Depends(get_db)):
                 "category": "SSL expiry",
                 "name": host.name,
                 "detail": f"Expires in {host.ssl_expiry_days} days",
-                "url": f"/ping/{host.id}",
+                "url": f"/hosts/{host.id}",
                 "time": None,
             })
 

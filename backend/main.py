@@ -154,6 +154,18 @@ async def ws_live(websocket: WebSocket):
         unregister(websocket)
 
 
+# ── Legacy redirect: /ping → /hosts ──────────────────────────────────────────
+from fastapi.responses import RedirectResponse
+
+@app.get("/ping/{path:path}")
+@app.get("/ping")
+async def _ping_redirect(request: Request, path: str = ""):
+    qs = str(request.query_params)
+    target = f"/hosts/{path}" if path else "/hosts"
+    if qs:
+        target += f"?{qs}"
+    return RedirectResponse(url=target, status_code=301)
+
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
 app.include_router(dashboard.router)

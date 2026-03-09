@@ -147,7 +147,7 @@ window.showToast = function(msg, type) {
 // ── Cmd+K Search ──────────────────────────────────────────────────────────
 const cmdkItems = [
   {name: 'Dashboard', url: '/', section: 'Pages'},
-  {name: 'Hosts', url: '/ping', section: 'Pages'},
+  {name: 'Hosts', url: '/hosts', section: 'Pages'},
   {name: 'Alerts', url: '/alerts', section: 'Pages'},
   {name: 'Syslog', url: '/syslog', section: 'Pages'},
   {name: 'Incidents', url: '/incidents', section: 'Pages'},
