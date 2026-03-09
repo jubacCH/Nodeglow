@@ -1,6 +1,7 @@
 import os
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -126,7 +127,10 @@ async def inject_globals(request: Request, call_next):
             content_type = request.headers.get("content-type", "")
             form_data = None
             if "form" in content_type:
-                form_data = dict(await request.form())
+                # Parse CSRF token from raw body without consuming Starlette's form state
+                body = await request.body()
+                parsed = parse_qs(body.decode("utf-8", errors="replace"))
+                form_data = {k: v[0] for k, v in parsed.items()}
             if not validate_csrf(request, form_data):
                 return csrf_error_response(request)
         else:
