@@ -1277,8 +1277,8 @@
     type: 'line',
     data: { labels: [], datasets: [
       { label: 'Latency (ms)', data: [],
-        borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.06)',
-        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4, fill: true, tension: 0.3, spanGaps: true,
+        borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.15)',
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, fill: true, tension: 0.3, spanGaps: true,
         order: 1,
       },
       { label: 'Offline', data: [],
@@ -1428,10 +1428,10 @@
     const makeDatasets = (rng) => {
       const r = pxRanges[rng];
       const ds = [
-        { label: 'CPU %', data: r.cpu, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.06)', borderWidth: 1.5, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 3 },
-        { label: 'RAM %', data: r.mem, borderColor: '#c084fc', backgroundColor: 'rgba(192,132,252,0.06)', borderWidth: 1.5, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 3 },
+        { label: 'CPU %', data: r.cpu, borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.15)', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 3 },
+        { label: 'RAM %', data: r.mem, borderColor: '#c084fc', backgroundColor: 'rgba(192,132,252,0.15)', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 3 },
       ];
-      if (hasDisk) ds.push({ label: 'Disk %', data: r.disk, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.04)', borderWidth: 1.5, fill: false, tension: 0.3, pointRadius: 0, pointHoverRadius: 3 });
+      if (hasDisk) ds.push({ label: 'Disk %', data: r.disk, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.15)', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHoverRadius: 3 });
       return ds;
     };
 
@@ -1499,8 +1499,8 @@
         data: {
           labels: labels,
           datasets: [
-            { label: 'CPU %', data: cpuData, borderColor: '#38BDF8', backgroundColor: 'rgba(56,189,248,0.08)', fill: true, borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
-            { label: 'Memory %', data: memData, borderColor: '#A78BFA', backgroundColor: 'rgba(167,139,250,0.08)', fill: true, borderWidth: 1.5, pointRadius: 0, tension: 0.3 },
+            { label: 'CPU %', data: cpuData, borderColor: '#38BDF8', backgroundColor: 'rgba(56,189,248,0.15)', fill: true, borderWidth: 2, pointRadius: 0, tension: 0.3 },
+            { label: 'Memory %', data: memData, borderColor: '#A78BFA', backgroundColor: 'rgba(167,139,250,0.15)', fill: true, borderWidth: 2, pointRadius: 0, tension: 0.3 },
           ]
         },
         options: {
@@ -1634,7 +1634,7 @@
           data: values,
           borderColor: getComputedStyle(document.documentElement).getPropertyValue('--ng-primary').trim() || '#38BDF8',
           backgroundColor: 'transparent',
-          borderWidth: 1.5,
+          borderWidth: 2,
           pointRadius: 0,
           pointHitRadius: 8,
           tension: 0.3,
