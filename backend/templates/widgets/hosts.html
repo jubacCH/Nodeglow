@@ -31,7 +31,7 @@
             {% elif s.online %}text-ng-success
             {% elif s.online is false %}text-ng-critical
             {% else %}text-[--ng-text-muted]{% endif %}">
-            {% if s.host.maintenance %}Maint.{% elif s.online %}Online{% elif s.online is false %}Offline{% else %}—{% endif %}
+            {% if s.host.maintenance %}Maint.{% elif s.online is false %}Offline{% elif not s.online %}—{% endif %}
           </span>
           <span class="latency-val-{{ s.host.id }} text-[10px] font-mono tabular-nums
             {% if s.latency is not none %}text-[--ng-text-secondary]{% else %}text-[--ng-text-muted]{% endif %}">
