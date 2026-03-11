@@ -4,6 +4,18 @@ A self-hosted infrastructure monitoring platform with **log intelligence**, **in
 
 ---
 
+## Screenshots
+
+| Dashboard | Hosts |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Hosts](docs/screenshots/hosts.png) |
+
+| Host Detail | Incidents |
+|---|---|
+| ![Host Detail](docs/screenshots/host-detail.png) | ![Incidents](docs/screenshots/incidents.png) |
+
+---
+
 ## Tech Stack
 
 ```mermaid
