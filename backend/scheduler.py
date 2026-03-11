@@ -102,6 +102,14 @@ async def run_ping_checks():
         result = await db.execute(select(PingHost).where(PingHost.enabled == True))
         hosts = result.scalars().all()
 
+        # Auto-clear expired maintenance windows
+        now = datetime.utcnow()
+        for h in hosts:
+            if h.maintenance and h.maintenance_until and h.maintenance_until <= now:
+                h.maintenance = False
+                h.maintenance_until = None
+        await db.commit()
+
     if not hosts:
         return
 

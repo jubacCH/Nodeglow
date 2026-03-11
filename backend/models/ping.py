@@ -17,6 +17,7 @@ class PingHost(Base):
     port                 = Column(Integer, nullable=True)
     latency_threshold_ms = Column(Float, nullable=True)
     maintenance          = Column(Boolean, default=False)
+    maintenance_until    = Column(DateTime, nullable=True)
     ssl_expiry_days      = Column(Integer, nullable=True)
     source               = Column(String, default="manual", index=True) # manual | phpipam | proxmox | unifi
     source_detail        = Column(String, nullable=True)

@@ -52,6 +52,7 @@ class PingHost(Base):
     port                 = Column(Integer, nullable=True)
     latency_threshold_ms = Column(Float, nullable=True)
     maintenance          = Column(Boolean, default=False)
+    maintenance_until    = Column(DateTime, nullable=True)
     ssl_expiry_days      = Column(Integer, nullable=True)
     source               = Column(String, default="manual")
     source_detail        = Column(String, nullable=True)
@@ -115,6 +116,7 @@ async def init_db():
             ("port",                 "INTEGER"),
             ("latency_threshold_ms", "REAL"),
             ("maintenance",          "INTEGER DEFAULT 0"),
+            ("maintenance_until",    "TIMESTAMP"),
             ("ssl_expiry_days",      "INTEGER"),
             ("source",               "TEXT DEFAULT 'manual'"),
             ("source_detail",        "TEXT"),

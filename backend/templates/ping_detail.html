@@ -21,7 +21,7 @@
 
         {% if host.maintenance %}
           <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 text-xs font-medium border border-yellow-500/20">
-            Maintenance
+            Maintenance{% if host.maintenance_until %} until {{ host.maintenance_until|localtime("%H:%M") }}{% endif %}
           </span>
         {% elif latest and latest.success %}
           <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-medium border border-emerald-500/20">
@@ -230,20 +230,44 @@
             </form>
           </div>
 
-          <!-- Maintenance toggle -->
-          <div class="flex items-center justify-between py-3 border-b border-white/[0.08]">
-            <div>
-              <p class="text-sm text-white">Maintenance mode</p>
-              <p class="text-xs text-slate-500 mt-0.5">Pauses checks, hides from alarms</p>
+          <!-- Maintenance window -->
+          <div class="py-3 border-b border-white/[0.08]">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm text-white">Maintenance mode</p>
+                <p class="text-xs text-slate-500 mt-0.5">Pauses checks, hides from alarms</p>
+                {% if host.maintenance and host.maintenance_until %}
+                <p class="text-xs text-yellow-400 mt-1 font-mono">Until {{ host.maintenance_until|localtime("%Y-%m-%d %H:%M") }}</p>
+                {% elif host.maintenance %}
+                <p class="text-xs text-yellow-400 mt-1">Indefinite</p>
+                {% endif %}
+              </div>
+              {% if host.maintenance %}
+              <form method="post" action="/hosts/{{ host.id }}/maintenance">
+                <button type="submit" class="ng-btn ng-btn-ghost !text-xs !py-1 !px-3 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/10">End</button>
+              </form>
+              {% else %}
+              <button type="button" onclick="document.getElementById('maintModal').classList.remove('hidden')"
+                      class="ng-btn ng-btn-ghost !text-xs !py-1 !px-3">Schedule</button>
+              {% endif %}
             </div>
-            <form method="post" action="/hosts/{{ host.id }}/maintenance">
-              <button type="submit"
-                      class="relative w-10 h-5 rounded-full transition-colors focus:outline-none
-                             {% if host.maintenance %}bg-yellow-500{% else %}bg-white/[0.06]{% endif %}">
-                <span class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all
-                             {% if host.maintenance %}left-5{% else %}left-0.5{% endif %}"></span>
-              </button>
-            </form>
+          </div>
+
+          <!-- Maintenance Modal -->
+          <div id="maintModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+            <div class="glass-elevated rounded-xl p-6 w-full max-w-sm mx-4">
+              <h3 class="text-sm font-medium text-[--ng-text-primary] mb-4">Schedule Maintenance</h3>
+              <form method="post" action="/hosts/{{ host.id }}/maintenance" class="space-y-2">
+                <button type="submit" name="duration" value="1h" class="w-full ng-btn ng-btn-ghost !justify-start !text-xs">1 Hour</button>
+                <button type="submit" name="duration" value="2h" class="w-full ng-btn ng-btn-ghost !justify-start !text-xs">2 Hours</button>
+                <button type="submit" name="duration" value="4h" class="w-full ng-btn ng-btn-ghost !justify-start !text-xs">4 Hours</button>
+                <button type="submit" name="duration" value="8h" class="w-full ng-btn ng-btn-ghost !justify-start !text-xs">8 Hours</button>
+                <button type="submit" name="duration" value="24h" class="w-full ng-btn ng-btn-ghost !justify-start !text-xs">24 Hours</button>
+                <button type="submit" name="duration" value="indefinite" class="w-full ng-btn ng-btn-ghost !justify-start !text-xs text-yellow-400">Indefinite</button>
+              </form>
+              <button type="button" onclick="document.getElementById('maintModal').classList.add('hidden')"
+                      class="w-full ng-btn ng-btn-ghost !text-xs mt-3 text-slate-500">Cancel</button>
+            </div>
           </div>
 
           <!-- Delete -->

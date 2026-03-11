@@ -707,11 +707,41 @@ async def toggle_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{host_id}/maintenance")
-async def toggle_maintenance(host_id: int, db: AsyncSession = Depends(get_db)):
+async def toggle_maintenance(
+    host_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     host = await db.get(PingHost, host_id)
-    if host:
-        host.maintenance = not host.maintenance
-        await db.commit()
+    if not host:
+        return RedirectResponse(url="/hosts", status_code=303)
+
+    form = await request.form()
+    duration = form.get("duration", "")
+
+    if host.maintenance and not duration:
+        # Toggle off
+        host.maintenance = False
+        host.maintenance_until = None
+    else:
+        # Toggle on with optional duration
+        host.maintenance = True
+        if duration == "1h":
+            host.maintenance_until = datetime.utcnow() + timedelta(hours=1)
+        elif duration == "2h":
+            host.maintenance_until = datetime.utcnow() + timedelta(hours=2)
+        elif duration == "4h":
+            host.maintenance_until = datetime.utcnow() + timedelta(hours=4)
+        elif duration == "8h":
+            host.maintenance_until = datetime.utcnow() + timedelta(hours=8)
+        elif duration == "24h":
+            host.maintenance_until = datetime.utcnow() + timedelta(hours=24)
+        elif duration == "indefinite":
+            host.maintenance_until = None
+        else:
+            # Default: indefinite (backwards compatible)
+            host.maintenance_until = None
+    await db.commit()
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)
 
 
