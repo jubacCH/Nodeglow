@@ -330,11 +330,14 @@ async function _loadFields(prefix, preselect) {
     if (!_fieldCache[key]) {
         try {
             const url = `/api/rules/fields?source_type=${encodeURIComponent(type)}` + (id ? `&source_id=${id}` : '');
-            const resp = await fetch(url);
+            const resp = await fetch(url, {credentials: 'same-origin'});
             if (resp.ok) {
-                _fieldCache[key] = await resp.json();
+                const ct = resp.headers.get('content-type') || '';
+                if (ct.includes('json')) {
+                    _fieldCache[key] = await resp.json();
+                }
             }
-        } catch(e) {}
+        } catch(e) { console.warn('Field load failed:', e); }
     }
 
     const fields = _fieldCache[key] || [];
