@@ -90,8 +90,8 @@ async def alerts_page(
         if cfg.type == "ups" and snap and snap.ok and snap.data_json:
             try:
                 d = json.loads(snap.data_json)
-                status = d.get("status", "").lower()
-                if "onbatt" in status or "on battery" in status:
+                ups_status = d.get("status", "").lower()
+                if "onbatt" in ups_status or "on battery" in ups_status:
                     alerts.append({
                         "severity": "critical",
                         "category": "UPS on battery",
@@ -124,11 +124,17 @@ async def alerts_page(
         )).scalar() or 0
         inc_counts[s] = c
 
+    # ── Maintenance windows ─────────────────────────────────────────────────────
+    maint_hosts = (await db.execute(
+        select(PingHost).where(PingHost.maintenance == True)
+    )).scalars().all()
+
     return templates.TemplateResponse("alerts.html", {
         "request": request,
         "alerts": alerts,
         "incidents": incidents,
         "inc_counts": inc_counts,
+        "maint_hosts": maint_hosts,
         "tab": tab,
         "f_status": status,
         "active_page": "alerts",
