@@ -155,7 +155,35 @@ def parse_syslog(raw: str, source_ip: str) -> dict:
             "message": pri_match.group(2).strip(),
         }
 
-    # No PRI at all
+    # No PRI — try RFC 3164 timestamp pattern without PRI header
+    m = re.match(
+        r"(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+"
+        r"(\S+)\s+"
+        r"(.+)", raw, re.DOTALL
+    )
+    if m:
+        ts = _parse_3164_ts(m.group(1))
+        hostname = m.group(2)
+        rest = m.group(3)
+
+        # Dual-timestamp (UniFi): hostname slot is actually an ISO timestamp
+        if re.match(r"\d{4}-\d{2}-\d{2}T", hostname):
+            parts = rest.split(None, 1)
+            if parts:
+                hostname = parts[0]
+                rest = parts[1] if len(parts) > 1 else ""
+
+        app_name, message = _split_app_message(rest)
+        return {
+            "timestamp": ts,
+            "source_ip": source_ip,
+            "hostname": hostname,
+            "facility": None,
+            "severity": 6,  # informational (no PRI to derive from)
+            "app_name": app_name,
+            "message": message.strip(),
+        }
+
     return {
         "timestamp": datetime.utcnow(),
         "source_ip": source_ip,
