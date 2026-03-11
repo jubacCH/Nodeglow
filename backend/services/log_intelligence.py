@@ -1,16 +1,18 @@
 """
 Log Intelligence Engine – template extraction, baseline learning, noise scoring,
-auto-tagging, and precursor detection. Pure Python, no ML libraries.
+auto-tagging, precursor detection, and burst detection.  Pure Python, no ML libraries.
 
 Architecture:
 - Template extraction runs on every incoming syslog message (in-memory, fast)
+- Burst detection tracks per-template rate in a sliding 5-min window
 - Baseline computation + precursor detection run periodically (scheduler)
 - Noise scores are updated periodically based on template frequency patterns
 """
 import hashlib
 import logging
 import re
-from collections import defaultdict
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -27,6 +29,13 @@ log = logging.getLogger("nodeglow.intelligence")
 _VARIABLE_PATTERNS = [
     # UUIDs
     (re.compile(r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'), '<UUID>'),
+    # Email addresses
+    (re.compile(r'\b[\w.+-]+@[\w.-]+\.\w{2,}\b'), '<EMAIL>'),
+    # URLs (http/https)
+    (re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+'), '<URL>'),
+    # Docker container IDs (12 or 64 hex chars)
+    (re.compile(r'\b[0-9a-f]{64}\b'), '<CONTAINER_ID>'),
+    (re.compile(r'\b[0-9a-f]{12}\b'), '<SHORT_ID>'),
     # MAC addresses
     (re.compile(r'\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b'), '<MAC>'),
     # IPv6 (simplified)
@@ -37,11 +46,20 @@ _VARIABLE_PATTERNS = [
     (re.compile(r'\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\.\d]*[Z+\-\d:]*\b'), '<TS>'),
     # Date-like patterns
     (re.compile(r'\b\d{4}[-/]\d{2}[-/]\d{2}\b'), '<DATE>'),
+    # Time-like patterns (HH:MM:SS)
+    (re.compile(r'\b\d{2}:\d{2}:\d{2}\b'), '<TIME>'),
     # Hex strings (8+ chars)
     (re.compile(r'\b0x[0-9a-fA-F]{4,}\b'), '<HEX>'),
     (re.compile(r'\b[0-9a-fA-F]{8,}\b'), '<HEX>'),
     # File paths
     (re.compile(r'(?:/[\w.\-]+){2,}'), '<PATH>'),
+    # Quoted strings (often variable content in logs)
+    (re.compile(r"'[^']{2,60}'"), "'<*>'"),
+    (re.compile(r'"[^"]{2,60}"'), '"<*>"'),
+    # Usernames after common prefixes
+    (re.compile(r'(?<=user[= ])\S+'), '<USER>'),
+    (re.compile(r'(?<=for user )\S+'), '<USER>'),
+    (re.compile(r'(?<=from user )\S+'), '<USER>'),
     # Numbers (3+ digits, standalone)
     (re.compile(r'\b\d{3,}\b'), '<NUM>'),
     # Port-like numbers after specific keywords
@@ -80,25 +98,32 @@ _TAG_RULES = [
     ("security", re.compile(
         r'(?i)\b(failed\s+password|unauthorized|denied|authentication|'
         r'invalid\s+user|brute.?force|attack|intrusion|forbidden|'
-        r'login\s+failed|access.?denied|permission|firewall)\b'
+        r'login\s+failed|access.?denied|permission|firewall|'
+        r'blocked|malware|virus|exploit|scan|vulnerability|'
+        r'injection|overflow|escalation|privilege)\b'
     )),
     ("hardware", re.compile(
         r'(?i)\b(disk|memory|temperature|temp|fan|sensor|cpu|'
-        r'hardware|smart|i/?o\s+error|ecc|parity|thermal|voltage|power)\b'
+        r'hardware|smart|i/?o\s+error|ecc|parity|thermal|voltage|power|'
+        r'battery|ups|overclock|overheat|dimm|bios|uefi|pci|usb)\b'
     )),
     ("network", re.compile(
         r'(?i)\b(link\s+down|link\s+up|unreachable|timeout|connection\s+refused|'
         r'dns|dhcp|arp|route|interface|packet|dropped|retransmit|'
-        r'network|carrier|negotiat|duplex|mtu)\b'
+        r'network|carrier|negotiat|duplex|mtu|latency|bandwidth|'
+        r'vlan|bridge|bond|lacp|spanning.?tree|bgp|ospf|vpn|wireguard|'
+        r'tcp\s+reset|connection\s+closed|port\s+unreachable)\b'
     )),
     ("storage", re.compile(
         r'(?i)\b(zfs|zpool|raid|mdadm|lvm|mount|unmount|filesystem|'
-        r'quota|inode|scrub|resilver|snapshot|backup|nfs|smb|iscsi)\b'
+        r'quota|inode|scrub|resilver|snapshot|backup|nfs|smb|iscsi|'
+        r'ceph|btrfs|ext4|xfs|disk\s+full|no\s+space|trim|defrag)\b'
     )),
     ("service", re.compile(
         r'(?i)\b(started|stopped|restart|crashed|exited|failed|'
         r'systemd|service|unit|docker|container|supervisor|'
-        r'enabling|disabling|loaded|activated)\b'
+        r'enabling|disabling|loaded|activated|'
+        r'oom.?kill|segfault|core\s+dump|signal|sigterm|sigkill)\b'
     )),
     ("update", re.compile(
         r'(?i)\b(upgrade|update|patch|install|dpkg|apt|yum|rpm|'
@@ -106,7 +131,28 @@ _TAG_RULES = [
     )),
     ("auth", re.compile(
         r'(?i)\b(login|logout|session|pam|sudo|su\b|ssh|'
-        r'accepted\s+key|publickey|certificate|token|oauth)\b'
+        r'accepted\s+key|publickey|certificate|token|oauth|'
+        r'ldap|radius|kerberos|saml|mfa|2fa|totp)\b'
+    )),
+    ("database", re.compile(
+        r'(?i)\b(postgres|mysql|mariadb|sqlite|mongodb|redis|'
+        r'query|transaction|deadlock|slow\s+query|replication|'
+        r'connection\s+pool|vacuum|checkpoint|wal|tablespace)\b'
+    )),
+    ("web", re.compile(
+        r'(?i)\b(nginx|apache|httpd|haproxy|traefik|caddy|'
+        r'GET|POST|PUT|DELETE|status\s+[45]\d\d|'
+        r'upstream|proxy|ssl|tls|handshake|cert\s+expir|'
+        r'rate.?limit|throttl|cors|redirect)\b'
+    )),
+    ("cron", re.compile(
+        r'(?i)\b(cron|anacron|at\b|scheduled|timer|'
+        r'CMD\s*\(|CRON\[)\b'
+    )),
+    ("kernel", re.compile(
+        r'(?i)\b(kernel|dmesg|panic|oops|bug:|call\s+trace|'
+        r'out\s+of\s+memory|oom|segmentation|page\s+fault|'
+        r'nmi|watchdog|hung_task|soft\s+lockup)\b'
     )),
 ]
 
@@ -128,6 +174,8 @@ def compute_noise_score(
     first_seen: datetime,
     severity: Optional[int] = None,
     tags: Optional[list[str]] = None,
+    is_precursor: bool = False,
+    avg_severity: Optional[float] = None,
 ) -> int:
     """
     Compute noise score 0-100 (0 = very interesting, 100 = total noise).
@@ -135,8 +183,10 @@ def compute_noise_score(
     Factors:
     - High frequency + consistent rate = noise
     - Low severity (info/debug) = more likely noise
-    - Security/hardware tags = less likely noise
+    - Security/hardware/kernel tags = less likely noise
     - Recently first seen = interesting
+    - Precursor templates = never noise
+    - Average severity of the template matters
     """
     score = 50  # neutral start
 
@@ -162,12 +212,19 @@ def compute_noise_score(
         elif severity >= 6:  # info/debug
             score += 10
 
-    # Tag factor
+    # Tag factor — more categories now contribute
     if tags:
-        if "security" in tags or "hardware" in tags:
+        if "security" in tags or "hardware" in tags or "kernel" in tags:
             score -= 15
+        if "database" in tags:
+            score -= 10
         if "service" in tags and "started" not in str(tags):
             score -= 5
+        if "cron" in tags:
+            score += 5  # cron output is usually expected noise
+        # Multi-tag bonus: messages with 3+ tags are usually significant
+        if len(tags) >= 3:
+            score -= 10
 
     # Novelty factor: first seen < 24h ago
     age_hours = (datetime.utcnow() - first_seen).total_seconds() / 3600
@@ -175,6 +232,10 @@ def compute_noise_score(
         score -= 25  # brand new = very interesting
     elif age_hours < 24:
         score -= 10
+
+    # Precursor bonus
+    if is_precursor:
+        score -= 30
 
     return max(0, min(100, score))
 
@@ -187,13 +248,52 @@ _new_templates: dict[str, tuple[str, str, list[str]]] = {}  # hash -> (template,
 _FLUSH_INTERVAL = 30  # seconds
 _last_flush: float = 0.0
 
+# ── Burst Detection (sliding 5-min window per template) ───────────────────────
+_BURST_WINDOW = 300  # 5 minutes
+_BURST_THRESHOLD = 50  # messages in 5 min to count as burst
+_burst_timestamps: dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+_active_bursts: set[str] = set()  # hashes currently in burst state
+
+
+def _check_burst(h: str, now: float) -> bool:
+    """Track template occurrence and detect bursts (>50 msgs in 5 min)."""
+    dq = _burst_timestamps[h]
+    dq.append(now)
+    # Evict old entries outside window
+    while dq and dq[0] < now - _BURST_WINDOW:
+        dq.popleft()
+    count = len(dq)
+    if count >= _BURST_THRESHOLD:
+        if h not in _active_bursts:
+            _active_bursts.add(h)
+            return True  # new burst detected
+    elif h in _active_bursts and count < _BURST_THRESHOLD // 2:
+        _active_bursts.discard(h)  # burst ended
+    return False
+
+
+def get_active_bursts() -> list[dict]:
+    """Return currently active burst templates for display."""
+    now = time.time()
+    bursts = []
+    for h in list(_active_bursts):
+        dq = _burst_timestamps.get(h)
+        if not dq:
+            continue
+        count = sum(1 for t in dq if t >= now - _BURST_WINDOW)
+        if count < _BURST_THRESHOLD // 2:
+            _active_bursts.discard(h)
+            continue
+        bursts.append({"template_hash": h, "count_5m": count, "rate_per_min": round(count / 5, 1)})
+    return bursts
+
 
 def process_message(message: str, severity: Optional[int] = None) -> dict:
     """
     Process a single message through the intelligence pipeline.
     Called for every incoming syslog message (must be fast).
 
-    Returns enrichment dict: {template_hash, tags, is_new_template, noise_score}
+    Returns enrichment dict: {template_hash, tags, is_new_template, noise_score, is_burst}
     """
     template, h = extract_template(message)
     tags = auto_tag(message)
@@ -205,20 +305,32 @@ def process_message(message: str, severity: Optional[int] = None) -> dict:
     if is_new:
         _new_templates[h] = (template, message, tags)
 
+    # Burst detection (sliding window)
+    now = time.time()
+    new_burst = _check_burst(h, now)
+    is_burst = h in _active_bursts
+
     # Rough noise estimate for immediate use (refined later by periodic job)
     noise = 50
     if is_new:
         noise = 10  # new templates are interesting
+    elif is_burst:
+        noise = 85  # bursting templates are noise
     elif h in _template_cache:
         count = _template_counts.get(h, 0)
         if count > 100:
             noise = 80
+
+    # Severity-aware adjustment (fast path)
+    if severity is not None and severity <= 3:
+        noise = max(0, noise - 20)  # errors are never pure noise
 
     return {
         "template_hash": h,
         "tags": tags,
         "is_new_template": is_new,
         "noise_score": noise,
+        "is_burst": is_burst,
     }
 
 
@@ -441,19 +553,86 @@ async def detect_baseline_anomalies(db: AsyncSession) -> list[dict]:
 
 # ── Precursor Detection (periodic) ───────────────────────────────────────────
 
+async def _learn_precursors_for_event(
+    db: AsyncSession, event_type: str,
+    events: list[tuple[int, datetime]], now: datetime,
+):
+    """Learn which templates appeared before a specific event type."""
+    from services.clickhouse_client import query as ch_query
+
+    template_before: dict[int, int] = defaultdict(int)
+    total_events = 0
+
+    for host_id, event_ts in events:
+        window_start = event_ts - timedelta(minutes=5)
+        msg_rows = await ch_query(
+            """SELECT message FROM syslog_messages
+               WHERE host_id = {hid:Int32}
+               AND timestamp >= {ts_start:DateTime64(3)}
+               AND timestamp <= {ts_end:DateTime64(3)}
+               AND severity <= 4
+               LIMIT 50""",
+            {"hid": host_id, "ts_start": window_start, "ts_end": event_ts},
+        )
+        syslog_msgs = [r["message"] for r in msg_rows]
+
+        if syslog_msgs:
+            total_events += 1
+            seen_templates = set()
+            for msg in syslog_msgs:
+                _, h = extract_template(msg)
+                tpl_id = _template_cache.get(h)
+                if tpl_id and tpl_id not in seen_templates:
+                    seen_templates.add(tpl_id)
+                    template_before[tpl_id] += 1
+
+    if not total_events:
+        return
+
+    for tpl_id, before_count in template_before.items():
+        confidence = before_count / total_events
+        if confidence < 0.3:
+            continue
+
+        existing = (await db.execute(
+            select(PrecursorPattern).where(
+                PrecursorPattern.template_id == tpl_id,
+                PrecursorPattern.precedes_event == event_type,
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            existing.confidence = confidence
+            existing.occurrence_count = before_count
+            existing.total_checked = total_events
+            existing.updated_at = now
+        else:
+            db.add(PrecursorPattern(
+                template_id=tpl_id,
+                precedes_event=event_type,
+                confidence=confidence,
+                avg_lead_time_sec=150,
+                occurrence_count=before_count,
+                total_checked=total_events,
+                updated_at=now,
+            ))
+
+    log.info("Precursor analysis (%s): %d templates, %d events",
+             event_type, len(template_before), total_events)
+
+
 async def learn_precursors(db: AsyncSession):
     """
     Analyze which log templates appeared in the 5-minute window before
-    host-down events. Build confidence scores over time.
+    host-down events, integration failures, and incidents.
+    Build confidence scores over time.
     """
     from models.ping import PingResult
 
     now = datetime.utcnow()
     lookback = now - timedelta(days=7)
 
-    # Find all host-down transitions in last 7 days
-    # A "down transition" = PingResult.success=False preceded by success=True
-    # Simplified: find PingResults where success=False
+    # 1. Host-down events
     down_events = (await db.execute(
         select(PingResult.host_id, PingResult.timestamp)
         .where(
@@ -463,82 +642,45 @@ async def learn_precursors(db: AsyncSession):
         .order_by(PingResult.timestamp)
     )).all()
 
-    if not down_events:
-        return
+    if down_events:
+        await _learn_precursors_for_event(db, "host_down", down_events, now)
 
-    # For each down event, find syslog templates in the preceding 5 minutes
-    template_before_down: dict[int, int] = defaultdict(int)  # template_id -> count
-    total_down_events = 0
-
-    for host_id, down_ts in down_events:
-        window_start = down_ts - timedelta(minutes=5)
-        # Get syslog messages from this host in the window (ClickHouse)
-        from services.clickhouse_client import query as ch_query
-        msg_rows = await ch_query(
-            """SELECT message FROM syslog_messages
-               WHERE host_id = {hid:Int32}
-               AND timestamp >= {ts_start:DateTime64(3)}
-               AND timestamp <= {ts_end:DateTime64(3)}
-               AND severity <= 4
-               LIMIT 50""",
-            {"hid": host_id, "ts_start": window_start, "ts_end": down_ts},
-        )
-        syslog_msgs = [r["message"] for r in msg_rows]
-
-        if syslog_msgs:
-            total_down_events += 1
-            seen_templates = set()
-            for msg in syslog_msgs:
-                _, h = extract_template(msg)
-                tpl_id = _template_cache.get(h)
-                if tpl_id and tpl_id not in seen_templates:
-                    seen_templates.add(tpl_id)
-                    template_before_down[tpl_id] += 1
-
-    if not total_down_events:
-        return
-
-    # Also count total appearances of each template (for confidence calculation)
-    for tpl_id, before_count in template_before_down.items():
-        # Get total count of this template
-        tpl = (await db.execute(
-            select(LogTemplate).where(LogTemplate.id == tpl_id)
-        )).scalar_one_or_none()
-        if not tpl:
-            continue
-
-        confidence = before_count / total_down_events
-
-        # Only store if confidence >= 0.3 (appeared before 30%+ of down events)
-        if confidence < 0.3:
-            continue
-
-        existing = (await db.execute(
-            select(PrecursorPattern).where(
-                PrecursorPattern.template_id == tpl_id,
-                PrecursorPattern.precedes_event == "host_down",
+    # 2. Integration failures
+    try:
+        from models.integration import Snapshot
+        fail_snaps = (await db.execute(
+            select(Snapshot.entity_id, Snapshot.timestamp)
+            .where(
+                Snapshot.ok == False,
+                Snapshot.timestamp >= lookback,
             )
-        )).scalar_one_or_none()
+            .order_by(Snapshot.timestamp)
+        )).all()
+        if fail_snaps:
+            # entity_id is integration config ID, but we need host_id for syslog matching
+            # Use entity_id as host_id=0 context (global syslog before integration failure)
+            integration_events = [(0, ts) for _, ts in fail_snaps]
+            await _learn_precursors_for_event(db, "integration_fail", integration_events, now)
+    except Exception as exc:
+        log.debug("Integration precursor learning skipped: %s", exc)
 
-        if existing:
-            existing.confidence = confidence
-            existing.occurrence_count = before_count
-            existing.total_checked = total_down_events
-            existing.updated_at = now
-        else:
-            db.add(PrecursorPattern(
-                template_id=tpl_id,
-                precedes_event="host_down",
-                confidence=confidence,
-                avg_lead_time_sec=150,  # ~2.5min average in 5min window
-                occurrence_count=before_count,
-                total_checked=total_down_events,
-                updated_at=now,
-            ))
+    # 3. Incidents (learn what templates precede manually-confirmed incidents)
+    try:
+        from models.incident import Incident
+        incidents = (await db.execute(
+            select(Incident)
+            .where(
+                Incident.created_at >= lookback,
+                Incident.status.in_(["resolved", "acknowledged"]),
+            )
+        )).scalars().all()
+        if incidents:
+            incident_events = [(0, i.created_at) for i in incidents]
+            await _learn_precursors_for_event(db, "incident", incident_events, now)
+    except Exception as exc:
+        log.debug("Incident precursor learning skipped: %s", exc)
 
     await db.commit()
-    log.info("Precursor analysis: %d templates checked against %d down events",
-             len(template_before_down), total_down_events)
 
 
 # ── Noise Score Refresh (periodic) ───────────────────────────────────────────
@@ -548,27 +690,27 @@ async def refresh_noise_scores(db: AsyncSession):
     templates = (await db.execute(select(LogTemplate))).scalars().all()
     now = datetime.utcnow()
 
+    # Batch-load all precursor template IDs to avoid N+1 queries
+    precursor_ids = set(
+        row[0] for row in (await db.execute(
+            select(PrecursorPattern.template_id).where(
+                PrecursorPattern.confidence >= 0.3,
+            )
+        )).all()
+    )
+
     for tpl in templates:
         hours_active = max(0.1, (now - tpl.first_seen).total_seconds() / 3600)
         tags = tpl.tags.split(",") if tpl.tags else []
-
-        # Check if this template is a precursor (= definitely not noise)
-        is_precursor = (await db.execute(
-            select(func.count(PrecursorPattern.id)).where(
-                PrecursorPattern.template_id == tpl.id,
-                PrecursorPattern.confidence >= 0.3,
-            )
-        )).scalar() > 0
+        is_precursor = tpl.id in precursor_ids
 
         score = compute_noise_score(
             count=tpl.count,
             hours_active=hours_active,
             first_seen=tpl.first_seen,
             tags=tags,
+            is_precursor=is_precursor,
         )
-
-        if is_precursor:
-            score = max(0, score - 30)  # precursors are never noise
 
         tpl.noise_score = score
         tpl.avg_rate_per_hour = tpl.count / hours_active

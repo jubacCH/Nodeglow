@@ -1,6 +1,66 @@
 # Nodeglow
 
-A self-hosted infrastructure monitoring dashboard built with **FastAPI**, **PostgreSQL** (async via asyncpg), **Jinja2** templates and **Tailwind CSS**.
+A self-hosted infrastructure monitoring platform with **log intelligence**, **incident correlation**, and **15 integrations** — built for homelabs and small networks.
+
+---
+
+## Tech Stack
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Nodeglow                                │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    Frontend                               │   │
+│  │  Jinja2 Templates  ·  Tailwind CSS  ·  Chart.js          │   │
+│  │  GridStack (dashboard)  ·  SPA navigation (fetch)        │   │
+│  └──────────────────────┬───────────────────────────────────┘   │
+│                         │                                       │
+│  ┌──────────────────────▼───────────────────────────────────┐   │
+│  │                  Application Layer                        │   │
+│  │  FastAPI (async)  ·  Uvicorn  ·  Python 3.11+            │   │
+│  │                                                           │   │
+│  │  ┌─────────────┐ ┌──────────────┐ ┌────────────────┐     │   │
+│  │  │  Scheduler   │ │  Correlation │ │ Log Intelligence│    │   │
+│  │  │  (APScheduler)│ │  Engine      │ │ (Drain-lite)   │    │   │
+│  │  └─────────────┘ └──────────────┘ └────────────────┘     │   │
+│  │                                                           │   │
+│  │  ┌─────────────────────────────────────────────────┐      │   │
+│  │  │              15 Integration Plugins              │      │   │
+│  │  │  Proxmox · UniFi · TrueNAS · Synology · pfSense │      │   │
+│  │  │  Pi-hole · AdGuard · Portainer · HASS · Gitea    │      │   │
+│  │  │  phpIPAM · Speedtest · UPS/NUT · Redfish · UNAS  │      │   │
+│  │  └─────────────────────────────────────────────────┘      │   │
+│  └──────────────────────┬─────────────┬─────────────────────┘   │
+│                         │             │                         │
+│  ┌──────────────────────▼──┐  ┌───────▼──────────────────────┐  │
+│  │     PostgreSQL 16       │  │     ClickHouse               │  │
+│  │  (config, hosts, users, │  │  (syslog messages,           │  │
+│  │   incidents, templates) │  │   high-volume time-series)   │  │
+│  │  SQLAlchemy (asyncpg)   │  │  clickhouse-driver (native)  │  │
+│  └─────────────────────────┘  └──────────────────────────────┘  │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    Infrastructure                         │   │
+│  │  Docker Compose  ·  Syslog UDP/TCP  ·  Agent (Win/Linux) │   │
+│  │  Fernet Encryption  ·  REST API (api_keys)               │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| **Web framework** | FastAPI + Uvicorn | Async HTTP server, REST API, SSE |
+| **Templates** | Jinja2 + Tailwind CSS | Server-rendered HTML with SPA navigation |
+| **Charts** | Chart.js | Latency sparklines, syslog rate charts, heatmaps |
+| **Dashboard** | GridStack.js | Drag-and-drop widget layout |
+| **Primary DB** | PostgreSQL 16 (asyncpg) | Config, hosts, users, incidents, templates |
+| **Log DB** | ClickHouse | High-volume syslog storage, time-series queries |
+| **ORM** | SQLAlchemy 2.0 (async) | Models, migrations (Alembic) |
+| **Scheduler** | APScheduler | Periodic ping, integration polling, cleanup |
+| **Encryption** | Fernet (SHA256) | Integration credentials at rest |
+| **Notifications** | Telegram, Discord, Email | Alert delivery via configurable channels |
+| **Agent** | Python (PyInstaller .exe) | Windows/Linux host agent with auto-update |
 
 ---
 
@@ -18,12 +78,18 @@ A self-hosted infrastructure monitoring dashboard built with **FastAPI**, **Post
 | **Latency thresholds** | Per-host or global alarm when latency exceeds limit |
 | **15 integrations** | Generic plugin system — see table below |
 | **Syslog receiver** | UDP/TCP syslog (RFC 3164/5424) with auto-host assignment and full-text search |
+| **Log intelligence** | Template extraction, auto-tagging (11 categories), noise scoring, burst detection |
+| **Baseline anomalies** | Per-host hourly rate baselines with spike and silence detection |
+| **Precursor detection** | Learns which log patterns precede host-down, integration failures, incidents |
 | **Incident correlation** | Auto-detects related failures (multi-host down, syslog + ping, integration + host) |
-| **Alerts page** | Offline hosts, integration errors, UPS on battery, SSL expiry |
+| **Alert rules** | Custom triggers on any field — supports contains, regex, numeric operators |
+| **Alerts page** | Offline hosts, integration errors, UPS on battery, SSL expiry, maintenance |
 | **Anomaly detection** | Proxmox VM CPU/RAM spike detection (statistical + threshold) |
 | **System status** | Self-monitoring page with CPU, RAM, disk, DB stats, scheduler, logs |
+| **Agent system** | Auto-enrolling Windows/Linux agents with auto-update |
+| **REST API** | Full API with key auth (readonly/editor/admin roles) |
 | **Multi-user** | Admin / Editor / Read-only roles |
-| **Notifications** | Telegram, Discord, Email (SMTP) |
+| **Notifications** | Telegram, Discord, Email (SMTP), Webhook |
 | **Sparklines** | 2h latency sparklines in dashboard host cards |
 | **SPA navigation** | Instant page transitions without full reload |
 | **Data retention** | Configurable per integration type, automatic cleanup |
@@ -89,7 +155,7 @@ All settings are available at **`/settings`**:
 | Integration retention | 7 days | How long integration snapshots are kept |
 | Latency threshold (global) | — | Alarm when latency exceeds this (ms) |
 | CPU/RAM/Disk threshold | 85 / 85 / 90 % | Threshold for anomaly alerts |
-| Anomaly multiplier | 2.0× | Alert when metric > N× 24h avg |
+| Anomaly multiplier | 2.0x | Alert when metric > Nx 24h avg |
 | Syslog port | 1514 | UDP/TCP syslog listener port |
 
 ---
@@ -104,35 +170,30 @@ nodeglow/
 │   ├── models/                # SQLAlchemy models
 │   │   ├── base.py            # Engine, session factory, encryption helpers
 │   │   ├── integration.py     # IntegrationConfig + Snapshot (generic)
-│   │   ├── syslog.py          # SyslogMessage
-│   │   └── incidents.py       # Incident + IncidentEvent
+│   │   ├── incident.py        # Incident + IncidentEvent
+│   │   ├── alert_rule.py      # User-defined alert rules
+│   │   └── log_template.py    # LogTemplate, HostBaseline, PrecursorPattern
 │   ├── integrations/          # Plugin system (one file per integration)
 │   │   ├── _base.py           # BaseIntegration ABC, ConfigField, CollectorResult
 │   │   ├── __init__.py        # Auto-discovery + registry
-│   │   ├── proxmox.py
-│   │   ├── unifi.py
 │   │   └── ...                # 15 integration plugins
 │   ├── services/              # Business logic layer
 │   │   ├── snapshot.py        # Snapshot CRUD + batch queries
 │   │   ├── integration.py     # Integration CRUD + encryption
-│   │   ├── syslog.py          # UDP/TCP syslog server + parser
-│   │   ├── correlation.py     # Incident correlation engine
-│   │   └── log_intelligence.py # Template extraction + noise scoring
+│   │   ├── syslog.py          # UDP/TCP syslog server + parser + live tail (SSE)
+│   │   ├── correlation.py     # Incident correlation engine (5 rules, auto-resolve)
+│   │   ├── log_intelligence.py # Template extraction, tagging, baselines, precursors
+│   │   ├── rules.py           # Alert rule evaluation engine
+│   │   └── clickhouse_client.py # ClickHouse connection + query helpers
 │   ├── routers/               # FastAPI routers (HTML + JSON)
-│   │   ├── dashboard.py
-│   │   ├── ping.py
-│   │   ├── integrations.py    # Generic CRUD for all integrations
-│   │   ├── system.py          # Self-monitoring status page
-│   │   ├── syslog.py          # Syslog viewer
-│   │   ├── incidents.py       # Incident management
-│   │   └── ...
-│   ├── scheduler.py           # APScheduler (ping, integrations, SSL, cleanup)
+│   ├── scheduler.py           # APScheduler (ping, integrations, SSL, cleanup, intelligence)
+│   ├── notifications.py       # Telegram, Discord, Email, Webhook
 │   ├── templates/             # Jinja2 templates
 │   │   ├── base.html          # Layout, sidebar, SPA navigation
 │   │   ├── widgets/           # Dashboard widget templates (GridStack)
 │   │   └── integrations/      # Generic list/detail templates
-│   └── static/                # CSS, JS, icons
-├── docker-compose.yml         # App + PostgreSQL
+│   └── static/                # CSS, JS, icons, agent binaries
+├── docker-compose.yml         # App + PostgreSQL + ClickHouse
 └── data/                      # Encryption key (Docker volume)
 ```
 
@@ -141,9 +202,11 @@ nodeglow/
 1. **Scheduler** (APScheduler, async) runs collector functions on configurable intervals.
 2. Each collector stores a **snapshot** row in PostgreSQL (`data_json` column holds full JSON).
 3. **Routers** read the latest snapshot on page load — no live API calls on every request.
-4. **Syslog receiver** buffers incoming messages and batch-inserts with auto-host assignment.
-5. **Correlation engine** (60s interval) detects related failures and creates incidents.
-6. Background **cleanup job** (daily at 03:00) prunes data older than configured retention.
+4. **Syslog receiver** processes messages through the intelligence pipeline (template extraction, auto-tagging, burst detection) and batch-inserts into ClickHouse.
+5. **Log intelligence** (30s interval) computes baselines, learns precursor patterns, and refreshes noise scores.
+6. **Correlation engine** (60s interval) detects related failures and creates incidents.
+7. **Alert rules** (60s interval) evaluate user-defined conditions and fire notifications/incidents.
+8. Background **cleanup job** (daily at 03:00) prunes data older than configured retention.
 
 ---
 

@@ -240,12 +240,13 @@ async def syslog_page(
     saved_views = (await db.execute(select(SyslogView).order_by(SyslogView.name))).scalars().all()
     alert_spike = await _check_severity_spike()
 
-    intelligence = {"anomalies": [], "new_templates": [], "precursors": []}
+    intelligence = {"anomalies": [], "new_templates": [], "precursors": [], "bursts": []}
     try:
         from models.log_template import LogTemplate, PrecursorPattern
-        from services.log_intelligence import detect_baseline_anomalies
+        from services.log_intelligence import detect_baseline_anomalies, get_active_bursts
 
         intelligence["anomalies"] = await detect_baseline_anomalies(db)
+        intelligence["bursts"] = get_active_bursts()
 
         new_tpls = (await db.execute(
             select(LogTemplate)

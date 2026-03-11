@@ -79,7 +79,7 @@
   </div>
 
   {# ── Intelligence Panel ─────────────────────────────────────────────── #}
-  {% if intelligence and (intelligence.anomalies or intelligence.new_templates or intelligence.precursors) %}
+  {% if intelligence and (intelligence.anomalies or intelligence.new_templates or intelligence.precursors or intelligence.bursts) %}
   <div class="glass-card !rounded-xl !p-3 mb-4 !border-indigo-500/20 !bg-indigo-500/[0.03]">
     <div class="flex items-center gap-2 mb-2">
       <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -92,8 +92,8 @@
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
 
-      {# Baseline anomalies #}
-      {% if intelligence.anomalies %}
+      {# Baseline anomalies + bursts #}
+      {% if intelligence.anomalies or intelligence.bursts %}
       <div>
         <p class="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">Rate Anomalies</p>
         {% for a in intelligence.anomalies %}
@@ -105,6 +105,15 @@
           <span class="text-[--ng-text-secondary] font-mono truncate">{{ a.source_ip }}</span>
           <span class="text-[--ng-text-muted] text-[10px] font-mono ml-auto shrink-0">
             {% if a.type == 'silent' %}0{% else %}{{ a.current_count }}{% endif %} / ~{{ a.expected }}/hr
+          </span>
+        </div>
+        {% endfor %}
+        {% for b in intelligence.bursts %}
+        <div class="flex items-center gap-2 text-xs mb-1">
+          <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-orange-500/15 text-orange-400">BURST</span>
+          <span class="text-[--ng-text-secondary] font-mono truncate">{{ b.template_hash[:8] }}</span>
+          <span class="text-[--ng-text-muted] text-[10px] font-mono ml-auto shrink-0">
+            {{ b.count_5m }} in 5m ({{ b.rate_per_min }}/min)
           </span>
         </div>
         {% endfor %}
@@ -506,7 +515,29 @@
       if (refreshPaused) return;
       refreshLeft--;
       bar.style.width = ((REFRESH - refreshLeft) / REFRESH * 100) + '%';
-      if (refreshLeft <= 0) { refreshLeft = REFRESH; location.reload(); }
+      if (refreshLeft <= 0) {
+        refreshLeft = REFRESH;
+        // Fetch page in background and swap content to preserve scroll position
+        fetch(location.href, {credentials: 'same-origin'})
+          .then(r => r.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            // Swap the syslog table body
+            const newBody = doc.getElementById('syslog-body');
+            const curBody = document.getElementById('syslog-body');
+            if (newBody && curBody) curBody.innerHTML = newBody.innerHTML;
+            // Update the message count in the header
+            const newH = doc.querySelector('h1 + p');
+            const curH = document.querySelector('h1 + p');
+            if (newH && curH) curH.innerHTML = newH.innerHTML;
+            // Update severity pills
+            const newPills = doc.querySelector('.flex.items-center.gap-1\\.5.flex-wrap');
+            const curPills = document.querySelector('.flex.items-center.gap-1\\.5.flex-wrap');
+            if (newPills && curPills) curPills.innerHTML = newPills.innerHTML;
+          })
+          .catch(() => { /* silently skip on error */ });
+      }
     }, 1000));
   }
 

@@ -5,6 +5,7 @@ Supports dot-notation field paths into JSON snapshot data and multiple operators
 """
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
@@ -26,6 +27,8 @@ OPERATORS = {
     "ne":           ("not equals",       lambda v, t: str(v).lower() != str(t).lower()),
     "contains":     ("contains",         lambda v, t: str(t).lower() in str(v).lower()),
     "not_contains": ("not contains",     lambda v, t: str(t).lower() not in str(v).lower()),
+    "regex":        ("matches regex",    lambda v, t: bool(re.search(str(t), str(v)))),
+    "not_regex":    ("not matches regex",lambda v, t: not bool(re.search(str(t), str(v)))),
     "is_true":      ("is true",          lambda v, _: _truthy(v)),
     "is_false":     ("is false",         lambda v, _: not _truthy(v)),
 }
@@ -176,6 +179,12 @@ async def _evaluate_syslog_rule(rule: AlertRule, now: datetime) -> int:
             return 0
         negate = "= 0" if rule.operator == "not_contains" else "> 0"
         condition = f"positionCaseInsensitive({ch_field}, {{pat:String}}) {negate}"
+        params = {"t": window, "pat": rule.threshold or ""}
+    elif rule.operator in ("regex", "not_regex"):
+        if ch_field in ("severity",):
+            return 0
+        negate = "NOT " if rule.operator == "not_regex" else ""
+        condition = f"{negate}match({ch_field}, {{pat:String}})"
         params = {"t": window, "pat": rule.threshold or ""}
     elif rule.operator in ("gt", "lt", "gte", "lte", "eq", "ne"):
         op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<=", "eq": "=", "ne": "!="}
