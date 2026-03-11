@@ -187,18 +187,24 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
                 (SELECT reltuples::bigint FROM pg_class WHERE relname = 'ping_results') AS result_count,
                 (SELECT count(*) FROM integration_configs) AS config_count,
                 (SELECT reltuples::bigint FROM pg_class WHERE relname = 'snapshots') AS snapshot_count,
-                (SELECT reltuples::bigint FROM pg_class WHERE relname = 'syslog_messages') AS syslog_count,
                 (SELECT pg_size_pretty(pg_database_size(current_database()))) AS db_size,
                 (SELECT min(timestamp) FROM ping_results) AS oldest_ping,
                 (SELECT max(timestamp) FROM ping_results) AS newest_ping
         """))).one()
+        # Syslog count from ClickHouse
+        syslog_count = 0
+        try:
+            from services.clickhouse_client import query_scalar as ch_scalar
+            syslog_count = int(await ch_scalar("SELECT count() FROM syslog_messages") or 0)
+        except Exception:
+            pass
         db_stats = {
             "db_size": row.db_size or "—",
             "host_count": row.host_count or 0,
             "result_count": max(row.result_count or 0, 0),
             "config_count": row.config_count or 0,
             "snapshot_count": max(row.snapshot_count or 0, 0),
-            "syslog_count": max(row.syslog_count or 0, 0),
+            "syslog_count": syslog_count,
             "oldest_ping": localtime(row.oldest_ping, "%Y-%m-%d %H:%M") if row.oldest_ping else "—",
             "newest_ping": localtime(row.newest_ping, "%Y-%m-%d %H:%M") if row.newest_ping else "—",
         }
@@ -306,11 +312,13 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         from services.syslog import _udp_transport, _tcp_server, _buffer
         syslog_status["running"] = _udp_transport is not None
         syslog_status["buffer_size"] = len(_buffer)
-        # Messages per minute (last 10 min)
+        # Messages per minute (last 10 min) — query ClickHouse, not PostgreSQL
+        from services.clickhouse_client import query_scalar as ch_scalar
         ten_min_ago = now - timedelta(minutes=10)
-        syslog_rate = (await db.execute(text("""
-            SELECT count(*) AS cnt FROM syslog_messages WHERE received_at >= :since
-        """).bindparams(since=ten_min_ago))).scalar() or 0
+        syslog_rate = int(await ch_scalar(
+            "SELECT count() FROM syslog_messages WHERE received_at >= {since:DateTime64(3)}",
+            {"since": ten_min_ago},
+        ) or 0)
         syslog_status["msg_per_min"] = round(syslog_rate / 10, 1)
     except Exception:
         pass
@@ -359,14 +367,21 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         oldest_snap = (await db.execute(text(
             "SELECT min(timestamp) FROM snapshots"
         ))).scalar()
-        oldest_syslog = (await db.execute(text(
-            "SELECT min(received_at) FROM syslog_messages"
-        ))).scalar()
         retention_info = {
             "ping_age": _format_age(row.oldest_ping) if db_stats.get("oldest_ping") != "—" else "—",
             "snap_age": _format_age(oldest_snap) if oldest_snap else "—",
-            "syslog_age": _format_age(oldest_syslog) if oldest_syslog else "—",
+            "syslog_age": "—",
         }
+        # Syslog age from ClickHouse
+        try:
+            from services.clickhouse_client import query_scalar as ch_scalar
+            oldest_syslog = await ch_scalar(
+                "SELECT min(received_at) FROM syslog_messages"
+            )
+            if oldest_syslog:
+                retention_info["syslog_age"] = _format_age(oldest_syslog)
+        except Exception:
+            pass
     except Exception:
         pass
 
