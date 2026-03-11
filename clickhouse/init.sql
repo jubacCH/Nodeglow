@@ -1,3 +1,5 @@
+CREATE DATABASE IF NOT EXISTS nodeglow;
+
 CREATE TABLE IF NOT EXISTS syslog_messages
 (
     timestamp       DateTime64(3, 'UTC') NOT NULL,
@@ -19,11 +21,11 @@ ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (severity, source_ip, timestamp)
 TTL
-    timestamp + INTERVAL 1  DAY  WHERE severity = 7,
-    timestamp + INTERVAL 3  DAY  WHERE severity = 6,
-    timestamp + INTERVAL 7  DAY  WHERE severity = 5,
-    timestamp + INTERVAL 30 DAY  WHERE severity = 4,
-    timestamp + INTERVAL 90 DAY  WHERE severity IN (0, 1, 2, 3)
+    toDateTime(timestamp) + INTERVAL 1  DAY  WHERE severity = 7,
+    toDateTime(timestamp) + INTERVAL 3  DAY  WHERE severity = 6,
+    toDateTime(timestamp) + INTERVAL 7  DAY  WHERE severity = 5,
+    toDateTime(timestamp) + INTERVAL 30 DAY  WHERE severity = 4,
+    toDateTime(timestamp) + INTERVAL 90 DAY  WHERE severity IN (0, 1, 2, 3)
 SETTINGS
     index_granularity = 8192,
     ttl_only_drop_parts = 1;
