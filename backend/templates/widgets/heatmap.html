@@ -1,4 +1,4 @@
-{# Widget: Availability heatmap (7-day per-host grid) #}
+{# Widget: Availability heatmap (30-day per-host grid) #}
 <div class="grid-stack-item" gs-id="heatmap" gs-x="{{ w.x }}" gs-y="{{ w.y }}" gs-w="{{ w.w }}" gs-h="{{ w.h }}" gs-min-h="3" gs-min-w="4">
   <div class="grid-stack-item-content p-4 relative">
     {{ widget_remove_btn() }}
@@ -6,7 +6,7 @@
     <div class="flex items-center justify-between mb-3">
       <div class="flex items-center gap-2 cursor-pointer section-header" data-section="heatmap">
         <h2 class="metric-label !text-[10px]">Availability</h2>
-        <span class="text-[9px] font-mono text-[--ng-text-muted]">7 days</span>
+        <span class="text-[9px] font-mono text-[--ng-text-muted]">30 days</span>
         <svg class="w-3.5 h-3.5 text-[--ng-text-muted] section-chevron transition-transform ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
       </div>
       <div class="flex items-center gap-3">
@@ -20,15 +20,15 @@
       </div>
     </div>
     <div class="section-body overflow-y-auto" style="max-height: calc(100% - 36px)">
-      <div class="space-y-[3px]">
+      <div class="space-y-[2px]">
         {% for row in heatmap_data %}
         <div class="flex items-center gap-2 group">
           <a href="/hosts/{{ row.host_id }}" class="text-[10px] font-mono text-[--ng-text-secondary] group-hover:text-ng-primary transition-colors truncate w-24 shrink-0 text-right" title="{{ row.name }}">{{ row.name }}</a>
-          <div class="flex gap-[3px] flex-1">
+          <div class="flex gap-[2px] flex-1 min-w-0">
             {% for pct in row.days %}
-            <div class="relative flex-1 group/cell">
-              <div class="h-[14px] rounded-[3px] transition-all duration-150
-                {% if pct is none %}bg-white/[0.03] border border-white/[0.04]
+            <div class="relative group/cell flex-1 min-w-0">
+              <div class="h-[10px] rounded-[2px] transition-all duration-150
+                {% if pct is none %}bg-white/[0.03]
                 {% elif pct >= 99.9 %}bg-ng-success/70 group-hover/cell:bg-ng-success/90
                 {% elif pct >= 99 %}bg-ng-success/50 group-hover/cell:bg-ng-success/70
                 {% elif pct >= 95 %}bg-ng-success/30 group-hover/cell:bg-ng-success/50

@@ -679,13 +679,14 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         key=lambda x: x["uptime"],
     )[:15]
 
-    # ── Heatmap (7-day per-host availability) ─────────────────────────────────
+    # ── Heatmap (30-day per-host availability) ────────────────────────────────
     heatmap_data = []
     heatmap_days = []
+    _HEATMAP_DAYS = 30
     try:
-        window_7d = now - timedelta(days=7)
-        for i in range(7):
-            d = (now - timedelta(days=6 - i))
+        window_30d = now - timedelta(days=_HEATMAP_DAYS)
+        for i in range(_HEATMAP_DAYS):
+            d = (now - timedelta(days=_HEATMAP_DAYS - 1 - i))
             heatmap_days.append(d.strftime("%a %d.%m"))
 
         from sqlalchemy import cast, Date
@@ -696,7 +697,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                 func.count().label("total"),
                 func.count().filter(PingResult.success == True).label("ok"),
             )
-            .where(PingResult.host_id.in_(host_ids), PingResult.timestamp >= window_7d)
+            .where(PingResult.host_id.in_(host_ids), PingResult.timestamp >= window_30d)
             .group_by(PingResult.host_id, cast(PingResult.timestamp, Date))
         )).all()
 
@@ -708,15 +709,15 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         heatmap_hosts = sorted(
             [h for h in hosts if not h.maintenance],
             key=lambda h: min(
-                (day_map.get((h.id, str((now - timedelta(days=6 - i)).date())), 100) or 100)
-                for i in range(7)
+                (day_map.get((h.id, str((now - timedelta(days=_HEATMAP_DAYS - 1 - i)).date())), 100) or 100)
+                for i in range(_HEATMAP_DAYS)
             ),
-        )[:15]
+        )[:20]
 
         for h in heatmap_hosts:
             days = []
-            for i in range(7):
-                d = (now - timedelta(days=6 - i)).date()
+            for i in range(_HEATMAP_DAYS):
+                d = (now - timedelta(days=_HEATMAP_DAYS - 1 - i)).date()
                 days.append(day_map.get((h.id, str(d))))
             heatmap_data.append({"host_id": h.id, "name": h.name, "days": days})
     except Exception:
