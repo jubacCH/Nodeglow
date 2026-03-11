@@ -370,6 +370,80 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    # ── Correlation / Incidents ─────────────────────────────────────────
+    incident_stats = {}
+    try:
+        row = (await db.execute(text("""
+            SELECT
+                (SELECT count(*) FROM incidents WHERE status = 'open') AS open_count,
+                (SELECT count(*) FROM incidents WHERE status = 'acknowledged') AS ack_count,
+                (SELECT count(*) FROM incidents WHERE status = 'resolved') AS resolved_count,
+                (SELECT count(*) FROM incidents) AS total_count
+        """))).one()
+        incident_stats = {
+            "open": row.open_count or 0,
+            "acknowledged": row.ack_count or 0,
+            "resolved": row.resolved_count or 0,
+            "total": row.total_count or 0,
+        }
+    except Exception:
+        pass
+
+    # ── Alert Rules ──────────────────────────────────────────────────────
+    alert_rule_stats = {}
+    try:
+        row = (await db.execute(text("""
+            SELECT
+                count(*) AS total,
+                count(*) FILTER (WHERE enabled) AS enabled,
+                count(*) FILTER (WHERE source_type = 'syslog') AS syslog_rules,
+                max(last_triggered_at) AS last_triggered
+            FROM alert_rules
+        """))).one()
+        alert_rule_stats = {
+            "total": row.total or 0,
+            "enabled": row.enabled or 0,
+            "syslog_rules": row.syslog_rules or 0,
+            "last_triggered": localtime(row.last_triggered, "%d.%m. %H:%M") if row.last_triggered else "—",
+        }
+    except Exception:
+        pass
+
+    # ── Maintenance Windows ──────────────────────────────────────────────
+    maintenance_stats = {}
+    try:
+        row = (await db.execute(text("""
+            SELECT
+                count(*) FILTER (WHERE maintenance) AS active,
+                count(*) FILTER (WHERE maintenance AND maintenance_until IS NOT NULL) AS timed,
+                count(*) FILTER (WHERE maintenance AND maintenance_until IS NULL) AS indefinite
+            FROM ping_hosts
+        """))).one()
+        maintenance_stats = {
+            "active": row.active or 0,
+            "timed": row.timed or 0,
+            "indefinite": row.indefinite or 0,
+        }
+    except Exception:
+        pass
+
+    # ── Log Intelligence ─────────────────────────────────────────────────
+    log_intelligence = {}
+    try:
+        row = (await db.execute(text("""
+            SELECT
+                (SELECT count(*) FROM log_templates) AS templates,
+                (SELECT count(*) FROM host_baselines) AS baselines,
+                (SELECT count(*) FROM precursor_patterns WHERE confidence > 0.3) AS precursors
+        """))).one()
+        log_intelligence = {
+            "templates": row.templates or 0,
+            "baselines": row.baselines or 0,
+            "precursors": row.precursors or 0,
+        }
+    except Exception:
+        pass
+
     # ── Await thread pool results ────────────────────────────────────────
     sysinfo = await sysinfo_fut
     log_lines = await logs_fut
@@ -390,6 +464,10 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         "ssl_certs": ssl_certs,
         "notification_info": notification_info,
         "retention_info": retention_info,
+        "incident_stats": incident_stats,
+        "alert_rule_stats": alert_rule_stats,
+        "maintenance_stats": maintenance_stats,
+        "log_intelligence": log_intelligence,
         "active_page": "system",
     })
 

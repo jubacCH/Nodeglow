@@ -126,6 +126,14 @@ async def evaluate_rules(db: AsyncSession) -> int:
                 if now < cooldown_end:
                     continue
 
+            # Syslog rules use a special evaluation path
+            if rule.source_type == "syslog":
+                match_count = await _evaluate_syslog_rule(rule, now)
+                if match_count > 0:
+                    triggered += 1
+                    await _fire_syslog_rule(db, rule, match_count, now)
+                continue
+
             # Get data based on source type
             data = await _get_source_data(db, rule)
             if data is None:
@@ -149,6 +157,80 @@ async def evaluate_rules(db: AsyncSession) -> int:
             logger.warning("Rule %s (%s) evaluation failed: %s", rule.id, rule.name, exc)
 
     return triggered
+
+
+async def _evaluate_syslog_rule(rule: AlertRule, now: datetime) -> int:
+    """Evaluate a syslog rule by querying ClickHouse. Returns match count."""
+    from services.clickhouse_client import query_scalar as ch_scalar
+
+    window = now - timedelta(seconds=60)
+
+    field_map = {"message": "message", "app_name": "app_name",
+                 "hostname": "hostname", "severity": "severity"}
+    ch_field = field_map.get(rule.field_path, "message")
+
+    # Build condition based on operator
+    if rule.operator in ("contains", "not_contains"):
+        if ch_field in ("severity",):
+            # Numeric comparison doesn't use contains
+            return 0
+        negate = "= 0" if rule.operator == "not_contains" else "> 0"
+        condition = f"positionCaseInsensitive({ch_field}, {{pat:String}}) {negate}"
+        params = {"t": window, "pat": rule.threshold or ""}
+    elif rule.operator in ("gt", "lt", "gte", "lte", "eq", "ne"):
+        op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<=", "eq": "=", "ne": "!="}
+        sql_op = op_map[rule.operator]
+        if ch_field == "severity":
+            condition = f"severity {sql_op} {{thr:Int8}}"
+            params = {"t": window, "thr": int(rule.threshold or 0)}
+        else:
+            condition = f"lower({ch_field}) {sql_op} lower({{pat:String}})"
+            params = {"t": window, "pat": rule.threshold or ""}
+    else:
+        condition = f"positionCaseInsensitive({ch_field}, {{pat:String}}) > 0"
+        params = {"t": window, "pat": rule.threshold or ""}
+
+    count = int(await ch_scalar(
+        f"SELECT count() FROM syslog_messages WHERE timestamp >= {{t:DateTime64(3)}} AND {condition}",
+        params,
+    ) or 0)
+    return count
+
+
+async def _fire_syslog_rule(db: AsyncSession, rule: AlertRule, match_count: int, now: datetime):
+    """Fire a syslog rule — creates an incident and notifies."""
+    from models.incident import Incident, IncidentEvent
+    from services.correlation import _find_or_create_incident
+
+    op_label = OPERATORS.get(rule.operator, ("?",))[0]
+    detail = f"{rule.field_path} {op_label} '{rule.threshold}' — {match_count} matches in 60s"
+
+    if rule.message_template:
+        summary = rule.message_template.format(
+            value=match_count, field=rule.field_path,
+            source="syslog", name=rule.name, threshold=rule.threshold,
+        )
+    else:
+        summary = f"Rule '{rule.name}': {match_count} log messages matching {rule.field_path} {op_label} '{rule.threshold}'"
+
+    await _find_or_create_incident(
+        db,
+        rule=f"alert_rule_{rule.id}",
+        title=f"Rule: {rule.name}",
+        severity=rule.severity,
+        host_ids=[0],
+        event_type="syslog_error",
+        summary=summary,
+        detail=detail,
+    )
+
+    # Update last_triggered_at
+    await db.execute(
+        update(AlertRule).where(AlertRule.id == rule.id).values(last_triggered_at=now)
+    )
+    await db.commit()
+
+    logger.info("Syslog rule triggered: %s (%d matches)", rule.name, match_count)
 
 
 async def _get_source_data(db: AsyncSession, rule: AlertRule) -> dict | None:
@@ -308,6 +390,13 @@ async def get_source_options(db: AsyncSession) -> list[dict]:
             "instances": instances,
         })
 
+    # Syslog source
+    sources.append({
+        "type": "syslog",
+        "label": "Syslog",
+        "instances": [],
+    })
+
     # Ping source
     from database import PingHost
     hosts = (await db.execute(
@@ -325,6 +414,13 @@ async def get_source_options(db: AsyncSession) -> list[dict]:
 
 async def get_fields_for_source(db: AsyncSession, source_type: str, source_id: int | None = None) -> list[dict]:
     """Discover available fields from the latest snapshot of a source."""
+    if source_type == "syslog":
+        return [
+            {"path": "message", "value": "log message text", "type": "string"},
+            {"path": "hostname", "value": "source hostname", "type": "string"},
+            {"path": "app_name", "value": "application name", "type": "string"},
+            {"path": "severity", "value": 6, "type": "number"},
+        ]
     if source_type == "ping":
         # Return static ping fields
         return [

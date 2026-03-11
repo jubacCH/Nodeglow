@@ -1,5 +1,6 @@
 """Incidents UI – list, detail, acknowledge, resolve."""
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -38,9 +39,27 @@ async def incident_detail(
     if not incident:
         return RedirectResponse("/alerts?tab=incidents", status_code=302)
 
+    # Fetch related syslog entries around the incident timeframe
+    related_logs = []
+    try:
+        from services.clickhouse_client import query as ch_query
+        start = incident.created_at - timedelta(minutes=5)
+        end = (incident.resolved_at or datetime.utcnow()) + timedelta(minutes=5)
+        related_logs = await ch_query(
+            "SELECT timestamp, hostname, severity, app_name, message "
+            "FROM syslog_messages "
+            "WHERE timestamp >= {t0:DateTime64(3)} AND timestamp <= {t1:DateTime64(3)} "
+            "AND severity <= 4 "
+            "ORDER BY timestamp DESC LIMIT 50",
+            {"t0": start, "t1": end},
+        )
+    except Exception:
+        logging.getLogger(__name__).debug("Could not fetch syslog context", exc_info=True)
+
     return templates.TemplateResponse("incident_detail.html", {
         "request": request,
         "incident": incident,
+        "related_logs": related_logs,
         "active_page": "alerts",
     })
 

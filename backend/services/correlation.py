@@ -6,7 +6,8 @@ Rules:
 1. host_down_syslog  – Host offline + syslog errors from same host (5min window)
 2. multi_host_down   – 3+ hosts offline simultaneously → network problem
 3. integration_host  – Integration unreachable + associated host offline
-4. syslog_spike      – Syslog error rate 5x above baseline + latency increase
+4. syslog_spike      – Syslog error rate 5x above baseline
+5. log_anomaly       – Per-host log volume > baseline + 3σ
 """
 import hashlib
 import json
@@ -20,6 +21,7 @@ from models.ping import PingHost, PingResult
 from services.clickhouse_client import query_scalar as ch_scalar
 from models.integration import IntegrationConfig, Snapshot
 from models.incident import Incident, IncidentEvent
+from models.log_template import HostBaseline
 
 log = logging.getLogger("nodeglow.correlation")
 
@@ -275,6 +277,72 @@ async def _rule_syslog_spike(db):
         )
 
 
+# ── Rule 5: Log Anomaly ────────────────────────────────────────────────
+
+async def _rule_log_anomaly(db):
+    """Detect per-host log volume anomalies vs. learned baselines."""
+    now = datetime.utcnow()
+    hour = now.hour
+    dow = now.weekday()
+
+    # Get baselines for current time slot with sufficient data
+    baselines = (await db.execute(
+        select(HostBaseline).where(
+            HostBaseline.hour_of_day == hour,
+            HostBaseline.day_of_week == dow,
+            HostBaseline.sample_count >= 3,
+            HostBaseline.avg_rate > 0,
+        )
+    )).scalars().all()
+
+    if not baselines:
+        return
+
+    window_10m = now - timedelta(minutes=10)
+
+    for bl in baselines:
+        # Current rate: messages in last 10min, extrapolated to per-hour
+        if bl.host_key.startswith("host:"):
+            host_id = int(bl.host_key.split(":")[1])
+            count = int(await ch_scalar(
+                "SELECT count() FROM syslog_messages WHERE host_id = {hid:Int32} AND timestamp >= {t:DateTime64(3)}",
+                {"hid": host_id, "t": window_10m},
+            ) or 0)
+        else:
+            count = int(await ch_scalar(
+                "SELECT count() FROM syslog_messages WHERE source_ip = {ip:String} AND timestamp >= {t:DateTime64(3)}",
+                {"ip": bl.host_key, "t": window_10m},
+            ) or 0)
+
+        current_rate = count * 6  # extrapolate 10min → 1hr
+        threshold = bl.avg_rate + 3 * max(bl.std_rate, bl.avg_rate * 0.3)
+
+        if current_rate > threshold and count >= 20:
+            host_label = bl.host_key
+            if bl.host_key.startswith("host:"):
+                host = (await db.execute(
+                    select(PingHost).where(PingHost.id == int(bl.host_key.split(":")[1]))
+                )).scalar_one_or_none()
+                if host:
+                    host_label = host.name
+                    host_ids = [host.id]
+                else:
+                    host_ids = [0]
+            else:
+                host_ids = [0]
+
+            await _find_or_create_incident(
+                db,
+                rule="log_anomaly",
+                title=f"Log volume anomaly: {host_label}",
+                severity="warning",
+                host_ids=host_ids,
+                event_type="syslog_error",
+                summary=f"{host_label}: {current_rate}/hr (baseline: {int(bl.avg_rate)}/hr ± {int(bl.std_rate)})",
+                detail=f"{count} messages in last 10min, expected ~{int(bl.avg_rate / 6)}",
+            )
+
+
 # ── Auto-Resolve ────────────────────────────────────────────────────────────
 
 async def _auto_resolve(db):
@@ -291,9 +359,9 @@ async def _auto_resolve(db):
     offline_ids = {h.id for h in offline_hosts}
 
     for incident in open_incidents:
-        # Skip syslog_spike – auto-resolves after no new spike
-        if incident.rule == "syslog_spike":
-            # Resolve if last update was > 10min ago (no new spike detected)
+        # Skip syslog_spike / log_anomaly / alert_rules – auto-resolve after timeout
+        if incident.rule in ("syslog_spike", "log_anomaly") or incident.rule.startswith("alert_rule_"):
+            # Resolve if last update was > 10min ago (no new activity)
             if incident.updated_at < datetime.utcnow() - timedelta(minutes=10):
                 incident.status = "resolved"
                 incident.resolved_at = datetime.utcnow()
@@ -378,6 +446,7 @@ async def run_correlation():
             await _rule_multi_host_down(db)
             await _rule_integration_host(db)
             await _rule_syslog_spike(db)
+            await _rule_log_anomaly(db)
             await _auto_resolve(db)
             await db.commit()
         except Exception as e:

@@ -472,6 +472,115 @@
 
   </div>
 
+  <!-- Row 5: Correlation + Alert Rules + Maintenance + Log Intelligence -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+
+    <!-- Correlation Engine / Incidents -->
+    <div class="glass-card">
+      <h2 class="metric-label !text-[10px] mb-4">Correlation Engine</h2>
+      {% if incident_stats %}
+      <div class="space-y-2.5">
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Open Incidents</span>
+          <span class="text-xs font-mono {% if incident_stats.open > 0 %}text-ng-critical{% else %}text-ng-success{% endif %}">{{ incident_stats.open }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Acknowledged</span>
+          <span class="text-xs font-mono {% if incident_stats.acknowledged > 0 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{{ incident_stats.acknowledged }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Resolved</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ incident_stats.resolved }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Total</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ incident_stats.total }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Rules Active</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">5</span>
+        </div>
+      </div>
+      {% else %}
+      <p class="text-[--ng-text-muted] text-xs">No data</p>
+      {% endif %}
+    </div>
+
+    <!-- Alert Rules -->
+    <div class="glass-card">
+      <h2 class="metric-label !text-[10px] mb-4">Alert Rules</h2>
+      {% if alert_rule_stats %}
+      <div class="space-y-2.5">
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Total Rules</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ alert_rule_stats.total }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Enabled</span>
+          <span class="text-xs font-mono {% if alert_rule_stats.enabled > 0 %}text-ng-success{% else %}text-[--ng-text-muted]{% endif %}">{{ alert_rule_stats.enabled }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Syslog Rules</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ alert_rule_stats.syslog_rules }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Last Triggered</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ alert_rule_stats.last_triggered }}</span>
+        </div>
+      </div>
+      {% else %}
+      <p class="text-[--ng-text-muted] text-xs">No data</p>
+      {% endif %}
+    </div>
+
+    <!-- Maintenance Windows -->
+    <div class="glass-card">
+      <h2 class="metric-label !text-[10px] mb-4">Maintenance Windows</h2>
+      {% if maintenance_stats %}
+      <div class="space-y-2.5">
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Active</span>
+          <span class="text-xs font-mono {% if maintenance_stats.active > 0 %}text-ng-warning{% else %}text-ng-success{% endif %}">{{ maintenance_stats.active }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Time-limited</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ maintenance_stats.timed }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Indefinite</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ maintenance_stats.indefinite }}</span>
+        </div>
+      </div>
+      {% else %}
+      <p class="text-[--ng-text-muted] text-xs">No data</p>
+      {% endif %}
+    </div>
+
+    <!-- Log Intelligence -->
+    <div class="glass-card">
+      <h2 class="metric-label !text-[10px] mb-4">Log Intelligence</h2>
+      {% if log_intelligence %}
+      <div class="space-y-2.5">
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Learned Templates</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ "{:,}".format(log_intelligence.templates) }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Host Baselines</span>
+          <span class="text-[--ng-text-secondary] text-xs font-mono">{{ "{:,}".format(log_intelligence.baselines) }}</span>
+        </div>
+        <div class="flex justify-between gap-4">
+          <span class="text-[--ng-text-muted] text-xs">Precursor Patterns</span>
+          <span class="text-xs font-mono {% if log_intelligence.precursors > 0 %}text-ng-primary{% else %}text-[--ng-text-muted]{% endif %}">{{ log_intelligence.precursors }}</span>
+        </div>
+      </div>
+      {% else %}
+      <p class="text-[--ng-text-muted] text-xs">No data</p>
+      {% endif %}
+    </div>
+
+  </div>
+
   <!-- Top Tables by Size -->
   {% if top_tables %}
   <div class="glass-card">
