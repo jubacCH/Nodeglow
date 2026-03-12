@@ -117,42 +117,132 @@
     {% set dev_ip = d.get('ip', '') %}
     {% set dev_name = d.get('name', d.get('hostname', 'Unknown')) %}
     {% set host_id = ip_to_host_id.get(dev_ip) or ip_to_host_id.get(dev_name.lower()) %}
-    {% if host_id %}
-    <a href="/hosts/{{ host_id }}" class="glass-card p-4 block hover:!border-[--ng-primary]/30 transition-colors">
-    {% else %}
-    <div class="glass-card p-4">
-    {% endif %}
-        <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full {% if d.get('state', d.get('status')) == 1 or d.get('adopted') %}bg-ng-success{% else %}bg-ng-critical{% endif %}"></span>
-                <span class="text-[--ng-text-primary] font-medium text-sm">{{ dev_name }}</span>
-            </div>
-            <span class="text-[10px] font-mono text-[--ng-text-muted]">{{ d.get('model', '') }}</span>
-        </div>
-        <div class="space-y-2">
-            {% if d.get('cpu_pct') is not none or d.get('system-stats', {}).get('cpu') %}
-            {% set cpu = d.get('cpu_pct', d.get('system-stats', {}).get('cpu', '0'))|float|round|int %}
-            <div>
-                <div class="flex justify-between text-[10px] text-[--ng-text-muted] mb-0.5"><span>CPU</span><span>{{ cpu }}%</span></div>
-                <div class="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                    <div class="h-full rounded-full {% if cpu > 85 %}bg-ng-critical{% elif cpu > 70 %}bg-ng-warning{% else %}bg-ng-primary{% endif %}" style="width:{{ cpu }}%"></div>
+    <div class="glass-card overflow-hidden">
+        {% if host_id %}
+        <a href="/hosts/{{ host_id }}" class="block p-4 hover:bg-white/[0.02] transition-colors">
+        {% else %}
+        <div class="p-4">
+        {% endif %}
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full {% if d.get('state', d.get('status')) == 1 or d.get('adopted') %}bg-ng-success{% else %}bg-ng-critical{% endif %}"></span>
+                    <span class="text-[--ng-text-primary] font-medium text-sm">{{ dev_name }}</span>
                 </div>
+                <span class="text-[10px] font-mono text-[--ng-text-muted]">{{ d.get('type_label', d.get('type', '')) }}</span>
             </div>
-            {% endif %}
-            {% if d.get('mem_pct') is not none or d.get('system-stats', {}).get('mem') %}
-            {% set mem = d.get('mem_pct', d.get('system-stats', {}).get('mem', '0'))|float|round|int %}
-            <div>
-                <div class="flex justify-between text-[10px] text-[--ng-text-muted] mb-0.5"><span>Memory</span><span>{{ mem }}%</span></div>
-                <div class="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                    <div class="h-full rounded-full {% if mem > 85 %}bg-ng-critical{% elif mem > 70 %}bg-ng-warning{% else %}bg-ng-mint{% endif %}" style="width:{{ mem }}%"></div>
+            <!-- Model + Version + Uptime line -->
+            <div class="flex items-center gap-2 mb-3 text-[10px] text-[--ng-text-muted] font-mono">
+                {% if d.get('model') %}<span>{{ d.get('model') }}</span>{% endif %}
+                {% if d.get('version') %}<span class="px-1 py-0.5 rounded bg-white/5">v{{ d.get('version') }}</span>{% endif %}
+                {% set up_s = d.get('uptime', 0)|int %}
+                {% if up_s > 0 %}
+                {% set up_d = (up_s / 86400)|int %}
+                {% set up_h = ((up_s % 86400) / 3600)|int %}
+                <span>{% if up_d > 0 %}{{ up_d }}d {{ up_h }}h{% else %}{{ up_h }}h{% endif %}</span>
+                {% endif %}
+            </div>
+            <div class="space-y-2">
+                {% if d.get('cpu_pct') is not none %}
+                {% set cpu = d.get('cpu_pct', 0)|float|round|int %}
+                <div>
+                    <div class="flex justify-between text-[10px] text-[--ng-text-muted] mb-0.5"><span>CPU</span><span>{{ cpu }}%</span></div>
+                    <div class="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                        <div class="h-full rounded-full {% if cpu > 85 %}bg-ng-critical{% elif cpu > 70 %}bg-ng-warning{% else %}bg-ng-primary{% endif %}" style="width:{{ cpu }}%"></div>
+                    </div>
                 </div>
+                {% endif %}
+                {% if d.get('mem_pct') is not none %}
+                {% set mem = d.get('mem_pct', 0)|float|round|int %}
+                <div>
+                    <div class="flex justify-between text-[10px] text-[--ng-text-muted] mb-0.5"><span>Memory</span><span>{{ mem }}%</span></div>
+                    <div class="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                        <div class="h-full rounded-full {% if mem > 85 %}bg-ng-critical{% elif mem > 70 %}bg-ng-warning{% else %}bg-ng-mint{% endif %}" style="width:{{ mem }}%"></div>
+                    </div>
+                </div>
+                {% endif %}
+                <!-- Satisfaction + Throughput + IP -->
+                <div class="flex items-center justify-between text-[10px] text-[--ng-text-muted]">
+                    <div class="flex items-center gap-3">
+                        {% if dev_ip %}<span class="font-mono">{{ dev_ip }}</span>{% endif %}
+                        {% if d.get('satisfaction', -1) >= 0 %}
+                        <span class="{% if d.get('satisfaction') >= 80 %}text-ng-success{% elif d.get('satisfaction') >= 50 %}text-ng-warning{% else %}text-ng-critical{% endif %}">{{ d.get('satisfaction') }}% sat</span>
+                        {% endif %}
+                    </div>
+                    {% if d.get('rx_bytes_r', 0) > 0 or d.get('tx_bytes_r', 0) > 0 %}
+                    <span class="font-mono">
+                        {% set rxr = d.get('rx_bytes_r', 0) %}{% set txr = d.get('tx_bytes_r', 0) %}
+                        {% if rxr > 1048576 %}{{ "%.1f"|format(rxr / 1048576) }}M{% elif rxr > 1024 %}{{ "%.0f"|format(rxr / 1024) }}K{% else %}{{ rxr }}B{% endif %}/s
+                        &darr;&uarr;
+                        {% if txr > 1048576 %}{{ "%.1f"|format(txr / 1048576) }}M{% elif txr > 1024 %}{{ "%.0f"|format(txr / 1024) }}K{% else %}{{ txr }}B{% endif %}/s
+                    </span>
+                    {% endif %}
+                </div>
+                <!-- Client count -->
+                {% if d.get('clients_wifi', 0) > 0 or d.get('clients_wired', 0) > 0 %}
+                <div class="flex items-center gap-2 text-[10px] text-[--ng-text-muted]">
+                    {% if d.get('clients_wifi', 0) > 0 %}<span>{{ d.get('clients_wifi') }} WiFi</span>{% endif %}
+                    {% if d.get('clients_wired', 0) > 0 %}<span>{{ d.get('clients_wired') }} Wired</span>{% endif %}
+                </div>
+                {% endif %}
             </div>
-            {% endif %}
-            {% if dev_ip %}
-            <p class="text-[10px] text-[--ng-text-muted] font-mono">{{ dev_ip }}</p>
-            {% endif %}
+        {% if host_id %}</a>{% else %}</div>{% endif %}
+
+        <!-- Port Table (expandable) -->
+        {% if d.get('has_ports') %}
+        <div class="border-t border-white/[0.06]">
+            <button onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('svg').classList.toggle('rotate-180')"
+                    class="w-full px-4 py-2 flex items-center justify-between text-[10px] text-[--ng-text-muted] hover:bg-white/[0.02] transition-colors">
+                <span>{{ d.get('port_table', [])|length }} Ports</span>
+                <svg class="w-3 h-3 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div class="hidden">
+                <table class="w-full text-[10px]">
+                    <thead>
+                        <tr class="border-b border-white/[0.06] text-[--ng-text-muted] uppercase tracking-wider">
+                            <th class="px-3 py-1.5 text-left font-medium">#</th>
+                            <th class="px-3 py-1.5 text-left font-medium">Name</th>
+                            <th class="px-3 py-1.5 text-center font-medium">Status</th>
+                            <th class="px-3 py-1.5 text-right font-medium">Speed</th>
+                            <th class="px-3 py-1.5 text-right font-medium">PoE</th>
+                            <th class="px-3 py-1.5 text-right font-medium">RX/TX</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in d.get('port_table', []) %}
+                        <tr class="border-b border-white/[0.03] {% if p.get('is_uplink') %}bg-ng-primary/[0.04]{% endif %}">
+                            <td class="px-3 py-1 text-[--ng-text-muted] font-mono">{{ p.get('idx') }}</td>
+                            <td class="px-3 py-1 text-[--ng-text-primary]">{{ p.get('name', '') }}{% if p.get('is_uplink') %} <span class="text-ng-primary text-[8px]">UPLINK</span>{% endif %}</td>
+                            <td class="px-3 py-1 text-center">
+                                {% if not p.get('enable') %}
+                                <span class="px-1 py-0.5 rounded bg-slate-500/15 text-slate-500">Disabled</span>
+                                {% elif p.get('up') %}
+                                <span class="px-1 py-0.5 rounded bg-ng-success/15 text-ng-success">Up</span>
+                                {% else %}
+                                <span class="px-1 py-0.5 rounded bg-slate-500/15 text-slate-400">Down</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-1 text-right font-mono text-[--ng-text-secondary]">{{ p.get('speed_label', '') }}</td>
+                            <td class="px-3 py-1 text-right font-mono">
+                                {% if p.get('poe_enable') %}
+                                <span class="{% if p.get('poe_power', 0) > 0 %}text-amber-400{% else %}text-[--ng-text-muted]{% endif %}">{{ p.get('poe_power', 0) }}W</span>
+                                {% else %}
+                                <span class="text-[--ng-text-muted]">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-1 text-right font-mono text-[--ng-text-muted]">
+                                {% set prx = p.get('rx_bytes_r', 0) %}{% set ptx = p.get('tx_bytes_r', 0) %}
+                                {% if prx > 0 or ptx > 0 %}
+                                {% if prx > 1048576 %}{{ "%.1f"|format(prx / 1048576) }}M{% elif prx > 1024 %}{{ "%.0f"|format(prx / 1024) }}K{% else %}{{ prx }}{% endif %}/{% if ptx > 1048576 %}{{ "%.1f"|format(ptx / 1048576) }}M{% elif ptx > 1024 %}{{ "%.0f"|format(ptx / 1024) }}K{% else %}{{ ptx }}{% endif %}
+                                {% else %}—{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
-    {% if host_id %}</a>{% else %}</div>{% endif %}
+        {% endif %}
+    </div>
     {% endfor %}
 </div>
 {% endif %}
@@ -162,32 +252,49 @@
 {% if clients %}
 <h2 class="metric-label !text-[10px] mb-3">Clients ({{ clients|length }})</h2>
 <div class="glass-card overflow-hidden">
+    <div class="overflow-x-auto">
     <table class="w-full text-sm">
         <thead>
             <tr class="border-b border-white/[0.06] text-[--ng-text-muted] text-[10px] uppercase tracking-wider">
                 <th class="px-4 py-2.5 text-left font-medium">Client</th>
                 <th class="px-4 py-2.5 text-left font-medium">IP</th>
                 <th class="px-4 py-2.5 text-left font-medium">Connection</th>
+                <th class="px-4 py-2.5 text-left font-medium">AP / Switch</th>
+                <th class="px-4 py-2.5 text-right font-medium">VLAN</th>
                 <th class="px-4 py-2.5 text-right font-medium">Signal</th>
                 <th class="px-4 py-2.5 text-right font-medium">RX/TX</th>
+                <th class="px-4 py-2.5 text-right font-medium">Uptime</th>
             </tr>
         </thead>
-        <tbody>
-            {% for c in clients[:50] %}
-            <tr class="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors">
+        <tbody id="clientTableBody">
+            {% for c in clients %}
+            <tr class="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors {% if loop.index > 50 %}hidden client-extra-row{% endif %}">
                 <td class="px-4 py-2">
                     <span class="text-[--ng-text-primary] font-medium">{{ c.get('hostname', c.get('name', c.get('mac', '?'))) }}</span>
                 </td>
                 <td class="px-4 py-2 text-[--ng-text-secondary] text-xs font-mono">{{ c.get('ip', '—') }}</td>
                 <td class="px-4 py-2">
-                    {% if c.get('is_wireless', c.get('is_wired') == false) %}
-                    <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-blue-500/15 text-blue-400">{{ c.get('ssid', 'WiFi') }}</span>
+                    {% if c.get('is_wireless') %}
+                    <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-blue-500/15 text-blue-400">{{ c.get('ssid', 'WiFi') }}{% if c.get('channel') %} ch{{ c.get('channel') }}{% endif %}</span>
                     {% else %}
                     <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-slate-500/15 text-slate-400">Wired</span>
                     {% endif %}
                 </td>
+                <td class="px-4 py-2 text-xs text-[--ng-text-muted]">
+                    {% if c.get('is_wireless') and c.get('ap_name') %}
+                    <span class="font-mono">{{ c.get('ap_name') }}</span>
+                    {% elif c.get('sw_name') %}
+                    <span class="font-mono">{{ c.get('sw_name') }}{% if c.get('sw_port') %} :{{ c.get('sw_port') }}{% endif %}</span>
+                    {% else %}—{% endif %}
+                </td>
+                <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-muted]">{{ c.get('vlan', 1) }}</td>
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-secondary]">
-                    {% if c.get('rssi') %}{{ c.get('rssi') }} dBm{% elif c.get('signal') %}{{ c.get('signal') }} dBm{% else %}—{% endif %}
+                    {% if c.get('is_wireless') %}
+                    {% set sig = c.get('rssi', c.get('signal', 0))|int %}
+                    {% if sig %}
+                    <span class="{% if sig > -50 %}text-ng-success{% elif sig > -70 %}text-ng-warning{% else %}text-ng-critical{% endif %}">{{ sig }} dBm</span>
+                    {% else %}—{% endif %}
+                    {% else %}—{% endif %}
                 </td>
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-muted]">
                     {% set rx = c.get('rx_bytes', 0) %}
@@ -196,12 +303,23 @@
                     /
                     {% if tx > 1073741824 %}{{ "%.1f"|format(tx / 1073741824) }}G{% elif tx > 1048576 %}{{ "%.0f"|format(tx / 1048576) }}M{% elif tx > 1024 %}{{ "%.0f"|format(tx / 1024) }}K{% else %}{{ tx }}B{% endif %}
                 </td>
+                <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-muted]">
+                    {% set cup = c.get('uptime', 0)|int %}
+                    {% if cup > 0 %}
+                    {% set cup_d = (cup / 86400)|int %}{% set cup_h = ((cup % 86400) / 3600)|int %}{% set cup_m = ((cup % 3600) / 60)|int %}
+                    {% if cup_d > 0 %}{{ cup_d }}d {{ cup_h }}h{% elif cup_h > 0 %}{{ cup_h }}h {{ cup_m }}m{% else %}{{ cup_m }}m{% endif %}
+                    {% else %}—{% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    </div>
     {% if clients|length > 50 %}
-    <div class="px-4 py-2 text-center text-[--ng-text-muted] text-xs">Showing 50 of {{ clients|length }} clients</div>
+    <button id="showAllClientsBtn" onclick="document.querySelectorAll('.client-extra-row').forEach(r=>r.classList.remove('hidden')); this.remove()"
+            class="w-full px-4 py-2 text-center text-[--ng-text-muted] text-xs hover:bg-white/[0.02] transition-colors cursor-pointer">
+        Show all {{ clients|length }} clients ({{ clients|length - 50 }} more)
+    </button>
     {% endif %}
 </div>
 {% endif %}
@@ -209,16 +327,39 @@
 <!-- Recent Events -->
 {% set events = data.get('events', []) %}
 {% if events %}
-<h2 class="metric-label !text-[10px] mb-3 mt-6">Recent Events</h2>
+<h2 class="metric-label !text-[10px] mb-3 mt-6">Recent Events ({{ events|length }})</h2>
 <div class="glass-card overflow-hidden">
     <div class="divide-y divide-white/[0.04]">
-        {% for e in events[:20] %}
-        <div class="px-4 py-2.5 flex items-center gap-3">
-            <span class="text-[--ng-text-muted] text-xs font-mono whitespace-nowrap">{{ e.get('time', e.get('datetime', '')) }}</span>
-            <span class="text-[--ng-text-primary] text-xs">{{ e.get('msg', e.get('message', '')) }}</span>
+        {% for e in events %}
+        <div class="px-4 py-2.5 flex items-start gap-3 {% if loop.index > 30 %}hidden event-extra-row{% endif %}">
+            <span class="text-[--ng-text-muted] text-[10px] font-mono whitespace-nowrap shrink-0 pt-0.5">{{ e.get('datetime', '') }}</span>
+            <span class="px-1.5 py-0.5 rounded text-[8px] font-mono shrink-0
+                {% if e.get('subsystem') == 'wan' %}bg-amber-500/15 text-amber-400
+                {% elif e.get('subsystem') == 'wlan' %}bg-blue-500/15 text-blue-400
+                {% elif e.get('subsystem') == 'lan' %}bg-slate-500/15 text-slate-400
+                {% else %}bg-white/5 text-[--ng-text-muted]{% endif %}">{{ e.get('sub_label', e.get('subsystem', '')) }}</span>
+            <div class="min-w-0">
+                <span class="text-[--ng-text-primary] text-xs">{{ e.get('key_label', '') }}</span>
+                {% if e.get('hostname') or e.get('ap') or e.get('ssid') %}
+                <span class="text-[10px] text-[--ng-text-muted] font-mono ml-1">
+                    {% if e.get('hostname') %}{{ e.get('hostname') }}{% endif %}
+                    {% if e.get('ap') %} @ {{ e.get('ap') }}{% endif %}
+                    {% if e.get('ssid') %} ({{ e.get('ssid') }}){% endif %}
+                </span>
+                {% endif %}
+                {% if e.get('msg') and e.get('msg') != e.get('key_label') %}
+                <p class="text-[10px] text-[--ng-text-muted] mt-0.5 truncate">{{ e.get('msg') }}</p>
+                {% endif %}
+            </div>
         </div>
         {% endfor %}
     </div>
+    {% if events|length > 30 %}
+    <button onclick="document.querySelectorAll('.event-extra-row').forEach(r=>r.classList.remove('hidden')); this.remove()"
+            class="w-full px-4 py-2 text-center text-[--ng-text-muted] text-xs hover:bg-white/[0.02] transition-colors cursor-pointer">
+        Show all {{ events|length }} events ({{ events|length - 30 }} more)
+    </button>
+    {% endif %}
 </div>
 {% endif %}
 
