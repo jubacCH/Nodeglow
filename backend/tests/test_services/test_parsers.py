@@ -29,7 +29,7 @@ def test_proxmox_parse_nodes():
     assert node["online"] is True
     assert node["cpu_pct"] == 15.5
     assert node["mem_pct"] == 25.0
-    assert node["uptime_h"] == 2.0
+    assert node["uptime_s"] == 7200
 
 
 def test_proxmox_parse_vms_and_containers():

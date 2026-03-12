@@ -14,12 +14,8 @@ from models.integration import IntegrationConfig, Snapshot
 
 logger = logging.getLogger(__name__)
 
-# Storage integration types and their pool/volume keys
-_STORAGE_TYPES = {
-    "truenas": "pools",
-    "unas": "pools",
-    "synology": "volumes",
-}
+# Storage integration types (all use standardized "storage_pools" key)
+_STORAGE_TYPES = {"truenas", "unas", "synology"}
 
 
 async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, dict]:
@@ -34,7 +30,7 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
     result = await db.execute(
         select(IntegrationConfig).where(
             IntegrationConfig.enabled == True,
-            IntegrationConfig.type.in_(list(_STORAGE_TYPES.keys())),
+            IntegrationConfig.type.in_(list(_STORAGE_TYPES)),
         )
     )
     configs = result.scalars().all()
@@ -43,9 +39,10 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
 
     predictions: dict[str, dict] = {}
 
+    from integrations import get_meta as _int_meta
+
     for cfg in configs:
-        pools_key = _STORAGE_TYPES[cfg.type]
-        label = {"truenas": "TrueNAS", "unas": "UNAS", "synology": "Synology"}[cfg.type]
+        label = f"{_int_meta(cfg.type)['label']}: {cfg.name}"
 
         # Get snapshot history
         snap_result = await db.execute(
@@ -72,7 +69,7 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
             except (json.JSONDecodeError, TypeError):
                 continue
             ts = snap.timestamp.timestamp()
-            for pool in data.get(pools_key, []):
+            for pool in data.get("storage_pools", []):
                 name = pool.get("name", "?")
                 pct = pool.get("pct")
                 if pct is not None:
@@ -92,7 +89,7 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
                 "config_id": cfg.id,
                 "config_name": cfg.name,
                 "pool_name": pool_name,
-                "source": f"{label}: {cfg.name}",
+                "source": label,
                 "current_pct": pred["current"],
                 "trend_pct_per_day": pred["slope_per_day"],
                 "days_until_full": pred["days_until_full"],

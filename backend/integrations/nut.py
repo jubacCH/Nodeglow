@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 _STATUS_LABELS = {
     "OL": "On Line", "OB": "On Battery", "LB": "Low Battery",
@@ -132,8 +132,9 @@ class NutClient:
 
 class NutIntegration(BaseIntegration):
     name = "ups"
-    display_name = "UPS (NUT)"
+    display_name = "UPS / NUT"
     icon = "apc"
+    color = "yellow"
     icon_svg = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 4h-2V2h-4v2H8C6.9 4 6 4.9 6 6v14c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H8V6h8v14zm-4-4c.55 0 1-.45 1-1v-3c0-.55-.45-1-1-1s-1 .45-1 1v3c0 .55.45 1 1 1z"/></svg>'
     description = "Monitor UPS devices via Network UPS Tools."
 
@@ -163,6 +164,36 @@ class NutIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        status = (data.get("status") or "").lower()
+        if "onbatt" in status or "ob" in status.split():
+            alerts.append(Alert(
+                severity="critical",
+                title="UPS on battery",
+                detail=f"Status: {data.get('status', '?')} – Charge: {data.get('battery_pct', '?')}%",
+            ))
+        if "lb" in status.split():
+            alerts.append(Alert(
+                severity="critical",
+                title="UPS low battery",
+                detail=f"Battery: {data.get('battery_pct', '?')}% – Runtime: {data.get('runtime_s', '?')}s",
+            ))
+        if "rb" in status.split():
+            alerts.append(Alert(
+                severity="warning",
+                title="UPS battery needs replacement",
+                detail=f"Model: {data.get('model', '?')}",
+            ))
+        load = data.get("load_pct")
+        if load is not None and load >= 90:
+            alerts.append(Alert(
+                severity="critical" if load >= 95 else "warning",
+                title="UPS high load",
+                detail=f"Load: {load}%",
+            ))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._client().health_check()

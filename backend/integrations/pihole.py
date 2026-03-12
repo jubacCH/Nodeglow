@@ -228,6 +228,7 @@ class PiholeIntegration(BaseIntegration):
     name = "pihole"
     display_name = "Pi-hole"
     icon = "pihole"
+    color = "red"
     description = "Monitor Pi-hole DNS filtering (v5 + v6)."
 
     config_fields = [

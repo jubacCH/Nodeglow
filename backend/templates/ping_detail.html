@@ -492,8 +492,8 @@
         <div>
           <p class="text-[--ng-text-muted] text-xs uppercase tracking-wider mb-1.5">Uptime (VM)</p>
           <p class="text-xl font-bold text-white">
-            {% if proxmox_guest.running and proxmox_guest.uptime_h > 0 %}
-              {% set _d = (proxmox_guest.uptime_h / 24)|int %}{% set _h = (proxmox_guest.uptime_h % 24)|int %}
+            {% if proxmox_guest.running and proxmox_guest.uptime_s > 0 %}
+              {% set _h = (proxmox_guest.uptime_s / 3600)|int %}{% set _d = (_h / 24)|int %}{% set _h = _h % 24 %}
               {% if _d > 0 %}{{ _d }}d {% endif %}{{ _h }}h
             {% else %}<span class="text-slate-600">—</span>{% endif %}
           </p>

@@ -97,6 +97,7 @@ class AdguardIntegration(BaseIntegration):
     name = "adguard"
     display_name = "AdGuard Home"
     icon = "adguard"
+    color = "emerald"
     description = "Monitor AdGuard Home DNS filtering."
 
     config_fields = [

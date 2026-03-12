@@ -89,6 +89,7 @@ class HomeAssistantIntegration(BaseIntegration):
     name = "hass"
     display_name = "Home Assistant"
     icon = "homeassistant"
+    color = "orange"
     description = "Monitor Home Assistant entities and automations."
 
     config_fields = [

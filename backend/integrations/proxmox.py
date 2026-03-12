@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ def parse_cluster_data(resources: list[dict], cluster_status: list[dict],
                 "disk_pct": round(disk_used / disk_total * 100, 1) if disk_total else 0,
                 "netin": r.get("netin") or 0,
                 "netout": r.get("netout") or 0,
-                "uptime_h": round(uptime_s / 3600, 1),
+                "uptime_s": uptime_s,
             })
 
         elif rtype == "qemu":
@@ -150,7 +150,7 @@ def parse_cluster_data(resources: list[dict], cluster_status: list[dict],
                 "netout": r.get("netout") or 0,
                 "diskread": r.get("diskread") or 0,
                 "diskwrite": r.get("diskwrite") or 0,
-                "uptime_h": round((r.get("uptime") or 0) / 3600, 1),
+                "uptime_s": r.get("uptime") or 0,
                 "type": "VM",
             })
 
@@ -176,7 +176,7 @@ def parse_cluster_data(resources: list[dict], cluster_status: list[dict],
                 "netout": r.get("netout") or 0,
                 "diskread": r.get("diskread") or 0,
                 "diskwrite": r.get("diskwrite") or 0,
-                "uptime_h": round((r.get("uptime") or 0) / 3600, 1),
+                "uptime_s": r.get("uptime") or 0,
                 "type": "LXC",
             })
 
@@ -301,6 +301,7 @@ class ProxmoxIntegration(BaseIntegration):
     name = "proxmox"
     display_name = "Proxmox VE"
     icon = "proxmox"
+    color = "orange"
     description = "Monitor Proxmox VE clusters via the REST API."
 
     config_fields = [
@@ -334,6 +335,25 @@ class ProxmoxIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        if not data.get("quorum_ok", True):
+            alerts.append(Alert(severity="critical", title="Cluster quorum lost",
+                                detail=f"Cluster: {data.get('cluster_name', '?')}"))
+        for node in data.get("nodes", []):
+            if not node.get("online", True):
+                alerts.append(Alert(severity="critical", title="Node offline",
+                                    detail=node.get("name", "?"), entity=f"node: {node.get('name', '?')}"))
+            if node.get("cpu_pct", 0) >= 95:
+                alerts.append(Alert(severity="warning", title="Node CPU critical",
+                                    detail=f"{node.get('name', '?')}: {node.get('cpu_pct')}%",
+                                    entity=f"node: {node.get('name', '?')}"))
+            if node.get("mem_pct", 0) >= 95:
+                alerts.append(Alert(severity="warning", title="Node memory critical",
+                                    detail=f"{node.get('name', '?')}: {node.get('mem_pct')}%",
+                                    entity=f"node: {node.get('name', '?')}"))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

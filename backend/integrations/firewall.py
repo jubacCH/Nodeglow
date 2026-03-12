@@ -214,6 +214,7 @@ class FirewallIntegration(BaseIntegration):
     name = "firewall"
     display_name = "Firewall"
     icon = "opnsense"
+    color = "orange"
     description = "Monitor OPNsense or pfSense firewalls."
 
     config_fields = [

@@ -210,9 +210,18 @@ async def ping_list(request: Request, db: AsyncSession = Depends(get_db)):
             day_data = agg.get(str(d))
             if day_data:
                 total_d, ok_d = day_data
-                heatmap.append(round(ok_d / total_d * 100, 1) if total_d > 0 else None)
+                pct = round(ok_d / total_d * 100, 1) if total_d > 0 else None
             else:
-                heatmap.append(None)
+                pct = None
+            if pct is None:
+                color = "none"
+            elif pct >= 99:
+                color = "emerald"
+            elif pct >= 95:
+                color = "yellow"
+            else:
+                color = "red"
+            heatmap.append({"color": color, "date": str(d), "pct": pct})
 
         host_data.append({
             "host": host,
