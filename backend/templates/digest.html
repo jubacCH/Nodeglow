@@ -25,12 +25,12 @@
       <p class="metric-label !text-[10px]">Avg Uptime</p>
     </div>
     <div class="glass-card p-4 text-center">
-      <p class="text-2xl font-bold text-[--ng-text-primary]">{{ "{:,}"|format(digest.syslog.total) }}</p>
+      <p class="text-2xl font-bold text-[--ng-text-primary]">{{ "{:,}".format(digest.syslog.total) }}</p>
       <p class="metric-label !text-[10px]">Syslog Messages</p>
     </div>
     <div class="glass-card p-4 text-center">
       <p class="text-2xl font-bold {% if digest.syslog.errors > 100 %}text-ng-critical{% elif digest.syslog.errors > 10 %}text-ng-warning{% else %}text-ng-success{% endif %}">
-        {{ "{:,}"|format(digest.syslog.errors) }}
+        {{ "{:,}".format(digest.syslog.errors) }}
       </p>
       <p class="metric-label !text-[10px]">Syslog Errors</p>
     </div>
@@ -144,7 +144,7 @@
         {% for t in digest.syslog.top_templates %}
         <div class="bg-white/[0.02] rounded px-3 py-2">
           <div class="flex items-center gap-2 mb-0.5">
-            <span class="text-[--ng-text-primary] text-[10px] font-mono font-medium">{{ "{:,}"|format(t.count) }}x</span>
+            <span class="text-[--ng-text-primary] text-[10px] font-mono font-medium">{{ "{:,}".format(t.count) }}x</span>
             {% if t.noise_score <= 20 %}
             <span class="px-1 py-0.5 rounded text-[9px] bg-ng-warning/15 text-ng-warning">interesting</span>
             {% endif %}
