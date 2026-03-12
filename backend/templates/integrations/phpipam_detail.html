@@ -48,9 +48,9 @@
            class="ng-input !py-1.5 !text-xs max-w-sm" autocomplete="off">
 </div>
 <div class="glass-card overflow-hidden">
-    <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
+    <div class="overflow-x-auto">
         <table class="w-full text-sm" id="ipamTable">
-            <thead class="sticky top-0 bg-[--ng-glass-bg]">
+            <thead>
                 <tr class="border-b border-white/[0.06] text-[--ng-text-muted] text-[10px] uppercase tracking-wider">
                     <th class="px-4 py-2.5 text-left font-medium">IP</th>
                     <th class="px-4 py-2.5 text-left font-medium">Hostname</th>
@@ -60,7 +60,7 @@
             </thead>
             <tbody>
                 {% for addr in addrs %}
-                <tr class="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors">
+                <tr class="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors {% if loop.index > 50 %}hidden ipam-extra{% endif %}">
                     <td class="px-4 py-2 text-xs font-mono text-[--ng-text-primary] font-medium">{{ addr.ip }}</td>
                     <td class="px-4 py-2 text-xs text-[--ng-text-secondary]">{{ addr.hostname or '—' }}</td>
                     <td class="px-4 py-2 text-xs font-mono text-[--ng-text-muted]">{{ addr.mac or '—' }}</td>
@@ -71,12 +71,29 @@
         </table>
     </div>
 </div>
+{% if addrs|length > 50 %}
+<button id="ipamShowAll" onclick="document.querySelectorAll('.ipam-extra').forEach(r=>r.classList.remove('hidden'));this.remove()"
+        class="mt-3 text-xs text-[--ng-primary] hover:text-[--ng-primary-light] transition-colors cursor-pointer">
+    Show all {{ addrs|length }} addresses ({{ addrs|length - 50 }} more)
+</button>
+{% endif %}
 <script>
 document.getElementById('ipamSearch')?.addEventListener('input', function() {
     const q = this.value.toLowerCase();
-    document.querySelectorAll('#ipamTable tbody tr').forEach(row => {
-        row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
-    });
+    const showAllBtn = document.getElementById('ipamShowAll');
+    if (q) {
+        if (showAllBtn) showAllBtn.style.display = 'none';
+        document.querySelectorAll('#ipamTable tbody tr').forEach(row => {
+            row.classList.remove('hidden');
+            row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+        });
+    } else {
+        if (showAllBtn) showAllBtn.style.display = '';
+        document.querySelectorAll('#ipamTable tbody tr').forEach(row => {
+            row.style.display = '';
+            if (row.classList.contains('ipam-extra')) row.classList.add('hidden');
+        });
+    }
 });
 </script>
 {% endif %}
