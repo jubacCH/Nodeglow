@@ -377,12 +377,12 @@
               <span class="text-[--ng-text-primary] font-medium font-mono">${m.name}</span>
               <span class="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-[--ng-text-muted]">${m.vendor || 'unknown'}</span>
               <span class="text-[10px] text-[--ng-text-muted]">${m.oid_count} OIDs</span>
-              ${imported ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">Imported</span>' : ''}
+              ${imported ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-ng-success/10 text-ng-success">Imported</span>' : ''}
             </div>
             <p class="text-xs text-[--ng-text-muted] truncate">${m.description || ''}</p>
           </div>
           <button onclick="_importMib('${m.name}', '${m.vendor || ''}', this)"
-                  class="ng-btn ${imported ? 'ng-btn-ghost text-emerald-400' : 'ng-btn-primary'} text-xs ml-4 shrink-0"
+                  class="ng-btn ${imported ? 'ng-btn-ghost text-ng-success' : 'ng-btn-primary'} text-xs ml-4 shrink-0"
                   ${imported ? 'disabled' : ''}>
             ${imported ? 'Imported' : 'Import'}
           </button>
@@ -410,7 +410,7 @@
 
       if (resp.ok && data.ok) {
         btn.textContent = `Imported (${data.oids_added} OIDs)`;
-        btn.className = 'ng-btn ng-btn-ghost text-emerald-400 text-xs ml-4 shrink-0';
+        btn.className = 'ng-btn ng-btn-ghost text-ng-success text-xs ml-4 shrink-0';
         _importedMibs.add(name);
       } else {
         btn.textContent = data.error || 'Failed';
