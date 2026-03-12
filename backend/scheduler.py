@@ -53,7 +53,18 @@ async def run_integration_checks():
         async with AsyncSessionLocal() as db:
             for cfg in configs:
                 try:
-                    config_dict = int_svc.decrypt_config(cfg.config_json)
+                    try:
+                        config_dict = int_svc.decrypt_config(cfg.config_json)
+                    except Exception as dec_exc:
+                        logger.error(
+                            "Failed to decrypt config [%s/%s]: %s",
+                            integration_type, cfg.name, dec_exc,
+                        )
+                        await snap_svc.save(
+                            db, integration_type, cfg.id,
+                            ok=False, error=f"Decryption failed: {dec_exc}",
+                        )
+                        continue
                     instance = integration_cls(config=config_dict)
                     result = await instance.collect()
 

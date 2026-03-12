@@ -303,7 +303,10 @@ async def _rule_log_anomaly(db):
     for bl in baselines:
         # Current rate: messages in last 10min, extrapolated to per-hour
         if bl.host_key.startswith("host:"):
-            host_id = int(bl.host_key.split(":")[1])
+            parts = bl.host_key.split(":", 1)
+            if len(parts) < 2 or not parts[1].isdigit():
+                continue
+            host_id = int(parts[1])
             count = int(await ch_scalar(
                 "SELECT count() FROM syslog_messages WHERE host_id = {hid:Int32} AND timestamp >= {t:DateTime64(3)}",
                 {"hid": host_id, "t": window_10m},
@@ -320,8 +323,10 @@ async def _rule_log_anomaly(db):
         if current_rate > threshold and count >= 20:
             host_label = bl.host_key
             if bl.host_key.startswith("host:"):
+                _parts = bl.host_key.split(":", 1)
+                _hid = int(_parts[1]) if len(_parts) > 1 and _parts[1].isdigit() else 0
                 host = (await db.execute(
-                    select(PingHost).where(PingHost.id == int(bl.host_key.split(":")[1]))
+                    select(PingHost).where(PingHost.id == _hid)
                 )).scalar_one_or_none()
                 if host:
                     host_label = host.name
