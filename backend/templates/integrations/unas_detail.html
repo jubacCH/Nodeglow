@@ -19,6 +19,14 @@
 {% set sys = data.get('system', {}) %}
 {% set totals = data.get('totals', {}) %}
 
+<!-- System info line -->
+{% if sys.get('hostname') or sys.get('version') %}
+<div class="flex items-center gap-3 mb-4 text-[10px] text-[--ng-text-muted] font-mono">
+    {% if sys.get('hostname') %}<span>{{ sys.get('hostname') }}</span>{% endif %}
+    {% if sys.get('version') %}<span class="px-1.5 py-0.5 rounded bg-white/5">v{{ sys.get('version') }}</span>{% endif %}
+</div>
+{% endif %}
+
 <!-- System metrics -->
 <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
     {% set cpu = sys.get('cpu_pct', 0)|float %}
@@ -41,13 +49,18 @@
         <p class="text-2xl font-bold text-[--ng-text-primary]">{{ data.get('disks', [])|length }}</p>
         <p class="metric-label !text-[10px]">Disks</p>
     </div>
+    {% set st_total = totals.get('storage_total_gb', 0) %}
+    {% set st_used = totals.get('storage_used_gb', 0) %}
+    {% set st_pct = totals.get('storage_pct', 0) %}
     <div class="glass-card p-4 text-center">
-        <p class="text-2xl font-bold text-[--ng-text-primary]">{{ totals.get('total_tb', totals.get('total_gb', 0)) }}<span class="text-sm text-[--ng-text-muted]"> {% if totals.get('total_tb') %}TB{% else %}GB{% endif %}</span></p>
-        <p class="metric-label !text-[10px]">Total Storage</p>
+        <p class="text-2xl font-bold {% if st_pct > 90 %}text-ng-critical{% elif st_pct > 80 %}text-ng-warning{% else %}text-[--ng-text-primary]{% endif %}">{% if st_total >= 1024 %}{{ "%.1f"|format(st_total / 1024) }}<span class="text-sm text-[--ng-text-muted]"> TB</span>{% else %}{{ st_total|round|int }}<span class="text-sm text-[--ng-text-muted]"> GB</span>{% endif %}</p>
+        <p class="metric-label !text-[10px]">Storage ({{ st_pct }}% used)</p>
     </div>
-    {% set uptime_h = (sys.get('uptime_s', 0)|float / 3600)|round|int %}
+    {% set uptime_s = sys.get('uptime_s', 0)|float %}
+    {% set uptime_d = (uptime_s / 86400)|int %}
+    {% set uptime_h = ((uptime_s % 86400) / 3600)|int %}
     <div class="glass-card p-4 text-center">
-        <p class="text-2xl font-bold text-[--ng-text-primary]">{{ uptime_h }}h</p>
+        <p class="text-2xl font-bold text-[--ng-text-primary]">{% if uptime_d > 0 %}{{ uptime_d }}d {{ uptime_h }}h{% else %}{{ uptime_h }}h{% endif %}</p>
         <p class="metric-label !text-[10px]">Uptime</p>
     </div>
 </div>
@@ -82,6 +95,34 @@
 </div>
 {% endif %}
 
+<!-- Storage Pools -->
+{% set pools = data.get('pools', []) %}
+{% if pools %}
+<h2 class="metric-label !text-[10px] mb-3">Storage Pools ({{ pools|length }})</h2>
+<div class="grid gap-3 md:grid-cols-2 mb-6">
+    {% for p in pools %}
+    <div class="glass-card p-4">
+        <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full {% if p.get('healthy') %}bg-ng-success{% else %}bg-ng-critical{% endif %}"></span>
+                <span class="text-[--ng-text-primary] font-medium text-sm">{{ p.get('name', '?') }}</span>
+            </div>
+            <span class="text-[10px] font-mono text-[--ng-text-muted]">{{ p.get('id', '') }}</span>
+        </div>
+        <div>
+            <div class="flex justify-between text-[10px] text-[--ng-text-muted] mb-0.5">
+                <span>{{ p.get('used_gb', 0) }} / {{ p.get('size_gb', 0) }} GB{% if p.get('free_gb') %} ({{ p.get('free_gb') }} GB free){% endif %}</span>
+                <span>{{ p.get('pct', 0) }}%</span>
+            </div>
+            <div class="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                <div class="h-full rounded-full {% if p.get('pct', 0)|float > 90 %}bg-ng-critical{% elif p.get('pct', 0)|float > 80 %}bg-ng-warning{% else %}bg-ng-primary{% endif %}" style="width:{{ p.get('pct', 0) }}%"></div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
 <!-- Disks -->
 {% set disks = data.get('disks', []) %}
 {% if disks %}
@@ -91,9 +132,12 @@
         <thead>
             <tr class="border-b border-white/[0.06] text-[--ng-text-muted] text-[10px] uppercase tracking-wider">
                 <th class="px-4 py-2.5 text-left font-medium">Disk</th>
+                <th class="px-4 py-2.5 text-left font-medium">Type</th>
                 <th class="px-4 py-2.5 text-left font-medium">Model</th>
                 <th class="px-4 py-2.5 text-right font-medium">Size</th>
                 <th class="px-4 py-2.5 text-right font-medium">Temp</th>
+                <th class="px-4 py-2.5 text-right font-medium">Power-On</th>
+                <th class="px-4 py-2.5 text-right font-medium">Life</th>
                 <th class="px-4 py-2.5 text-left font-medium">Status</th>
                 <th class="px-4 py-2.5 text-left font-medium">SMART</th>
             </tr>
@@ -102,9 +146,14 @@
             {% for d in disks %}
             <tr class="border-b border-white/[0.03] hover:bg-white/[0.02]">
                 <td class="px-4 py-2 text-[--ng-text-primary] font-medium">{{ d.get('name', '?') }}</td>
+                <td class="px-4 py-2 text-xs">
+                    <span class="px-1.5 py-0.5 rounded text-[9px] {% if d.get('type') == 'SSD' %}bg-blue-500/15 text-blue-400{% else %}bg-slate-500/15 text-slate-400{% endif %}">{{ d.get('type', '?') }}</span>
+                </td>
                 <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono truncate max-w-[180px]">{{ d.get('model', '') }}</td>
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-secondary]">{% if d.get('size_tb') %}{{ d.get('size_tb') }} TB{% else %}{{ d.get('size_gb', 0) }} GB{% endif %}</td>
-                <td class="px-4 py-2 text-right text-xs font-mono {% if not d.get('temp_ok', true) %}text-ng-critical{% elif d.get('temp', 0)|float > 45 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{% if d.get('temp') %}{{ d.get('temp') }}°C{% else %}—{% endif %}</td>
+                <td class="px-4 py-2 text-right text-xs font-mono {% if not d.get('temp_ok', true) %}text-ng-critical{% elif d.get('temp') and d.get('temp')|float > 45 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{% if d.get('temp') %}{{ d.get('temp') }}°C{% else %}—{% endif %}</td>
+                <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-muted]">{% if d.get('power_on_hrs') %}{{ "{:,}".format(d.get('power_on_hrs')|int) }}h{% else %}—{% endif %}</td>
+                <td class="px-4 py-2 text-right text-xs font-mono">{% if d.get('life_span') is not none %}<span class="{% if d.get('life_span')|float < 20 %}text-ng-critical{% elif d.get('life_span')|float < 50 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{{ d.get('life_span') }}%</span>{% else %}—{% endif %}</td>
                 <td class="px-4 py-2"><span class="px-1.5 py-0.5 rounded text-[9px] {% if d.get('ok') %}bg-ng-success/15 text-ng-success{% else %}bg-ng-critical/15 text-ng-critical{% endif %}">{{ d.get('status_label', d.get('status', '?')) }}</span></td>
                 <td class="px-4 py-2"><span class="px-1.5 py-0.5 rounded text-[9px] {% if d.get('smart_ok') %}bg-ng-success/15 text-ng-success{% else %}bg-ng-critical/15 text-ng-critical{% endif %}">{% if d.get('smart_ok') %}OK{% else %}FAIL{% endif %}</span></td>
             </tr>
