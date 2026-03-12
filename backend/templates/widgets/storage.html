@@ -25,6 +25,11 @@
         </div>
         <div class="flex justify-between mt-1 text-[10px] font-mono text-[--ng-text-muted]">
           <span>{{ "%.1f"|format(pool.used_gb / 1024) if pool.used_gb >= 1024 else "%.0f"|format(pool.used_gb) }} {{ "TB" if pool.used_gb >= 1024 else "GB" }} used</span>
+          {% if pool.days_until_full is defined and pool.days_until_full is not none %}
+          <span class="{% if pool.days_until_full <= 14 %}text-ng-critical{% elif pool.days_until_full <= 30 %}text-ng-warning{% else %}text-[--ng-text-muted]{% endif %}">
+            full in ~{{ pool.days_until_full }}d
+          </span>
+          {% endif %}
           <span>{{ "%.1f"|format(pool.total_gb / 1024) if pool.total_gb >= 1024 else "%.0f"|format(pool.total_gb) }} {{ "TB" if pool.total_gb >= 1024 else "GB" }} total</span>
         </div>
       </div>

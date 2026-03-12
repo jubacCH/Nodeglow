@@ -15,6 +15,8 @@ from database import (
 from models.integration import IntegrationConfig, Snapshot
 from services import integration as int_svc
 from services import snapshot as snap_svc
+from services import predictions as pred_svc
+from services import health as health_svc
 
 router = APIRouter()
 
@@ -447,6 +449,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         snap = all_snaps_cache.get(cfg.type, {}).get(cfg.id)
         url = f"{meta['url_prefix']}/{cfg.id}" if cfg.type != "speedtest" else meta["url_prefix"]
         integration_health.append({
+            "config_id": cfg.id,
             "label": meta["label"],
             "name": cfg.name,
             "url": url,
@@ -455,6 +458,16 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             "error": snap.error if snap and not snap.ok else None,
             "cached_at": snap.timestamp if snap else None,
         })
+
+    # ── Integration health scores ─────────────────────────────────────────
+    try:
+        int_health_scores = await health_svc.compute_integration_health(db)
+        for ih in integration_health:
+            cfg_id = ih.get("config_id")
+            if cfg_id and cfg_id in int_health_scores:
+                ih["health_score"] = int_health_scores[cfg_id]
+    except Exception:
+        pass
 
     # Active incidents
     from models.incident import Incident
@@ -592,7 +605,20 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                         "pct": pool.get("pct", 0),
                         "used_gb": pool.get("used_gb", 0),
                         "total_gb": pool.get("size_gb", 0),
+                        "_pred_key": f"{cfg.id}:{pool.get('name', '?')}",
                     })
+    except Exception:
+        pass
+
+    # ── Disk-full predictions ──────────────────────────────────────────────
+    disk_predictions = {}
+    try:
+        disk_predictions = await pred_svc.predict_disk_full(db)
+        for pool in storage_pools:
+            pred = disk_predictions.get(pool.get("_pred_key"))
+            if pred and pred["confidence"] >= 0.3:
+                pool["days_until_full"] = pred["days_until_full"]
+                pool["trend_pct_per_day"] = pred["trend_pct_per_day"]
     except Exception:
         pass
 
