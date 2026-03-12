@@ -54,3 +54,21 @@ def get_registry() -> dict[str, type[BaseIntegration]]:
 def get_integration(name: str) -> type[BaseIntegration] | None:
     """Get a specific integration class by name."""
     return get_registry().get(name)
+
+
+def get_meta(name: str) -> dict:
+    """Return metadata dict for an integration type (label, color, url_prefix, single_instance)."""
+    cls = get_registry().get(name)
+    if cls:
+        return {
+            "label": cls.display_name,
+            "color": cls.color,
+            "url_prefix": f"/integration/{cls.name}",
+            "single_instance": cls.single_instance,
+        }
+    return {
+        "label": name,
+        "color": "gray",
+        "url_prefix": f"/integration/{name}",
+        "single_instance": False,
+    }

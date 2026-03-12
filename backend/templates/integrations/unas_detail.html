@@ -39,9 +39,9 @@
         <p class="text-2xl font-bold {% if mem > 85 %}text-ng-critical{% elif mem > 70 %}text-ng-warning{% else %}text-ng-success{% endif %}">{{ mem|round|int }}%</p>
         <p class="metric-label !text-[10px]">Memory ({{ sys.get('mem_used_gb', 0) }}/{{ sys.get('mem_total_gb', 0) }}G)</p>
     </div>
-    {% if sys.get('cpu_temp') %}
+    {% if sys.get('temp_c') %}
     <div class="glass-card p-4 text-center">
-        <p class="text-2xl font-bold {% if sys.get('cpu_temp', 0)|float > 70 %}text-ng-warning{% else %}text-[--ng-text-primary]{% endif %}">{{ sys.get('cpu_temp') }}°C</p>
+        <p class="text-2xl font-bold {% if sys.get('temp_c', 0)|float > 70 %}text-ng-warning{% else %}text-[--ng-text-primary]{% endif %}">{{ sys.get('temp_c') }}°C</p>
         <p class="metric-label !text-[10px]">CPU Temp</p>
     </div>
     {% endif %}
@@ -96,7 +96,7 @@
 {% endif %}
 
 <!-- Storage Pools -->
-{% set pools = data.get('pools', []) %}
+{% set pools = data.get('storage_pools', []) %}
 {% if pools %}
 <h2 class="metric-label !text-[10px] mb-3">Storage Pools ({{ pools|length }})</h2>
 <div class="grid gap-3 md:grid-cols-2 mb-6">

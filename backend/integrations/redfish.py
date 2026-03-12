@@ -215,6 +215,7 @@ class RedfishIntegration(BaseIntegration):
     name = "redfish"
     display_name = "Redfish / iDRAC"
     icon = "dell"
+    color = "purple"
     icon_svg = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>'
     description = "Monitor server hardware via Redfish (Dell iDRAC, HPE iLO, etc.)."
 

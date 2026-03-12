@@ -5,7 +5,7 @@ import asyncio
 
 import httpx
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ def parse_truenas_data(info: dict, pools: list, disks: list, alerts: list) -> di
     storage_pct = round(total_used_bytes / total_size_bytes * 100, 1) if total_size_bytes > 0 else 0.0
 
     return {
-        "system": system, "pools": parsed_pools, "disks": parsed_disks,
+        "system": system, "storage_pools": parsed_pools, "disks": parsed_disks,
         "alerts": parsed_alerts,
         "totals": {
             "pools_total": len(parsed_pools), "pools_healthy": pools_healthy,
@@ -135,6 +135,7 @@ class TruenasIntegration(BaseIntegration):
     name = "truenas"
     display_name = "TrueNAS"
     icon = "truenas"
+    color = "slate"
     description = "Monitor TrueNAS pools, disks and system stats."
 
     config_fields = [
@@ -158,6 +159,29 @@ class TruenasIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        for pool in data.get("storage_pools", []):
+            pct = pool.get("pct", 0)
+            if pct >= 95:
+                alerts.append(Alert(severity="critical", title="Storage pool nearly full",
+                                    detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
+            elif pct >= 90:
+                alerts.append(Alert(severity="warning", title="Storage pool filling up",
+                                    detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
+            if not pool.get("healthy", True):
+                alerts.append(Alert(severity="critical", title="Unhealthy storage pool",
+                                    detail=f"{pool.get('name', '?')}: {pool.get('status', 'unknown')}",
+                                    entity=pool.get("name", "")))
+        for alert in data.get("alerts", []):
+            if alert.get("level") in ("CRITICAL", "ERROR"):
+                alerts.append(Alert(severity="critical", title="TrueNAS alert",
+                                    detail=alert.get("message", "")))
+            elif alert.get("level") == "WARNING":
+                alerts.append(Alert(severity="warning", title="TrueNAS alert",
+                                    detail=alert.get("message", "")))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

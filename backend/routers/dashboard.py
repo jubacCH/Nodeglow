@@ -13,6 +13,7 @@ from database import (
     get_db, get_setting, set_setting, is_setup_complete,
 )
 from models.integration import IntegrationConfig, Snapshot
+from integrations import get_meta as _int_meta
 from services import integration as int_svc
 from services import snapshot as snap_svc
 from services import predictions as pred_svc
@@ -45,23 +46,7 @@ DEFAULT_LAYOUT = [
 
 # ── Helper: build integration_health from generic tables ─────────────────
 
-_INTEGRATION_META = {
-    "proxmox":      {"label": "Proxmox",        "color": "orange",  "url_prefix": "/integration/proxmox"},
-    "unifi":        {"label": "UniFi",           "color": "blue",    "url_prefix": "/integration/unifi"},
-    "unas":         {"label": "UniFi NAS",       "color": "cyan",    "url_prefix": "/integration/unas"},
-    "pihole":       {"label": "Pi-hole",         "color": "red",     "url_prefix": "/integration/pihole"},
-    "adguard":      {"label": "AdGuard",         "color": "emerald", "url_prefix": "/integration/adguard"},
-    "portainer":    {"label": "Portainer",       "color": "teal",    "url_prefix": "/integration/portainer"},
-    "truenas":      {"label": "TrueNAS",         "color": "slate",   "url_prefix": "/integration/truenas"},
-    "synology":     {"label": "Synology",        "color": "blue",    "url_prefix": "/integration/synology"},
-    "firewall":     {"label": "Firewall",        "color": "orange",  "url_prefix": "/integration/firewall"},
-    "hass":         {"label": "Home Assistant",   "color": "orange",  "url_prefix": "/integration/hass"},
-    "gitea":        {"label": "Gitea",           "color": "green",   "url_prefix": "/integration/gitea"},
-    "phpipam":      {"label": "phpIPAM",         "color": "purple",  "url_prefix": "/integration/phpipam"},
-    "speedtest":    {"label": "Speedtest",       "color": "blue",    "url_prefix": "/integration/speedtest"},
-    "ups":          {"label": "UPS / NUT",       "color": "yellow",  "url_prefix": "/integration/ups"},
-    "redfish":      {"label": "Redfish",         "color": "purple",  "url_prefix": "/integration/redfish"},
-}
+    # Integration metadata is now sourced from the plugin registry (integrations.get_meta)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -445,9 +430,9 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     non_px_configs = [c for c in all_configs if c.type != "proxmox"]
 
     for cfg in non_px_configs:
-        meta = _INTEGRATION_META.get(cfg.type, {"label": cfg.type, "color": "slate", "url_prefix": f"/integration/{cfg.type}"})
+        meta = _int_meta(cfg.type)
         snap = all_snaps_cache.get(cfg.type, {}).get(cfg.id)
-        url = f"{meta['url_prefix']}/{cfg.id}" if cfg.type != "speedtest" else meta["url_prefix"]
+        url = f"{meta['url_prefix']}/{cfg.id}" if not meta.get("single_instance") else meta["url_prefix"]
         integration_health.append({
             "config_id": cfg.id,
             "label": meta["label"],
@@ -588,19 +573,19 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Storage pools (TrueNAS/Synology/UNAS) ────────────────────────────────
     storage_pools = []
     try:
-        for stype, label in [("truenas", "TrueNAS"), ("synology", "Synology"), ("unas", "UNAS")]:
+        for stype in ("truenas", "synology", "unas"):
             type_snaps = all_snaps_cache.get(stype, {})
             type_configs = [c for c in all_configs if c.type == stype]
+            meta = _int_meta(stype)
             for cfg in type_configs:
                 snap = type_snaps.get(cfg.id)
                 if not snap or not snap.ok or not snap.data_json:
                     continue
                 sd = json.loads(snap.data_json)
-                pools_key = "pools" if stype in ("truenas", "unas") else "volumes"
-                for pool in sd.get(pools_key, []):
+                for pool in sd.get("storage_pools", []):
                     storage_pools.append({
                         "name": pool.get("name", "?"),
-                        "source": f"{label}: {cfg.name}",
+                        "source": f"{meta['label']}: {cfg.name}",
                         "healthy": pool.get("healthy", True),
                         "pct": pool.get("pct", 0),
                         "used_gb": pool.get("used_gb", 0),

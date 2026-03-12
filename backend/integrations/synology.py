@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import httpx
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -157,10 +157,11 @@ def parse_synology_data(info: dict, storage: dict, load: dict) -> dict:
     return {
         "system": {
             "hostname": hostname, "version": version, "uptime_s": uptime_s,
-            "cpu_pct": cpu_pct, "mem_used_pct": mem_used_pct,
-            "mem_total_mb": int(mem_total_mb), "mem_used_mb": int(mem_used_mb),
+            "cpu_pct": cpu_pct, "mem_pct": mem_used_pct,
+            "mem_used_gb": round(mem_used_mb / 1024, 2),
+            "mem_total_gb": round(mem_total_mb / 1024, 2),
         },
-        "volumes": volumes, "disks": disks,
+        "storage_pools": volumes, "disks": disks,
         "totals": {
             "volumes_total": len(volumes),
             "volumes_healthy": sum(1 for v in volumes if v["healthy"]),
@@ -180,6 +181,7 @@ class SynologyIntegration(BaseIntegration):
     name = "synology"
     display_name = "Synology DSM"
     icon = "synology"
+    color = "blue"
     description = "Monitor Synology NAS storage and system stats."
 
     config_fields = [
@@ -209,6 +211,27 @@ class SynologyIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        for vol in data.get("storage_pools", []):
+            pct = vol.get("pct", 0)
+            if pct >= 95:
+                alerts.append(Alert(severity="critical", title="Volume nearly full",
+                                    detail=f"{vol.get('name', '?')}: {pct}%", entity=vol.get("name", "")))
+            elif pct >= 90:
+                alerts.append(Alert(severity="warning", title="Volume filling up",
+                                    detail=f"{vol.get('name', '?')}: {pct}%", entity=vol.get("name", "")))
+            if not vol.get("healthy", True):
+                alerts.append(Alert(severity="critical", title="Unhealthy volume",
+                                    detail=f"{vol.get('name', '?')}: {vol.get('status', 'unknown')}",
+                                    entity=vol.get("name", "")))
+        for disk in data.get("disks", []):
+            if not disk.get("healthy", True):
+                alerts.append(Alert(severity="critical", title="Disk unhealthy",
+                                    detail=f"{disk.get('name', '?')}: {disk.get('status', 'unknown')}",
+                                    entity=disk.get("name", "")))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._api().health_check()
