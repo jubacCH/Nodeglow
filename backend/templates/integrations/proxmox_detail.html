@@ -65,7 +65,7 @@
                 <span class="w-2 h-2 rounded-full {% if n.online %}bg-ng-success{% else %}bg-ng-critical{% endif %}"></span>
                 <span class="text-[--ng-text-primary] font-medium text-sm">{{ n.name }}</span>
             </div>
-            <span class="text-[10px] font-mono text-[--ng-text-muted]">{{ n.uptime_h }}h up</span>
+            <span class="text-[10px] font-mono text-[--ng-text-muted]">{{ (n.uptime_s / 3600)|round|int }}h up</span>
         </div>
         <div class="space-y-2">
             <div>

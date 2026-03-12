@@ -124,6 +124,7 @@ class PortainerIntegration(BaseIntegration):
     name = "portainer"
     display_name = "Portainer"
     icon = "portainer"
+    color = "teal"
     description = "Monitor Docker containers via Portainer."
 
     config_fields = [

@@ -292,9 +292,15 @@
 
 {% block scripts %}
 <script>
-// Source data from server
+// Source data from server (attached to window for SPA compatibility)
 const _sources = {{ sources|tojson }};
 let _fieldCache = {};  // cache per "type:id"
+let _loadFieldsAbort = null;
+
+window.onSourceTypeChange = onSourceTypeChange;
+window.onSourceIdChange = onSourceIdChange;
+window.updateFieldPreview = updateFieldPreview;
+window.openEditModal = openEditModal;
 
 function onSourceTypeChange(sel, prefix) {
     const type = sel.value;
@@ -313,7 +319,6 @@ function onSourceIdChange(prefix) {
     return _loadFields(prefix);
 }
 
-let _loadFieldsAbort = null;
 async function _loadFields(prefix, preselect) {
     // Cancel any in-flight request for this prefix
     if (_loadFieldsAbort) _loadFieldsAbort.abort();

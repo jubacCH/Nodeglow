@@ -227,6 +227,9 @@
 
 {% block scripts %}
 <script>
+window.openRoleModal = openRoleModal;
+window.openPasswordModal = openPasswordModal;
+
 function openRoleModal(id, username, currentRole) {
   document.getElementById('role-modal-username').textContent = username;
   document.getElementById('role-modal-form').action = `/users/${id}/role`;

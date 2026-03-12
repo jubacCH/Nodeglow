@@ -110,6 +110,7 @@ class GiteaIntegration(BaseIntegration):
     name = "gitea"
     display_name = "Gitea"
     icon = "gitea"
+    color = "green"
     description = "Monitor Gitea repositories and users."
 
     config_fields = [

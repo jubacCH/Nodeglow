@@ -25,7 +25,7 @@
 <!-- Totals -->
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
     <div class="glass-card p-4 text-center">
-        <p class="text-2xl font-bold text-[--ng-text-primary]">{{ totals.get('pools', data.get('pools', [])|length) }}</p>
+        <p class="text-2xl font-bold text-[--ng-text-primary]">{{ totals.get('pools', data.get('storage_pools', [])|length) }}</p>
         <p class="metric-label !text-[10px]">Pools</p>
     </div>
     <div class="glass-card p-4 text-center">
@@ -44,7 +44,7 @@
 </div>
 
 <!-- Pools -->
-{% set pools = data.get('pools', []) %}
+{% set pools = data.get('storage_pools', []) %}
 {% if pools %}
 <h2 class="metric-label !text-[10px] mb-3">Storage Pools</h2>
 <div class="grid gap-3 md:grid-cols-2 mb-6">

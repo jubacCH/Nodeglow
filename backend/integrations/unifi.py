@@ -147,7 +147,7 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
             "mac": d.get("mac", ""), "name": d.get("name") or d.get("hostname") or d.get("mac", ""),
             "type": dtype, "type_label": _DEVICE_TYPE_LABELS.get(dtype, dtype.upper()),
             "model": d.get("model", ""), "state": d.get("state", 0),
-            "ip": d.get("ip", ""), "uptime": d.get("uptime", 0),
+            "ip": d.get("ip", ""), "uptime_s": d.get("uptime", 0),
             "cpu_pct": cpu_pct, "mem_pct": mem_pct,
             "clients_wifi": max(clients_wifi, 0), "clients_wired": max(clients_wired, 0),
             "rx_bytes": d.get("rx_bytes", 0) or 0, "tx_bytes": d.get("tx_bytes", 0) or 0,
@@ -170,7 +170,7 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
             "signal": c.get("signal", 0), "rssi": c.get("rssi", 0),
             "rx_bytes": c.get("rx_bytes", 0) or 0, "tx_bytes": c.get("tx_bytes", 0) or 0,
             "rx_bytes_r": c.get("rx_bytes-r", 0) or 0, "tx_bytes_r": c.get("tx_bytes-r", 0) or 0,
-            "uptime": c.get("uptime", 0), "is_wireless": is_wireless,
+            "uptime_s": c.get("uptime", 0), "is_wireless": is_wireless,
             "vlan": c.get("vlan", 1) or 1, "ssid": c.get("essid", ""),
             "satisfaction": c.get("satisfaction", -1), "channel": c.get("channel", 0),
             "sw_mac": sw_mac, "sw_port": c.get("sw_port"),
@@ -325,6 +325,7 @@ class UnifiIntegration(BaseIntegration):
     name = "unifi"
     display_name = "UniFi Network"
     icon = "ubiquiti"
+    color = "blue"
     description = "Monitor UniFi network devices, clients, and WAN health."
 
     config_fields = [

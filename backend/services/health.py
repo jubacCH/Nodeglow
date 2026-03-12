@@ -102,8 +102,7 @@ async def compute_integration_health(db: AsyncSession) -> dict[int, float]:
         if snap and snap.ok and snap.data_json and cfg.type in _STORAGE_TYPES:
             try:
                 data = json.loads(snap.data_json)
-                pools_key = "pools" if cfg.type != "synology" else "volumes"
-                for pool in data.get(pools_key, []):
+                for pool in data.get("storage_pools", []):
                     pct = pool.get("pct", 0)
                     if pct >= 95:
                         score += 0.15

@@ -55,6 +55,8 @@ class SpeedtestIntegration(BaseIntegration):
     name = "speedtest"
     display_name = "Speedtest"
     icon = "speedtest"
+    color = "blue"
+    single_instance = True
     description = "Measure internet speed using speedtest-cli."
 
     config_fields = [

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import httpx
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 _DISK_STATUS_LABELS: dict[str, str] = {
     "normal": "Normal", "spare": "Spare", "error": "Error",
@@ -75,7 +75,7 @@ def parse_unas_data(raw_system: dict) -> dict:
     system = {
         "hostname": raw_system.get("hostname", ""), "version": version,
         "uptime_s": raw_system.get("uptime", 0) or 0, "cpu_pct": cpu_pct,
-        "cpu_temp": cpu_temp, "mem_used_gb": mem_used_gb,
+        "temp_c": cpu_temp, "mem_used_gb": mem_used_gb,
         "mem_total_gb": mem_total_gb, "mem_pct": mem_pct,
     }
 
@@ -159,7 +159,7 @@ def parse_unas_data(raw_system: dict) -> dict:
 
     return {
         "system": system, "disks": disks, "raids": raids,
-        "pools": pools, "shares": shares, "totals": totals,
+        "storage_pools": pools, "shares": shares, "totals": totals,
     }
 
 
@@ -170,6 +170,7 @@ class UnasIntegration(BaseIntegration):
     name = "unas"
     display_name = "UniFi NAS"
     icon = "ubiquiti"
+    color = "cyan"
     description = "Monitor UniFi NAS storage, RAID, and system stats."
 
     config_fields = [
@@ -195,6 +196,32 @@ class UnasIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        for pool in data.get("storage_pools", []):
+            pct = pool.get("pct", 0)
+            if pct >= 95:
+                alerts.append(Alert(severity="critical", title="Storage pool nearly full",
+                                    detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
+            elif pct >= 90:
+                alerts.append(Alert(severity="warning", title="Storage pool filling up",
+                                    detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
+            if not pool.get("healthy", True):
+                alerts.append(Alert(severity="critical", title="Unhealthy storage pool",
+                                    detail=f"{pool.get('name', '?')}",
+                                    entity=pool.get("name", "")))
+        for disk in data.get("disks", []):
+            if not disk.get("ok", True):
+                alerts.append(Alert(severity="critical", title="Disk error",
+                                    detail=f"{disk.get('name', '?')}: {disk.get('status_label', disk.get('status', 'unknown'))}",
+                                    entity=disk.get("name", "")))
+            temp = disk.get("temp")
+            if temp is not None and not disk.get("temp_ok", True):
+                alerts.append(Alert(severity="warning", title="Disk overheating",
+                                    detail=f"{disk.get('name', '?')}: {temp}°C",
+                                    entity=disk.get("name", "")))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

@@ -60,7 +60,9 @@ class BaseIntegration(ABC):
     display_name: str = ""        # Human-readable, e.g. "Proxmox VE"
     icon: str = ""                # Simple Icons slug, e.g. "proxmox"
     icon_svg: str = ""            # Optional custom SVG (used if icon is empty)
+    color: str = "gray"           # Tailwind color name for UI badges/labels
     description: str = ""
+    single_instance: bool = False # True = no per-instance detail page (e.g. speedtest)
 
     # ── Config fields (override in subclass) ─────────────────────────────────
     config_fields: list[ConfigField] = []
