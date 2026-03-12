@@ -95,7 +95,7 @@ def parse_syslog(raw: str, source_ip: str) -> dict:
     # Try RFC 5424 first (has version number after PRI)
     m = _RFC5424_RE.match(raw)
     if m:
-        pri = int(m.group(1))
+        pri = min(int(m.group(1)), 191)  # RFC max: facility 23 * 8 + severity 7
         facility = pri >> 3
         severity = pri & 7
         ts = _parse_5424_ts(m.group(3))
@@ -115,7 +115,7 @@ def parse_syslog(raw: str, source_ip: str) -> dict:
     # Try RFC 3164
     m = _RFC3164_RE.match(raw)
     if m:
-        pri = int(m.group(1))
+        pri = min(int(m.group(1)), 191)  # RFC max: facility 23 * 8 + severity 7
         facility = pri >> 3
         severity = pri & 7
         ts = _parse_3164_ts(m.group(2))

@@ -3,6 +3,14 @@
  * SPA navigation, toast notifications, Cmd+K search, sidebar toggle
  */
 
+// ── HTML Escape Helper ──────────────────────────────────────────────────────
+window._esc = function(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+};
+
 // ── CSRF Protection ─────────────────────────────────────────────────────────
 (function() {
   function getCsrfToken() {

@@ -56,7 +56,7 @@
 
         <!-- Actions -->
         <div class="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button onclick="openEditModal({{ rule.id }}, '{{ rule.name|e }}', '{{ rule.source_type }}', '{{ rule.source_id or '' }}', '{{ rule.field_path }}', '{{ rule.operator }}', '{{ rule.threshold or '' }}', '{{ rule.severity }}', `{{ rule.message_template or '' }}`, {{ rule.cooldown_minutes }}, '{{ rule.notify_channels or '' }}')"
+            <button onclick="openEditModal({{ rule.id }}, '{{ rule.name|e }}', '{{ rule.source_type|e }}', '{{ rule.source_id or '' }}', '{{ rule.field_path|e }}', '{{ rule.operator|e }}', '{{ rule.threshold|e if rule.threshold else '' }}', '{{ rule.severity|e }}', `{{ rule.message_template|e if rule.message_template else '' }}`, {{ rule.cooldown_minutes }}, '{{ rule.notify_channels|e if rule.notify_channels else '' }}')"
                     class="ng-btn ng-btn-ghost text-[10px] px-2 py-1">Edit</button>
             <form method="post" action="/rules/{{ rule.id }}/toggle" class="inline">
                 <button type="submit" class="ng-btn ng-btn-ghost text-[10px] px-2 py-1">

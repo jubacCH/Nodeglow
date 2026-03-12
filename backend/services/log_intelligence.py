@@ -255,8 +255,12 @@ _burst_timestamps: dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
 _active_bursts: set[str] = set()  # hashes currently in burst state
 
 
+_burst_last_cleanup: float = 0.0
+_BURST_CLEANUP_INTERVAL = 600  # prune stale entries every 10 min
+
 def _check_burst(h: str, now: float) -> bool:
     """Track template occurrence and detect bursts (>50 msgs in 5 min)."""
+    global _burst_last_cleanup
     dq = _burst_timestamps[h]
     dq.append(now)
     # Evict old entries outside window
@@ -269,6 +273,14 @@ def _check_burst(h: str, now: float) -> bool:
             return True  # new burst detected
     elif h in _active_bursts and count < _BURST_THRESHOLD // 2:
         _active_bursts.discard(h)  # burst ended
+    # Periodic cleanup: remove hashes with no recent activity
+    if now - _burst_last_cleanup > _BURST_CLEANUP_INTERVAL:
+        _burst_last_cleanup = now
+        cutoff = now - _BURST_WINDOW
+        stale = [k for k, v in _burst_timestamps.items() if not v or v[-1] < cutoff]
+        for k in stale:
+            del _burst_timestamps[k]
+            _active_bursts.discard(k)
     return False
 
 
@@ -443,6 +455,8 @@ async def compute_baselines(db: AsyncSession):
 
     # Upsert baselines
     for (host_key, dow, hour), counts in grouped.items():
+        if not counts:
+            continue
         avg = sum(counts) / len(counts)
         std = (sum((c - avg) ** 2 for c in counts) / len(counts)) ** 0.5 if len(counts) > 1 else 0
 
@@ -537,8 +551,8 @@ async def detect_baseline_anomalies(db: AsyncSession) -> list[dict]:
     for host_key, baseline in baseline_map.items():
         if baseline.avg_rate > 10 and baseline.sample_count >= 3:
             current = next((r.cnt for r in current_counts if r.source_ip == host_key), 0)
-            minutes_elapsed = max(1, now.minute)
-            projected_rate = current * (60 / minutes_elapsed)
+            minutes_elapsed = max(1, now.minute + now.second / 60)
+            projected_rate = current * (60.0 / minutes_elapsed)
             if projected_rate < baseline.avg_rate * 0.1:  # <10% of normal
                 anomalies.append({
                     "source_ip": host_key,
