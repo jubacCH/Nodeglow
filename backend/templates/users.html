@@ -122,17 +122,17 @@
     </div>
     <form method="post" action="/users/add" class="px-5 py-4 flex flex-wrap gap-3 items-end">
       <div class="flex-1 min-w-36">
-        <label class="block text-xs text-slate-500 mb-1.5">Username</label>
+        <label class="block text-xs text-[--ng-text-muted] mb-1.5">Username</label>
         <input type="text" name="username" required autocomplete="off"
                class="ng-input">
       </div>
       <div class="flex-1 min-w-36">
-        <label class="block text-xs text-slate-500 mb-1.5">Password</label>
+        <label class="block text-xs text-[--ng-text-muted] mb-1.5">Password</label>
         <input type="password" name="password" required minlength="6" autocomplete="new-password"
                class="ng-input">
       </div>
       <div class="w-40">
-        <label class="block text-xs text-slate-500 mb-1.5">Role</label>
+        <label class="block text-xs text-[--ng-text-muted] mb-1.5">Role</label>
         <select name="role"
                 class="ng-input">
           <option value="readonly">Read only</option>
@@ -150,7 +150,7 @@
   <!-- Role info -->
   <div class="bg-[--ng-glass-bg] border border-[--ng-glass-border] rounded-xl px-5 py-4 space-y-2">
     <p class="text-xs font-medium text-slate-400 mb-3">Role permissions</p>
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-500">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-[--ng-text-muted]">
       <div class="space-y-1">
         <p class="text-blue-400 font-medium">Admin</p>
         <p>Full access — settings, user management, all monitoring objects.</p>
@@ -176,7 +176,7 @@
     <p class="text-sm text-slate-400 mb-4">User: <span id="role-modal-username" class="text-white font-medium"></span></p>
     <form id="role-modal-form" method="post">
       <div class="mb-4">
-        <label class="block text-xs text-slate-500 mb-1.5">Role</label>
+        <label class="block text-xs text-[--ng-text-muted] mb-1.5">Role</label>
         <select name="role" id="role-modal-select"
                 class="ng-input">
           <option value="readonly">Read only</option>
@@ -206,7 +206,7 @@
     <p class="text-sm text-slate-400 mb-4">User: <span id="pw-modal-username" class="text-white font-medium"></span></p>
     <form id="pw-modal-form" method="post">
       <div class="mb-4">
-        <label class="block text-xs text-slate-500 mb-1.5">New Password</label>
+        <label class="block text-xs text-[--ng-text-muted] mb-1.5">New Password</label>
         <input type="password" name="password" required minlength="6" autocomplete="new-password"
                class="ng-input">
       </div>

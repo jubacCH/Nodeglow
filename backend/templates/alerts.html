@@ -31,19 +31,19 @@
   <div class="flex items-center gap-1 mb-6 border-b border-white/[0.08] pb-px">
     <a href="/alerts?tab=alerts"
        class="px-4 py-2 text-sm font-medium transition-colors rounded-t-lg -mb-px
-         {% if tab == 'alerts' %}text-white border-b-2 border-[--ng-primary]{% else %}text-slate-500 hover:text-white{% endif %}">
+         {% if tab == 'alerts' %}text-white border-b-2 border-[--ng-primary]{% else %}text-[--ng-text-muted] hover:text-white{% endif %}">
       Alerts
-      {% if alerts %}<span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-red-500/15 text-red-400">{{ alerts|length }}</span>{% endif %}
+      {% if alerts %}<span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-ng-critical/15 text-ng-critical">{{ alerts|length }}</span>{% endif %}
     </a>
     <a href="/alerts?tab=incidents"
        class="px-4 py-2 text-sm font-medium transition-colors rounded-t-lg -mb-px
-         {% if tab == 'incidents' %}text-white border-b-2 border-[--ng-primary]{% else %}text-slate-500 hover:text-white{% endif %}">
+         {% if tab == 'incidents' %}text-white border-b-2 border-[--ng-primary]{% else %}text-[--ng-text-muted] hover:text-white{% endif %}">
       Incidents
       {% if inc_counts.get('open', 0) > 0 %}<span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-orange-500/15 text-orange-400">{{ inc_counts.open }}</span>{% endif %}
     </a>
     <a href="/alerts?tab=maintenance"
        class="px-4 py-2 text-sm font-medium transition-colors rounded-t-lg -mb-px
-         {% if tab == 'maintenance' %}text-white border-b-2 border-[--ng-primary]{% else %}text-slate-500 hover:text-white{% endif %}">
+         {% if tab == 'maintenance' %}text-white border-b-2 border-[--ng-primary]{% else %}text-[--ng-text-muted] hover:text-white{% endif %}">
       Maintenance
       {% if maint_hosts %}<span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] bg-blue-500/15 text-blue-400">{{ maint_hosts|length }}</span>{% endif %}
     </a>
@@ -53,14 +53,14 @@
   {% if tab == 'alerts' %}
 
   {% if not alerts %}
-  <div class="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-12 text-center">
-    <div class="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
-      <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <div class="bg-ng-success/5 border border-ng-success/20 rounded-xl p-12 text-center">
+    <div class="w-12 h-12 rounded-full bg-ng-success/10 flex items-center justify-center mx-auto mb-4">
+      <svg class="w-6 h-6 text-ng-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
       </svg>
     </div>
-    <p class="text-emerald-400 font-semibold text-lg">All clear</p>
-    <p class="text-slate-500 text-sm mt-1">No active issues found.</p>
+    <p class="text-ng-success font-semibold text-lg">All clear</p>
+    <p class="text-[--ng-text-muted] text-sm mt-1">No active issues found.</p>
   </div>
 
   {% else %}
@@ -68,28 +68,28 @@
     {% for alert in alerts %}
     <a href="{{ alert.url }}"
        class="flex items-start gap-4 px-5 py-4 rounded-xl border transition-colors
-         {% if alert.severity == 'critical' %}bg-red-500/6 border-red-500/25 hover:border-red-500/50
-         {% else %}bg-yellow-500/5 border-yellow-500/20 hover:border-yellow-500/40{% endif %}">
+         {% if alert.severity == 'critical' %}bg-ng-critical/6 border-ng-critical/25 hover:border-ng-critical/50
+         {% else %}bg-ng-warning/5 border-ng-warning/20 hover:border-ng-warning/40{% endif %}">
       <div class="mt-0.5 shrink-0">
         <span class="w-2.5 h-2.5 rounded-full inline-block
-          {% if alert.severity == 'critical' %}bg-red-400 animate-pulse{% else %}bg-yellow-400{% endif %}"></span>
+          {% if alert.severity == 'critical' %}bg-ng-critical animate-pulse{% else %}bg-ng-warning{% endif %}"></span>
       </div>
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
           <span class="px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide
-            {% if alert.severity == 'critical' %}bg-red-500/15 text-red-400{% else %}bg-yellow-500/15 text-yellow-400{% endif %}">
+            {% if alert.severity == 'critical' %}bg-ng-critical/15 text-ng-critical{% else %}bg-ng-warning/15 text-ng-warning{% endif %}">
             {{ alert.category }}
           </span>
           <span class="text-white font-semibold text-sm">{{ alert.name }}</span>
         </div>
-        <p class="text-slate-400 text-xs mt-1 truncate">{{ alert.detail }}</p>
+        <p class="text-[--ng-text-secondary] text-xs mt-1 truncate">{{ alert.detail }}</p>
       </div>
       {% if alert.time %}
       <div class="shrink-0 text-right">
-        <p class="text-slate-500 text-xs tabular-nums">{{ alert.time|localtime("%d.%m. %H:%M") }}</p>
+        <p class="text-[--ng-text-muted] text-xs tabular-nums">{{ alert.time|localtime("%d.%m. %H:%M") }}</p>
       </div>
       {% endif %}
-      <svg class="w-4 h-4 text-slate-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="w-4 h-4 text-[--ng-text-muted] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
       </svg>
     </a>
@@ -104,27 +104,27 @@
   <div class="flex items-center gap-2 mb-4">
     <a href="/alerts?tab=incidents"
        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-         {% if not f_status %}bg-indigo-600 text-white{% else %}bg-[--ng-glass-bg] border border-[--ng-glass-border] text-slate-400 hover:text-white{% endif %}">
+         {% if not f_status %}bg-indigo-600 text-white{% else %}bg-[--ng-glass-bg] border border-[--ng-glass-border] text-[--ng-text-secondary] hover:text-white{% endif %}">
       All <span class="ml-1 opacity-60">{{ inc_counts.open + inc_counts.acknowledged + inc_counts.resolved }}</span>
     </a>
     {% if inc_counts.open > 0 %}
     <a href="/alerts?tab=incidents&status=open"
        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-         {% if f_status == 'open' %}bg-red-600 text-white{% else %}bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20{% endif %}">
+         {% if f_status == 'open' %}bg-red-600 text-white{% else %}bg-ng-critical/10 border border-ng-critical/20 text-ng-critical hover:bg-ng-critical/20{% endif %}">
       Open <span class="ml-1 opacity-60">{{ inc_counts.open }}</span>
     </a>
     {% endif %}
     {% if inc_counts.acknowledged > 0 %}
     <a href="/alerts?tab=incidents&status=acknowledged"
        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-         {% if f_status == 'acknowledged' %}bg-yellow-600 text-white{% else %}bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 hover:bg-yellow-500/20{% endif %}">
+         {% if f_status == 'acknowledged' %}bg-yellow-600 text-white{% else %}bg-ng-warning/10 border border-ng-warning/20 text-ng-warning hover:bg-ng-warning/20{% endif %}">
       Ack'd <span class="ml-1 opacity-60">{{ inc_counts.acknowledged }}</span>
     </a>
     {% endif %}
     {% if inc_counts.resolved > 0 %}
     <a href="/alerts?tab=incidents&status=resolved"
        class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-         {% if f_status == 'resolved' %}bg-emerald-600 text-white{% else %}bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20{% endif %}">
+         {% if f_status == 'resolved' %}bg-emerald-600 text-white{% else %}bg-ng-success/10 border border-ng-success/20 text-ng-success hover:bg-ng-success/20{% endif %}">
       Resolved <span class="ml-1 opacity-60">{{ inc_counts.resolved }}</span>
     </a>
     {% endif %}
@@ -132,13 +132,13 @@
 
   {% if not incidents %}
   <div class="bg-[--ng-glass-bg] border border-[--ng-glass-border] rounded-xl p-12 text-center">
-    <div class="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
-      <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div class="w-12 h-12 rounded-full bg-ng-success/10 flex items-center justify-center mx-auto mb-4">
+      <svg class="w-6 h-6 text-ng-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
       </svg>
     </div>
-    <p class="text-emerald-400 font-semibold text-lg">No incidents</p>
-    <p class="text-slate-500 text-sm mt-1">The correlation engine has not detected any issues.</p>
+    <p class="text-ng-success font-semibold text-lg">No incidents</p>
+    <p class="text-[--ng-text-muted] text-sm mt-1">The correlation engine has not detected any issues.</p>
   </div>
 
   {% else %}
@@ -146,9 +146,9 @@
     {% for inc in incidents %}
     <a href="/incidents/{{ inc.id }}"
        class="flex items-start gap-4 px-5 py-4 rounded-xl border transition-colors
-         {% if inc.status == 'open' and inc.severity == 'critical' %}bg-red-500/[0.06] border-red-500/25 hover:border-red-500/50
-         {% elif inc.status == 'open' %}bg-yellow-500/[0.05] border-yellow-500/20 hover:border-yellow-500/40
-         {% elif inc.status == 'acknowledged' %}bg-yellow-500/[0.03] border-yellow-500/15 hover:border-yellow-500/30
+         {% if inc.status == 'open' and inc.severity == 'critical' %}bg-ng-critical/[0.06] border-ng-critical/25 hover:border-ng-critical/50
+         {% elif inc.status == 'open' %}bg-ng-warning/[0.05] border-ng-warning/20 hover:border-ng-warning/40
+         {% elif inc.status == 'acknowledged' %}bg-ng-warning/[0.03] border-ng-warning/15 hover:border-ng-warning/30
          {% else %}bg-[--ng-glass-bg] border-white/[0.08] hover:border-slate-600{% endif %}">
       <div class="mt-0.5 shrink-0">
         {{ status_dot(inc.status, inc.severity) }}
@@ -157,17 +157,17 @@
         <div class="flex items-center gap-2 flex-wrap">
           {{ severity_pill(inc.severity) }}
           {{ status_pill(inc.status) }}
-          <span class="text-slate-600 text-[10px] font-mono">{{ inc.rule }}</span>
+          <span class="text-[--ng-text-muted] text-[10px] font-mono">{{ inc.rule }}</span>
         </div>
         <p class="text-white font-semibold text-sm mt-1">{{ inc.title }}</p>
       </div>
       <div class="shrink-0 text-right">
-        <p class="text-slate-500 text-xs tabular-nums">{{ inc.created_at|localtime("%d.%m. %H:%M") }}</p>
+        <p class="text-[--ng-text-muted] text-xs tabular-nums">{{ inc.created_at|localtime("%d.%m. %H:%M") }}</p>
         {% if inc.status == 'resolved' and inc.resolved_at %}
         <p class="text-emerald-500/60 text-[10px] mt-0.5">resolved {{ inc.resolved_at|localtime("%H:%M") }}</p>
         {% endif %}
       </div>
-      <svg class="w-4 h-4 text-slate-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="w-4 h-4 text-[--ng-text-muted] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
       </svg>
     </a>
@@ -187,7 +187,7 @@
       </svg>
     </div>
     <p class="text-blue-400 font-semibold text-lg">No maintenance windows</p>
-    <p class="text-slate-500 text-sm mt-1">No hosts are currently in maintenance mode.</p>
+    <p class="text-[--ng-text-muted] text-sm mt-1">No hosts are currently in maintenance mode.</p>
   </div>
 
   {% else %}
@@ -205,16 +205,16 @@
           </span>
           <span class="text-white font-semibold text-sm">{{ host.name }}</span>
         </div>
-        <p class="text-slate-400 text-xs mt-1 truncate">{{ host.hostname }}</p>
+        <p class="text-[--ng-text-secondary] text-xs mt-1 truncate">{{ host.hostname }}</p>
       </div>
       <div class="shrink-0 text-right">
         {% if host.maintenance_until %}
         <p class="text-blue-400 text-xs font-medium">Until {{ host.maintenance_until|localtime("%d.%m. %H:%M") }}</p>
         {% else %}
-        <p class="text-slate-500 text-xs">Indefinite</p>
+        <p class="text-[--ng-text-muted] text-xs">Indefinite</p>
         {% endif %}
       </div>
-      <svg class="w-4 h-4 text-slate-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="w-4 h-4 text-[--ng-text-muted] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
       </svg>
     </a>
