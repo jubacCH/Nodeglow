@@ -225,14 +225,41 @@ const _searchPages = [
 ];
 
 let _searchTimer = null;
+let _searchActive = false;
+
+function _setSearchMode(active) {
+  _searchActive = active;
+  const nav = document.getElementById('sidebar-nav');
+  const results = document.getElementById('sidebar-results');
+  const clearBtn = document.getElementById('sidebar-search-clear');
+  const hint = document.getElementById('sidebar-search-hint');
+  if (active) {
+    nav.classList.add('hidden');
+    results.classList.remove('hidden');
+    if (clearBtn) clearBtn.classList.remove('hidden');
+    if (hint) hint.classList.add('hidden');
+  } else {
+    nav.classList.remove('hidden');
+    results.classList.add('hidden');
+    if (clearBtn) clearBtn.classList.add('hidden');
+    if (hint) hint.classList.remove('hidden');
+  }
+}
+
+window.clearSidebarSearch = function() {
+  const input = document.getElementById('sidebar-search');
+  input.value = '';
+  _setSearchMode(false);
+  input.blur();
+};
+
 window.sidebarSearch = function(q) {
-  const container = document.getElementById('sidebar-results');
   const query = q.toLowerCase().trim();
   if (!query || query.length < 2) {
-    container.classList.add('hidden');
+    _setSearchMode(false);
     return;
   }
-  container.classList.remove('hidden');
+  _setSearchMode(true);
 
   // Instant: static page/integration matches
   const pages = _searchPages.filter(i => i.name.toLowerCase().includes(query));
@@ -254,7 +281,7 @@ window.sidebarSearch = function(q) {
 function _renderSidebarResults(pages, hosts) {
   const container = document.getElementById('sidebar-results');
   if (!pages.length && !hosts.length) {
-    container.innerHTML = '<p class="text-center text-[--ng-text-muted] text-[10px] py-4 font-mono">No results</p>';
+    container.innerHTML = '<p class="text-center text-[--ng-text-muted] text-[10px] py-6 font-mono">No results</p>';
     return;
   }
   let html = '';
@@ -262,7 +289,7 @@ function _renderSidebarResults(pages, hosts) {
 
   // Hosts first (primary use case)
   if (hosts.length) {
-    html += `<p class="text-[9px] font-mono uppercase tracking-[2px] text-[--ng-text-muted] px-3 pt-2 pb-1">Hosts</p>`;
+    html += `<p class="px-3 pt-1 pb-1.5 text-[9px] font-mono uppercase tracking-[3px] text-[--ng-text-muted]">Hosts</p>`;
     hosts.forEach(h => {
       const dot = h.online === true
         ? '<span class="w-1.5 h-1.5 rounded-full bg-ng-success shrink-0"></span>'
@@ -270,10 +297,10 @@ function _renderSidebarResults(pages, hosts) {
           ? '<span class="w-1.5 h-1.5 rounded-full bg-ng-critical shrink-0"></span>'
           : '<span class="w-1.5 h-1.5 rounded-full bg-white/20 shrink-0"></span>';
       const ip = h.hostname && h.hostname !== h.name
-        ? `<span class="text-[--ng-text-muted] text-[10px] font-mono">${h.hostname}</span>` : '';
-      html += `<a href="/hosts/${h.id}" class="sb-item flex items-center gap-2 px-3 py-1.5 text-xs text-[--ng-text-secondary] hover:bg-white/[0.06] hover:text-[--ng-text-primary] transition-colors cursor-pointer ${idx === 0 ? 'bg-white/[0.04] text-[--ng-text-primary]' : ''}" data-idx="${idx}">
+        ? `<span class="text-[--ng-text-muted] text-[10px] font-mono ml-auto shrink-0">${h.hostname}</span>` : '';
+      html += `<a href="/hosts/${h.id}" class="sb-item ng-nav-item !gap-2 ${idx === 0 ? 'bg-white/[0.04] text-[--ng-text-primary]' : ''}" data-idx="${idx}">
         ${dot}
-        <span class="truncate flex-1">${h.name}</span>
+        <span class="truncate">${h.name}</span>
         ${ip}
       </a>`;
       idx++;
@@ -285,9 +312,9 @@ function _renderSidebarResults(pages, hosts) {
     pages.forEach(m => {
       if (m.section !== lastSection) {
         lastSection = m.section;
-        html += `<p class="text-[9px] font-mono uppercase tracking-[2px] text-[--ng-text-muted] px-3 pt-2 pb-1">${m.section}</p>`;
+        html += `<p class="px-3 pt-2 pb-1.5 text-[9px] font-mono uppercase tracking-[3px] text-[--ng-text-muted]">${m.section}</p>`;
       }
-      html += `<a href="${m.url}" class="sb-item flex items-center gap-2 px-3 py-1.5 text-xs text-[--ng-text-secondary] hover:bg-white/[0.06] hover:text-[--ng-text-primary] transition-colors cursor-pointer ${idx === 0 ? 'bg-white/[0.04] text-[--ng-text-primary]' : ''}" data-idx="${idx}">${m.name}</a>`;
+      html += `<a href="${m.url}" class="sb-item ng-nav-item ${idx === 0 ? 'bg-white/[0.04] text-[--ng-text-primary]' : ''}" data-idx="${idx}">${m.name}</a>`;
       idx++;
     });
   }
@@ -295,8 +322,8 @@ function _renderSidebarResults(pages, hosts) {
 }
 
 window.sidebarSearchKey = function(e) {
+  if (!_searchActive) return;
   const container = document.getElementById('sidebar-results');
-  if (container.classList.contains('hidden')) return;
   const items = [...container.querySelectorAll('.sb-item')];
   if (!items.length) return;
   const active = items.findIndex(i => i.classList.contains('bg-white/[0.04]'));
@@ -311,12 +338,12 @@ window.sidebarSearchKey = function(e) {
     e.preventDefault();
     const sel = items[active >= 0 ? active : 0];
     if (sel) {
-      container.classList.add('hidden');
+      clearSidebarSearch();
       navigate(sel.getAttribute('href'));
     }
   } else if (e.key === 'Escape') {
-    container.classList.add('hidden');
-    document.getElementById('sidebar-search').blur();
+    e.preventDefault();
+    clearSidebarSearch();
   }
 };
 
