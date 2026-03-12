@@ -165,9 +165,9 @@
                     <td class="py-2 pr-3 text-right text-[--ng-text-muted]">{{ log.total }}</td>
                     <td class="py-2 pr-3 text-right">
                         {% if log.error %}
-                            <span class="text-red-400" title="{{ log.error }}">error</span>
+                            <span class="text-ng-critical" title="{{ log.error }}">error</span>
                         {% elif log.added > 0 %}
-                            <span class="text-emerald-400">+{{ log.added }}</span>
+                            <span class="text-ng-success">+{{ log.added }}</span>
                         {% else %}
                             <span class="text-[--ng-text-muted]">0</span>
                         {% endif %}
@@ -178,12 +178,12 @@
                             <div class="flex flex-wrap gap-1">
                                 {% for h in (log.hosts_added | replace('[', '') | replace(']', '') | replace('"', '')).split(',') %}
                                     {% if h.strip() %}
-                                    <span class="inline-block px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-mono">{{ h.strip() }}</span>
+                                    <span class="inline-block px-1.5 py-0.5 rounded bg-ng-success/10 text-ng-success text-[10px] font-mono">{{ h.strip() }}</span>
                                     {% endif %}
                                 {% endfor %}
                             </div>
                         {% elif log.error %}
-                            <span class="text-red-400 text-[10px] truncate block max-w-xs" title="{{ log.error }}">{{ log.error[:80] }}</span>
+                            <span class="text-ng-critical text-[10px] truncate block max-w-xs" title="{{ log.error }}">{{ log.error[:80] }}</span>
                         {% else %}
                             <span class="text-[--ng-text-muted]">—</span>
                         {% endif %}
