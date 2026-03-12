@@ -22,6 +22,7 @@ from services.clickhouse_client import query_scalar as ch_scalar
 from models.integration import IntegrationConfig, Snapshot
 from models.incident import Incident, IncidentEvent
 from models.log_template import HostBaseline
+from services.topology import build_topology, filter_upstream_failures
 
 log = logging.getLogger("nodeglow.correlation")
 
@@ -109,17 +110,46 @@ async def _get_offline_hosts(db) -> list[PingHost]:
     return [row[0] for row in results.all()]
 
 
+# ── Topology cache (refreshed once per correlation run) ────────────────────
+
+_topo_cache: dict[int, int | None] = {}
+_topo_cache_ts: datetime | None = None
+
+
+async def _get_topology(db) -> dict[int, int | None]:
+    """Get topology with 60s cache."""
+    global _topo_cache, _topo_cache_ts
+    now = datetime.utcnow()
+    if _topo_cache_ts and (now - _topo_cache_ts).total_seconds() < 60:
+        return _topo_cache
+    try:
+        _topo_cache = await build_topology(db)
+        _topo_cache_ts = now
+    except Exception:
+        log.debug("Failed to build topology", exc_info=True)
+    return _topo_cache
+
+
 # ── Rule 1: Host Down + Syslog Errors ───────────────────────────────────────
 
 async def _rule_host_down_syslog(db):
-    """Host offline AND syslog severity <= 3 from same host in 5min window."""
+    """Host offline AND syslog severity <= 3 from same host in 5min window.
+    Skips hosts whose upstream parent is also offline (topology cascading)."""
     offline_hosts = await _get_offline_hosts(db)
     if not offline_hosts:
         return
 
+    # Filter out cascaded failures
+    topology = await _get_topology(db)
+    offline_ids = {h.id for h in offline_hosts}
+    primary_ids, cascaded_ids = filter_upstream_failures(offline_ids, topology)
+
     window = datetime.utcnow() - timedelta(minutes=5)
 
     for host in offline_hosts:
+        if host.id in cascaded_ids:
+            continue  # upstream is down — suppress individual alert
+
         # Check for error-level syslog messages from this host
         syslog_count = int(await ch_scalar(
             "SELECT count() FROM syslog_messages WHERE host_id = {hid:Int32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
@@ -137,18 +167,58 @@ async def _rule_host_down_syslog(db):
                 summary=f"{host.name} ({host.hostname}) is offline with {syslog_count} syslog errors in the last 5min",
             )
 
+    # Create a single upstream-failure incident if cascaded hosts exist
+    if cascaded_ids:
+        # Find the upstream root causes
+        cascade_hosts = [h for h in offline_hosts if h.id in cascaded_ids]
+        parent_names = set()
+        for hid in cascaded_ids:
+            from services.topology import get_ancestors
+            ancestors = get_ancestors(topology, hid)
+            for a in ancestors:
+                if a in primary_ids:
+                    ph = next((h for h in offline_hosts if h.id == a), None)
+                    if ph:
+                        parent_names.add(ph.name)
+                    break
+
+        names = ", ".join(h.name for h in cascade_hosts[:5])
+        if len(cascade_hosts) > 5:
+            names += f" (+{len(cascade_hosts) - 5} more)"
+        upstream_label = ", ".join(parent_names) if parent_names else "upstream device"
+
+        await _find_or_create_incident(
+            db,
+            rule="upstream_failure",
+            title=f"Upstream failure: {len(cascaded_ids)} hosts affected",
+            severity="warning",
+            host_ids=list(cascaded_ids),
+            event_type="host_down",
+            summary=f"{len(cascaded_ids)} hosts offline due to upstream failure ({upstream_label}): {names}",
+        )
+
 
 # ── Rule 2: Multi-Host Down ─────────────────────────────────────────────────
 
 async def _rule_multi_host_down(db):
-    """3+ hosts offline simultaneously → likely network problem."""
+    """3+ hosts offline simultaneously → likely network problem.
+    Excludes hosts already explained by upstream failure."""
     offline_hosts = await _get_offline_hosts(db)
     if len(offline_hosts) < 3:
         return
 
+    # Filter out cascaded failures (already handled by rule 1)
+    topology = await _get_topology(db)
+    offline_ids = {h.id for h in offline_hosts}
+    primary_ids, _ = filter_upstream_failures(offline_ids, topology)
+    primary_hosts = [h for h in offline_hosts if h.id in primary_ids]
+
+    if len(primary_hosts) < 3:
+        return
+
     # Group by /24 subnet (simple heuristic)
     subnets: dict[str, list[PingHost]] = {}
-    for host in offline_hosts:
+    for host in primary_hosts:
         hostname = host.hostname.strip()
         parts = hostname.split(".")
         if len(parts) == 4 and all(p.isdigit() for p in parts):
@@ -174,9 +244,8 @@ async def _rule_multi_host_down(db):
             )
 
     # Also trigger if 3+ hosts down across all subnets (no single subnet has 3+)
-    total_offline = len(offline_hosts)
     already_covered = sum(len(h) for h in subnets.values() if len(h) >= 3)
-    remaining = total_offline - already_covered
+    remaining = len(primary_hosts) - already_covered
     if remaining >= 3:
         uncovered = [h for s, hosts in subnets.items() if len(hosts) < 3 for h in hosts]
         host_ids = [h.id for h in uncovered]

@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from database import get_db
 from models.incident import Incident, IncidentEvent
+from models.log_template import LogTemplate, PrecursorPattern
 
 router = APIRouter(prefix="/incidents")
 
@@ -56,10 +57,42 @@ async def incident_detail(
     except Exception:
         logging.getLogger(__name__).debug("Could not fetch syslog context", exc_info=True)
 
+    # Fetch root-cause suggestions from learned precursor patterns
+    precursors = []
+    try:
+        _EVENT_MAP = {
+            "host_down_syslog": "host_down",
+            "multi_host_down": "host_down",
+            "integration_host": "integration_fail",
+        }
+        event_type = _EVENT_MAP.get(incident.rule, "incident")
+        rows = (await db.execute(
+            select(PrecursorPattern, LogTemplate)
+            .join(LogTemplate, PrecursorPattern.template_id == LogTemplate.id)
+            .where(
+                PrecursorPattern.precedes_event == event_type,
+                PrecursorPattern.confidence >= 0.3,
+                PrecursorPattern.occurrence_count >= 2,
+            )
+            .order_by(PrecursorPattern.confidence.desc())
+            .limit(8)
+        )).all()
+        for pp, lt in rows:
+            precursors.append({
+                "template": lt.template,
+                "example": lt.example,
+                "confidence": round(pp.confidence * 100),
+                "lead_time_min": round(pp.avg_lead_time_sec / 60, 1) if pp.avg_lead_time_sec else None,
+                "occurrences": pp.occurrence_count,
+            })
+    except Exception:
+        logging.getLogger(__name__).debug("Could not fetch precursors", exc_info=True)
+
     return templates.TemplateResponse("incident_detail.html", {
         "request": request,
         "incident": incident,
         "related_logs": related_logs,
+        "precursors": precursors,
         "active_page": "alerts",
     })
 
