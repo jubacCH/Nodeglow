@@ -7,7 +7,7 @@
 
   <!-- Header -->
   <div class="flex items-center gap-3 mb-6">
-    <a href="/incidents" title="Back to incidents" class="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-white/[0.06] transition-colors">
+    <a href="/incidents" title="Back to incidents" class="p-1.5 rounded-lg text-[--ng-text-muted] hover:text-white hover:bg-white/[0.06] transition-colors">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
       </svg>
@@ -19,7 +19,7 @@
         {{ status_pill(incident.status) }}
       </div>
       <p class="text-white text-sm mt-1">{{ incident.title }}</p>
-      <p class="text-slate-600 text-xs mt-0.5 font-mono">rule: {{ incident.rule }}</p>
+      <p class="text-[--ng-text-muted] text-xs mt-0.5 font-mono">rule: {{ incident.rule }}</p>
     </div>
 
     <!-- Actions -->
@@ -28,14 +28,14 @@
       {% if incident.status == 'open' %}
       <form method="post" action="/incidents/{{ incident.id }}/acknowledge">
         <button type="submit"
-                class="ng-btn px-4 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-500 text-white text-sm font-medium">
+                class="ng-btn px-4 py-2 rounded-lg bg-ng-warning hover:brightness-110 text-[--ng-bg] text-sm font-medium">
           Acknowledge
         </button>
       </form>
       {% endif %}
       <form method="post" action="/incidents/{{ incident.id }}/resolve">
         <button type="submit"
-                class="ng-btn px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium">
+                class="ng-btn px-4 py-2 rounded-lg bg-ng-success hover:brightness-110 text-[--ng-bg] text-sm font-medium">
           Resolve
         </button>
       </form>
@@ -46,15 +46,15 @@
   <!-- Info cards -->
   <div class="grid grid-cols-4 gap-4 mb-6">
     <div class="bg-[--ng-glass-bg] border border-[--ng-glass-border] rounded-xl p-4">
-      <p class="text-slate-500 text-xs uppercase tracking-wider mb-1">Created</p>
+      <p class="text-[--ng-text-muted] text-xs uppercase tracking-wider mb-1">Created</p>
       <p class="text-white text-sm font-medium">{{ incident.created_at|localtime("%d.%m.%Y %H:%M:%S") }}</p>
     </div>
     <div class="bg-[--ng-glass-bg] border border-[--ng-glass-border] rounded-xl p-4">
-      <p class="text-slate-500 text-xs uppercase tracking-wider mb-1">Last updated</p>
+      <p class="text-[--ng-text-muted] text-xs uppercase tracking-wider mb-1">Last updated</p>
       <p class="text-white text-sm font-medium">{{ incident.updated_at|localtime("%d.%m.%Y %H:%M:%S") }}</p>
     </div>
     <div class="bg-[--ng-glass-bg] border border-[--ng-glass-border] rounded-xl p-4">
-      <p class="text-slate-500 text-xs uppercase tracking-wider mb-1">Duration</p>
+      <p class="text-[--ng-text-muted] text-xs uppercase tracking-wider mb-1">Duration</p>
       {% set end_time = incident.resolved_at or None %}
       {% if end_time %}
         {% set dur = (end_time - incident.created_at).total_seconds() %}
@@ -68,12 +68,12 @@
         {% elif incident.status == 'resolved' %}
           < 1m
         {% else %}
-          <span class="text-yellow-400">ongoing</span>
+          <span class="text-ng-warning">ongoing</span>
         {% endif %}
       </p>
     </div>
     <div class="bg-[--ng-glass-bg] border border-[--ng-glass-border] rounded-xl p-4">
-      <p class="text-slate-500 text-xs uppercase tracking-wider mb-1">Acknowledged by</p>
+      <p class="text-[--ng-text-muted] text-xs uppercase tracking-wider mb-1">Acknowledged by</p>
       <p class="text-white text-sm font-medium">{{ incident.acknowledged_by or '—' }}</p>
     </div>
   </div>
@@ -91,19 +91,19 @@
         <div class="flex items-start gap-4 relative">
           <!-- Dot -->
           <div class="w-6 h-6 rounded-full flex items-center justify-center shrink-0 z-10
-            {% if event.event_type == 'created' %}bg-red-500/20 border border-red-500/40
-            {% elif event.event_type == 'resolved' %}bg-emerald-500/20 border border-emerald-500/40
-            {% elif event.event_type == 'acknowledged' %}bg-yellow-500/20 border border-yellow-500/40
-            {% elif event.event_type == 'host_down' %}bg-red-500/15 border border-red-500/30
-            {% elif event.event_type == 'host_up' %}bg-emerald-500/15 border border-emerald-500/30
+            {% if event.event_type == 'created' %}bg-ng-critical/20 border border-ng-critical/40
+            {% elif event.event_type == 'resolved' %}bg-ng-success/20 border border-ng-success/40
+            {% elif event.event_type == 'acknowledged' %}bg-ng-warning/20 border border-ng-warning/40
+            {% elif event.event_type == 'host_down' %}bg-ng-critical/15 border border-ng-critical/30
+            {% elif event.event_type == 'host_up' %}bg-ng-success/15 border border-ng-success/30
             {% elif event.event_type in ('syslog_error', 'integration_error') %}bg-orange-500/15 border border-orange-500/30
-            {% else %}bg-slate-500/15 border border-slate-500/30{% endif %}">
+            {% else %}bg-white/[0.06] border border-white/[0.08]{% endif %}">
             <span class="w-2 h-2 rounded-full
-              {% if event.event_type == 'created' %}bg-red-400
-              {% elif event.event_type == 'resolved' %}bg-emerald-400
-              {% elif event.event_type == 'acknowledged' %}bg-yellow-400
-              {% elif event.event_type == 'host_down' %}bg-red-400/70
-              {% elif event.event_type == 'host_up' %}bg-emerald-400/70
+              {% if event.event_type == 'created' %}bg-ng-critical
+              {% elif event.event_type == 'resolved' %}bg-ng-success
+              {% elif event.event_type == 'acknowledged' %}bg-ng-warning
+              {% elif event.event_type == 'host_down' %}bg-ng-critical/70
+              {% elif event.event_type == 'host_up' %}bg-ng-success/70
               {% else %}bg-orange-400/70{% endif %}"></span>
           </div>
 
@@ -111,11 +111,11 @@
           <div class="flex-1 min-w-0 pb-1">
             <div class="flex items-center gap-2">
               {{ event_type_pill(event.event_type) }}
-              <span class="text-slate-600 text-xs tabular-nums">{{ event.timestamp|localtime("%d.%m. %H:%M:%S") }}</span>
+              <span class="text-[--ng-text-muted] text-xs tabular-nums">{{ event.timestamp|localtime("%d.%m. %H:%M:%S") }}</span>
             </div>
-            <p class="text-slate-300 text-sm mt-1">{{ event.summary }}</p>
+            <p class="text-[--ng-text-secondary] text-sm mt-1">{{ event.summary }}</p>
             {% if event.detail %}
-            <p class="text-slate-500 text-xs mt-0.5 font-mono">{{ event.detail }}</p>
+            <p class="text-[--ng-text-muted] text-xs mt-0.5 font-mono">{{ event.detail }}</p>
             {% endif %}
           </div>
         </div>
@@ -148,9 +148,9 @@
             <td class="py-1.5 pr-3 text-[--ng-text-muted] tabular-nums whitespace-nowrap font-mono">{{ log.timestamp.strftime('%H:%M:%S') }}</td>
             <td class="py-1.5 pr-3">
               <span class="px-1.5 py-0.5 rounded text-[9px] font-medium
-                {% if log.severity <= 2 %}bg-red-500/15 text-red-400
+                {% if log.severity <= 2 %}bg-ng-critical/15 text-ng-critical
                 {% elif log.severity == 3 %}bg-orange-500/15 text-orange-400
-                {% else %}bg-yellow-500/15 text-yellow-400{% endif %}">
+                {% else %}bg-ng-warning/15 text-ng-warning{% endif %}">
                 {% if log.severity == 0 %}EMERG{% elif log.severity == 1 %}ALERT{% elif log.severity == 2 %}CRIT{% elif log.severity == 3 %}ERR{% else %}WARN{% endif %}
               </span>
             </td>

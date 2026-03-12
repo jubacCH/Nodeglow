@@ -8,7 +8,7 @@
   <div class="flex items-center justify-between mb-6">
     <div>
       <h1 class="ng-heading text-2xl text-[--ng-text-primary]">Hosts</h1>
-      <p class="text-slate-500 text-sm mt-0.5">Manage monitored hosts</p>
+      <p class="text-[--ng-text-muted] text-sm mt-0.5">Manage monitored hosts</p>
     </div>
     <button type="button" onclick="document.getElementById('add-form').classList.toggle('hidden')"
             class="flex items-center gap-2 ng-btn ng-btn-primary">
@@ -150,32 +150,32 @@
     <table class="w-full text-sm">
       <thead>
         <tr class="border-b border-white/[0.08]">
-          <th class="text-left px-5 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none transition-colors"
+          <th class="text-left px-5 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-[--ng-text-secondary] select-none transition-colors"
               onclick="sortTable('name')">
             Host <span class="sort-arrow" data-col="name"></span>
           </th>
-          <th class="text-left px-5 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none transition-colors"
+          <th class="text-left px-5 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-[--ng-text-secondary] select-none transition-colors"
               onclick="sortTable('status')">
             Status <span class="sort-arrow" data-col="status"></span>
           </th>
-          <th class="text-left px-5 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none transition-colors"
+          <th class="text-left px-5 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-[--ng-text-secondary] select-none transition-colors"
               onclick="sortTable('latency')">
             Latency <span class="sort-arrow" data-col="latency"></span>
           </th>
-          <th class="text-left px-5 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none transition-colors"
+          <th class="text-left px-5 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-[--ng-text-secondary] select-none transition-colors"
               onclick="sortTable('uptime24')">
             24h <span class="sort-arrow" data-col="uptime24"></span>
           </th>
-          <th class="text-left px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none transition-colors"
+          <th class="text-left px-4 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-[--ng-text-secondary] select-none transition-colors"
               onclick="sortTable('uptime7')">
             7d <span class="sort-arrow" data-col="uptime7"></span>
           </th>
-          <th class="text-left px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none transition-colors"
+          <th class="text-left px-4 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider cursor-pointer hover:text-[--ng-text-secondary] select-none transition-colors"
               onclick="sortTable('uptime30')">
             30d <span class="sort-arrow" data-col="uptime30"></span>
           </th>
-          <th class="text-left px-5 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider">30-day history</th>
-          <th class="text-left px-5 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider">Enabled</th>
+          <th class="text-left px-5 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider">30-day history</th>
+          <th class="text-left px-5 py-3 text-[--ng-text-muted] font-medium text-xs uppercase tracking-wider">Enabled</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-white/[0.08]">
