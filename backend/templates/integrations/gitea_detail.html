@@ -54,7 +54,7 @@
             <tr class="border-b border-white/[0.03] hover:bg-white/[0.02]">
                 <td class="px-4 py-2">
                     <span class="text-[--ng-text-primary] font-medium">{{ r.get('full_name', r.get('name', '?')) }}</span>
-                    {% if r.get('private') %}<span class="ml-1 px-1 py-0 rounded text-[8px] bg-yellow-500/15 text-yellow-400">private</span>{% endif %}
+                    {% if r.get('private') %}<span class="ml-1 px-1 py-0 rounded text-[8px] bg-ng-warning/15 text-ng-warning">private</span>{% endif %}
                     {% if r.get('description') %}<p class="text-[--ng-text-muted] text-[10px] mt-0.5 truncate max-w-[300px]">{{ r.get('description') }}</p>{% endif %}
                 </td>
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-secondary]">{{ r.get('stars', 0) }}</td>

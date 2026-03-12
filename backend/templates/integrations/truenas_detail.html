@@ -94,7 +94,7 @@
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-secondary]">{{ d.get('size_gb', 0) }} GB</td>
                 <td class="px-4 py-2 text-right text-xs font-mono {% if d.get('temp', 0)|float > 50 %}text-ng-critical{% elif d.get('temp', 0)|float > 40 %}text-ng-warning{% else %}text-[--ng-text-secondary]{% endif %}">{% if d.get('temp') %}{{ d.get('temp') }}°C{% else %}—{% endif %}</td>
                 <td class="px-4 py-2 text-xs">
-                    <span class="px-1.5 py-0.5 rounded text-[9px] font-mono {% if d.get('type') == 'SSD' %}bg-blue-500/15 text-blue-400{% else %}bg-slate-500/15 text-slate-400{% endif %}">{{ d.get('type', 'HDD') }}</span>
+                    <span class="px-1.5 py-0.5 rounded text-[9px] font-mono {% if d.get('type') == 'SSD' %}bg-blue-500/15 text-blue-400{% else %}bg-white/[0.06] text-[--ng-text-secondary]{% endif %}">{{ d.get('type', 'HDD') }}</span>
                 </td>
             </tr>
             {% endfor %}
