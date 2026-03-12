@@ -214,11 +214,11 @@
                             <td class="px-3 py-1 text-[--ng-text-primary]">{{ p.get('name', '') }}{% if p.get('is_uplink') %} <span class="text-ng-primary text-[8px]">UPLINK</span>{% endif %}</td>
                             <td class="px-3 py-1 text-center">
                                 {% if not p.get('enable') %}
-                                <span class="px-1 py-0.5 rounded bg-slate-500/15 text-slate-500">Disabled</span>
+                                <span class="px-1 py-0.5 rounded bg-white/[0.06] text-[--ng-text-muted]">Disabled</span>
                                 {% elif p.get('up') %}
                                 <span class="px-1 py-0.5 rounded bg-ng-success/15 text-ng-success">Up</span>
                                 {% else %}
-                                <span class="px-1 py-0.5 rounded bg-slate-500/15 text-slate-400">Down</span>
+                                <span class="px-1 py-0.5 rounded bg-white/[0.06] text-[--ng-text-secondary]">Down</span>
                                 {% endif %}
                             </td>
                             <td class="px-3 py-1 text-right font-mono text-[--ng-text-secondary]">{{ p.get('speed_label', '') }}</td>
@@ -277,7 +277,7 @@
                     {% if c.get('is_wireless') %}
                     <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-blue-500/15 text-blue-400">{{ c.get('ssid', 'WiFi') }}{% if c.get('channel') %} ch{{ c.get('channel') }}{% endif %}</span>
                     {% else %}
-                    <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-slate-500/15 text-slate-400">Wired</span>
+                    <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-white/[0.06] text-[--ng-text-secondary]">Wired</span>
                     {% endif %}
                 </td>
                 <td class="px-4 py-2 text-xs text-[--ng-text-muted]">
@@ -336,7 +336,7 @@
             <span class="px-1.5 py-0.5 rounded text-[8px] font-mono shrink-0
                 {% if e.get('subsystem') == 'wan' %}bg-amber-500/15 text-amber-400
                 {% elif e.get('subsystem') == 'wlan' %}bg-blue-500/15 text-blue-400
-                {% elif e.get('subsystem') == 'lan' %}bg-slate-500/15 text-slate-400
+                {% elif e.get('subsystem') == 'lan' %}bg-white/[0.06] text-[--ng-text-secondary]
                 {% else %}bg-white/5 text-[--ng-text-muted]{% endif %}">{{ e.get('sub_label', e.get('subsystem', '')) }}</span>
             <div class="min-w-0">
                 <span class="text-[--ng-text-primary] text-xs">{{ e.get('key_label', '') }}</span>
