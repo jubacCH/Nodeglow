@@ -306,14 +306,20 @@ function onSourceTypeChange(sel, prefix) {
             idSel.innerHTML += `<option value="${inst.id}">${inst.name}</option>`;
         });
     }
-    _loadFields(prefix);
+    return _loadFields(prefix);
 }
 
 function onSourceIdChange(prefix) {
-    _loadFields(prefix);
+    return _loadFields(prefix);
 }
 
+let _loadFieldsAbort = null;
 async function _loadFields(prefix, preselect) {
+    // Cancel any in-flight request for this prefix
+    if (_loadFieldsAbort) _loadFieldsAbort.abort();
+    _loadFieldsAbort = new AbortController();
+    const signal = _loadFieldsAbort.signal;
+
     const type = document.getElementById(prefix + '_source_type').value;
     const id = document.getElementById(prefix + '_source_id').value;
     const fieldSel = document.getElementById(prefix + '_field_path');
@@ -330,15 +336,20 @@ async function _loadFields(prefix, preselect) {
     if (!_fieldCache[key]) {
         try {
             const url = `/api/rules/fields?source_type=${encodeURIComponent(type)}` + (id ? `&source_id=${id}` : '');
-            const resp = await fetch(url, {credentials: 'same-origin'});
+            const resp = await fetch(url, {credentials: 'same-origin', signal});
             if (resp.ok) {
                 const ct = resp.headers.get('content-type') || '';
                 if (ct.includes('json')) {
                     _fieldCache[key] = await resp.json();
                 }
             }
-        } catch(e) { console.warn('Field load failed:', e); }
+        } catch(e) {
+            if (e.name === 'AbortError') return;
+            console.warn('Field load failed:', e);
+        }
     }
+
+    if (signal.aborted) return;
 
     const fields = _fieldCache[key] || [];
     if (!fields.length) {
@@ -379,16 +390,9 @@ function updateFieldPreview(prefix) {
     }
 }
 
-function openEditModal(id, name, sourceType, sourceId, fieldPath, operator, threshold, severity, message, cooldown, channels) {
+async function openEditModal(id, name, sourceType, sourceId, fieldPath, operator, threshold, severity, message, cooldown, channels) {
     document.getElementById('editForm').action = '/rules/' + id + '/edit';
     document.getElementById('edit_name').value = name;
-    document.getElementById('edit_source_type').value = sourceType;
-    onSourceTypeChange(document.getElementById('edit_source_type'), 'edit');
-    // Set source_id after options are populated, then load fields with preselect
-    setTimeout(() => {
-        document.getElementById('edit_source_id').value = sourceId;
-        _loadFields('edit', fieldPath);
-    }, 50);
     document.getElementById('edit_operator').value = operator;
     document.getElementById('edit_threshold').value = threshold;
     document.getElementById('edit_severity').value = severity;
@@ -400,6 +404,21 @@ function openEditModal(id, name, sourceType, sourceId, fieldPath, operator, thre
     document.querySelectorAll('#edit_channels_wrap input[type="checkbox"]').forEach(cb => {
         cb.checked = channelList.includes(cb.value);
     });
+
+    // Populate source type and instances first
+    document.getElementById('edit_source_type').value = sourceType;
+    const typeSel = document.getElementById('edit_source_type');
+    const idSel = document.getElementById('edit_source_id');
+    idSel.innerHTML = '<option value="">Any</option>';
+    const src = _sources.find(s => s.type === sourceType);
+    if (src) {
+        src.instances.forEach(inst => {
+            idSel.innerHTML += `<option value="${inst.id}">${inst.name}</option>`;
+        });
+    }
+    // Set source_id, then load fields with preselect (await ensures completion)
+    idSel.value = sourceId;
+    await _loadFields('edit', fieldPath);
 
     document.getElementById('editModal').classList.remove('hidden');
 }
