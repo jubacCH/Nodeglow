@@ -586,7 +586,7 @@
 
       eventSource = new EventSource('/syslog/stream?' + params.toString());
       eventSource.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
+        let msg; try { msg = JSON.parse(e.data); } catch { return; }
         liveCount++;
         document.getElementById('live-count').textContent = liveCount + ' messages';
 
@@ -597,15 +597,15 @@
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-white/[0.03] transition-colors ' + rowClass;
         tr.innerHTML = `
-          <td class="px-4 py-2 text-[--ng-text-muted] text-xs tabular-nums whitespace-nowrap font-mono">${msg.timestamp}</td>
-          <td class="px-4 py-2 whitespace-nowrap"><span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${sevClass}">${msg.severity_label}</span></td>
-          <td class="px-4 py-2 text-[--ng-text-secondary] text-xs whitespace-nowrap">${msg.hostname || '...'}</td>
-          <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono whitespace-nowrap">${msg.source_ip}</td>
-          <td class="px-4 py-2 text-[--ng-text-muted] text-xs whitespace-nowrap">${msg.app_name ? '<span class="px-1.5 py-0.5 rounded bg-white/5 text-[--ng-text-secondary]">'+msg.app_name+'</span>' : ''}</td>
+          <td class="px-4 py-2 text-[--ng-text-muted] text-xs tabular-nums whitespace-nowrap font-mono">${_esc(msg.timestamp)}</td>
+          <td class="px-4 py-2 whitespace-nowrap"><span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${sevClass}">${_esc(msg.severity_label)}</span></td>
+          <td class="px-4 py-2 text-[--ng-text-secondary] text-xs whitespace-nowrap">${_esc(msg.hostname) || '...'}</td>
+          <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono whitespace-nowrap">${_esc(msg.source_ip)}</td>
+          <td class="px-4 py-2 text-[--ng-text-muted] text-xs whitespace-nowrap">${msg.app_name ? '<span class="px-1.5 py-0.5 rounded bg-white/5 text-[--ng-text-secondary]">'+_esc(msg.app_name)+'</span>' : ''}</td>
           <td class="px-4 py-2 text-xs font-mono break-all">
             ${msg.is_new_template ? '<span class="px-1 py-0 rounded text-[8px] bg-emerald-500/20 text-emerald-400 mr-1">NEW</span>' : ''}
-            ${(msg.tags||[]).map(t => '<span class="px-1 py-0 rounded text-[8px] bg-indigo-500/15 text-indigo-400 mr-0.5">' + t + '</span>').join('')}
-            <span class="text-[--ng-text-primary] ${msg.noise_score > 70 ? 'opacity-40' : ''}">${msg.message}</span>
+            ${(msg.tags||[]).map(t => '<span class="px-1 py-0 rounded text-[8px] bg-indigo-500/15 text-indigo-400 mr-0.5">' + _esc(t) + '</span>').join('')}
+            <span class="text-[--ng-text-primary] ${msg.noise_score > 70 ? 'opacity-40' : ''}">${_esc(msg.message)}</span>
           </td>
         `;
         const tbody = document.getElementById('live-rows');

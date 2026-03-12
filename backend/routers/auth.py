@@ -31,7 +31,11 @@ async def login(
 ):
     result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
-    if not user or not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
+    # Always run bcrypt to prevent timing-based user enumeration
+    _dummy_hash = b"$2b$12$000000000000000000000uGHEjmFMntPDYjXJPBT3V44YS5gL0nS"
+    stored_hash = user.password_hash.encode() if user else _dummy_hash
+    pw_ok = bcrypt.checkpw(password.encode(), stored_hash)
+    if not user or not pw_ok:
         return templates.TemplateResponse(
             "login.html",
             {"request": request, "error": "Ungültiger Benutzername oder Passwort"},
