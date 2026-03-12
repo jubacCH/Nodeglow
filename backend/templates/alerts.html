@@ -9,13 +9,13 @@
   <div class="flex items-center justify-between mb-6">
     <div>
       <h1 class="ng-heading text-2xl text-[--ng-text-primary]">Alerts & Incidents</h1>
-      <p class="text-slate-500 text-sm mt-0.5">Active issues, warnings, and correlated incidents</p>
+      <p class="text-[--ng-text-muted] text-sm mt-0.5">Active issues, warnings, and correlated incidents</p>
     </div>
     <div class="flex items-center gap-2">
       {% set crit = alerts | selectattr('severity', 'equalto', 'critical') | list | length %}
       {% set open_inc = inc_counts.get('open', 0) %}
       {% if crit > 0 %}
-      <span class="px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm font-medium">
+      <span class="px-3 py-1.5 rounded-lg bg-ng-critical/10 border border-ng-critical/30 text-ng-critical text-sm font-medium">
         {{ crit }} Critical
       </span>
       {% endif %}
