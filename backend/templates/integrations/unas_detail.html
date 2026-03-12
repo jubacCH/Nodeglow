@@ -147,7 +147,7 @@
             <tr class="border-b border-white/[0.03] hover:bg-white/[0.02]">
                 <td class="px-4 py-2 text-[--ng-text-primary] font-medium">{{ d.get('name', '?') }}</td>
                 <td class="px-4 py-2 text-xs">
-                    <span class="px-1.5 py-0.5 rounded text-[9px] {% if d.get('type') == 'SSD' %}bg-blue-500/15 text-blue-400{% else %}bg-slate-500/15 text-slate-400{% endif %}">{{ d.get('type', '?') }}</span>
+                    <span class="px-1.5 py-0.5 rounded text-[9px] {% if d.get('type') == 'SSD' %}bg-blue-500/15 text-blue-400{% else %}bg-white/[0.06] text-[--ng-text-secondary]{% endif %}">{{ d.get('type', '?') }}</span>
                 </td>
                 <td class="px-4 py-2 text-[--ng-text-muted] text-xs font-mono truncate max-w-[180px]">{{ d.get('model', '') }}</td>
                 <td class="px-4 py-2 text-right text-xs font-mono text-[--ng-text-secondary]">{% if d.get('size_tb') %}{{ d.get('size_tb') }} TB{% else %}{{ d.get('size_gb', 0) }} GB{% endif %}</td>

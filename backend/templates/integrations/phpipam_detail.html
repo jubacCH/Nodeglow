@@ -30,7 +30,7 @@
         <p class="metric-label !text-[10px]">Active</p>
     </div>
     <div class="glass-card p-4 text-center">
-        <p class="text-2xl font-bold text-slate-500">{{ data.get('addresses_inactive', 0) }}</p>
+        <p class="text-2xl font-bold text-[--ng-text-muted]">{{ data.get('addresses_inactive', 0) }}</p>
         <p class="metric-label !text-[10px]">Inactive</p>
     </div>
     <div class="glass-card p-4 text-center">
@@ -61,10 +61,10 @@
             <tbody>
                 {% for addr in addrs %}
                 <tr class="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors">
-                    <td class="px-4 py-2 text-xs font-mono text-[--ng-text-primary]">{{ addr.ip }}</td>
+                    <td class="px-4 py-2 text-xs font-mono text-[--ng-text-primary] font-medium">{{ addr.ip }}</td>
                     <td class="px-4 py-2 text-xs text-[--ng-text-secondary]">{{ addr.hostname or '—' }}</td>
-                    <td class="px-4 py-2 text-xs font-mono text-slate-500">{{ addr.mac or '—' }}</td>
-                    <td class="px-4 py-2 text-xs text-slate-500">{{ addr.last_seen or '—' }}</td>
+                    <td class="px-4 py-2 text-xs font-mono text-[--ng-text-muted]">{{ addr.mac or '—' }}</td>
+                    <td class="px-4 py-2 text-xs text-[--ng-text-muted]">{{ addr.last_seen or '—' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
