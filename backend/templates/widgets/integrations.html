@@ -26,6 +26,12 @@
           <p class="text-[--ng-text-primary] text-xs font-medium leading-none">{{ i.name }}</p>
           <p class="text-[--ng-text-muted] text-[10px] font-mono mt-0.5">{{ i.label }}</p>
         </div>
+        {% if i.health_score is defined and i.health_score is not none %}
+        <span class="text-[10px] font-mono shrink-0 tabular-nums
+          {% if i.health_score >= 0.5 %}text-ng-critical
+          {% elif i.health_score >= 0.2 %}text-ng-warning
+          {% else %}text-ng-success{% endif %}">{{ "%.0f"|format((1 - i.health_score) * 100) }}%</span>
+        {% endif %}
         {% if i.cached_at %}
         <span class="text-[--ng-text-muted] text-[10px] font-mono ml-1 shrink-0">{{ i.cached_at|localtime("%H:%M") }}</span>
         {% endif %}
