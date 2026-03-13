@@ -29,6 +29,6 @@ COPY --from=builder /app/public ./public
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget -qO- http://localhost:3000/ || exit 1
+    CMD wget -qO- http://0.0.0.0:3000/ || exit 1
 
 CMD ["node", "server.js"]
