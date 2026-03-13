@@ -193,6 +193,23 @@ export default function HostDetailPage() {
               <p className="text-sm text-slate-400 font-mono">{host.hostname}</p>
             </div>
             <div className="flex items-center gap-3">
+              {host.health_pct != null && (
+                <div className="flex items-center gap-2" title={`Health Score: ${host.health_pct}%`}>
+                  <div className="w-16 h-2 rounded-full bg-white/[0.06] overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${
+                        host.health_pct >= 90 ? 'bg-emerald-500' : host.health_pct >= 70 ? 'bg-amber-500' : 'bg-red-500'
+                      }`}
+                      style={{ width: `${host.health_pct}%` }}
+                    />
+                  </div>
+                  <span className={`text-xs font-mono ${
+                    host.health_pct >= 90 ? 'text-emerald-400' : host.health_pct >= 70 ? 'text-amber-400' : 'text-red-400'
+                  }`}>
+                    {host.health_pct}%
+                  </span>
+                </div>
+              )}
               <Badge>{host.check_type}</Badge>
               <Badge>{host.source}</Badge>
               {host.port && <Badge>:{host.port}</Badge>}
@@ -345,25 +362,33 @@ export default function HostDetailPage() {
           )}
 
           {/* Integration Data */}
-          {host?.integration && (
-            <GlassCard className="p-4">
-              <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
-                <Wifi size={14} className="text-violet-400" />
-                Integration: {host.integration.type} — {host.integration.config_name}
-              </h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2">
-                {Object.entries(host.integration.data as Record<string, unknown>).map(([key, val]) => {
-                  if (val == null || typeof val === 'object') return null;
-                  return (
+          {host?.integration && (() => {
+            let data = host.integration.data;
+            if (typeof data === 'string') {
+              try { data = JSON.parse(data); } catch { /* keep as-is */ }
+            }
+            if (!data || typeof data !== 'object') return null;
+            const entries = Object.entries(data as Record<string, unknown>).filter(
+              ([, val]) => val != null && typeof val !== 'object'
+            );
+            if (!entries.length) return null;
+            return (
+              <GlassCard className="p-4">
+                <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                  <Wifi size={14} className="text-violet-400" />
+                  Integration: {host.integration.type} — {host.integration.config_name}
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2">
+                  {entries.map(([key, val]) => (
                     <div key={key} className="flex justify-between">
                       <span className="text-xs text-slate-500">{key.replace(/_/g, ' ')}</span>
                       <span className="text-xs text-slate-300 font-mono truncate max-w-[60%]">{String(val)}</span>
                     </div>
-                  );
-                })}
-              </div>
-            </GlassCard>
-          )}
+                  ))}
+                </div>
+              </GlassCard>
+            );
+          })()}
 
           {/* Uptime stats */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
