@@ -299,9 +299,36 @@ async def get_host(
                     "config_name": cfg.name,
                     "ok": snap.ok,
                     "timestamp": snap.timestamp.isoformat(),
-                    "data": snap.data_json,
+                    "data": json.loads(snap.data_json) if isinstance(snap.data_json, str) else snap.data_json,
                 }
                 break
+
+    # ── Health score (0.0 = healthy, 1.0 = critical) ──────────────────────
+    _online = lr.success if lr else None
+    _lat = lr.latency_ms if lr else None
+    _thr = host.latency_threshold_ms
+    if _online is False:
+        health_score = 1.0
+    elif host.maintenance:
+        health_score = 0.5
+    elif _online is None:
+        health_score = 0.8
+    else:
+        _hs = 0.0
+        if _lat is not None and _thr:
+            r = _lat / _thr
+            if r <= 0.5: _hs += r * 0.05
+            elif r <= 0.8: _hs += 0.025 + (r - 0.5) / 0.3 * 0.075
+            elif r <= 1.0: _hs += 0.10 + (r - 0.8) / 0.2 * 0.10
+            else: _hs += 0.20
+        elif _lat is not None:
+            _hs += min(_lat / 200.0, 0.20)
+        uptime_24h = um.get("h24") or 100.0
+        deficit = 1 - uptime_24h / 100.0
+        if deficit > 0:
+            _hs += min((deficit ** 0.5) * 0.15, 0.15)
+        health_score = round(min(_hs, 1.0), 3)
+    health_pct = round((1 - health_score) * 100)
 
     return {
         "id": host.id,
@@ -324,6 +351,8 @@ async def get_host(
             "timestamp": lr.timestamp.isoformat() if lr else None,
         },
         "uptime": {"h24": um.get("h24"), "d7": um.get("d7"), "d30": um.get("d30")},
+        "health_score": health_score,
+        "health_pct": health_pct,
         "agent": agent_metrics,
         "integration": integration_data,
     }
