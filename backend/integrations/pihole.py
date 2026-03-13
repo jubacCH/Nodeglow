@@ -1,9 +1,13 @@
 """Pi-hole integration – DNS stats via Pi-hole API (v5 + v6 support)."""
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
+
+log = logging.getLogger(__name__)
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -15,134 +19,161 @@ class PiholeAPI:
         self.api_key = api_key
         self.verify_ssl = verify_ssl
 
-    async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
-            # Try v6 first
-            if self.api_key:
-                try:
-                    auth_resp = await client.post(
-                        f"{self.base}/api/auth", json={"password": self.api_key})
-                    if auth_resp.status_code == 200:
-                        auth_data = auth_resp.json()
-                        sid = (auth_data.get("session", {}) or {}).get("sid")
-                        if sid:
-                            headers = {"sid": sid}
-                            stats_resp = await client.get(
-                                f"{self.base}/api/stats/summary", headers=headers)
-                            stats_resp.raise_for_status()
-                            raw = stats_resp.json()
+    async def _try_v6(self, client: httpx.AsyncClient) -> dict | None:
+        """Attempt Pi-hole v6 API. Returns parsed data or None."""
+        # v6 requires authentication via session
+        auth_resp = await client.post(
+            f"{self.base}/api/auth", json={"password": self.api_key or ""})
+        if auth_resp.status_code != 200:
+            log.debug("Pi-hole v6 auth returned %s", auth_resp.status_code)
+            return None
+        auth_data = auth_resp.json()
+        sid = (auth_data.get("session") or {}).get("sid")
+        if not sid:
+            log.debug("Pi-hole v6 auth: no session SID in response: %s", auth_data)
+            return None
 
-                            top_resp = await client.get(
-                                f"{self.base}/api/stats/top_domains", headers=headers,
-                                params={"blocked": "false", "count": 10})
-                            top_blocked_resp = await client.get(
-                                f"{self.base}/api/stats/top_domains", headers=headers,
-                                params={"blocked": "true", "count": 10})
+        headers = {"sid": sid}
 
-                            top_queries = []
-                            top_blocked = []
-                            if top_resp.status_code == 200:
-                                domains = top_resp.json().get("domains", [])
-                                top_queries = [{"domain": d.get("domain", ""), "count": d.get("count", 0)}
-                                               for d in domains[:10]]
-                            if top_blocked_resp.status_code == 200:
-                                domains = top_blocked_resp.json().get("domains", [])
-                                top_blocked = [{"domain": d.get("domain", ""), "count": d.get("count", 0)}
-                                               for d in domains[:10]]
+        stats_resp = await client.get(
+            f"{self.base}/api/stats/summary", headers=headers)
+        stats_resp.raise_for_status()
+        raw = stats_resp.json()
 
-                            # Fetch local DNS records (v6: /api/config/dns/hosts)
-                            local_dns = []
-                            try:
-                                dns_resp = await client.get(
-                                    f"{self.base}/api/config/dns/hosts", headers=headers)
-                                if dns_resp.status_code == 200:
-                                    entries = dns_resp.json().get("config", {}).get("dns", {}).get("hosts", [])
-                                    for entry in entries:
-                                        parts = entry.split(None, 1)
-                                        if len(parts) == 2:
-                                            local_dns.append({"domain": parts[1], "ip": parts[0]})
-                            except Exception:
-                                pass
+        top_resp = await client.get(
+            f"{self.base}/api/stats/top_domains", headers=headers,
+            params={"blocked": "false", "count": 10})
+        top_blocked_resp = await client.get(
+            f"{self.base}/api/stats/top_domains", headers=headers,
+            params={"blocked": "true", "count": 10})
 
-                            # Fetch local CNAME records (v6)
-                            try:
-                                cname_resp = await client.get(
-                                    f"{self.base}/api/config/dns/cnameRecords", headers=headers)
-                                if cname_resp.status_code == 200:
-                                    cnames = cname_resp.json().get("config", {}).get("dns", {}).get("cnameRecords", [])
-                                    for entry in cnames:
-                                        if isinstance(entry, str) and "," in entry:
-                                            domain, target = entry.split(",", 1)
-                                            local_dns.append({"domain": domain, "ip": target, "type": "CNAME"})
-                            except Exception:
-                                pass
+        top_queries = []
+        top_blocked = []
+        if top_resp.status_code == 200:
+            domains = top_resp.json().get("domains", [])
+            top_queries = [{"domain": d.get("domain", ""), "count": d.get("count", 0)}
+                           for d in domains[:10]]
+        if top_blocked_resp.status_code == 200:
+            domains = top_blocked_resp.json().get("domains", [])
+            top_blocked = [{"domain": d.get("domain", ""), "count": d.get("count", 0)}
+                           for d in domains[:10]]
 
-                            try:
-                                await client.delete(f"{self.base}/api/auth", headers=headers)
-                            except Exception:
-                                pass
+        # Fetch local DNS records (v6: /api/config/dns/hosts)
+        local_dns = []
+        try:
+            dns_resp = await client.get(
+                f"{self.base}/api/config/dns/hosts", headers=headers)
+            if dns_resp.status_code == 200:
+                entries = dns_resp.json().get("config", {}).get("dns", {}).get("hosts", [])
+                for entry in entries:
+                    parts = entry.split(None, 1)
+                    if len(parts) == 2:
+                        local_dns.append({"domain": parts[1], "ip": parts[0]})
+        except Exception:
+            pass
 
-                            return parse_pihole_v6_data(raw, top_queries, top_blocked, local_dns)
-                except Exception:
-                    pass
+        # Fetch local CNAME records (v6)
+        try:
+            cname_resp = await client.get(
+                f"{self.base}/api/config/dns/cnameRecords", headers=headers)
+            if cname_resp.status_code == 200:
+                cnames = cname_resp.json().get("config", {}).get("dns", {}).get("cnameRecords", [])
+                for entry in cnames:
+                    if isinstance(entry, str) and "," in entry:
+                        domain, target = entry.split(",", 1)
+                        local_dns.append({"domain": domain, "ip": target, "type": "CNAME"})
+        except Exception:
+            pass
 
-            # Fall back to v5
-            params: dict = {"summaryRaw": ""}
-            if self.api_key:
-                params["auth"] = self.api_key
+        try:
+            await client.delete(f"{self.base}/api/auth", headers=headers)
+        except Exception:
+            pass
 
-            resp = await client.get(f"{self.base}/admin/api.php", params=params)
-            resp.raise_for_status()
-            raw = resp.json()
+        return parse_pihole_v6_data(raw, top_queries, top_blocked, local_dns)
 
-            if not raw or "status" not in raw:
-                raise ValueError(f"Unexpected Pi-hole v5 response: {raw}")
+    async def _try_v5(self, client: httpx.AsyncClient) -> dict:
+        """Attempt Pi-hole v5 API."""
+        params: dict = {"summaryRaw": ""}
+        if self.api_key:
+            params["auth"] = self.api_key
 
-            top_queries = []
-            top_blocked = []
-            if self.api_key:
-                tq_params = {"topItems": 10, "auth": self.api_key}
-            else:
-                tq_params = {"topItems": 10}
+        resp = await client.get(f"{self.base}/admin/api.php", params=params)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        if not raw or "status" not in raw:
+            raise ValueError(f"Unexpected Pi-hole v5 response: {raw}")
+
+        top_queries = []
+        top_blocked = []
+        if self.api_key:
+            tq_params = {"topItems": 10, "auth": self.api_key}
+        else:
+            tq_params = {"topItems": 10}
+        try:
+            tq_resp = await client.get(f"{self.base}/admin/api.php", params=tq_params)
+            if tq_resp.status_code == 200:
+                tq_data = tq_resp.json()
+                tq_raw = tq_data.get("top_queries") or {}
+                tb_raw = tq_data.get("top_ads") or {}
+                top_queries = [{"domain": d, "count": c}
+                               for d, c in sorted(tq_raw.items(), key=lambda x: -x[1])][:10]
+                top_blocked = [{"domain": d, "count": c}
+                               for d, c in sorted(tb_raw.items(), key=lambda x: -x[1])][:10]
+        except Exception:
+            pass
+
+        # Fetch local DNS records (v5)
+        local_dns = []
+        if self.api_key:
             try:
-                tq_resp = await client.get(f"{self.base}/admin/api.php", params=tq_params)
-                if tq_resp.status_code == 200:
-                    tq_data = tq_resp.json()
-                    tq_raw = tq_data.get("top_queries") or {}
-                    tb_raw = tq_data.get("top_ads") or {}
-                    top_queries = [{"domain": d, "count": c}
-                                   for d, c in sorted(tq_raw.items(), key=lambda x: -x[1])][:10]
-                    top_blocked = [{"domain": d, "count": c}
-                                   for d, c in sorted(tb_raw.items(), key=lambda x: -x[1])][:10]
+                dns_params = {"customdns": "", "action": "get", "auth": self.api_key}
+                dns_resp = await client.get(f"{self.base}/admin/api.php", params=dns_params)
+                if dns_resp.status_code == 200:
+                    dns_data = dns_resp.json()
+                    for entry in dns_data.get("data", []):
+                        if isinstance(entry, list) and len(entry) >= 2:
+                            local_dns.append({"domain": entry[0], "ip": entry[1]})
+            except Exception:
+                pass
+            # Also try CNAME records
+            try:
+                cname_params = {"customcname": "", "action": "get", "auth": self.api_key}
+                cname_resp = await client.get(f"{self.base}/admin/api.php", params=cname_params)
+                if cname_resp.status_code == 200:
+                    cname_data = cname_resp.json()
+                    for entry in cname_data.get("data", []):
+                        if isinstance(entry, list) and len(entry) >= 2:
+                            local_dns.append({"domain": entry[0], "ip": entry[1], "type": "CNAME"})
             except Exception:
                 pass
 
-            # Fetch local DNS records (v5)
-            local_dns = []
-            if self.api_key:
-                try:
-                    dns_params = {"customdns": "", "action": "get", "auth": self.api_key}
-                    dns_resp = await client.get(f"{self.base}/admin/api.php", params=dns_params)
-                    if dns_resp.status_code == 200:
-                        dns_data = dns_resp.json()
-                        for entry in dns_data.get("data", []):
-                            if isinstance(entry, list) and len(entry) >= 2:
-                                local_dns.append({"domain": entry[0], "ip": entry[1]})
-                except Exception:
-                    pass
-                # Also try CNAME records
-                try:
-                    cname_params = {"customcname": "", "action": "get", "auth": self.api_key}
-                    cname_resp = await client.get(f"{self.base}/admin/api.php", params=cname_params)
-                    if cname_resp.status_code == 200:
-                        cname_data = cname_resp.json()
-                        for entry in cname_data.get("data", []):
-                            if isinstance(entry, list) and len(entry) >= 2:
-                                local_dns.append({"domain": entry[0], "ip": entry[1], "type": "CNAME"})
-                except Exception:
-                    pass
+        return parse_pihole_data(raw, top_queries, top_blocked, local_dns)
 
-            return parse_pihole_data(raw, top_queries, top_blocked, local_dns)
+    async def fetch_all(self) -> dict:
+        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
+            # Try v6 first (check if /api/auth endpoint exists)
+            v6_error = None
+            try:
+                result = await self._try_v6(client)
+                if result is not None:
+                    return result
+            except Exception as exc:
+                v6_error = exc
+                log.debug("Pi-hole v6 attempt failed: %s", exc)
+
+            # Fall back to v5
+            try:
+                return await self._try_v5(client)
+            except Exception as v5_error:
+                # If both fail, report the most relevant error
+                if v6_error:
+                    raise ValueError(
+                        f"Pi-hole v6 failed: {v6_error}; v5 fallback also failed: {v5_error}"
+                    ) from v5_error
+                raise
+
 
     async def health_check(self) -> bool:
         try:

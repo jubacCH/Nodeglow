@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useHost, useHostHistory } from '@/hooks/queries/useHosts';
 import { formatLatency, uptimeColor } from '@/lib/utils';
 import { EChart } from '@/components/charts/EChart';
-import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi } from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -26,6 +26,13 @@ interface SyslogEntry {
   message: string;
 }
 
+interface DiskInfo {
+  mount: string;
+  total_gb: number;
+  used_gb: number;
+  pct: number;
+}
+
 interface AgentMetrics {
   agent_id: number;
   agent_name: string;
@@ -38,8 +45,19 @@ interface AgentMetrics {
   mem_used_mb: number | null;
   mem_total_mb: number | null;
   disk_pct: number | null;
+  load_1: number | null;
+  load_5: number | null;
+  load_15: number | null;
   uptime_s: number | null;
+  rx_bytes: number | null;
+  tx_bytes: number | null;
   snapshot_time: string | null;
+  extra: {
+    disks?: DiskInfo[];
+    network?: { rx_bytes?: number; tx_bytes?: number; rx_rate?: number; tx_rate?: number };
+    cpu_pct?: number;
+    [key: string]: unknown;
+  } | null;
 }
 
 const sevLabels: Record<number, string> = {
@@ -73,6 +91,14 @@ function formatUptime(seconds: number | null): string {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function MetricCard({ icon: Icon, label, value, pct, sub, color }: {
@@ -203,7 +229,7 @@ export default function HostDetailPage() {
       {/* Tab content */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
-          {/* Agent Metrics (CPU / RAM / Disk / Uptime) */}
+          {/* Agent Metrics */}
           {agent && (
             <div>
               <h3 className="text-sm font-medium text-slate-300 mb-3">System Metrics</h3>
@@ -238,8 +264,49 @@ export default function HostDetailPage() {
                   value={formatUptime(agent.uptime_s)}
                   color="text-emerald-400"
                 />
+                {(agent.load_1 != null) && (
+                  <MetricCard
+                    icon={Activity}
+                    label="Load Average"
+                    value={`${agent.load_1.toFixed(2)}`}
+                    sub={[agent.load_1, agent.load_5, agent.load_15].filter(v => v != null).map(v => v!.toFixed(2)).join(' / ')}
+                    color="text-orange-400"
+                  />
+                )}
+                {(agent.rx_bytes != null || agent.tx_bytes != null) && (
+                  <MetricCard
+                    icon={Network}
+                    label="Network I/O"
+                    value={`${formatBytes(agent.rx_bytes)}`}
+                    sub={`TX: ${formatBytes(agent.tx_bytes)}`}
+                    color="text-cyan-400"
+                  />
+                )}
               </div>
             </div>
+          )}
+
+          {/* All Disks (from agent extra data) */}
+          {agent?.extra?.disks && agent.extra.disks.length > 1 && (
+            <GlassCard className="p-4">
+              <h3 className="text-sm font-medium text-slate-300 mb-3">Disk Usage</h3>
+              <div className="space-y-3">
+                {agent.extra.disks.map((disk: DiskInfo) => (
+                  <div key={disk.mount}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-slate-400 font-mono">{disk.mount}</span>
+                      <span className="text-xs text-slate-400">
+                        {disk.used_gb?.toFixed(1)} / {disk.total_gb?.toFixed(1)} GB
+                        <span className={`ml-2 font-mono ${pctTextColor(disk.pct)}`}>{disk.pct?.toFixed(1)}%</span>
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-white/[0.06] overflow-hidden">
+                      <div className={`h-full rounded-full ${pctColor(disk.pct)}`} style={{ width: `${Math.min(disk.pct, 100)}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </GlassCard>
           )}
 
           {/* Agent Info */}
@@ -265,6 +332,35 @@ export default function HostDetailPage() {
                     {agent.last_seen ? new Date(agent.last_seen).toLocaleString() : '—'}
                   </span>
                 </div>
+                {agent.snapshot_time && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-slate-400">Snapshot</span>
+                    <span className="text-sm text-slate-200">
+                      {new Date(agent.snapshot_time).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </GlassCard>
+          )}
+
+          {/* Integration Data */}
+          {host?.integration && (
+            <GlassCard className="p-4">
+              <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                <Wifi size={14} className="text-violet-400" />
+                Integration: {host.integration.type} — {host.integration.config_name}
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2">
+                {Object.entries(host.integration.data as Record<string, unknown>).map(([key, val]) => {
+                  if (val == null || typeof val === 'object') return null;
+                  return (
+                    <div key={key} className="flex justify-between">
+                      <span className="text-xs text-slate-500">{key.replace(/_/g, ' ')}</span>
+                      <span className="text-xs text-slate-300 font-mono truncate max-w-[60%]">{String(val)}</span>
+                    </div>
+                  );
+                })}
               </div>
             </GlassCard>
           )}
