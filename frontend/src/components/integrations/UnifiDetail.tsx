@@ -2,38 +2,64 @@
 
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
-import { formatUptime } from '@/lib/utils';
+
+interface UnifiPort {
+  port_idx: number;
+  name?: string;
+  up: boolean;
+  speed: number;
+  full_duplex?: boolean;
+  poe_enable?: boolean;
+}
 
 interface UnifiDevice {
   name: string;
   model: string;
   mac: string;
   ip: string;
-  uptime_s: number;
-  clients: number;
-  type: string;
-}
-
-interface UnifiClient {
-  hostname: string;
-  mac: string;
-  ip: string;
-  signal: number;
-  speed: number;
-  uptime_s: number;
-  is_wired: boolean;
-}
-
-interface UnifiNetwork {
-  total_devices: number;
-  wired_clients: number;
-  wireless_clients: number;
+  type_label: string;
+  state: number;
+  version: string;
+  cpu_pct: number;
+  mem_pct: number;
+  clients_wifi: number;
+  clients_wired: number;
+  rx_bytes: number;
+  tx_bytes: number;
+  satisfaction: number;
+  has_ports: boolean;
+  port_table?: UnifiPort[];
 }
 
 interface UnifiData {
   devices: UnifiDevice[];
-  clients: UnifiClient[];
-  network: UnifiNetwork;
+}
+
+function barColor(pct: number): string {
+  if (pct >= 90) return 'bg-red-500';
+  if (pct >= 75) return 'bg-amber-500';
+  return 'bg-emerald-500';
+}
+
+function ProgressBar({ label, pct }: { label: string; pct: number }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-xs text-slate-400">
+        <span>{label}</span>
+        <span>{pct.toFixed(1)}%</span>
+      </div>
+      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
@@ -45,41 +71,46 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function signalBadge(signal: number): string {
-  if (signal >= -50) return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
-  if (signal >= -70) return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
-  return 'bg-red-500/20 text-red-400 border-red-500/30';
-}
-
 export function UnifiDetail({ data }: { data: UnifiData }) {
-  const { devices, clients, network } = data;
+  const devices = data.devices ?? [];
+  const totalWifi = devices.reduce((sum, d) => sum + (d.clients_wifi ?? 0), 0);
+  const totalWired = devices.reduce((sum, d) => sum + (d.clients_wired ?? 0), 0);
 
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <StatCard label="Devices" value={network?.total_devices ?? devices?.length ?? 0} />
-        <StatCard label="Wired Clients" value={network?.wired_clients ?? 0} />
-        <StatCard label="Wireless Clients" value={network?.wireless_clients ?? 0} />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard label="Devices" value={devices.length} />
+        <StatCard label="WiFi Clients" value={totalWifi} />
+        <StatCard label="Wired Clients" value={totalWired} />
+        <StatCard label="Total Clients" value={totalWifi + totalWired} />
       </div>
 
       {/* Device cards */}
-      {devices && devices.length > 0 && (
+      {devices.length > 0 && (
         <div>
           <h3 className="text-sm font-medium text-slate-300 mb-3">Devices</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {devices.map((d) => (
-              <GlassCard key={d.mac} className="p-4 space-y-2">
+              <GlassCard key={d.mac} className="p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-200">{d.name || d.mac}</span>
-                  <Badge>{d.type}</Badge>
+                  <Badge>{d.type_label}</Badge>
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-400">
                   <span>Model</span><span className="text-slate-300">{d.model}</span>
                   <span>IP</span><span className="text-slate-300 font-mono">{d.ip}</span>
-                  <span>MAC</span><span className="text-slate-300 font-mono">{d.mac}</span>
-                  <span>Clients</span><span className="text-slate-300">{d.clients}</span>
-                  <span>Uptime</span><span className="text-slate-300">{formatUptime(d.uptime_s)}</span>
+                  <span>Version</span><span className="text-slate-300">{d.version}</span>
+                  <span>WiFi</span><span className="text-slate-300">{d.clients_wifi}</span>
+                  <span>Wired</span><span className="text-slate-300">{d.clients_wired}</span>
+                  <span>Satisfaction</span>
+                  <span className="text-slate-300">{d.satisfaction >= 0 ? `${d.satisfaction}%` : '—'}</span>
+                  <span>RX</span><span className="text-slate-300">{formatBytes(d.rx_bytes)}</span>
+                  <span>TX</span><span className="text-slate-300">{formatBytes(d.tx_bytes)}</span>
+                </div>
+                <div className="space-y-2">
+                  <ProgressBar label="CPU" pct={d.cpu_pct} />
+                  <ProgressBar label="Memory" pct={d.mem_pct} />
                 </div>
               </GlassCard>
             ))}
@@ -87,48 +118,34 @@ export function UnifiDetail({ data }: { data: UnifiData }) {
         </div>
       )}
 
-      {/* Client table */}
-      {clients && clients.length > 0 && (
-        <GlassCard className="overflow-hidden">
+      {/* Port tables for switches */}
+      {devices.filter((d) => d.has_ports && d.port_table && d.port_table.length > 0).map((d) => (
+        <GlassCard key={`ports-${d.mac}`} className="overflow-hidden">
           <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-medium text-slate-300">Clients ({clients.length})</h3>
+            <h3 className="text-sm font-medium text-slate-300">
+              Ports &mdash; {d.name || d.mac}
+            </h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
+                  <th className="px-4 py-2 text-left">Port</th>
                   <th className="px-4 py-2 text-left">Name</th>
-                  <th className="px-4 py-2 text-left">MAC</th>
-                  <th className="px-4 py-2 text-left">IP</th>
-                  <th className="px-4 py-2 text-left">Type</th>
-                  <th className="px-4 py-2 text-right">Signal</th>
+                  <th className="px-4 py-2 text-center">Status</th>
                   <th className="px-4 py-2 text-right">Speed</th>
-                  <th className="px-4 py-2 text-right">Uptime</th>
                 </tr>
               </thead>
               <tbody>
-                {clients.map((c) => (
-                  <tr key={c.mac} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-slate-200">{c.hostname || '—'}</td>
-                    <td className="px-4 py-2 font-mono text-slate-400">{c.mac}</td>
-                    <td className="px-4 py-2 font-mono text-slate-400">{c.ip}</td>
-                    <td className="px-4 py-2">
-                      <Badge>{c.is_wired ? 'Wired' : 'WiFi'}</Badge>
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      {c.is_wired ? (
-                        <span className="text-slate-500">—</span>
-                      ) : (
-                        <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium border ${signalBadge(c.signal)}`}>
-                          {c.signal} dBm
-                        </span>
-                      )}
+                {d.port_table!.map((p) => (
+                  <tr key={p.port_idx} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
+                    <td className="px-4 py-2 text-slate-300">{p.port_idx}</td>
+                    <td className="px-4 py-2 text-slate-400">{p.name || '—'}</td>
+                    <td className="px-4 py-2 text-center">
+                      <span className={`inline-block w-2 h-2 rounded-full ${p.up ? 'bg-emerald-400' : 'bg-slate-600'}`} />
                     </td>
                     <td className="px-4 py-2 text-right text-slate-400">
-                      {c.speed ? `${c.speed} Mbps` : '—'}
-                    </td>
-                    <td className="px-4 py-2 text-right text-slate-400">
-                      {c.uptime_s > 0 ? formatUptime(c.uptime_s) : '—'}
+                      {p.up && p.speed ? `${p.speed} Mbps` : '—'}
                     </td>
                   </tr>
                 ))}
@@ -136,7 +153,7 @@ export function UnifiDetail({ data }: { data: UnifiData }) {
             </table>
           </div>
         </GlassCard>
-      )}
+      ))}
     </div>
   );
 }

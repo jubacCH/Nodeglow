@@ -142,10 +142,10 @@ export default function UsersPage() {
                       <select
                         value={u.role}
                         onChange={(e) => handleRoleChange(u.id, e.target.value)}
-                        className="bg-transparent border border-white/[0.08] rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+                        className="bg-[#111621] border border-white/[0.08] rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
                       >
                         {ROLES.map((r) => (
-                          <option key={r} value={r} className="bg-[#111621]">{r}</option>
+                          <option key={r} value={r} className="bg-[#111621] text-slate-200">{r}</option>
                         ))}
                       </select>
                     </td>
@@ -208,10 +208,10 @@ export default function UsersPage() {
             <select
               value={newUser.role}
               onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
-              className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+              className="w-full px-3 py-2 rounded-md bg-[#111621] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
             >
               {ROLES.map((r) => (
-                <option key={r} value={r} className="bg-[#111621]">{r}</option>
+                <option key={r} value={r} className="bg-[#111621] text-slate-200">{r}</option>
               ))}
             </select>
           </div>
