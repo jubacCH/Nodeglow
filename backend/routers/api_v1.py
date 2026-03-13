@@ -263,8 +263,14 @@ async def get_host(
                 "mem_used_mb": snap.mem_used_mb if snap else None,
                 "mem_total_mb": snap.mem_total_mb if snap else None,
                 "disk_pct": snap.disk_pct if snap else None,
+                "load_1": snap.load_1 if snap else None,
+                "load_5": snap.load_5 if snap else None,
+                "load_15": snap.load_15 if snap else None,
                 "uptime_s": snap.uptime_s if snap else None,
+                "rx_bytes": snap.rx_bytes if snap else None,
+                "tx_bytes": snap.tx_bytes if snap else None,
                 "snapshot_time": snap.timestamp.isoformat() if snap else None,
+                "extra": json.loads(snap.data_json) if snap and snap.data_json else None,
             }
 
     # Integration snapshots (for non-agent hosts with integration data)

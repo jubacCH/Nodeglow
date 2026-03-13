@@ -1,11 +1,15 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useAgents } from '@/hooks/queries/useAgents';
+import { get } from '@/lib/api';
+import { Plus, X, Copy, Check, Terminal, Monitor } from 'lucide-react';
 import Link from 'next/link';
 
 function MetricBar({ label, value }: { label: string; value: number | null }) {
@@ -24,15 +28,134 @@ function MetricBar({ label, value }: { label: string; value: number | null }) {
   );
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="p-1.5 rounded hover:bg-white/10 transition-colors text-slate-400 hover:text-slate-200"
+      title="Copy"
+    >
+      {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+    </button>
+  );
+}
+
+interface EnrollmentInfo {
+  enrollment_key: string;
+  server_url: string;
+  install_linux: string;
+  install_windows: string;
+}
+
+function AddAgentDialog({ onClose }: { onClose: () => void }) {
+  const [info, setInfo] = useState<EnrollmentInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<'linux' | 'windows'>('linux');
+
+  useEffect(() => {
+    get<EnrollmentInfo>('/api/agent/enrollment-info')
+      .then(setInfo)
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <GlassCard className="p-6 mb-6 border border-sky-500/20">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-medium text-slate-200">Add New Agent</h3>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
+          <X size={16} />
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-48" />
+          <Skeleton className="h-20 w-full" />
+        </div>
+      ) : info ? (
+        <div className="space-y-4">
+          <p className="text-sm text-slate-400">
+            Run one of the following commands on the target machine to install and register the agent automatically.
+          </p>
+
+          <div className="flex gap-1 border-b border-white/[0.06]">
+            <button
+              onClick={() => setTab('linux')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
+                tab === 'linux' ? 'text-sky-400 border-b-2 border-sky-400' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Terminal size={12} /> Linux
+            </button>
+            <button
+              onClick={() => setTab('windows')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
+                tab === 'windows' ? 'text-sky-400 border-b-2 border-sky-400' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Monitor size={12} /> Windows
+            </button>
+          </div>
+
+          <div className="relative">
+            <pre className="bg-black/40 border border-white/[0.06] rounded-lg p-4 pr-10 text-sm font-mono text-emerald-400 overflow-x-auto whitespace-pre-wrap break-all">
+              {tab === 'linux' ? info.install_linux : info.install_windows}
+            </pre>
+            <div className="absolute top-2 right-2">
+              <CopyButton text={tab === 'linux' ? info.install_linux : info.install_windows} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Server URL</label>
+              <code className="text-xs text-slate-300 font-mono bg-white/[0.04] px-2 py-1 rounded block truncate">
+                {info.server_url}
+              </code>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Enrollment Key</label>
+              <div className="flex items-center gap-1">
+                <code className="text-xs text-slate-300 font-mono bg-white/[0.04] px-2 py-1 rounded flex-1 truncate">
+                  {info.enrollment_key}
+                </code>
+                <CopyButton text={info.enrollment_key} />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-red-400">Failed to load enrollment info</p>
+      )}
+    </GlassCard>
+  );
+}
+
 export default function AgentsPage() {
   const { data: agents, isLoading } = useAgents();
+  const [showAdd, setShowAdd] = useState(false);
 
   return (
     <div>
       <PageHeader
         title="Agents"
         description="Deployed monitoring agents"
+        actions={
+          <Button size="sm" onClick={() => setShowAdd(true)}>
+            <Plus size={16} />
+            Add Agent
+          </Button>
+        }
       />
+
+      {showAdd && <AddAgentDialog onClose={() => setShowAdd(false)} />}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {isLoading &&
