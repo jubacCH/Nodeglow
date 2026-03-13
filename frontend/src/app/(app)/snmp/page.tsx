@@ -546,10 +546,10 @@ function AddHostModal({
         {/* host select */}
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">Host</label>
-          <select value={hostId} onChange={(e) => setHostId(e.target.value)} className={inputCls} required>
-            <option value="">Select a host...</option>
+          <select value={hostId} onChange={(e) => setHostId(e.target.value)} className={`${inputCls} !bg-[#111621]`} required>
+            <option value="" className="bg-[#111621] text-slate-200">Select a host...</option>
             {availableHosts.map((h) => (
-              <option key={h.id} value={h.id}>
+              <option key={h.id} value={h.id} className="bg-[#111621] text-slate-200">
                 {h.name} ({h.hostname})
               </option>
             ))}
@@ -600,11 +600,11 @@ function AddHostModal({
         {/* preset */}
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">Preset</label>
-          <select value={preset} onChange={(e) => setPreset(e.target.value)} className={inputCls}>
-            <option value="standard">Standard (system + interfaces)</option>
-            <option value="minimal">Minimal (sysDescr only)</option>
-            <option value="full">Full (all common OIDs)</option>
-            <option value="custom">Custom OIDs</option>
+          <select value={preset} onChange={(e) => setPreset(e.target.value)} className={`${inputCls} !bg-[#111621]`}>
+            <option value="standard" className="bg-[#111621] text-slate-200">Standard (system + interfaces)</option>
+            <option value="minimal" className="bg-[#111621] text-slate-200">Minimal (sysDescr only)</option>
+            <option value="full" className="bg-[#111621] text-slate-200">Full (all common OIDs)</option>
+            <option value="custom" className="bg-[#111621] text-slate-200">Custom OIDs</option>
           </select>
         </div>
 
@@ -670,11 +670,11 @@ function OidBrowserTab() {
               setMibFilter(e.target.value);
               setSearchTriggered(false);
             }}
-            className={`${inputCls} max-w-[200px]`}
+            className={`${inputCls} !bg-[#111621] max-w-[200px]`}
           >
-            <option value="">All MIBs</option>
+            <option value="" className="bg-[#111621] text-slate-200">All MIBs</option>
             {mibNames.map((n) => (
-              <option key={n} value={n}>
+              <option key={n} value={n} className="bg-[#111621] text-slate-200">
                 {n}
               </option>
             ))}

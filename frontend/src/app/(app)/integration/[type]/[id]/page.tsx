@@ -13,6 +13,9 @@ import { UnifiDetail } from '@/components/integrations/UnifiDetail';
 import { PiholeDetail } from '@/components/integrations/PiholeDetail';
 import { PortainerDetail } from '@/components/integrations/PortainerDetail';
 import { SynologyDetail } from '@/components/integrations/SynologyDetail';
+import { UnasDetail } from '@/components/integrations/UnasDetail';
+import { SpeedtestDetail } from '@/components/integrations/SpeedtestDetail';
+import { PhpipamDetail } from '@/components/integrations/PhpipamDetail';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 
@@ -23,6 +26,9 @@ const detailComponents: Record<string, React.ComponentType<{ data: any }>> = {
   pihole: PiholeDetail,
   portainer: PortainerDetail,
   synology: SynologyDetail,
+  unas: UnasDetail,
+  speedtest: SpeedtestDetail,
+  phpipam: PhpipamDetail,
 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

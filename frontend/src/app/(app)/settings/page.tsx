@@ -928,9 +928,9 @@ export default function SettingsPage() {
                 value={newKeyRole}
                 onChange={(e) => setNewKeyRole(e.target.value as 'readonly' | 'editor' | 'admin')}
               >
-                <option value="readonly">Read-only</option>
-                <option value="editor">Editor</option>
-                <option value="admin">Admin</option>
+                <option value="readonly" className="bg-[#111621] text-slate-200">Read-only</option>
+                <option value="editor" className="bg-[#111621] text-slate-200">Editor</option>
+                <option value="admin" className="bg-[#111621] text-slate-200">Admin</option>
               </select>
             </div>
             <div className="flex justify-end gap-2 pt-2">
