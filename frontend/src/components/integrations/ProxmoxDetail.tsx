@@ -33,7 +33,8 @@ interface ProxmoxNode {
 }
 
 interface ProxmoxGuest {
-  vmid: number;
+  id: number;
+  vmid?: number;
   name: string;
   status: string;
   node: string;
@@ -142,11 +143,11 @@ export function ProxmoxDetail({ data }: { data: ProxmoxData }) {
               </thead>
               <tbody>
                 {allGuests.map((g) => (
-                  <tr key={`${g.guestType}-${g.vmid}`} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
+                  <tr key={`${g.guestType}-${g.id}`} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
                     <td className="px-4 py-2">
                       <Badge>{g.guestType}</Badge>
                     </td>
-                    <td className="px-4 py-2 text-slate-400">{g.vmid}</td>
+                    <td className="px-4 py-2 text-slate-400">{g.id}</td>
                     <td className="px-4 py-2 text-slate-200"><Link href={'/hosts?q=' + encodeURIComponent(g.name)} className="text-sky-400 hover:underline">{g.name}</Link></td>
                     <td className="px-4 py-2">
                       <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium border ${guestStatusColor(g.status)}`}>
