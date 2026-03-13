@@ -36,7 +36,7 @@ export default function UsersPage() {
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['users'],
-    queryFn: () => get<UserInfo[]>('/api/v1/users'),
+    queryFn: () => get<UserInfo[]>('/api/users'),
     enabled: isAdmin,
   });
 

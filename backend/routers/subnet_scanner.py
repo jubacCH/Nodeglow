@@ -143,7 +143,7 @@ async def auto_add_hosts(db: AsyncSession, scan_results: list[dict]) -> tuple[in
 # ── Routes – Page ────────────────────────────────────────────────────────────
 
 
-@router.get("/subnet-scanner")
+@router.get("/api/subnet-scanner/page-data")
 async def subnet_scanner_page(request: Request, db: AsyncSession = Depends(get_db)):
     q = await db.execute(
         select(SubnetScanSchedule).order_by(SubnetScanSchedule.created_at.desc())
@@ -165,10 +165,10 @@ async def subnet_scanner_page(request: Request, db: AsyncSession = Depends(get_d
             "id": s.id,
             "name": s.name,
             "cidr": s.cidr,
-            "interval_m": s.interval_minutes,
-            "auto_add": getattr(s, "auto_add", False),
+            "interval_m": s.interval_m,
+            "auto_add": s.auto_add,
             "enabled": s.enabled,
-            "last_run": str(s.last_run) if s.last_run else None,
+            "last_run": str(s.last_scan) if s.last_scan else None,
         }
         for s in schedules
     ])

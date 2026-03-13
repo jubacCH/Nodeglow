@@ -10,15 +10,12 @@ const nextConfig = {
       { source: '/hosts/api/:path*', destination: `${backend}/hosts/api/:path*` },
       { source: '/syslog/api/:path*', destination: `${backend}/syslog/api/:path*` },
       { source: '/syslog/stream', destination: `${backend}/syslog/stream` },
-      { source: '/syslog/templates', destination: `${backend}/syslog/templates` },
       { source: '/health', destination: `${backend}/health` },
       { source: '/ws/:path*', destination: `${backend}/ws/:path*` },
       { source: '/setup', destination: `${backend}/setup` },
       { source: '/setup/:path*', destination: `${backend}/setup/:path*` },
       { source: '/install/:path*', destination: `${backend}/install/:path*` },
       { source: '/static/:path*', destination: `${backend}/static/:path*` },
-      { source: '/snmp', destination: `${backend}/snmp` },
-      { source: '/subnet-scanner', destination: `${backend}/subnet-scanner` },
     ];
   },
 };

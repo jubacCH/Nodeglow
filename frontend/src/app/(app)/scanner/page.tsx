@@ -65,7 +65,7 @@ export default function ScannerPage() {
   /* --- queries --- */
   const { data: schedules, isLoading: schedulesLoading } = useQuery<Schedule[]>({
     queryKey: ['scanner-schedules'],
-    queryFn: () => get<Schedule[]>('/subnet-scanner'),
+    queryFn: () => get<Schedule[]>('/api/subnet-scanner/page-data'),
   });
 
   /* --- mutations --- */
