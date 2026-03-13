@@ -131,99 +131,67 @@ async def _get_nav_counts(db) -> dict:
 
 @app.middleware("http")
 async def inject_globals(request: Request, call_next):
-    if request.url.path.startswith("/static/") or request.url.path == "/health" \
-            or request.url.path.startswith("/api/agent/") or request.url.path.startswith("/api/v1/") \
-            or request.url.path.startswith("/api/v2/") or request.url.path.startswith("/api/auth/") \
-            or request.url.path.startswith("/api/docs") or request.url.path.startswith("/api/redoc") \
-            or request.url.path.startswith("/api/openapi") \
-            or request.url.path.startswith("/ws/") \
-            or request.url.path.startswith("/install/") or "/download/" in request.url.path:
+    # Skip auth entirely for these paths
+    _skip = (
+        request.url.path.startswith("/static/") or request.url.path == "/health"
+        or request.url.path.startswith("/api/agent/") or request.url.path.startswith("/api/v1/")
+        or request.url.path.startswith("/api/v2/") or request.url.path.startswith("/api/auth/")
+        or request.url.path.startswith("/api/docs") or request.url.path.startswith("/api/redoc")
+        or request.url.path.startswith("/api/openapi")
+        or request.url.path.startswith("/ws/")
+        or request.url.path.startswith("/install/") or "/download/" in request.url.path
+    )
+    if _skip:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
-    # CSRF protection for state-changing methods
-    from csrf import generate_csrf_token, set_csrf_cookie, validate_csrf, csrf_error_response
-    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-        # Skip CSRF for API endpoints that use their own auth (Bearer tokens, API keys)
-        if not request.url.path.startswith("/api/"):
-            content_type = request.headers.get("content-type", "")
-            form_data = None
-            if "form" in content_type:
-                # Parse CSRF token from raw body without consuming Starlette's form state
-                body = await request.body()
-                parsed = parse_qs(body.decode("utf-8", errors="replace"))
-                form_data = {k: v[0] for k, v in parsed.items()}
-            if not validate_csrf(request, form_data):
-                return csrf_error_response(request)
-        else:
-            # For /api/* endpoints: check CSRF header (set by fetch patch in app.js)
-            if not validate_csrf(request):
-                return csrf_error_response(request)
+    is_api = request.url.path.startswith("/api/")
 
-    PUBLIC_PATHS = {"/login", "/logout"}
-    is_public = request.url.path in PUBLIC_PATHS or request.url.path.startswith("/setup")
+    # CSRF protection for state-changing methods (skip for API — frontend sends x-csrf-token header)
+    if request.method in ("POST", "PUT", "DELETE", "PATCH") and not is_api:
+        from csrf import validate_csrf, csrf_error_response
+        content_type = request.headers.get("content-type", "")
+        form_data = None
+        if "form" in content_type:
+            body = await request.body()
+            parsed = parse_qs(body.decode("utf-8", errors="replace"))
+            form_data = {k: v[0] for k, v in parsed.items()}
+        if not validate_csrf(request, form_data):
+            return csrf_error_response(request)
 
-    # Redirect to setup wizard when no setup has been completed yet
+    is_public = request.url.path.startswith("/setup")
+
     if not is_public:
         from database import is_setup_complete as _is_setup, get_current_user, AsyncSessionLocal as _ASL
+        from fastapi.responses import JSONResponse as _JSON
         async with _ASL() as check_db:
             if not await _is_setup(check_db):
+                if is_api:
+                    return _JSON({"error": "Setup not complete"}, status_code=503)
                 from fastapi.responses import RedirectResponse as _RR
                 return _RR(url="/setup", status_code=302)
         async with _ASL() as auth_db:
             user = await get_current_user(request, auth_db)
         if user is None:
-            from fastapi.responses import RedirectResponse as _RR
-            return _RR(url="/login", status_code=302)
+            if is_api:
+                return _JSON({"error": "Unauthorized"}, status_code=401)
+            # Non-API requests pass through (Next.js serves the pages, handles auth client-side)
+            request.state.current_user = None
+            response = await call_next(request)
+            return response
         request.state.current_user = user
         role = getattr(user, "role", "admin") or "admin"
-        if (request.url.path.startswith("/settings") or request.url.path.startswith("/users")) \
-                and role != "admin":
-            from fastapi.responses import HTMLResponse as _HTML
-            return _HTML(
-                "<html><body style='background:#0b0d14;color:#e2e8f0;font-family:sans-serif;"
-                "display:flex;align-items:center;justify-content:center;height:100vh;'>"
-                "<div style='text-align:center'><p style='font-size:3rem;margin:0'>403</p>"
-                "<p style='color:#94a3b8'>Admin access required.</p>"
-                "<a href='/' style='color:#3b82f6;font-size:.875rem'>← Back</a></div></body></html>",
-                status_code=403,
-            )
-        if role == "readonly" and request.method in ("POST", "PUT", "DELETE", "PATCH"):
-            from fastapi.responses import HTMLResponse as _HTML
-            return _HTML(
-                "<html><body style='background:#0b0d14;color:#e2e8f0;font-family:sans-serif;"
-                "display:flex;align-items:center;justify-content:center;height:100vh;'>"
-                "<div style='text-align:center'><p style='font-size:3rem;margin:0'>403</p>"
-                "<p style='color:#94a3b8'>Read-only access — no changes allowed.</p>"
-                "<a href='/' style='color:#3b82f6;font-size:.875rem'>← Back</a></div></body></html>",
-                status_code=403,
-            )
+        if is_api:
+            if (request.url.path.startswith("/api/settings") or request.url.path.startswith("/api/users")) \
+                    and role != "admin":
+                return _JSON({"error": "Admin access required"}, status_code=403)
+            if role == "readonly" and request.method in ("POST", "PUT", "DELETE", "PATCH"):
+                return _JSON({"error": "Read-only access"}, status_code=403)
     else:
         request.state.current_user = None
 
-    from templating import current_tz
-    now = time.time()
-    if now - _settings_cache["ts"] < _NAV_CACHE_TTL:
-        request.state.site_name = _settings_cache["site_name"]
-        tz_name = _settings_cache["timezone"]
-    else:
-        async with AsyncSessionLocal() as db:
-            _settings_cache["site_name"] = await get_setting(db, "site_name", "NODEGLOW")
-            _settings_cache["timezone"] = await get_setting(db, "timezone", "UTC")
-            _settings_cache["ts"] = now
-        request.state.site_name = _settings_cache["site_name"]
-        tz_name = _settings_cache["timezone"]
-
-    async with AsyncSessionLocal() as db:
-        request.state.nav_counts = await _get_nav_counts(db)
-    current_tz.set(tz_name)
-
-    # Generate CSRF token for templates
-    request.state.csrf_token = generate_csrf_token(request)
-
     response = await call_next(request)
-    set_csrf_cookie(request, response)
 
     # Security headers
     response.headers["X-Frame-Options"] = "DENY"

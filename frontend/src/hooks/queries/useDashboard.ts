@@ -131,7 +131,7 @@ export function useDashboard() {
   return useQuery({
     queryKey: ['dashboard'],
     queryFn: () =>
-      get<DashboardData>('/', ),
+      get<DashboardData>('/api/dashboard'),
     refetchInterval: 30_000,
   });
 }
