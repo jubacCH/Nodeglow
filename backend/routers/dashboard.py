@@ -886,8 +886,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except (json.JSONDecodeError, TypeError, IndexError):
         layout = DEFAULT_LAYOUT
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    ctx = {
         "host_stats": host_stats,
         "online_count": online_count,
         "offline_count": offline_count,
@@ -917,8 +916,15 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "heatmap_data": heatmap_data,
         "heatmap_days": heatmap_days,
         "nodeglow_uptime": nodeglow_uptime,
-        "active_page": "dashboard",
-    })
+    }
+
+    # JSON response for Next.js frontend
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse(ctx, headers={"Cache-Control": "no-cache"})
+
+    ctx["request"] = request
+    ctx["active_page"] = "dashboard"
+    return templates.TemplateResponse("dashboard.html", ctx)
 
 
 @router.post("/api/dashboard-layout")

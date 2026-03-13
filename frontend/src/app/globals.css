@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ng-bg: #0B0E14;
+  --ng-surface: #111621;
+  --ng-elevated: #1A1F2E;
+  --ng-border: #1E2433;
+  --ng-primary: #38BDF8;
+  --ng-accent: #A78BFA;
+  --ng-text-primary: #F1F5F9;
+  --ng-text-secondary: #94A3B8;
+  --ng-text-muted: #64748B;
+}
+
+body {
+  color: var(--ng-text-primary);
+  background: var(--ng-bg);
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Glass card styles */
+@layer components {
+  .glass-card {
+    @apply bg-white/[0.04] backdrop-blur-xl border border-white/[0.06] rounded-lg;
+  }
+  .glass-elevated {
+    @apply bg-white/[0.06] backdrop-blur-2xl border border-white/[0.08] shadow-2xl rounded-lg;
+  }
+  .ng-input {
+    @apply w-full px-3 py-2 text-sm rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500/50 transition-all;
+  }
+}
+
+/* Glow pulse animation */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 4px 1px currentColor; }
+  50% { box-shadow: 0 0 8px 3px currentColor; }
+}
+.animate-glow-pulse {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
