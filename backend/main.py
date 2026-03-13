@@ -72,6 +72,15 @@ app.add_middleware(
 )
 
 
+@app.get("/api/v2/nav-counts")
+async def nav_counts_api():
+    """Sidebar badge counts for the Next.js frontend."""
+    from database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        counts = await _get_nav_counts(db)
+    return counts
+
+
 @app.get("/health")
 async def health():
     from sqlalchemy import text as sa_text
@@ -124,7 +133,7 @@ async def _get_nav_counts(db) -> dict:
 async def inject_globals(request: Request, call_next):
     if request.url.path.startswith("/static/") or request.url.path == "/health" \
             or request.url.path.startswith("/api/agent/") or request.url.path.startswith("/api/v1/") \
-            or request.url.path.startswith("/api/auth/") \
+            or request.url.path.startswith("/api/v2/") or request.url.path.startswith("/api/auth/") \
             or request.url.path.startswith("/api/docs") or request.url.path.startswith("/api/redoc") \
             or request.url.path.startswith("/api/openapi") \
             or request.url.path.startswith("/ws/") \
