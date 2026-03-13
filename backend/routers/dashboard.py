@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from templating import templates, localtime
+from templating import localtime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,7 @@ DEFAULT_LAYOUT = [
     # Integration metadata is now sourced from the plugin registry (integrations.get_meta)
 
 
+@router.get("/api/dashboard")
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     if not await is_setup_complete(db):
@@ -886,45 +887,77 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except (json.JSONDecodeError, TypeError, IndexError):
         layout = DEFAULT_LAYOUT
 
+    # ── Serialize for JSON ────────────────────────────────────────────────────
+
+    def _host_dict(h):
+        return {"id": h.id, "name": h.name, "hostname": h.hostname,
+                "source": getattr(h, "source", ""), "check_type": getattr(h, "check_type", ""),
+                "maintenance": h.maintenance}
+
+    def _stat_dict(s):
+        return {
+            "host": _host_dict(s["host"]),
+            "online": s["online"], "latency": s["latency"],
+            "uptime_pct": s["uptime_pct"], "avg_latency": s["avg_latency"],
+            "last_check": str(s["last_check"]) if s["last_check"] else None,
+            "sparkline": s["sparkline"],
+            "effective_threshold": s["effective_threshold"],
+            "health_score": s["health_score"],
+        }
+
+    def _incident_dict(inc):
+        return {
+            "id": inc.id, "title": inc.title, "severity": inc.severity,
+            "status": inc.status, "created_at": str(inc.created_at),
+        }
+
+    for ih in integration_health:
+        if ih.get("cached_at"):
+            ih["cached_at"] = str(ih["cached_at"])
+        ih["single_instance"] = ih.get("single_instance", False)
+        ih["type"] = ih.get("type", "")
+
+    # Syslog rate chart data (24h hourly buckets)
+    syslog_rate_data = {"labels": [], "errors": [], "warnings": [], "info": []}
+    try:
+        for e in syslog_stats.get("error_trend", []):
+            syslog_rate_data["labels"].append(e["hour"])
+            syslog_rate_data["errors"].append(e["errors"])
+            syslog_rate_data["warnings"].append(e["warnings"])
+            syslog_rate_data["info"].append(0)
+    except Exception:
+        pass
+
     ctx = {
-        "host_stats": host_stats,
+        "host_stats": [_stat_dict(s) for s in host_stats],
         "online_count": online_count,
         "offline_count": offline_count,
         "total_count": len(active_stats),
-        "proxmox_clusters": proxmox_clusters,
-        "top_latency": top_latency,
-        "top_downtime": top_downtime,
-        "top_cpu": top_cpu,
-        "top_ram": top_ram,
-        "top_disk": top_disk,
-        "ping_host_map": ping_host_map,
-        "anomalies": anomalies,
-        "warnings": warnings,
         "integration_health": integration_health,
-        "active_incidents": active_incidents,
-        "syslog_stats": syslog_stats,
-        "topology": topology,
+        "active_incidents": len(active_incidents),
+        "syslog_stats": {
+            "total_24h": syslog_stats.get("total", 0),
+            "errors_24h": syslog_stats.get("error_rate_1h", 0),
+            "rate_data": syslog_rate_data,
+        },
         "layout": layout,
         "speedtest_data": speedtest_data,
-        "speedtest_history": speedtest_history,
         "storage_pools": storage_pools,
         "container_data": container_data,
         "ups_data": ups_data,
         "ssl_certs": ssl_certs,
-        "recent_incidents": recent_incidents,
+        "recent_incidents": [_incident_dict(inc) for inc in recent_incidents],
         "uptime_ranking": uptime_ranking,
         "heatmap_data": heatmap_data,
         "heatmap_days": heatmap_days,
+        "top_latency": [{"id": s["host"].id, "name": s["host"].name, "value": s["avg_latency"]}
+                        for s in top_latency],
+        "anomalies": anomalies,
+        "warnings": warnings,
         "nodeglow_uptime": nodeglow_uptime,
     }
 
-    # JSON response for Next.js frontend
-    if "application/json" in request.headers.get("accept", ""):
-        return JSONResponse(ctx, headers={"Cache-Control": "no-cache"})
-
-    ctx["request"] = request
-    ctx["active_page"] = "dashboard"
-    return templates.TemplateResponse("dashboard.html", ctx)
+    return JSONResponse(ctx, headers={"Cache-Control": "no-cache"})
 
 
 @router.post("/api/dashboard-layout")
