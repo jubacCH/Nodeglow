@@ -533,7 +533,7 @@ async def syslog_by_host(
 
 # ── Template Browser ──────────────────────────────────────────────────────────
 
-@router.get("/templates")
+@router.get("/api/templates")
 async def template_browser(
     request: Request,
     db: AsyncSession = Depends(get_db),

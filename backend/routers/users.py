@@ -13,7 +13,7 @@ api_router = APIRouter()
 VALID_ROLES = {"admin", "editor", "readonly"}
 
 
-@api_router.get("/api/v1/users")
+@api_router.get("/api/users")
 async def list_users_api(request: Request, db: AsyncSession = Depends(get_db)):
     """JSON user list for the frontend (session-authenticated)."""
     user = getattr(request.state, "current_user", None)

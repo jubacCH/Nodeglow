@@ -116,7 +116,7 @@ export default function SyslogTemplatesPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['syslog-templates'],
-    queryFn: () => get<TemplatesResponse>('/syslog/templates'),
+    queryFn: () => get<TemplatesResponse>('/syslog/api/templates'),
   });
 
   const templates = useMemo(() => data?.templates ?? [], [data?.templates]);

@@ -25,7 +25,7 @@ router = APIRouter()
 # ── SNMP Management Page ────────────────────────────────────────────────────
 
 
-@router.get("/snmp")
+@router.get("/api/snmp/page-data")
 async def snmp_page(request: Request, db: AsyncSession = Depends(get_db)):
     # MIBs
     q = await db.execute(select(SnmpMib).order_by(SnmpMib.name))
