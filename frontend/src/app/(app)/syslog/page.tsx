@@ -1,6 +1,7 @@
 'use client';
 
 import { PageHeader } from '@/components/layout/PageHeader';
+import { SyslogLiveTail } from '@/components/syslog/SyslogLiveTail';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useSyslog } from '@/hooks/queries/useSyslog';
@@ -31,6 +32,7 @@ const SEVERITY_COLORS: Record<number, string> = {
 export default function SyslogPage() {
   const [search, setSearch] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState<string | undefined>(undefined);
+  const [liveEnabled, setLiveEnabled] = useState(false);
   const { data: messages, isLoading } = useSyslog({
     severity: selectedSeverity,
     limit: 200,
@@ -43,9 +45,32 @@ export default function SyslogPage() {
 
   return (
     <div>
-      <PageHeader
-        title="Syslog"
-        description="Live syslog messages from all sources"
+      <div className="flex items-center justify-between mb-2">
+        <PageHeader
+          title="Syslog"
+          description="Live syslog messages from all sources"
+        />
+        <button
+          onClick={() => setLiveEnabled((v) => !v)}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+            liveEnabled
+              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+              : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
+          }`}
+        >
+          {liveEnabled && (
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+          )}
+          Live
+        </button>
+      </div>
+
+      <SyslogLiveTail
+        enabled={liveEnabled}
+        severity={selectedSeverity}
       />
 
       {/* Search bar */}

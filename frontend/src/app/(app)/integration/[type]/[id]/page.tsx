@@ -8,14 +8,31 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useIntegration } from '@/hooks/queries/useIntegrations';
+import { ProxmoxDetail } from '@/components/integrations/ProxmoxDetail';
+import { UnifiDetail } from '@/components/integrations/UnifiDetail';
+import { PiholeDetail } from '@/components/integrations/PiholeDetail';
+import { PortainerDetail } from '@/components/integrations/PortainerDetail';
+import { SynologyDetail } from '@/components/integrations/SynologyDetail';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const detailComponents: Record<string, React.ComponentType<{ data: any }>> = {
+  proxmox: ProxmoxDetail,
+  unifi: UnifiDetail,
+  pihole: PiholeDetail,
+  portainer: PortainerDetail,
+  synology: SynologyDetail,
+};
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export default function IntegrationDetailPage() {
   const params = useParams();
   const type = params.type as string;
   const id = Number(params.id);
   const { data: snapshot, isLoading } = useIntegration(id);
+
+  const DetailComponent = detailComponents[type];
 
   return (
     <div>
@@ -65,23 +82,29 @@ export default function IntegrationDetailPage() {
         </GlassCard>
       )}
 
-      {/* JSON data viewer */}
-      <GlassCard className="p-4">
-        <h3 className="text-sm font-medium text-slate-300 mb-3">Snapshot Data</h3>
-        {isLoading ? (
+      {/* Type-specific or generic detail */}
+      {isLoading ? (
+        <GlassCard className="p-4">
           <div className="space-y-2">
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-3/4" />
             <Skeleton className="h-4 w-1/2" />
           </div>
-        ) : snapshot?.data_json ? (
+        </GlassCard>
+      ) : snapshot?.data_json && DetailComponent ? (
+        <DetailComponent data={snapshot.data_json} />
+      ) : snapshot?.data_json ? (
+        <GlassCard className="p-4">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Snapshot Data</h3>
           <pre className="text-xs text-slate-300 font-mono bg-black/20 rounded-md p-4 overflow-auto max-h-[500px]">
             {JSON.stringify(snapshot.data_json, null, 2)}
           </pre>
-        ) : (
+        </GlassCard>
+      ) : (
+        <GlassCard className="p-4">
           <p className="text-sm text-slate-500">No data available</p>
-        )}
-      </GlassCard>
+        </GlassCard>
+      )}
     </div>
   );
 }
