@@ -457,6 +457,27 @@ async def agent_global_settings(request: Request):
     return RedirectResponse("/agents", status_code=302)
 
 
+# ── Enrollment info (JSON API for SPA) ────────────────────────────────────────
+
+@router.get("/api/agent/enrollment-info")
+async def enrollment_info(request: Request):
+    """Return enrollment key + install commands for SPA."""
+    async with AsyncSessionLocal() as db:
+        custom_url = await get_setting(db, "agent_server_url", "")
+    if custom_url:
+        server_url = custom_url
+    else:
+        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+        server_url = f"{scheme}://{request.url.netloc}"
+    key = await _get_enrollment_key()
+    return {
+        "enrollment_key": key,
+        "server_url": server_url,
+        "install_linux": f"curl -sSL {server_url}/install/linux | sudo bash",
+        "install_windows": f"irm {server_url}/install/windows | iex",
+    }
+
+
 # ── Install scripts (universal one-liner endpoints) ──────────────────────────
 
 @router.get("/install/linux")

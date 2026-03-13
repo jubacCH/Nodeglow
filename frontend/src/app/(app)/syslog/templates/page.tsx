@@ -28,14 +28,22 @@ interface TemplatesResponse {
   total: number;
 }
 
-interface FollowUpPattern {
-  template: string;
-  count: number;
-  avg_delay_sec: number;
+interface AftermathPattern {
+  template_hash: string;
+  example: string;
+  frequency: number;
+  percentage: number;
+  avg_severity: number;
 }
 
 interface RootCauseResponse {
-  follow_up_patterns: FollowUpPattern[];
+  total_count: number;
+  hosts_affected: number;
+  template: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  aftermath: AftermathPattern[];
+  sample_size: number;
 }
 
 type SortMode = 'recent' | 'frequent' | 'noisy' | 'newest';
@@ -76,7 +84,7 @@ function RootCausePanel({ templateHash }: { templateHash: string }) {
     );
   }
 
-  if (error || !data?.follow_up_patterns?.length) {
+  if (error || !data?.aftermath?.length) {
     return (
       <p className="py-3 text-xs text-slate-500">
         No follow-up patterns detected for this template.
@@ -84,22 +92,33 @@ function RootCausePanel({ templateHash }: { templateHash: string }) {
     );
   }
 
+  const sevLabel = (sev: number) => {
+    if (sev <= 2) return 'text-red-400';
+    if (sev <= 4) return 'text-amber-400';
+    return 'text-slate-400';
+  };
+
   return (
     <div className="space-y-2 py-2">
+      <div className="flex items-center gap-4 text-xs text-slate-500 mb-2">
+        <span>{data.total_count} occurrences (30d)</span>
+        <span>{data.hosts_affected} hosts affected</span>
+        {data.last_seen && <span>Last: {formatDate(data.last_seen)}</span>}
+      </div>
       <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
-        Follow-up patterns
+        What happens next ({data.sample_size} samples)
       </p>
-      {data.follow_up_patterns.map((p, i) => (
+      {data.aftermath.map((p, i) => (
         <div
           key={i}
           className="flex items-start gap-3 rounded-md bg-white/[0.03] border border-white/[0.04] px-3 py-2"
         >
           <div className="flex-1 min-w-0">
-            <p className="font-mono text-xs text-slate-300 break-all">{p.template}</p>
+            <p className="font-mono text-xs text-slate-300 break-all">{p.example}</p>
           </div>
           <div className="flex items-center gap-3 shrink-0 text-xs text-slate-500">
-            <span>{p.count}x</span>
-            <span>~{p.avg_delay_sec < 60 ? `${Math.round(p.avg_delay_sec)}s` : `${Math.round(p.avg_delay_sec / 60)}m`} delay</span>
+            <span>{p.frequency}x ({p.percentage}%)</span>
+            <span className={sevLabel(p.avg_severity)}>sev {p.avg_severity}</span>
           </div>
         </div>
       ))}
