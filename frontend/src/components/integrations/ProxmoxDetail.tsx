@@ -4,6 +4,7 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { formatUptime } from '@/lib/utils';
+import Link from 'next/link';
 
 interface ProxmoxTotals {
   nodes_online: number;
@@ -146,7 +147,7 @@ export function ProxmoxDetail({ data }: { data: ProxmoxData }) {
                       <Badge>{g.guestType}</Badge>
                     </td>
                     <td className="px-4 py-2 text-slate-400">{g.vmid}</td>
-                    <td className="px-4 py-2 text-slate-200">{g.name}</td>
+                    <td className="px-4 py-2 text-slate-200"><Link href={'/hosts?q=' + encodeURIComponent(g.name)} className="text-sky-400 hover:underline">{g.name}</Link></td>
                     <td className="px-4 py-2">
                       <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium border ${guestStatusColor(g.status)}`}>
                         {g.status}

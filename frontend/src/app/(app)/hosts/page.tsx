@@ -7,11 +7,24 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useHosts } from '@/hooks/queries/useHosts';
 import { formatLatency } from '@/lib/utils';
-import { Plus } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { useState } from 'react';
 
 export default function HostsPage() {
+  const searchParams = useSearchParams();
+  const [search, setSearch] = useState(searchParams.get('q') ?? '');
   const { data: hosts, isLoading } = useHosts();
+
+  const filteredHosts = hosts?.filter((host) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      host.name.toLowerCase().includes(q) ||
+      host.hostname.toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div>
@@ -19,10 +32,22 @@ export default function HostsPage() {
         title="Hosts"
         description="Monitor network hosts and services"
         actions={
-          <Button size="sm">
-            <Plus size={16} />
-            Add Host
-          </Button>
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                placeholder="Search hosts..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-8 pr-3 py-1.5 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
+              />
+            </div>
+            <Button size="sm">
+              <Plus size={16} />
+              Add Host
+            </Button>
+          </div>
         }
       />
 
@@ -51,7 +76,7 @@ export default function HostsPage() {
                     <td className="px-4 py-3"><Skeleton className="h-5 w-12" /></td>
                   </tr>
                 ))}
-              {hosts?.map((host) => (
+              {filteredHosts?.map((host) => (
                 <tr
                   key={host.id}
                   className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors cursor-pointer"

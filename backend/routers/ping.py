@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from templating import templates, localtime
 from sqlalchemy import cast, func, select, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -754,6 +754,36 @@ async def toggle_maintenance(
             host.maintenance_until = None
     await db.commit()
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)
+
+
+@router.post("/api/{host_id}/maintenance")
+async def toggle_maintenance_api(
+    host_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """JSON API for toggling maintenance mode on a host."""
+    host = await db.get(PingHost, host_id)
+    if not host:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    duration = body.get("duration", "")
+    if host.maintenance and not duration:
+        host.maintenance = False
+        host.maintenance_until = None
+    else:
+        host.maintenance = True
+        hours_map = {"1h": 1, "2h": 2, "4h": 4, "8h": 8, "24h": 24}
+        if duration in hours_map:
+            host.maintenance_until = datetime.utcnow() + timedelta(hours=hours_map[duration])
+        else:
+            host.maintenance_until = None
+    await db.commit()
+    return JSONResponse({"ok": True, "maintenance": host.maintenance})
 
 
 @router.get("/api/search")

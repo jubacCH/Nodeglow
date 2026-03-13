@@ -3,6 +3,7 @@
 import { GlassCard } from '@/components/ui/GlassCard';
 import { EChart } from '@/components/charts/EChart';
 import type { EChartsOption } from 'echarts';
+import Link from 'next/link';
 
 interface PiholeStats {
   total_queries: number;
@@ -98,7 +99,7 @@ export function PiholeDetail({ data }: { data: PiholeData }) {
           <div className="space-y-2">
             {(top_clients ?? []).slice(0, 10).map((entry, i) => (
               <div key={entry.client ?? i} className="flex items-center justify-between text-xs">
-                <span className="text-slate-300 truncate mr-2 font-mono">{entry.client}</span>
+                {entry.client ? <Link href={'/hosts?q=' + encodeURIComponent(entry.client)} className="text-sky-400 hover:underline truncate mr-2 font-mono">{entry.client}</Link> : <span className="text-slate-300 truncate mr-2 font-mono">—</span>}
                 <span className="text-slate-500 tabular-nums shrink-0">{formatNumber(entry.count)}</span>
               </div>
             ))}

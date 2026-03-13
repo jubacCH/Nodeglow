@@ -4,15 +4,36 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
 import { StatusDot } from '@/components/ui/StatusDot';
+import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useIncidents } from '@/hooks/queries/useAlerts';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { get, post } from '@/lib/api';
 import { useState } from 'react';
+import Link from 'next/link';
+import { Wrench, Clock } from 'lucide-react';
+
+interface MaintenanceHost {
+  id: number;
+  name: string;
+  hostname: string;
+  source: string;
+  maintenance: boolean;
+  maintenance_until?: string | null;
+}
 
 type Tab = 'alerts' | 'incidents' | 'maintenance';
 
 export default function AlertsPage() {
   const [activeTab, setActiveTab] = useState<Tab>('alerts');
+  const qc = useQueryClient();
   const { data: incidents, isLoading } = useIncidents();
+
+  const { data: maintHosts, isLoading: maintLoading } = useQuery({
+    queryKey: ['maintenance-hosts'],
+    queryFn: () => get<MaintenanceHost[]>('/api/v1/hosts?status=maintenance'),
+    enabled: activeTab === 'maintenance',
+  });
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'alerts', label: 'Alerts' },
@@ -21,6 +42,11 @@ export default function AlertsPage() {
   ];
 
   const openIncidents = incidents?.filter((i) => i.status === 'open') ?? [];
+
+  async function removeMaintenance(hostId: number) {
+    await post(`/hosts/api/${hostId}/maintenance`);
+    qc.invalidateQueries({ queryKey: ['maintenance-hosts'] });
+  }
 
   return (
     <div>
@@ -42,6 +68,16 @@ export default function AlertsPage() {
             }`}
           >
             {tab.label}
+            {tab.key === 'alerts' && openIncidents.length > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs bg-red-500/20 text-red-400">
+                {openIncidents.length}
+              </span>
+            )}
+            {tab.key === 'maintenance' && maintHosts && maintHosts.length > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs bg-amber-500/20 text-amber-400">
+                {maintHosts.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -59,19 +95,21 @@ export default function AlertsPage() {
               </GlassCard>
             ))}
           {openIncidents.map((inc) => (
-            <GlassCard key={inc.id} className="p-4">
-              <div className="flex items-center gap-3">
-                <StatusDot
-                  status={inc.severity === 'critical' ? 'offline' : inc.severity === 'warning' ? 'maintenance' : 'unknown'}
-                  pulse={inc.severity === 'critical'}
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-slate-200 truncate">{inc.title}</p>
-                  <p className="text-xs text-slate-500">{new Date(inc.created_at).toLocaleString()}</p>
+            <Link key={inc.id} href={`/incidents/${inc.id}`}>
+              <GlassCard className="p-4 hover:bg-white/[0.04] transition-colors cursor-pointer">
+                <div className="flex items-center gap-3">
+                  <StatusDot
+                    status={inc.severity === 'critical' ? 'offline' : inc.severity === 'warning' ? 'maintenance' : 'unknown'}
+                    pulse={inc.severity === 'critical'}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-200 truncate">{inc.title}</p>
+                    <p className="text-xs text-slate-500">{new Date(inc.created_at).toLocaleString()}</p>
+                  </div>
+                  <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>
                 </div>
-                <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>
-              </div>
-            </GlassCard>
+              </GlassCard>
+            </Link>
           ))}
           {!isLoading && openIncidents.length === 0 && (
             <GlassCard className="p-8">
@@ -90,24 +128,26 @@ export default function AlertsPage() {
               </GlassCard>
             ))}
           {incidents?.map((inc) => (
-            <GlassCard key={inc.id} className="p-4">
-              <div className="flex items-center gap-3">
-                <StatusDot
-                  status={
-                    inc.status === 'resolved' ? 'online' :
-                    inc.status === 'acknowledged' ? 'maintenance' : 'offline'
-                  }
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-slate-200 truncate">{inc.title}</p>
-                  <p className="text-xs text-slate-500">
-                    {inc.rule} &middot; {new Date(inc.created_at).toLocaleString()}
-                  </p>
+            <Link key={inc.id} href={`/incidents/${inc.id}`}>
+              <GlassCard className="p-4 hover:bg-white/[0.04] transition-colors cursor-pointer">
+                <div className="flex items-center gap-3">
+                  <StatusDot
+                    status={
+                      inc.status === 'resolved' ? 'online' :
+                      inc.status === 'acknowledged' ? 'maintenance' : 'offline'
+                    }
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-200 truncate">{inc.title}</p>
+                    <p className="text-xs text-slate-500">
+                      {inc.rule} &middot; {new Date(inc.created_at).toLocaleString()}
+                    </p>
+                  </div>
+                  <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>
+                  <Badge>{inc.status}</Badge>
                 </div>
-                <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>
-                <Badge>{inc.status}</Badge>
-              </div>
-            </GlassCard>
+              </GlassCard>
+            </Link>
           ))}
           {!isLoading && (!incidents || incidents.length === 0) && (
             <GlassCard className="p-8">
@@ -118,9 +158,47 @@ export default function AlertsPage() {
       )}
 
       {activeTab === 'maintenance' && (
-        <GlassCard className="p-8">
-          <p className="text-center text-sm text-slate-500">No maintenance windows configured</p>
-        </GlassCard>
+        <div className="space-y-3">
+          {maintLoading &&
+            Array.from({ length: 3 }).map((_, i) => (
+              <GlassCard key={i} className="p-4">
+                <Skeleton className="h-5 w-full" />
+              </GlassCard>
+            ))}
+          {maintHosts?.map((h) => (
+            <GlassCard key={h.id} className="p-4">
+              <div className="flex items-center gap-3">
+                <Wrench className="h-4 w-4 text-amber-400 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <Link href={`/hosts/${h.id}`} className="text-sm font-medium text-slate-200 hover:text-sky-400 transition-colors">
+                    {h.name}
+                  </Link>
+                  <p className="text-xs text-slate-500 font-mono">{h.hostname}</p>
+                </div>
+                {h.maintenance_until && (
+                  <span className="flex items-center gap-1 text-xs text-slate-400">
+                    <Clock className="h-3 w-3" />
+                    Until {new Date(h.maintenance_until).toLocaleString()}
+                  </span>
+                )}
+                <Badge>{h.source}</Badge>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeMaintenance(h.id)}
+                  className="text-xs text-amber-400 hover:text-amber-300"
+                >
+                  Remove
+                </Button>
+              </div>
+            </GlassCard>
+          ))}
+          {!maintLoading && (!maintHosts || maintHosts.length === 0) && (
+            <GlassCard className="p-8">
+              <p className="text-center text-sm text-slate-500">No hosts currently in maintenance mode</p>
+            </GlassCard>
+          )}
+        </div>
       )}
     </div>
   );
