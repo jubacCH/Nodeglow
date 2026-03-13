@@ -19,22 +19,20 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const form = new FormData();
-      form.set('username', username);
-      form.set('password', password);
-
-      const res = await fetch('/login', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
-        body: form,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
         credentials: 'include',
-        redirect: 'manual',
       });
 
-      if (res.type === 'opaqueredirect' || res.ok || res.status === 303) {
+      if (res.ok) {
         await fetchUser();
         router.push('/');
+        router.refresh();
       } else {
-        setError('Invalid username or password');
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Invalid username or password');
       }
     } catch {
       setError('Connection failed');

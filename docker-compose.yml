@@ -37,9 +37,10 @@ services:
     build: ./backend
     container_name: nodeglow
     ports:
-      - "8000:8000"
       - "514:1514/udp"    # Syslog UDP (host 514 → container 1514)
       - "1514:1514/tcp"   # Syslog TCP
+    expose:
+      - "8000"             # Internal only — frontend proxies all requests
     volumes:
       - ./data:/data
       - .:/opt/repo                                # Git repo (for self-update)
@@ -62,7 +63,7 @@ services:
     build: ./frontend
     container_name: nodeglow-frontend
     ports:
-      - "3000:3000"
+      - "8000:3000"
     environment:
       HOSTNAME: "0.0.0.0"
     depends_on:
