@@ -131,7 +131,7 @@ function MibLibraryTab() {
 
   const { data, isLoading } = useQuery<PageData>({
     queryKey: ['snmp-page'],
-    queryFn: () => get('/snmp'),
+    queryFn: () => get('/api/snmp/page-data'),
   });
 
   const mibs = data?.mibs ?? [];
@@ -356,7 +356,7 @@ function HostConfigsTab() {
 
   const { data, isLoading } = useQuery<PageData>({
     queryKey: ['snmp-page'],
-    queryFn: () => get('/snmp'),
+    queryFn: () => get('/api/snmp/page-data'),
   });
 
   const configs = data?.host_configs ?? [];
@@ -644,7 +644,7 @@ function OidBrowserTab() {
 
   const { data: pageData } = useQuery<PageData>({
     queryKey: ['snmp-page'],
-    queryFn: () => get('/snmp'),
+    queryFn: () => get('/api/snmp/page-data'),
   });
 
   const mibNames = (pageData?.mibs ?? []).map((m) => m.name);
