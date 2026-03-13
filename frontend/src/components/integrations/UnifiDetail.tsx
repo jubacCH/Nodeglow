@@ -2,6 +2,7 @@
 
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
+import Link from 'next/link';
 
 interface UnifiPort {
   port_idx: number;
@@ -99,7 +100,7 @@ export function UnifiDetail({ data }: { data: UnifiData }) {
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-400">
                   <span>Model</span><span className="text-slate-300">{d.model}</span>
-                  <span>IP</span><span className="text-slate-300 font-mono">{d.ip}</span>
+                  <span>IP</span><Link href={'/hosts?q=' + encodeURIComponent(d.ip)} className="text-sky-400 hover:underline font-mono">{d.ip}</Link>
                   <span>Version</span><span className="text-slate-300">{d.version}</span>
                   <span>WiFi</span><span className="text-slate-300">{d.clients_wifi}</span>
                   <span>Wired</span><span className="text-slate-300">{d.clients_wired}</span>

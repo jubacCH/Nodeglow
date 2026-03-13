@@ -1,6 +1,7 @@
 'use client';
 
 import { GlassCard } from '@/components/ui/GlassCard';
+import Link from 'next/link';
 
 interface PhpipamAddress {
   ip: string;
@@ -58,8 +59,8 @@ export function PhpipamDetail({ data }: { data: PhpipamData }) {
               <tbody>
                 {data.addresses.map((a) => (
                   <tr key={`${a.ip}-${a.subnet_id}`} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 font-mono text-slate-200">{a.ip}</td>
-                    <td className="px-4 py-2 text-slate-300">{a.hostname || '—'}</td>
+                    <td className="px-4 py-2 font-mono text-slate-200"><Link href={'/hosts?q=' + encodeURIComponent(a.ip)} className="text-sky-400 hover:underline">{a.ip}</Link></td>
+                    <td className="px-4 py-2 text-slate-300">{a.hostname ? <Link href={'/hosts?q=' + encodeURIComponent(a.hostname)} className="text-sky-400 hover:underline">{a.hostname}</Link> : '—'}</td>
                     <td className="px-4 py-2 font-mono text-slate-400">{a.mac || '—'}</td>
                     <td className="px-4 py-2 text-slate-400">{a.subnet_id}</td>
                     <td className="px-4 py-2 text-right text-slate-400">
