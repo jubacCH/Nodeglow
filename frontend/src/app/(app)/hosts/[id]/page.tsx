@@ -9,9 +9,11 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useHost, useHostHistory } from '@/hooks/queries/useHosts';
 import { formatLatency, uptimeColor } from '@/lib/utils';
+import { EChart } from '@/components/charts/EChart';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import type { EChartsOption } from 'echarts';
 
 type Tab = 'overview' | 'results' | 'syslog';
 
@@ -153,16 +155,55 @@ export default function HostDetailPage() {
             )}
           </GlassCard>
 
-          {/* Heatmap placeholder */}
+          {/* Availability overview */}
           <GlassCard className="p-4">
-            <h3 className="text-sm font-medium text-slate-300 mb-3">Availability Heatmap</h3>
-            <Skeleton className="h-20 w-full" />
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Availability</h3>
+            {isLoading ? (
+              <Skeleton className="h-20 w-full" />
+            ) : (
+              <div className="space-y-3">
+                {([
+                  { label: '24 Hours', value: host?.uptime.h24 ?? null },
+                  { label: '7 Days', value: host?.uptime.d7 ?? null },
+                  { label: '30 Days', value: host?.uptime.d30 ?? null },
+                ] as const).map(({ label, value }) => (
+                  <div key={label}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-slate-400">{label}</span>
+                      <span className={`text-xs font-mono ${uptimeColor(value)}`}>
+                        {value != null ? `${value.toFixed(2)}%` : '--'}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-800/60 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          value === null
+                            ? 'bg-slate-700'
+                            : value >= 99.9
+                              ? 'bg-emerald-500'
+                              : value >= 95
+                                ? 'bg-amber-500'
+                                : 'bg-red-500'
+                        }`}
+                        style={{ width: value != null ? `${Math.max(value, 1)}%` : '0%' }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </GlassCard>
 
-          {/* Latency chart placeholder */}
+          {/* Latency chart */}
           <GlassCard className="p-4">
             <h3 className="text-sm font-medium text-slate-300 mb-3">Latency Chart</h3>
-            <Skeleton className="h-40 w-full" />
+            {historyLoading ? (
+              <Skeleton className="h-52 w-full" />
+            ) : history?.results && history.results.length > 0 ? (
+              <LatencyChart results={history.results} />
+            ) : (
+              <p className="text-sm text-slate-500 text-center py-8">No latency data available</p>
+            )}
           </GlassCard>
         </div>
       )}
@@ -224,4 +265,104 @@ export default function HostDetailPage() {
       )}
     </div>
   );
+}
+
+/* ── Latency Chart sub-component ── */
+
+interface HistoryResult {
+  timestamp: string;
+  success: boolean;
+  latency_ms: number | null;
+}
+
+function LatencyChart({ results }: { results: HistoryResult[] }) {
+  const option = useMemo<EChartsOption>(() => {
+    const sorted = [...results].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+    );
+
+    const timestamps = sorted.map((r) => r.timestamp);
+    const latencies = sorted.map((r) => r.latency_ms);
+
+    // Mark failed pings as red scatter points at y=0
+    const failPoints = sorted
+      .map((r, i) => (!r.success ? [i, 0] : null))
+      .filter(Boolean);
+
+    return {
+      grid: { left: 48, right: 16, top: 12, bottom: 32 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+        borderColor: 'rgba(255,255,255,0.08)',
+        textStyle: { color: '#cbd5e1', fontSize: 12 },
+        formatter(params: unknown) {
+          const list = params as Array<{ dataIndex: number; value: number | null; seriesName: string }>;
+          const idx = list[0]?.dataIndex;
+          if (idx == null) return '';
+          const r = sorted[idx];
+          const time = new Date(r.timestamp).toLocaleString();
+          const lat = r.latency_ms != null ? `${r.latency_ms.toFixed(1)} ms` : '--';
+          const status = r.success ? '<span style="color:#34d399">OK</span>' : '<span style="color:#f87171">FAIL</span>';
+          return `${time}<br/>Latency: ${lat}<br/>Status: ${status}`;
+        },
+      },
+      xAxis: {
+        type: 'category',
+        data: timestamps,
+        axisLabel: {
+          formatter(val: string) {
+            const d = new Date(val);
+            return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+          },
+          color: '#64748b',
+          fontSize: 10,
+        },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        name: 'ms',
+        nameTextStyle: { color: '#64748b', fontSize: 10 },
+        axisLabel: { color: '#64748b', fontSize: 10 },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
+      },
+      series: [
+        {
+          name: 'Latency',
+          type: 'line',
+          data: latencies,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: { width: 2, color: '#38bdf8' },
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: 'rgba(56, 189, 248, 0.25)' },
+                { offset: 1, color: 'rgba(56, 189, 248, 0.02)' },
+              ],
+            },
+          },
+        },
+        ...(failPoints.length > 0
+          ? [
+              {
+                name: 'Failed',
+                type: 'scatter' as const,
+                data: failPoints,
+                symbol: 'circle',
+                symbolSize: 8,
+                itemStyle: { color: '#f87171' },
+                z: 10,
+              },
+            ]
+          : []),
+      ],
+    };
+  }, [results]);
+
+  return <EChart option={option} height={220} />;
 }
