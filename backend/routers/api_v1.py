@@ -276,14 +276,33 @@ async def get_host(
 
     # Agent metrics (if host is agent-sourced)
     agent_metrics = None
-    if host.source == "agent" and host.hostname:
-        hn = host.hostname.lower()
-        agent_q = await db.execute(
-            select(Agent).where(
-                func.lower(Agent.hostname) == hn
-            ).limit(1)
-        )
-        agent = agent_q.scalar_one_or_none()
+    if host.source == "agent":
+        # Try matching by hostname (IP), name, or source_detail containing the agent hostname
+        candidates = [s.lower() for s in [host.hostname or "", host.name or ""] if s]
+        agent = None
+        for cand in candidates:
+            if not cand:
+                continue
+            agent_q = await db.execute(
+                select(Agent).where(
+                    (func.lower(Agent.hostname) == cand) | (func.lower(Agent.name) == cand)
+                ).limit(1)
+            )
+            agent = agent_q.scalar_one_or_none()
+            if agent:
+                break
+        # Fallback: match via source_detail (e.g. "auto-enrolled agent (PC-JULIAN)")
+        if not agent and host.source_detail:
+            import re
+            m = re.search(r"\((.+?)\)", host.source_detail or "")
+            if m:
+                agent_name = m.group(1).lower()
+                agent_q = await db.execute(
+                    select(Agent).where(
+                        (func.lower(Agent.hostname) == agent_name) | (func.lower(Agent.name) == agent_name)
+                    ).limit(1)
+                )
+                agent = agent_q.scalar_one_or_none()
         if agent:
             snap_q = await db.execute(
                 select(AgentSnapshot)
