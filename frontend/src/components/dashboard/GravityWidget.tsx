@@ -13,9 +13,9 @@ import type { HostStat } from '@/hooks/queries/useDashboard';
 /* ── Health scoring ── */
 
 function hostHealth(h: HostStat): number {
-  if (h.host.maintenance) return 0.5;
+  if (h.host.maintenance) return 0.4;
   if (h.online === false) return 1.0;
-  if (h.online === null) return 0.8;
+  if (h.online === null) return 0.7;
   let score = 0;
   if (h.latency != null) {
     if (h.latency > 200) score += 0.3;
@@ -39,60 +39,92 @@ function hostColor(h: HostStat): string {
   return '#34D399';
 }
 
-/* ── Orbit radius from health: healthy=close, offline=far ── */
+/* ── Orbit radius: healthy=close, offline=far ── */
+// Earth visual radius = 0.7
+// Inner orbit starts at 1.2 (just outside earth)
+// Healthy online: 1.2-2.0
+// Maintenance: 2.5-3.0
+// Offline: 4.0-5.5
 
-function orbitRadius(h: HostStat): number {
+function orbitRadius(h: HostStat, index: number): number {
+  if (h.online === false) {
+    // Offline: far ring with some spread
+    return 4.5 + (index % 5) * 0.25;
+  }
+  if (h.host.maintenance) {
+    // Maintenance: mid-range ring
+    return 2.8 + (index % 4) * 0.2;
+  }
+  // Online hosts: spread across inner rings based on health
   const health = hostHealth(h);
-  // Earth radius is 1.0
-  // Healthy (0) → 1.6, degraded → further, offline (1.0) → 4.5
-  if (h.online === false) return 4.0 + Math.random() * 1.0;
-  return 1.6 + health * 2.8;
+  // health 0 → 1.3, health 0.3 → 2.2
+  const base = 1.3 + health * 3.0;
+  // Add small per-host spread so they don't overlap
+  const spread = ((index * 7) % 13) / 13 * 0.4;
+  return base + spread;
 }
 
-/* ── Earth component ── */
+/* ── Earth component — smaller, brighter, more planet-like ── */
 
 function Earth() {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const glowRef = useRef<THREE.Mesh>(null);
+  const groupRef = useRef<THREE.Group>(null);
 
   useFrame((_state, delta) => {
-    if (meshRef.current) meshRef.current.rotation.y += delta * 0.05;
+    if (groupRef.current) groupRef.current.rotation.y += delta * 0.06;
   });
 
-  // Procedural earth-like material
-  const earthMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: new THREE.Color('#1a4a7a'),
-      emissive: new THREE.Color('#0a2a4a'),
-      emissiveIntensity: 0.3,
-      roughness: 0.8,
-      metalness: 0.1,
-    });
-  }, []);
-
   return (
-    <group>
-      {/* Earth sphere */}
-      <mesh ref={meshRef} material={earthMaterial}>
-        <sphereGeometry args={[1, 48, 48]} />
+    <group ref={groupRef}>
+      {/* Core planet — bright ocean blue */}
+      <mesh>
+        <sphereGeometry args={[0.7, 64, 64]} />
+        <meshStandardMaterial
+          color="#2563EB"
+          emissive="#1d4ed8"
+          emissiveIntensity={0.4}
+          roughness={0.6}
+          metalness={0.05}
+        />
       </mesh>
-      {/* Atmosphere glow */}
-      <mesh ref={glowRef}>
-        <sphereGeometry args={[1.08, 48, 48]} />
-        <meshBasicMaterial
-          color="#38BDF8"
+      {/* Land masses — subtle green-tinted overlay, slightly offset */}
+      <mesh rotation={[0.1, 0.8, 0]}>
+        <sphereGeometry args={[0.702, 32, 32]} />
+        <meshStandardMaterial
+          color="#16a34a"
+          emissive="#166534"
+          emissiveIntensity={0.2}
           transparent
-          opacity={0.08}
+          opacity={0.25}
+          roughness={0.9}
+        />
+      </mesh>
+      {/* Atmosphere inner glow */}
+      <mesh>
+        <sphereGeometry args={[0.76, 48, 48]} />
+        <meshBasicMaterial
+          color="#60A5FA"
+          transparent
+          opacity={0.12}
           side={THREE.BackSide}
         />
       </mesh>
-      {/* Outer atmosphere halo */}
+      {/* Atmosphere outer halo */}
       <mesh>
-        <sphereGeometry args={[1.2, 32, 32]} />
+        <sphereGeometry args={[0.88, 32, 32]} />
         <meshBasicMaterial
-          color="#0ea5e9"
+          color="#38BDF8"
           transparent
-          opacity={0.03}
+          opacity={0.06}
+          side={THREE.BackSide}
+        />
+      </mesh>
+      {/* Bright rim light effect */}
+      <mesh>
+        <sphereGeometry args={[1.05, 32, 32]} />
+        <meshBasicMaterial
+          color="#93C5FD"
+          transparent
+          opacity={0.025}
           side={THREE.BackSide}
         />
       </mesh>
@@ -107,11 +139,11 @@ function OrbitRings({ radii }: { radii: number[] }) {
     <>
       {radii.map((r, i) => (
         <mesh key={i} rotation={[Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[r - 0.005, r + 0.005, 128]} />
+          <ringGeometry args={[r - 0.004, r + 0.004, 160]} />
           <meshBasicMaterial
             color="#ffffff"
             transparent
-            opacity={0.04}
+            opacity={0.035}
             side={THREE.DoubleSide}
           />
         </mesh>
@@ -126,11 +158,11 @@ interface HostNodeProps {
   host: HostStat;
   radius: number;
   angle: number;
-  tilt: number;
+  inclination: number;
   speed: number;
 }
 
-function HostNode({ host, radius, angle, tilt, speed }: HostNodeProps) {
+function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
   const meshRef = useRef<THREE.Mesh>(null);
   const [hovered, setHovered] = useState(false);
@@ -144,11 +176,12 @@ function HostNode({ host, radius, angle, tilt, speed }: HostNodeProps) {
       const t = startAngle.current + clock.getElapsedTime() * speed;
       const x = Math.cos(t) * radius;
       const z = Math.sin(t) * radius;
-      const y = Math.sin(t * 0.7) * tilt;
+      // Inclined orbit — gives 3D depth
+      const y = Math.sin(t + inclination) * radius * 0.15;
       groupRef.current.position.set(x, y, z);
     }
     if (meshRef.current && isOffline) {
-      const s = 1 + Math.sin(clock.getElapsedTime() * 3) * 0.25;
+      const s = 1 + Math.sin(clock.getElapsedTime() * 2.5) * 0.3;
       meshRef.current.scale.setScalar(s);
     }
   });
@@ -157,7 +190,8 @@ function HostNode({ host, radius, angle, tilt, speed }: HostNodeProps) {
     router.push(`/hosts/${host.host.id}`);
   }, [router, host.host.id]);
 
-  const nodeSize = isOffline ? 0.12 : 0.1;
+  // Smaller nodes — 0.06 base, offline slightly bigger
+  const nodeSize = isOffline ? 0.07 : 0.055;
 
   return (
     <group ref={groupRef}>
@@ -172,24 +206,24 @@ function HostNode({ host, radius, angle, tilt, speed }: HostNodeProps) {
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={hovered ? 2.0 : 0.8}
+          emissiveIntensity={hovered ? 2.5 : 1.0}
           transparent
           opacity={0.95}
         />
       </mesh>
-      {/* Glow shell */}
+      {/* Glow shell — smaller, more subtle */}
       <mesh>
-        <sphereGeometry args={[nodeSize * 2.5, 12, 12]} />
+        <sphereGeometry args={[nodeSize * 2, 12, 12]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={hovered ? 0.2 : isOffline ? 0.12 : 0.06}
+          opacity={hovered ? 0.25 : isOffline ? 0.1 : 0.04}
           depthWrite={false}
         />
       </mesh>
       {/* Tooltip on hover */}
       {hovered && (
-        <Html distanceFactor={6} style={{ pointerEvents: 'none' }}>
+        <Html distanceFactor={8} style={{ pointerEvents: 'none' }}>
           <div className="rounded-md bg-[#0B0E14]/95 border border-white/[0.08] px-3 py-2 text-xs text-white whitespace-nowrap backdrop-blur-sm shadow-xl">
             <p className="font-medium text-slate-200">{host.host.name}</p>
             <p className="text-[10px] text-slate-500 font-mono">{host.host.hostname}</p>
@@ -213,7 +247,7 @@ function HostNode({ host, radius, angle, tilt, speed }: HostNodeProps) {
 
 /* ── Star particles ── */
 
-function Stars({ count = 300 }: { count?: number }) {
+function Stars({ count = 400 }: { count?: number }) {
   const ref = useRef<THREE.Points>(null);
   const geometry = useMemo(() => {
     const geo = new THREE.BufferGeometry();
@@ -221,7 +255,7 @@ function Stars({ count = 300 }: { count?: number }) {
     for (let i = 0; i < count; i++) {
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
-      const r = 8 + Math.random() * 4;
+      const r = 10 + Math.random() * 5;
       arr[i * 3] = r * Math.sin(phi) * Math.cos(theta);
       arr[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
       arr[i * 3 + 2] = r * Math.cos(phi);
@@ -231,52 +265,44 @@ function Stars({ count = 300 }: { count?: number }) {
   }, [count]);
 
   useFrame((_state, delta) => {
-    if (ref.current) ref.current.rotation.y += delta * 0.008;
+    if (ref.current) ref.current.rotation.y += delta * 0.005;
   });
 
   return (
     <points ref={ref} geometry={geometry}>
-      <pointsMaterial size={0.03} color="#94A3B8" transparent opacity={0.5} sizeAttenuation depthWrite={false} />
+      <pointsMaterial size={0.025} color="#CBD5E1" transparent opacity={0.4} sizeAttenuation depthWrite={false} />
     </points>
   );
 }
 
 /* ── Scene ── */
 
-interface SceneProps {
-  hosts: HostStat[];
-}
-
-function Scene({ hosts }: SceneProps) {
-  // Compute orbital params per host
+function Scene({ hosts }: { hosts: HostStat[] }) {
   const hostOrbits = useMemo(() => {
+    // Sort: healthy first, then maintenance, then offline
     const sorted = [...hosts].sort((a, b) => hostHealth(a) - hostHealth(b));
     const golden = Math.PI * (3 - Math.sqrt(5));
+
     return sorted.map((h, i) => {
-      const r = orbitRadius(h);
-      const angle = i * golden;
-      const tilt = 0.15 + Math.random() * 0.4;
-      // Slower orbit for far-away hosts
-      const speed = 0.15 + (1 - hostHealth(h)) * 0.2;
-      return { host: h, radius: r, angle, tilt, speed };
+      const r = orbitRadius(h, i);
+      const angle = i * golden; // Golden angle for even distribution
+      // Each host gets a unique orbit inclination
+      const inclination = ((i * 2.39996) % (Math.PI * 2));
+      // Speed: outer orbits move slower (Kepler-like)
+      const speed = 0.08 + (1 / (r * 0.6)) * 0.12;
+      return { host: h, radius: r, angle, inclination, speed };
     });
   }, [hosts]);
 
-  // Unique orbit ring radii (rounded to avoid too many rings)
-  const ringRadii = useMemo(() => {
-    const set = new Set<number>();
-    set.add(1.6);
-    set.add(2.5);
-    set.add(3.5);
-    set.add(4.5);
-    return Array.from(set);
-  }, []);
+  // Guide rings at key orbit distances
+  const ringRadii = useMemo(() => [1.5, 2.2, 3.0, 4.0, 5.0], []);
 
   return (
     <>
-      <ambientLight intensity={0.25} />
-      <pointLight position={[5, 3, 5]} intensity={0.9} color="#ffffff" />
-      <pointLight position={[-3, -2, -4]} intensity={0.2} color="#38BDF8" />
+      {/* Lighting — key light from upper right, blue fill from behind */}
+      <ambientLight intensity={0.2} />
+      <directionalLight position={[4, 3, 2]} intensity={1.0} color="#ffffff" />
+      <pointLight position={[-3, -1, -3]} intensity={0.3} color="#60A5FA" />
 
       <Stars />
       <Earth />
@@ -288,19 +314,21 @@ function Scene({ hosts }: SceneProps) {
           host={o.host}
           radius={o.radius}
           angle={o.angle}
-          tilt={o.tilt}
+          inclination={o.inclination}
           speed={o.speed}
         />
       ))}
 
       <OrbitControls
         enablePan={false}
-        minDistance={3}
-        maxDistance={12}
+        minDistance={4}
+        maxDistance={14}
         autoRotate
-        autoRotateSpeed={0.15}
+        autoRotateSpeed={0.12}
         enableDamping
         dampingFactor={0.05}
+        maxPolarAngle={Math.PI * 0.75}
+        minPolarAngle={Math.PI * 0.2}
       />
     </>
   );
@@ -387,7 +415,7 @@ export function GravityWidget({ hosts }: GravityWidgetProps) {
       ) : (
         <div style={{ height: 420 }}>
           <Canvas
-            camera={{ position: [0, 2.5, 6], fov: 50 }}
+            camera={{ position: [0, 3.5, 8], fov: 45 }}
             style={{ background: 'transparent' }}
             gl={{ alpha: true, antialias: true }}
             dpr={[1, 2]}
