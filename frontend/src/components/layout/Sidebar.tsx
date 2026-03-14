@@ -11,7 +11,7 @@ import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
   Bot, Scan, Radio, ShieldCheck, KeyRound, ChevronDown,
   Settings, Users, Activity, BookOpen, Search, LogOut, Plus,
-  ClipboardList,
+  ClipboardList, Sun, Moon,
 } from 'lucide-react';
 
 interface NavItem {
@@ -72,7 +72,7 @@ const allSearchItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { sidebarCollapsed } = useThemeStore();
+  const { sidebarCollapsed, colorMode, toggleColorMode } = useThemeStore();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const [intOpen, setIntOpen] = useState(true);
@@ -143,12 +143,13 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'flex flex-col h-screen bg-[#0B0E14] border-r border-white/[0.06] transition-all duration-200',
+        'flex flex-col h-screen border-r transition-all duration-200',
         sidebarCollapsed ? 'w-16' : 'w-[260px]',
       )}
+      style={{ background: 'var(--ng-bg)', borderColor: 'var(--ng-glass-border)' }}
     >
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 h-14 border-b border-white/[0.06]">
+      <div className="flex items-center gap-3 px-4 h-14 border-b" style={{ borderColor: 'var(--ng-glass-border)' }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo-icon.svg" alt="Nodeglow" className="w-8 h-8" />
         {!sidebarCollapsed && (
@@ -186,7 +187,7 @@ export function Sidebar() {
             />
           </div>
           {searchFocused && searchResults.length > 0 && (
-            <div className="absolute left-3 right-3 mt-1 z-50 rounded-md bg-[#111621] border border-white/[0.08] shadow-xl overflow-hidden">
+            <div className="absolute left-3 right-3 mt-1 z-50 rounded-md border shadow-xl overflow-hidden" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border-elevated)' }}>
               {searchResults.slice(0, 8).map((item) => (
                 <button
                   key={item.href}
@@ -315,18 +316,27 @@ export function Sidebar() {
 
       {/* User */}
       {user && !sidebarCollapsed && (
-        <div className="px-3 py-3 border-t border-white/[0.06]">
+        <div className="px-3 py-3 border-t" style={{ borderColor: 'var(--ng-glass-border)' }}>
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-white/[0.06] flex items-center justify-center text-xs font-medium text-slate-300">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium" style={{ background: 'var(--ng-glass-bg)', color: 'var(--ng-text-secondary)' }}>
               {user.username[0]?.toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm text-slate-200 truncate">{user.username}</p>
-              <p className="text-[10px] text-slate-500 uppercase">{user.role}</p>
+              <p className="text-sm truncate" style={{ color: 'var(--ng-text-primary)' }}>{user.username}</p>
+              <p className="text-[10px] uppercase" style={{ color: 'var(--ng-text-muted)' }}>{user.role}</p>
             </div>
             <button
+              onClick={toggleColorMode}
+              className="p-1.5 rounded-md transition-colors"
+              style={{ color: 'var(--ng-text-muted)' }}
+              title={colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {colorMode === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+            <button
               onClick={logout}
-              className="p-1.5 rounded-md text-slate-500 hover:text-slate-300 hover:bg-white/[0.06] transition-colors"
+              className="p-1.5 rounded-md transition-colors"
+              style={{ color: 'var(--ng-text-muted)' }}
               title="Logout"
             >
               <LogOut size={16} />

@@ -12,12 +12,14 @@ export const GlassCard = forwardRef<HTMLDivElement, GlassCardProps>(
     <div
       ref={ref}
       className={cn(
-        'rounded-lg border transition-all',
-        elevated
-          ? 'bg-white/[0.06] backdrop-blur-2xl border-white/[0.10] shadow-2xl'
-          : 'bg-white/[0.04] backdrop-blur-xl border-white/[0.08]',
+        'rounded-lg border transition-all backdrop-blur-xl',
+        elevated ? 'glass-elevated' : 'glass-card',
         className,
       )}
+      style={{
+        background: elevated ? 'var(--ng-glass-bg-elevated)' : 'var(--ng-glass-bg)',
+        borderColor: elevated ? 'var(--ng-glass-border-elevated)' : 'var(--ng-glass-border)',
+      }}
       {...props}
     >
       {children}

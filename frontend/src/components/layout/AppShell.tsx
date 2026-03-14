@@ -18,7 +18,7 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const fetchUser = useAuthStore((s) => s.fetchUser);
   const connect = useWsStore((s) => s.connect);
-  const { sidebarPosition, accentColor, density, fontSize } = useThemeStore();
+  const { sidebarPosition, accentColor, colorMode, density, fontSize } = useThemeStore();
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
 
@@ -38,7 +38,8 @@ export function AppShell({ children }: AppShellProps) {
     root.style.setProperty('--accent', accentColor);
     root.style.setProperty('--font-size-base', `${fontSize}px`);
     root.style.fontSize = `${fontSize}px`;
-  }, [accentColor, fontSize]);
+    root.setAttribute('data-theme', colorMode);
+  }, [accentColor, fontSize, colorMode]);
 
   return (
     <div className={cn(
@@ -67,12 +68,13 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       )}
 
-      <main className="flex-1 overflow-y-auto bg-[#0B0E14]">
+      <main className="flex-1 overflow-y-auto" style={{ background: 'var(--ng-bg)' }}>
         {/* Mobile header bar */}
-        <div className="lg:hidden flex items-center gap-3 px-4 h-14 border-b border-white/[0.06] bg-[#0B0E14] sticky top-0 z-40">
+        <div className="lg:hidden flex items-center gap-3 px-4 h-14 sticky top-0 z-40" style={{ background: 'var(--ng-bg)', borderBottom: '1px solid var(--ng-glass-border)' }}>
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-white/[0.08] transition-colors"
+            className="p-1.5 rounded-md transition-colors"
+            style={{ color: 'var(--ng-text-muted)' }}
           >
             {mobileOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
