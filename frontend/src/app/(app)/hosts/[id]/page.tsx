@@ -12,15 +12,32 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { useHost, useHostHistory, useHosts } from '@/hooks/queries/useHosts';
 import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
 import { EChart } from '@/components/charts/EChart';
-import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText, AlertTriangle, Scan, Check, X, Lock, Shield } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, patch } from '@/lib/api';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { get, patch, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { Modal } from '@/components/ui/Modal';
 import type { EChartsOption } from 'echarts';
 import type { Incident } from '@/types';
+
+interface DiscoveredPort {
+  id: number;
+  port: number;
+  protocol: string;
+  service: string | null;
+  status: string;          // new | monitored | dismissed
+  has_ssl: boolean;
+  ssl_issuer: string | null;
+  ssl_subject: string | null;
+  ssl_expiry_days: number | null;
+  ssl_expiry_date: string | null;
+  ssl_status: string;      // new | monitored | dismissed
+  first_seen: string | null;
+  last_seen: string | null;
+  last_open: boolean;
+}
 
 interface SyslogEntry {
   timestamp: string;
@@ -180,6 +197,32 @@ export default function HostDetailPage() {
     queryKey: ['host-incidents', hostId, host?.name],
     queryFn: () => get<Incident[]>(`/api/v1/incidents?host_name=${encodeURIComponent(host.name)}&limit=10`),
     enabled: !!host?.name,
+  });
+
+  const { data: discoveredPorts } = useQuery({
+    queryKey: ['discovered-ports', hostId],
+    queryFn: () => get<DiscoveredPort[]>(`/hosts/api/${hostId}/discovered-ports`),
+    enabled: !!host,
+  });
+
+  const scanMut = useMutation({
+    mutationFn: () => post<{ ok: boolean; ports: DiscoveredPort[] }>(`/hosts/api/${hostId}/scan-ports`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['discovered-ports', hostId] });
+      toast('Port scan complete', 'success');
+    },
+    onError: () => toast('Port scan failed', 'error'),
+  });
+
+  const portActionMut = useMutation({
+    mutationFn: ({ portId, action }: { portId: number; action: string }) =>
+      patch(`/hosts/api/${hostId}/discovered-ports/${portId}`, { action }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['discovered-ports', hostId] });
+      qc.invalidateQueries({ queryKey: ['host', hostId] });
+      toast('Updated', 'success');
+    },
+    onError: () => toast('Action failed', 'error'),
   });
 
   const agent: AgentMetrics | null = host?.agent ?? null;
@@ -764,6 +807,155 @@ export default function HostDetailPage() {
                         }`}
                         style={{ width: value != null ? `${Math.max(value, 1)}%` : '0%' }}
                       />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </GlassCard>
+
+          {/* Discovered Ports */}
+          <GlassCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                <Scan size={14} className="text-sky-400" />
+                Discovered Ports
+                {discoveredPorts && discoveredPorts.filter(p => p.last_open).length > 0 && (
+                  <span className="text-xs font-mono text-slate-500">
+                    {discoveredPorts.filter(p => p.last_open).length} open
+                  </span>
+                )}
+              </h3>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => scanMut.mutate()}
+                disabled={scanMut.isPending}
+              >
+                <RefreshCw size={13} className={scanMut.isPending ? 'animate-spin' : ''} />
+                {scanMut.isPending ? 'Scanning...' : 'Scan Now'}
+              </Button>
+            </div>
+
+            {!discoveredPorts || discoveredPorts.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-6">
+                {scanMut.isPending ? 'Scanning ports...' : 'No ports discovered yet. Click "Scan Now" to discover open ports.'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {discoveredPorts
+                  .filter(p => p.last_open)
+                  .sort((a, b) => {
+                    // Show new items first, then monitored, then dismissed
+                    const order = { new: 0, monitored: 1, dismissed: 2 };
+                    const aOrder = Math.min(order[a.status as keyof typeof order] ?? 0, order[a.ssl_status as keyof typeof order] ?? 0);
+                    const bOrder = Math.min(order[b.status as keyof typeof order] ?? 0, order[b.ssl_status as keyof typeof order] ?? 0);
+                    if (aOrder !== bOrder) return aOrder - bOrder;
+                    return a.port - b.port;
+                  })
+                  .map((dp) => (
+                  <div
+                    key={dp.id}
+                    className={`flex items-start gap-3 px-3 py-2.5 rounded-md border transition-colors ${
+                      dp.status === 'new' || (dp.has_ssl && dp.ssl_status === 'new')
+                        ? 'border-sky-500/30 bg-sky-500/[0.04]'
+                        : 'border-white/[0.06] bg-white/[0.02]'
+                    }`}
+                  >
+                    {/* Port info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-mono font-bold text-slate-200">{dp.port}</span>
+                        <span className="text-xs text-slate-500">/{dp.protocol}</span>
+                        {dp.service && (
+                          <Badge>{dp.service}</Badge>
+                        )}
+                        {dp.status === 'monitored' && (
+                          <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
+                            <Check size={10} /> monitored
+                          </span>
+                        )}
+                        {dp.status === 'dismissed' && (
+                          <span className="text-[10px] text-slate-500">dismissed</span>
+                        )}
+                      </div>
+
+                      {/* SSL cert info */}
+                      {dp.has_ssl && (
+                        <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                          <Lock size={12} className={
+                            dp.ssl_expiry_days != null && dp.ssl_expiry_days <= 14 ? 'text-red-400'
+                            : dp.ssl_expiry_days != null && dp.ssl_expiry_days <= 30 ? 'text-amber-400'
+                            : 'text-emerald-400'
+                          } />
+                          <span className="text-xs text-slate-400">
+                            {dp.ssl_subject && <span className="text-slate-300">{dp.ssl_subject}</span>}
+                            {dp.ssl_issuer && <span className="text-slate-500"> &middot; {dp.ssl_issuer}</span>}
+                          </span>
+                          {dp.ssl_expiry_days != null && (
+                            <Badge variant="severity" severity={
+                              dp.ssl_expiry_days <= 14 ? 'critical' : dp.ssl_expiry_days <= 30 ? 'warning' : 'info'
+                            }>
+                              {dp.ssl_expiry_days}d
+                            </Badge>
+                          )}
+                          {dp.ssl_status === 'monitored' && (
+                            <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
+                              <Shield size={10} /> SSL monitored
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-slate-600 mt-1">
+                        first seen {timeAgo(dp.first_seen ?? '')} &middot; last seen {timeAgo(dp.last_seen ?? '')}
+                      </p>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {/* Port actions */}
+                      {dp.status === 'new' && (
+                        <>
+                          <button
+                            onClick={() => portActionMut.mutate({ portId: dp.id, action: 'monitor_port' })}
+                            disabled={portActionMut.isPending}
+                            className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                            title="Monitor this port"
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            onClick={() => portActionMut.mutate({ portId: dp.id, action: 'dismiss_port' })}
+                            disabled={portActionMut.isPending}
+                            className="p-1.5 rounded-md bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] transition-colors"
+                            title="Dismiss"
+                          >
+                            <X size={14} />
+                          </button>
+                        </>
+                      )}
+                      {/* SSL actions */}
+                      {dp.has_ssl && dp.ssl_status === 'new' && (
+                        <>
+                          <button
+                            onClick={() => portActionMut.mutate({ portId: dp.id, action: 'monitor_ssl' })}
+                            disabled={portActionMut.isPending}
+                            className="p-1.5 rounded-md bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 transition-colors"
+                            title="Monitor SSL certificate"
+                          >
+                            <Shield size={14} />
+                          </button>
+                          <button
+                            onClick={() => portActionMut.mutate({ portId: dp.id, action: 'dismiss_ssl' })}
+                            disabled={portActionMut.isPending}
+                            className="p-1.5 rounded-md bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] transition-colors"
+                            title="Dismiss SSL"
+                          >
+                            <X size={14} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
