@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Html, useTexture } from '@react-three/drei';
 import { useRouter } from 'next/navigation';
 import * as THREE from 'three';
@@ -31,41 +31,156 @@ function hostHealth(h: HostStat): number {
 
 function hostColor(h: HostStat): string {
   if (h.host.maintenance) return '#FBBF24';
-  if (h.online === false) return '#F87171';
+  if (h.online === false) return '#EF4444';
   if (h.online === null) return '#64748B';
-  if (h.host.port_error) return '#FB923C'; // orange for port errors
+  if (h.host.port_error) return '#F97316';
   const health = hostHealth(h);
-  if (health >= 0.5) return '#F87171';
+  if (health >= 0.5) return '#EF4444';
   if (health >= 0.2) return '#FBBF24';
-  return '#34D399';
+  return '#10B981';
 }
 
-/* ── Orbit radius: healthy=close, offline=far ── */
-// Earth visual radius = 0.7
-// Inner orbit starts at 1.2 (just outside earth)
-// Healthy online: 1.2-2.0
-// Maintenance: 2.5-3.0
-// Offline: 4.0-5.5
+/* ── Orbit radius ── */
 
 function orbitRadius(h: HostStat, index: number): number {
   if (h.online === false) {
-    // Offline: far ring with some spread
     return 4.5 + (index % 5) * 0.25;
   }
   if (h.host.maintenance) {
-    // Maintenance: closer mid-range ring
     return 2.2 + (index % 4) * 0.2;
   }
-  // Online hosts: spread across inner rings based on health
   const health = hostHealth(h);
-  // health 0 → 1.4-1.9, health 0.3 → 2.3-2.8
   const base = 1.4 + health * 3.0;
-  // More spread so healthy hosts don't cluster at same radius
   const spread = ((index * 7) % 13) / 13 * 0.5;
   return base + spread;
 }
 
-/* ── Earth component — photorealistic with textures ── */
+/* ── Deep space background ── */
+
+function SpaceBackground() {
+  const { scene } = useThree();
+
+  useMemo(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2048;
+    canvas.height = 2048;
+    const ctx = canvas.getContext('2d')!;
+
+    // Deep space gradient
+    const grad = ctx.createRadialGradient(1024, 1024, 0, 1024, 1024, 1200);
+    grad.addColorStop(0, '#0a0e1a');
+    grad.addColorStop(0.3, '#060a14');
+    grad.addColorStop(0.6, '#030510');
+    grad.addColorStop(1, '#010208');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 2048, 2048);
+
+    // Subtle nebula patches
+    for (let n = 0; n < 4; n++) {
+      const nx = 400 + Math.random() * 1200;
+      const ny = 400 + Math.random() * 1200;
+      const nr = 200 + Math.random() * 300;
+      const colors = ['#1e3a5f', '#2d1b4e', '#1a3045', '#261840'];
+      const ng = ctx.createRadialGradient(nx, ny, 0, nx, ny, nr);
+      ng.addColorStop(0, colors[n] + '18');
+      ng.addColorStop(0.5, colors[n] + '08');
+      ng.addColorStop(1, 'transparent');
+      ctx.fillStyle = ng;
+      ctx.fillRect(0, 0, 2048, 2048);
+    }
+
+    // Stars — varying brightness and size
+    for (let i = 0; i < 1200; i++) {
+      const sx = Math.random() * 2048;
+      const sy = Math.random() * 2048;
+      const brightness = Math.random();
+      const size = brightness > 0.95 ? 2 : brightness > 0.8 ? 1.2 : 0.6;
+
+      if (brightness > 0.95) {
+        // Bright stars with subtle glow
+        const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, 4);
+        sg.addColorStop(0, `rgba(200, 220, 255, ${0.8 + Math.random() * 0.2})`);
+        sg.addColorStop(0.3, `rgba(180, 200, 240, 0.3)`);
+        sg.addColorStop(1, 'transparent');
+        ctx.fillStyle = sg;
+        ctx.fillRect(sx - 4, sy - 4, 8, 8);
+      }
+
+      // Vary star color slightly (blue-white range)
+      const r = 180 + Math.random() * 75;
+      const g = 190 + Math.random() * 65;
+      const b = 220 + Math.random() * 35;
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.3 + brightness * 0.7})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = texture;
+
+    return () => {
+      scene.background = null;
+      texture.dispose();
+    };
+  }, [scene]);
+
+  return null;
+}
+
+/* ── Twinkling star particles (foreground depth) ── */
+
+function Stars({ count = 300 }: { count?: number }) {
+  const ref = useRef<THREE.Points>(null);
+  const { geometry } = useMemo(() => {
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(count * 3);
+    const starSizes = new Float32Array(count);
+    const colors = new Float32Array(count * 3);
+
+    for (let i = 0; i < count; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const r = 8 + Math.random() * 6;
+      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = r * Math.cos(phi);
+
+      // Varying sizes
+      starSizes[i] = 0.015 + Math.random() * 0.03;
+
+      // Blue-white color range
+      const warmth = Math.random();
+      colors[i * 3] = 0.7 + warmth * 0.3;
+      colors[i * 3 + 1] = 0.75 + warmth * 0.2;
+      colors[i * 3 + 2] = 0.85 + warmth * 0.15;
+    }
+
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    return { geometry: geo, sizes: starSizes };
+  }, [count]);
+
+  useFrame((_state, delta) => {
+    if (ref.current) ref.current.rotation.y += delta * 0.003;
+  });
+
+  return (
+    <points ref={ref} geometry={geometry}>
+      <pointsMaterial
+        size={0.02}
+        vertexColors
+        transparent
+        opacity={0.6}
+        sizeAttenuation
+        depthWrite={false}
+      />
+    </points>
+  );
+}
+
+/* ── Earth ── */
 
 function Earth() {
   const groupRef = useRef<THREE.Group>(null);
@@ -80,7 +195,6 @@ function Earth() {
 
   return (
     <group ref={groupRef}>
-      {/* Main planet with day texture + bump map */}
       <mesh>
         <sphereGeometry args={[0.7, 64, 64]} />
         <meshStandardMaterial
@@ -91,35 +205,18 @@ function Earth() {
           metalness={0.05}
         />
       </mesh>
-      {/* Atmosphere inner glow — Fresnel-like rim */}
+      {/* Atmosphere layers */}
       <mesh>
         <sphereGeometry args={[0.73, 48, 48]} />
-        <meshBasicMaterial
-          color="#60A5FA"
-          transparent
-          opacity={0.12}
-          side={THREE.BackSide}
-        />
+        <meshBasicMaterial color="#60A5FA" transparent opacity={0.12} side={THREE.BackSide} />
       </mesh>
-      {/* Atmosphere outer halo */}
       <mesh>
         <sphereGeometry args={[0.82, 32, 32]} />
-        <meshBasicMaterial
-          color="#38BDF8"
-          transparent
-          opacity={0.07}
-          side={THREE.BackSide}
-        />
+        <meshBasicMaterial color="#38BDF8" transparent opacity={0.07} side={THREE.BackSide} />
       </mesh>
-      {/* Soft blue glow */}
       <mesh>
         <sphereGeometry args={[0.95, 32, 32]} />
-        <meshBasicMaterial
-          color="#93C5FD"
-          transparent
-          opacity={0.03}
-          side={THREE.BackSide}
-        />
+        <meshBasicMaterial color="#93C5FD" transparent opacity={0.03} side={THREE.BackSide} />
       </mesh>
     </group>
   );
@@ -132,9 +229,9 @@ function OrbitRings({ radii }: { radii: number[] }) {
     <>
       {radii.map((r, i) => (
         <mesh key={i} rotation={[Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[r - 0.004, r + 0.004, 160]} />
+          <ringGeometry args={[r - 0.003, r + 0.003, 180]} />
           <meshBasicMaterial
-            color="#ffffff"
+            color="#4488cc"
             transparent
             opacity={0.06}
             side={THREE.DoubleSide}
@@ -145,7 +242,7 @@ function OrbitRings({ radii }: { radii: number[] }) {
   );
 }
 
-/* ── Host node in 3D ── */
+/* ── Host node ── */
 
 interface HostNodeProps {
   host: HostStat;
@@ -158,6 +255,7 @@ interface HostNodeProps {
 function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
   const meshRef = useRef<THREE.Mesh>(null);
+  const ringRef = useRef<THREE.Mesh>(null);
   const [hovered, setHovered] = useState(false);
   const router = useRouter();
   const isOffline = host.online === false && !host.host.maintenance;
@@ -169,13 +267,18 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
       const t = startAngle.current + clock.getElapsedTime() * speed;
       const x = Math.cos(t) * radius;
       const z = Math.sin(t) * radius;
-      // Flat orbital plane — hosts hover on same level
       const y = Math.sin(t + inclination) * radius * 0.03;
       groupRef.current.position.set(x, y, z);
     }
+    // Offline pulse
     if (meshRef.current && isOffline) {
-      const s = 1 + Math.sin(clock.getElapsedTime() * 2.5) * 0.3;
+      const s = 1 + Math.sin(clock.getElapsedTime() * 2.5) * 0.25;
       meshRef.current.scale.setScalar(s);
+    }
+    // Spinning ring for online hosts
+    if (ringRef.current) {
+      ringRef.current.rotation.z += 0.02;
+      ringRef.current.rotation.x = Math.sin(clock.getElapsedTime() * 0.5) * 0.3 + 0.8;
     }
   });
 
@@ -183,38 +286,63 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
     router.push(`/hosts/${host.host.id}`);
   }, [router, host.host.id]);
 
-  // Node sizes — visible at distance
-  const nodeSize = isOffline ? 0.09 : 0.07;
+  const nodeSize = isOffline ? 0.08 : 0.06;
 
   return (
     <group ref={groupRef}>
-      {/* Core sphere */}
+      {/* Core — bright, sharp */}
       <mesh
         ref={meshRef}
         onClick={handleClick}
         onPointerOver={() => { setHovered(true); document.body.style.cursor = 'pointer'; }}
         onPointerOut={() => { setHovered(false); document.body.style.cursor = 'auto'; }}
       >
-        <sphereGeometry args={[nodeSize, 16, 16]} />
+        <sphereGeometry args={[nodeSize, 20, 20]} />
         <meshStandardMaterial
-          color={color}
+          color="#ffffff"
           emissive={color}
-          emissiveIntensity={hovered ? 2.5 : 1.0}
-          transparent
-          opacity={0.95}
+          emissiveIntensity={hovered ? 4 : 2}
+          toneMapped={false}
         />
       </mesh>
-      {/* Glow shell — smaller, more subtle */}
+
+      {/* Inner glow — colored halo */}
       <mesh>
-        <sphereGeometry args={[nodeSize * 2, 12, 12]} />
+        <sphereGeometry args={[nodeSize * 2.5, 16, 16]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={hovered ? 0.25 : isOffline ? 0.1 : 0.04}
+          opacity={hovered ? 0.35 : isOffline ? 0.15 : 0.08}
           depthWrite={false}
         />
       </mesh>
-      {/* Tooltip on hover */}
+
+      {/* Outer bloom — softer, larger */}
+      <mesh>
+        <sphereGeometry args={[nodeSize * 5, 12, 12]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={hovered ? 0.12 : 0.03}
+          depthWrite={false}
+        />
+      </mesh>
+
+      {/* Orbit ring around node (online hosts only) */}
+      {!isOffline && !host.host.maintenance && (
+        <mesh ref={ringRef}>
+          <ringGeometry args={[nodeSize * 1.8, nodeSize * 2.2, 32]} />
+          <meshBasicMaterial
+            color={color}
+            transparent
+            opacity={hovered ? 0.5 : 0.15}
+            side={THREE.DoubleSide}
+            depthWrite={false}
+          />
+        </mesh>
+      )}
+
+      {/* Tooltip */}
       {hovered && (
         <Html distanceFactor={8} style={{ pointerEvents: 'none' }}>
           <div className="rounded-md border px-3 py-2 text-xs text-slate-100 whitespace-nowrap backdrop-blur-sm shadow-xl" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border)' }}>
@@ -238,66 +366,33 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
   );
 }
 
-/* ── Star particles ── */
-
-function Stars({ count = 400 }: { count?: number }) {
-  const ref = useRef<THREE.Points>(null);
-  const geometry = useMemo(() => {
-    const geo = new THREE.BufferGeometry();
-    const arr = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      const r = 10 + Math.random() * 5;
-      arr[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      arr[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-      arr[i * 3 + 2] = r * Math.cos(phi);
-    }
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
-    return geo;
-  }, [count]);
-
-  useFrame((_state, delta) => {
-    if (ref.current) ref.current.rotation.y += delta * 0.005;
-  });
-
-  return (
-    <points ref={ref} geometry={geometry}>
-      <pointsMaterial size={0.025} color="#CBD5E1" transparent opacity={0.4} sizeAttenuation depthWrite={false} />
-    </points>
-  );
-}
-
 /* ── Scene ── */
 
 function Scene({ hosts }: { hosts: HostStat[] }) {
   const hostOrbits = useMemo(() => {
-    // Sort: healthy first, then maintenance, then offline
     const sorted = [...hosts].sort((a, b) => hostHealth(a) - hostHealth(b));
     const golden = Math.PI * (3 - Math.sqrt(5));
 
     return sorted.map((h, i) => {
       const r = orbitRadius(h, i);
-      const angle = i * golden; // Golden angle for even distribution
-      // Each host gets a unique orbit inclination
-      // Stronger, more varied inclinations for 3D depth
+      const a = i * golden;
       const inclination = ((i * 2.39996 + i * 0.7) % (Math.PI * 2));
-      // Speed: outer orbits move slower (Kepler-like)
       const speed = 0.08 + (1 / (r * 0.6)) * 0.12;
-      return { host: h, radius: r, angle, inclination, speed };
+      return { host: h, radius: r, angle: a, inclination, speed };
     });
   }, [hosts]);
 
-  // Guide rings at key orbit distances
   const ringRadii = useMemo(() => [1.5, 2.2, 3.0, 4.0, 5.0], []);
 
   return (
     <>
-      {/* Lighting — sunlight from right, subtle blue fill */}
-      <ambientLight intensity={0.35} />
-      <directionalLight position={[5, 3, 2]} intensity={1.4} color="#FFF5E6" />
-      <pointLight position={[-4, -2, -4]} intensity={0.4} color="#60A5FA" />
-      <hemisphereLight args={['#87CEEB', '#000814', 0.2]} />
+      <SpaceBackground />
+
+      {/* Lighting */}
+      <ambientLight intensity={0.25} />
+      <directionalLight position={[5, 3, 2]} intensity={1.6} color="#FFF5E6" />
+      <pointLight position={[-4, -2, -4]} intensity={0.3} color="#60A5FA" />
+      <hemisphereLight args={['#1a2a4a', '#000510', 0.15]} />
 
       <Stars />
       <Earth />
@@ -411,8 +506,7 @@ export function GravityWidget({ hosts }: GravityWidgetProps) {
         <div style={{ height: 350 }}>
           <Canvas
             camera={{ position: [0, 3, 8], fov: 45 }}
-            style={{ background: 'transparent' }}
-            gl={{ alpha: true, antialias: true }}
+            gl={{ antialias: true }}
             dpr={[1, 2]}
           >
             <Scene hosts={hosts} />
