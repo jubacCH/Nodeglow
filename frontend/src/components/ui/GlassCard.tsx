@@ -14,8 +14,8 @@ export const GlassCard = forwardRef<HTMLDivElement, GlassCardProps>(
       className={cn(
         'rounded-lg border transition-all',
         elevated
-          ? 'bg-white/[0.06] backdrop-blur-2xl border-white/[0.08] shadow-2xl'
-          : 'bg-white/[0.04] backdrop-blur-xl border-white/[0.06]',
+          ? 'bg-white/[0.06] backdrop-blur-2xl border-white/[0.10] shadow-2xl'
+          : 'bg-white/[0.04] backdrop-blur-xl border-white/[0.08]',
         className,
       )}
       {...props}
