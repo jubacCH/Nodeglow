@@ -260,6 +260,8 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
   const router = useRouter();
   const isOffline = host.online === false && !host.host.maintenance;
   const color = hostColor(host);
+  const health = hostHealth(host);
+  const healthPct = Math.round((1 - health) * 100);
   const startAngle = useRef(angle);
 
   useFrame(({ clock }) => {
@@ -358,6 +360,9 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
               {host.uptime_stats?.h24 != null && (
                 <span className="text-[10px] font-mono text-slate-400">{host.uptime_stats.h24.toFixed(1)}%</span>
               )}
+              <span className={`text-[10px] font-mono ${healthPct >= 80 ? 'text-emerald-400' : healthPct >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+                Health {healthPct}%
+              </span>
             </div>
           </div>
         </Html>
