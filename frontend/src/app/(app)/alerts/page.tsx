@@ -44,6 +44,7 @@ export default function AlertsPage() {
   const openIncidents = incidents?.filter((i) => i.status === 'open') ?? [];
 
   async function removeMaintenance(hostId: number) {
+    if (!confirm('Remove maintenance mode from this host?')) return;
     await post(`/hosts/api/${hostId}/maintenance`);
     qc.invalidateQueries({ queryKey: ['maintenance-hosts'] });
   }

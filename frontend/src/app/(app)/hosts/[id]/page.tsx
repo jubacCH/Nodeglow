@@ -10,11 +10,13 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useHost, useHostHistory } from '@/hooks/queries/useHosts';
 import { formatLatency, uptimeColor } from '@/lib/utils';
 import { EChart } from '@/components/charts/EChart';
-import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil } from 'lucide-react';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { get } from '@/lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { get, patch } from '@/lib/api';
+import { useToastStore } from '@/stores/toast';
+import { Modal } from '@/components/ui/Modal';
 import type { EChartsOption } from 'echarts';
 
 interface SyslogEntry {
@@ -132,6 +134,9 @@ export default function HostDetailPage() {
   const params = useParams();
   const hostId = Number(params.id);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [showEdit, setShowEdit] = useState(false);
+  const qc = useQueryClient();
+  const toast = useToastStore((s) => s.show);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: host, isLoading } = useHost(hostId) as { data: any; isLoading: boolean };
   const { data: history, isLoading: historyLoading } = useHostHistory(hostId, 24);
@@ -168,7 +173,13 @@ export default function HostDetailPage() {
                 Back
               </Button>
             </Link>
-            <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" onClick={() => setShowEdit(true)}>
+              <Pencil size={16} />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => {
+              qc.invalidateQueries({ queryKey: ['host', hostId] });
+              qc.invalidateQueries({ queryKey: ['host-history', hostId] });
+            }}>
               <RefreshCw size={16} />
             </Button>
           </div>
@@ -304,7 +315,7 @@ export default function HostDetailPage() {
           )}
 
           {/* All Disks (from agent extra data) */}
-          {agent?.extra?.disks && agent.extra.disks.length > 1 && (
+          {agent?.extra?.disks && agent.extra.disks.length > 0 && (
             <GlassCard className="p-4">
               <h3 className="text-sm font-medium text-slate-300 mb-3">Disk Usage</h3>
               <div className="space-y-3">
@@ -528,7 +539,125 @@ export default function HostDetailPage() {
       {activeTab === 'syslog' && (
         <HostSyslog hostId={hostId} />
       )}
+
+      {/* Edit Host Modal */}
+      {host && (
+        <EditHostModal
+          open={showEdit}
+          onClose={() => setShowEdit(false)}
+          host={host}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: ['host', hostId] });
+            qc.invalidateQueries({ queryKey: ['hosts'] });
+            toast('Host updated', 'success');
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/* ── Edit Host Modal ── */
+
+const editInputClass = 'w-full px-3 py-2 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50';
+const editSelectClass = 'w-full px-3 py-2 text-sm bg-[#111621] border border-white/[0.08] rounded-lg text-slate-200 focus:outline-none focus:border-sky-500/50 [&>option]:bg-[#111621] [&>option]:text-slate-200';
+
+function EditHostModal({ open, onClose, host, onSaved }: {
+  open: boolean;
+  onClose: () => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  host: any;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+    name: '',
+    hostname: '',
+    check_type: 'icmp',
+    port: '',
+    latency_threshold_ms: '',
+    enabled: true,
+  });
+  const [saving, setSaving] = useState(false);
+
+  // Sync form when modal opens
+  useEffect(() => {
+    if (open && host) {
+      setForm({
+        name: host.name ?? '',
+        hostname: host.hostname ?? '',
+        check_type: host.check_type ?? 'icmp',
+        port: host.port ? String(host.port) : '',
+        latency_threshold_ms: host.latency_threshold_ms ? String(host.latency_threshold_ms) : '',
+        enabled: host.enabled !== false,
+      });
+    }
+  }, [open, host]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await patch(`/api/v1/hosts/${host.id}`, {
+        name: form.name,
+        hostname: form.hostname,
+        check_type: form.check_type,
+        port: form.port ? Number(form.port) : null,
+        latency_threshold_ms: form.latency_threshold_ms ? Number(form.latency_threshold_ms) : null,
+        enabled: form.enabled,
+      });
+      onSaved();
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Edit Host">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Name</label>
+          <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={editInputClass} />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Hostname / IP</label>
+          <input type="text" value={form.hostname} onChange={(e) => setForm({ ...form, hostname: e.target.value })} className={editInputClass} />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Check Type</label>
+            <select value={form.check_type} onChange={(e) => setForm({ ...form, check_type: e.target.value })} className={editSelectClass}>
+              <option value="icmp">ICMP (Ping)</option>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+              <option value="tcp">TCP</option>
+              <option value="dns">DNS</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Port</label>
+            <input type="text" placeholder="optional" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} className={editInputClass} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Latency Threshold (ms)</label>
+            <input type="number" placeholder="200" value={form.latency_threshold_ms} onChange={(e) => setForm({ ...form, latency_threshold_ms: e.target.value })} className={editInputClass} />
+          </div>
+          <div className="flex items-end pb-1">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} className="rounded border-white/20 bg-white/[0.06]" />
+              <span className="text-sm text-slate-300">Enabled</span>
+            </label>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={handleSave} disabled={saving || !form.name || !form.hostname}>
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

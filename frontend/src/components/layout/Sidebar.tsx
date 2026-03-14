@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { useThemeStore } from '@/stores/theme';
 import { useAuthStore } from '@/stores/auth';
@@ -58,13 +58,39 @@ const integrationTypes = [
   { slug: 'redfish', label: 'Redfish' },
 ];
 
+// All searchable items for global search
+const allSearchItems = [
+  ...mainNav.map((n) => ({ label: n.label, href: n.href })),
+  ...systemNav.map((n) => ({ label: n.label, href: n.href })),
+  ...integrationTypes.map((i) => ({ label: i.label, href: `/integration/${i.slug}` })),
+];
+
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { sidebarCollapsed } = useThemeStore();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const [intOpen, setIntOpen] = useState(true);
   const [search, setSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Cmd+K shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
+
+  const searchResults = search.trim()
+    ? allSearchItems.filter((item) => item.label.toLowerCase().includes(search.toLowerCase()))
+    : [];
 
   const isAdmin = user?.role === 'admin';
 
@@ -89,17 +115,47 @@ export function Sidebar() {
 
       {/* Search */}
       {!sidebarCollapsed && (
-        <div className="px-3 py-2">
+        <div className="px-3 py-2 relative">
           <div className="relative">
             <Search size={14} className="absolute left-2.5 top-2.5 text-slate-500" />
             <input
+              ref={searchRef}
               type="text"
               placeholder="Search... ⌘K"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && searchResults.length > 0) {
+                  router.push(searchResults[0].href);
+                  setSearch('');
+                  searchRef.current?.blur();
+                }
+                if (e.key === 'Escape') {
+                  setSearch('');
+                  searchRef.current?.blur();
+                }
+              }}
               className="w-full pl-8 pr-3 py-2 text-xs rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-300 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
             />
           </div>
+          {searchFocused && searchResults.length > 0 && (
+            <div className="absolute left-3 right-3 mt-1 z-50 rounded-md bg-[#111621] border border-white/[0.08] shadow-xl overflow-hidden">
+              {searchResults.slice(0, 8).map((item) => (
+                <button
+                  key={item.href}
+                  className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.06] transition-colors"
+                  onMouseDown={() => {
+                    router.push(item.href);
+                    setSearch('');
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -163,10 +219,13 @@ export function Sidebar() {
                 );
               })}
               {isAdmin && (
-                <button className="flex items-center gap-2 px-3 py-1.5 pl-7 text-sm text-slate-500 hover:text-sky-400 transition-colors">
+                <Link
+                  href="/settings"
+                  className="flex items-center gap-2 px-3 py-1.5 pl-7 text-sm text-slate-500 hover:text-sky-400 transition-colors"
+                >
                   <Plus size={14} />
                   <span>Add Integration</span>
-                </button>
+                </Link>
               )}
             </div>
           )}

@@ -355,19 +355,34 @@ export default function RulesPage() {
             {loadingFields ? (
               <Skeleton className="h-9 w-full" />
             ) : fields.length > 0 ? (
-              <select
-                className={selectClass}
-                value={form.field_path}
-                onChange={(e) => updateForm('field_path', e.target.value)}
-                required
-              >
-                <option value="">Select field...</option>
-                {fields.map((f) => (
-                  <option key={f.path} value={f.path}>
-                    {f.path} ({f.type})
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  className={selectClass}
+                  value={form.field_path}
+                  onChange={(e) => updateForm('field_path', e.target.value)}
+                  required
+                >
+                  <option value="">Select field...</option>
+                  {fields.map((f) => (
+                    <option key={f.path} value={f.path}>
+                      {f.path} ({f.type})
+                    </option>
+                  ))}
+                </select>
+                {form.field_path && (() => {
+                  const selected = fields.find((f) => f.path === form.field_path);
+                  if (!selected || selected.value == null) return null;
+                  const displayVal = typeof selected.value === 'object'
+                    ? JSON.stringify(selected.value)
+                    : String(selected.value);
+                  return (
+                    <div className="mt-1.5 px-3 py-1.5 rounded-md bg-white/[0.04] border border-white/[0.06]">
+                      <span className="text-[10px] text-slate-500 uppercase tracking-wider">Current value: </span>
+                      <span className="text-xs font-mono text-slate-300">{displayVal}</span>
+                    </div>
+                  );
+                })()}
+              </>
             ) : (
               <input
                 type="text"

@@ -155,7 +155,7 @@ export default function SyslogPage() {
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_COLORS[msg.severity] ?? 'bg-slate-500 text-white'}`}>
-                      {msg.severity}
+                      {SEVERITY_LABELS[msg.severity] ?? msg.severity}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-300 font-mono whitespace-nowrap">
