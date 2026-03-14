@@ -981,6 +981,16 @@ export default function HostDetailPage() {
                           </button>
                         </>
                       )}
+                      {dp.status === 'monitored' && (
+                        <button
+                          onClick={() => portActionMut.mutate({ portId: dp.id, action: 'unmonitor_port' })}
+                          disabled={portActionMut.isPending}
+                          className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                          title="Stop monitoring this port"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
                       {/* SSL actions */}
                       {dp.has_ssl && dp.ssl_status === 'new' && (
                         <>
@@ -1001,6 +1011,16 @@ export default function HostDetailPage() {
                             <X size={14} />
                           </button>
                         </>
+                      )}
+                      {dp.has_ssl && dp.ssl_status === 'monitored' && (
+                        <button
+                          onClick={() => portActionMut.mutate({ portId: dp.id, action: 'unmonitor_ssl' })}
+                          disabled={portActionMut.isPending}
+                          className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                          title="Stop monitoring SSL"
+                        >
+                          <X size={14} />
+                        </button>
                       )}
                     </div>
                   </div>
