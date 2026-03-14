@@ -8,6 +8,7 @@ Rules:
 3. integration_host  – Integration unreachable + associated host offline
 4. syslog_spike      – Syslog error rate 5x above baseline
 5. log_anomaly       – Per-host log volume > baseline + 3σ
+6. port_error        – Host online (ICMP OK) but service check (HTTP/HTTPS/TCP) failed
 """
 import hashlib
 import json
@@ -308,6 +309,43 @@ async def _rule_integration_host(db):
             )
 
 
+# ── Rule 6: Port Error ─────────────────────────────────────────────────────
+
+async def _rule_port_error(db):
+    """Host is online (ICMP OK) but a service check (HTTP/HTTPS/TCP) failed."""
+    results = await db.execute(
+        select(PingHost).where(
+            PingHost.enabled == True,
+            PingHost.maintenance == False,
+            PingHost.port_error == True,
+        )
+    )
+    hosts = results.scalars().all()
+    if not hosts:
+        return
+
+    for host in hosts:
+        # Parse check_detail to find which checks failed
+        failed_checks = []
+        if host.check_detail:
+            try:
+                detail = json.loads(host.check_detail)
+                failed_checks = [k.upper() for k, v in detail.items() if not v]
+            except Exception:
+                pass
+
+        failed_label = ", ".join(failed_checks) if failed_checks else "service check"
+        await _find_or_create_incident(
+            db,
+            rule="port_error",
+            title=f"{host.name}: {failed_label} failed",
+            severity="warning",
+            host_ids=[host.id],
+            event_type="port_error",
+            summary=f"{host.name} ({host.hostname}) is online but {failed_label} is unreachable",
+        )
+
+
 # ── Rule 4: Syslog Spike ────────────────────────────────────────────────────
 
 async def _rule_syslog_spike(db):
@@ -491,6 +529,19 @@ async def _auto_resolve(db):
                     should_resolve = False
                     break
 
+        elif incident.rule == "port_error":
+            # Check if the host still has port_error
+            port_error_hosts = (await db.execute(
+                select(PingHost).where(
+                    PingHost.enabled == True,
+                    PingHost.port_error == True,
+                )
+            )).scalars().all()
+            for host in port_error_hosts:
+                if _host_ids_hash([host.id]) == incident.host_ids_hash:
+                    should_resolve = False
+                    break
+
         if should_resolve:
             incident.status = "resolved"
             incident.resolved_at = datetime.utcnow()
@@ -519,6 +570,7 @@ async def run_correlation():
             await _rule_host_down_syslog(db)
             await _rule_multi_host_down(db)
             await _rule_integration_host(db)
+            await _rule_port_error(db)
             await _rule_syslog_spike(db)
             await _rule_log_anomaly(db)
             await _auto_resolve(db)
