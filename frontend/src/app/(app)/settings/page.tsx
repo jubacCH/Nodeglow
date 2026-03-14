@@ -15,6 +15,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { api, get, post, del } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
+import { useThemeStore } from '@/stores/theme';
 
 /* ---------- Types ---------- */
 
@@ -26,6 +27,14 @@ interface SettingsData {
   ping_interval: string;
   latency_threshold_ms: string;
   proxmox_interval: string;
+  ping_retention_days: string;
+  proxmox_retention_days: string;
+  integration_retention_days: string;
+  anomaly_threshold: string;
+  proxmox_cpu_threshold: string;
+  proxmox_ram_threshold: string;
+  proxmox_disk_threshold: string;
+  syslog_port: string;
   notify_enabled: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
@@ -103,20 +112,6 @@ const inputSmCls =
 
 /* ---------- Helpers ---------- */
 
-function loadPref<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const v = localStorage.getItem(`ng_pref_${key}`);
-    return v !== null ? (JSON.parse(v) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function savePref(key: string, value: unknown) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(`ng_pref_${key}`, JSON.stringify(value));
-}
 
 /* ---------- API Doc Helper ---------- */
 
@@ -166,6 +161,14 @@ export default function SettingsPage() {
   const [pingInterval, setPingInterval] = useState('');
   const [latencyThreshold, setLatencyThreshold] = useState('');
   const [proxmoxInterval, setProxmoxInterval] = useState('');
+  const [pingRetention, setPingRetention] = useState('30');
+  const [proxmoxRetention, setProxmoxRetention] = useState('7');
+  const [integrationRetention, setIntegrationRetention] = useState('7');
+  const [anomalyThreshold, setAnomalyThreshold] = useState('2.0');
+  const [cpuThreshold, setCpuThreshold] = useState('85');
+  const [ramThreshold, setRamThreshold] = useState('85');
+  const [diskThreshold, setDiskThreshold] = useState('90');
+  const [syslogPort, setSyslogPort] = useState('1514');
 
   /* ---- Notifications state ---- */
   const [notifyEnabled, setNotifyEnabled] = useState(false);
@@ -182,11 +185,14 @@ export default function SettingsPage() {
   const [smtpTo, setSmtpTo] = useState('');
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
 
-  /* ---- Appearance state ---- */
-  const [accentColor, setAccentColor] = useState(() => loadPref('accentColor', '#0ea5e9'));
-  const [sidebarPosition, setSidebarPosition] = useState<'left' | 'right'>(() => loadPref('sidebarPosition', 'left'));
-  const [density, setDensity] = useState<'comfortable' | 'compact'>(() => loadPref('density', 'comfortable'));
-  const [fontSize, setFontSize] = useState<'sm' | 'base' | 'lg'>(() => loadPref('fontSize', 'sm'));
+  /* ---- Appearance state (from Zustand theme store) ---- */
+  const themeStore = useThemeStore();
+  const [accentColor, setAccentColor] = useState(themeStore.accentColor);
+  const [sidebarPosition, setSidebarPosition] = useState<'left' | 'right'>(themeStore.sidebarPosition);
+  const [density, setDensity] = useState<'comfortable' | 'compact'>(themeStore.density);
+  const [fontSize, setFontSize] = useState<'sm' | 'base' | 'lg'>(
+    themeStore.fontSize <= 12 ? 'sm' : themeStore.fontSize >= 16 ? 'lg' : 'base'
+  );
 
   /* ---- API keys state ---- */
   const [createKeyModal, setCreateKeyModal] = useState(false);
@@ -219,6 +225,14 @@ export default function SettingsPage() {
     setSmtpFrom(s.smtp_from);
     setSmtpTo(s.smtp_to);
     setSmtpPassword('');
+    setPingRetention(s.ping_retention_days || '30');
+    setProxmoxRetention(s.proxmox_retention_days || '7');
+    setIntegrationRetention(s.integration_retention_days || '7');
+    setAnomalyThreshold(s.anomaly_threshold || '2.0');
+    setCpuThreshold(s.proxmox_cpu_threshold || '85');
+    setRamThreshold(s.proxmox_ram_threshold || '85');
+    setDiskThreshold(s.proxmox_disk_threshold || '90');
+    setSyslogPort(s.syslog_port || '1514');
   }, []);
 
   useEffect(() => {
@@ -295,26 +309,30 @@ export default function SettingsPage() {
 
   /* ---- Handlers ---- */
 
-  function handleSaveSystem() {
+  function buildAllSettingsParams(): URLSearchParams {
     const params = new URLSearchParams();
     params.set('site_name', siteName);
     params.set('timezone', timezone);
-    // Keep existing monitoring values
     params.set('ping_interval', pingInterval);
     params.set('latency_threshold', latencyThreshold);
     params.set('proxmox_interval', proxmoxInterval);
-    saveSettingsMut.mutate(params);
+    params.set('ping_retention', pingRetention);
+    params.set('proxmox_retention', proxmoxRetention);
+    params.set('integration_retention', integrationRetention);
+    params.set('anomaly_threshold', anomalyThreshold);
+    params.set('cpu_threshold', cpuThreshold);
+    params.set('ram_threshold', ramThreshold);
+    params.set('disk_threshold', diskThreshold);
+    params.set('syslog_port', syslogPort);
+    return params;
+  }
+
+  function handleSaveSystem() {
+    saveSettingsMut.mutate(buildAllSettingsParams());
   }
 
   function handleSaveMonitoring() {
-    const params = new URLSearchParams();
-    // Keep existing system values
-    params.set('site_name', siteName);
-    params.set('timezone', timezone);
-    params.set('ping_interval', pingInterval);
-    params.set('latency_threshold', latencyThreshold);
-    params.set('proxmox_interval', proxmoxInterval);
-    saveSettingsMut.mutate(params);
+    saveSettingsMut.mutate(buildAllSettingsParams());
   }
 
   function handleSaveNotifications() {
@@ -340,11 +358,12 @@ export default function SettingsPage() {
   }
 
   function handleSaveAppearance() {
-    savePref('accentColor', accentColor);
-    savePref('sidebarPosition', sidebarPosition);
-    savePref('density', density);
-    savePref('fontSize', fontSize);
-    toast.show('Preferences saved to browser', 'success');
+    themeStore.setAccentColor(accentColor);
+    themeStore.setSidebarPosition(sidebarPosition);
+    themeStore.setDensity(density);
+    const sizeMap = { sm: 12, base: 14, lg: 16 } as const;
+    themeStore.setFontSize(sizeMap[fontSize]);
+    toast.show('Preferences saved', 'success');
   }
 
   function handleCreateKey(e: React.FormEvent) {
