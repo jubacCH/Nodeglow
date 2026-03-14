@@ -499,6 +499,31 @@ async def update_host(
     return {"ok": True, "id": host.id}
 
 
+@router.patch("/hosts/bulk", summary="Bulk update hosts")
+async def bulk_update_hosts(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    body = await request.json()
+    host_ids = body.get("ids", [])
+    updates = body.get("updates", {})
+    if not host_ids or not updates:
+        raise HTTPException(400, "ids and updates required")
+
+    allowed_fields = {"check_type", "enabled", "latency_threshold_ms"}
+    for field, value in updates.items():
+        if field not in allowed_fields:
+            continue
+        await db.execute(
+            update(PingHost)
+            .where(PingHost.id.in_(host_ids))
+            .values(**{field: value})
+        )
+    await db.commit()
+    return {"ok": True, "updated": len(host_ids)}
+
+
 @router.delete("/hosts/{host_id}", summary="Delete a host")
 async def delete_host(
     host_id: int,
@@ -760,11 +785,29 @@ async def list_incidents(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
     status: str = Query(None, description="Filter: open, acknowledged, resolved"),
+    severity: str = Query(None, description="Filter: critical, warning, info"),
+    search: str = Query(None, description="Search in title"),
+    host_name: str = Query(None, description="Filter by host name in event summaries"),
     limit: int = Query(50, ge=1, le=500),
 ):
-    q = select(Incident).order_by(Incident.updated_at.desc()).limit(limit)
+    if host_name:
+        # Join with events and find incidents that mention this host
+        q = (
+            select(Incident)
+            .join(IncidentEvent, IncidentEvent.incident_id == Incident.id)
+            .where(IncidentEvent.summary.ilike(f"%{host_name}%"))
+            .group_by(Incident.id)
+            .order_by(Incident.updated_at.desc())
+            .limit(limit)
+        )
+    else:
+        q = select(Incident).order_by(Incident.updated_at.desc()).limit(limit)
     if status:
         q = q.where(Incident.status == status)
+    if severity:
+        q = q.where(Incident.severity == severity)
+    if search:
+        q = q.where(Incident.title.ilike(f"%{search}%"))
     result = await db.execute(q)
 
     return [

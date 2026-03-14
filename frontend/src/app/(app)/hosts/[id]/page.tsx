@@ -10,9 +10,9 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { useHost, useHostHistory, useHosts } from '@/hooks/queries/useHosts';
-import { formatLatency, uptimeColor } from '@/lib/utils';
+import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
 import { EChart } from '@/components/charts/EChart';
-import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,6 +20,7 @@ import { get, patch } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { Modal } from '@/components/ui/Modal';
 import type { EChartsOption } from 'echarts';
+import type { Incident } from '@/types';
 
 interface SyslogEntry {
   timestamp: string;
@@ -174,6 +175,12 @@ export default function HostDetailPage() {
   const { data: host, isLoading } = useHost(hostId) as { data: any; isLoading: boolean };
   const { data: history, isLoading: historyLoading } = useHostHistory(hostId, 24);
   const { data: allHosts } = useHosts();
+
+  const { data: relatedIncidents } = useQuery({
+    queryKey: ['host-incidents', hostId, host?.name],
+    queryFn: () => get<Incident[]>(`/api/v1/incidents?host_name=${encodeURIComponent(host.name)}&limit=10`),
+    enabled: !!host?.name,
+  });
 
   const agent: AgentMetrics | null = host?.agent ?? null;
   const device = host?.integration?.device ?? null;
@@ -763,6 +770,37 @@ export default function HostDetailPage() {
               </div>
             )}
           </GlassCard>
+
+          {/* Related Incidents */}
+          {relatedIncidents && relatedIncidents.length > 0 && (
+            <GlassCard className="p-4">
+              <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                <AlertTriangle size={14} className="text-amber-400" />
+                Related Incidents ({relatedIncidents.length})
+              </h3>
+              <div className="space-y-2">
+                {relatedIncidents.map((inc) => (
+                  <Link key={inc.id} href={`/incidents/${inc.id}`}>
+                    <div className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/[0.06] transition-colors cursor-pointer">
+                      <StatusDot
+                        status={
+                          inc.status === 'resolved' ? 'online' :
+                          inc.status === 'acknowledged' ? 'maintenance' : 'offline'
+                        }
+                        pulse={inc.status === 'open' && inc.severity === 'critical'}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-slate-200 truncate">{inc.title}</p>
+                        <p className="text-xs text-slate-500">{inc.rule} &middot; {timeAgo(inc.created_at)}</p>
+                      </div>
+                      <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>
+                      <Badge>{inc.status}</Badge>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </GlassCard>
+          )}
 
           {/* Latency chart */}
           <GlassCard className="p-4">

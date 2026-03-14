@@ -730,6 +730,33 @@ async def root_cause_suggestions(
     }
 
 
+# ── Template Tag Editing ──────────────────────────────────────────────────────
+
+@router.patch("/api/templates/{template_hash}/tags")
+async def update_template_tags(
+    template_hash: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update tags for a log template."""
+    from models.log_template import LogTemplate
+
+    if not re.match(r"^[a-f0-9]{16}$", template_hash):
+        return JSONResponse({"error": "Invalid template hash"}, status_code=400)
+
+    tpl = (await db.execute(
+        select(LogTemplate).where(LogTemplate.template_hash == template_hash)
+    )).scalar_one_or_none()
+    if not tpl:
+        return JSONResponse({"error": "Template not found"}, status_code=404)
+
+    body = await request.json()
+    if "tags" in body:
+        tpl.tags = str(body["tags"]).strip()
+    await db.commit()
+    return {"ok": True, "tags": tpl.tags}
+
+
 @router.get("/api/smart-feed")
 async def smart_feed(
     db: AsyncSession = Depends(get_db),
