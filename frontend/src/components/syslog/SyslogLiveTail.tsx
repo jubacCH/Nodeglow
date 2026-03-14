@@ -3,6 +3,7 @@
 import { useSSE } from '@/hooks/useSSE';
 import type { SyslogMessage } from '@/types';
 import { useMemo } from 'react';
+import Link from 'next/link';
 
 const SEVERITY_COLORS: Record<number, string> = {
   0: 'bg-red-500 text-white',
@@ -102,9 +103,9 @@ export function SyslogLiveTail({ enabled, severity, host, app }: SyslogLiveTailP
                 >
                   {SEVERITY_LABELS[msg.severity] ?? msg.severity}
                 </span>
-                <span className="text-xs text-sky-300/70 font-mono whitespace-nowrap shrink-0">
+                <Link href={`/hosts?q=${encodeURIComponent(msg.hostname)}`} className="text-xs text-sky-300/70 hover:text-sky-300 font-mono whitespace-nowrap shrink-0 transition-colors">
                   {msg.hostname}
-                </span>
+                </Link>
                 <span className="text-xs text-slate-300 truncate min-w-0">
                   {msg.message}
                 </span>

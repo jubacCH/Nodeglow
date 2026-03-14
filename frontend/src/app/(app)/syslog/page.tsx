@@ -159,8 +159,10 @@ export default function SyslogPage() {
                       {SEVERITY_LABELS[msg.severity] ?? msg.severity}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-300 font-mono whitespace-nowrap">
-                    {msg.hostname}
+                  <td className="px-4 py-3 text-xs font-mono whitespace-nowrap">
+                    <Link href={`/hosts?q=${encodeURIComponent(msg.hostname)}`} className="text-slate-300 hover:text-sky-400 transition-colors">
+                      {msg.hostname}
+                    </Link>
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-300 max-w-md truncate">
                     {msg.message}
