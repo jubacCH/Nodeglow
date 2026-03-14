@@ -98,6 +98,7 @@ function HostsPageInner() {
   const [form, setForm] = useState({ name: '', hostname: '', check_type: 'icmp', port: '' });
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -232,6 +233,13 @@ function HostsPageInner() {
                 className="pl-8 pr-3 py-1.5 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
               />
             </div>
+            <Button size="sm" variant={selectMode ? 'secondary' : 'ghost'} onClick={() => {
+              setSelectMode(!selectMode);
+              if (selectMode) setSelected(new Set());
+            }}>
+              <CheckSquare size={16} />
+              {selectMode ? 'Cancel' : 'Select'}
+            </Button>
             <Button size="sm" onClick={() => setShowAdd(true)}>
               <Plus size={16} />
               Add Host
@@ -261,17 +269,14 @@ function HostsPageInner() {
           </button>
         ))}
 
-        {selected.size > 0 && (
+        {selectMode && selected.size > 0 && (
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs text-slate-400">{selected.size} selected</span>
             <Button size="sm" variant="ghost" onClick={() => bulkAction('maintenance')} disabled={bulkLoading}>
               <Wrench size={14} /> Maintenance
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => bulkAction('delete')} disabled={bulkLoading} className="text-red-400 hover:text-red-300">
+            <Button size="sm" variant="danger" onClick={() => bulkAction('delete')} disabled={bulkLoading}>
               <Trash2 size={14} /> Delete
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-              Clear
             </Button>
           </div>
         )}
@@ -323,11 +328,13 @@ function HostsPageInner() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/[0.06]">
-                <th className="px-4 py-3 w-8">
-                  <button onClick={toggleAll} className="text-slate-500 hover:text-slate-300">
-                    {selected.size === filteredHosts.length && filteredHosts.length > 0 ? <CheckSquare size={16} /> : <Square size={16} />}
-                  </button>
-                </th>
+                {selectMode && (
+                  <th className="px-4 py-3 w-8">
+                    <button onClick={toggleAll} className="text-slate-500 hover:text-slate-300">
+                      {selected.size === filteredHosts.length && filteredHosts.length > 0 ? <CheckSquare size={16} /> : <Square size={16} />}
+                    </button>
+                  </th>
+                )}
                 <SortHeader label="Host" sortKey="name" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
                 <SortHeader label="Status" sortKey="status" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
                 <SortHeader label="Type" sortKey="type" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
@@ -340,7 +347,7 @@ function HostsPageInner() {
               {isLoading &&
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i} className="border-b border-white/[0.06]">
-                    <td className="px-4 py-3"><Skeleton className="h-4 w-4" /></td>
+                    {selectMode && <td className="px-4 py-3"><Skeleton className="h-4 w-4" /></td>}
                     <td className="px-4 py-3"><Skeleton className="h-5 w-40" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-16" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-12" /></td>
@@ -354,11 +361,13 @@ function HostsPageInner() {
                   key={host.id}
                   className={`border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer ${selected.has(host.id) ? 'bg-sky-500/5' : ''}`}
                 >
-                  <td className="px-4 py-3">
-                    <button onClick={() => toggleSelect(host.id)} className="text-slate-500 hover:text-slate-300">
-                      {selected.has(host.id) ? <CheckSquare size={16} className="text-sky-400" /> : <Square size={16} />}
-                    </button>
-                  </td>
+                  {selectMode && (
+                    <td className="px-4 py-3">
+                      <button onClick={(e) => { e.stopPropagation(); toggleSelect(host.id); }} className="text-slate-500 hover:text-slate-300">
+                        {selected.has(host.id) ? <CheckSquare size={16} className="text-sky-400" /> : <Square size={16} />}
+                      </button>
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <Link href={`/hosts/${host.id}`} className="block">
                       <p className="font-medium text-slate-200">{host.name}</p>
@@ -403,7 +412,7 @@ function HostsPageInner() {
               ))}
               {!isLoading && filteredHosts.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center">
+                  <td colSpan={selectMode ? 7 : 6} className="px-4 py-12 text-center">
                     <Server size={48} className="mx-auto mb-4 text-slate-600" />
                     <p className="text-base font-medium text-slate-300 mb-1">
                       {search ? 'No hosts match your search' : 'No hosts configured yet'}
