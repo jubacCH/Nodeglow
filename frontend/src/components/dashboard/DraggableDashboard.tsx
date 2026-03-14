@@ -68,16 +68,26 @@ export function DraggableDashboard({ widgets }: DraggableDashboardProps) {
       i: w.id,
       ...w.defaultLayout,
     }));
+    // 2-col for medium screens
+    const md = widgets.map((w, idx): LayoutItem => ({
+      i: w.id,
+      x: w.defaultLayout.w >= 3 ? 0 : (idx % 2),
+      y: idx * (w.defaultLayout.h || 3),
+      w: Math.min(w.defaultLayout.w, 2),
+      h: w.defaultLayout.h,
+      minW: 1,
+      minH: w.defaultLayout.minH,
+    }));
     const sm = widgets.map((w, idx): LayoutItem => ({
       i: w.id,
       x: 0,
-      y: idx * (w.defaultLayout.h || 4),
+      y: idx * (w.defaultLayout.h || 3),
       w: 1,
       h: w.defaultLayout.h,
       minW: 1,
       minH: w.defaultLayout.minH,
     }));
-    return { lg, sm };
+    return { lg, md, sm };
   }, [widgets]);
 
   const [layouts, setLayouts] = useState<LayoutMap>(() => loadLayouts() ?? defaultLayouts);
@@ -95,9 +105,9 @@ export function DraggableDashboard({ widgets }: DraggableDashboardProps) {
   // While loading the grid library, just show a simple grid
   if (!RGL) {
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {widgets.map((w) => (
-          <div key={w.id} className={w.defaultLayout.w === 2 ? 'lg:col-span-2' : ''}>
+          <div key={w.id} className={w.defaultLayout.w >= 3 ? 'lg:col-span-3 md:col-span-2' : w.defaultLayout.w >= 2 ? 'lg:col-span-2 md:col-span-2' : ''}>
             <GlassCard className="p-4">
               {w.render()}
             </GlassCard>
@@ -164,9 +174,9 @@ function DraggableInner({
           className="react-grid-layout"
           width={width}
           layouts={layouts}
-          breakpoints={{ lg: 1024, sm: 0 }}
-          cols={{ lg: 2, sm: 1 }}
-          rowHeight={130}
+          breakpoints={{ lg: 1200, md: 768, sm: 0 }}
+          cols={{ lg: 3, md: 2, sm: 1 }}
+          rowHeight={110}
           isDraggable={!locked}
           isResizable={!locked}
           onLayoutChange={handleLayoutChange}
