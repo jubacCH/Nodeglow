@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post } from '@/lib/api';
 import { ShieldCheck, RefreshCw } from 'lucide-react';
+import { ExportButton } from '@/components/ui/ExportButton';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
@@ -66,10 +67,23 @@ export default function SslPage() {
         title="SSL Certificates"
         description="Certificate expiry monitoring"
         actions={
-          <Button variant="ghost" size="sm" onClick={refreshAll} disabled={refreshing}>
-            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-            {refreshing ? 'Refreshing...' : 'Refresh All'}
-          </Button>
+          <div className="flex items-center gap-2">
+            {certs.length > 0 && (
+              <ExportButton
+                data={certs.map(c => ({ name: c.name, hostname: c.hostname, days_until_expiry: c.days }))}
+                filename="ssl-certificates"
+                columns={[
+                  { key: 'name', label: 'Name' },
+                  { key: 'hostname', label: 'Hostname' },
+                  { key: 'days_until_expiry', label: 'Days Until Expiry' },
+                ]}
+              />
+            )}
+            <Button variant="ghost" size="sm" onClick={refreshAll} disabled={refreshing}>
+              <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
+              {refreshing ? 'Refreshing...' : 'Refresh All'}
+            </Button>
+          </div>
         }
       />
 

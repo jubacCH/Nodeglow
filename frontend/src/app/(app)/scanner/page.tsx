@@ -19,6 +19,7 @@ import {
   Radar,
   CalendarClock,
 } from 'lucide-react';
+import { timeAgo } from '@/lib/utils';
 
 /* ---------- types ---------- */
 
@@ -435,10 +436,8 @@ export default function ScannerPage() {
                       </Badge>
                     </button>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-500">
-                    {sched.last_run
-                      ? new Date(sched.last_run).toLocaleString()
-                      : 'Never'}
+                  <td className="px-4 py-3 text-xs text-slate-500" title={sched.last_run ? new Date(sched.last_run).toLocaleString() : ''}>
+                    {sched.last_run ? timeAgo(sched.last_run) : 'Never'}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
