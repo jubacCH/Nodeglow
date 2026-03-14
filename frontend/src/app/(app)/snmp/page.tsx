@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -83,6 +83,7 @@ const tabs: { key: Tab; label: string; icon: typeof Database }[] = [
 /* ---------- page ---------- */
 
 export default function SnmpPage() {
+  useEffect(() => { document.title = 'SNMP | Nodeglow'; }, []);
   const [activeTab, setActiveTab] = useState<Tab>('mibs');
 
   return (

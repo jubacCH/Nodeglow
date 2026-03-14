@@ -15,6 +15,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useToastStore } from '@/stores/toast';
 import { api } from '@/lib/api';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface ConfigField {
   key: string;
@@ -46,6 +47,7 @@ export default function IntegrationListPage() {
   const [formData, setFormData] = useState<Record<string, string | boolean>>({});
   const [saving, setSaving] = useState(false);
   const toast = useToastStore((s) => s.show);
+  const { confirm, ConfirmDialogElement } = useConfirm();
 
   const { data: fieldsData } = useQuery({
     queryKey: ['integration-fields', type],
@@ -108,7 +110,8 @@ export default function IntegrationListPage() {
   async function handleDelete(id: number, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (!confirm('Delete this integration instance?')) return;
+    const ok = await confirm({ title: 'Delete integration', description: 'Delete this integration instance? This cannot be undone.', confirmLabel: 'Delete', variant: 'danger' });
+    if (!ok) return;
     await del(`/api/integration/${type}/${id}`);
     qc.invalidateQueries({ queryKey: ['integrations', type] });
   }
@@ -319,6 +322,7 @@ export default function IntegrationListPage() {
           </GlassCard>
         )}
       </div>
+      {ConfirmDialogElement}
     </div>
   );
 }

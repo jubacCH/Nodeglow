@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useQuery } from '@tanstack/react-query';
 import { api, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 import type { AlertRule } from '@/types';
 import { Plus, Trash2, Power, Pencil } from 'lucide-react';
 
@@ -95,6 +96,7 @@ function ruleToForm(rule: AlertRule): RuleFormState {
 }
 
 export default function RulesPage() {
+  useEffect(() => { document.title = 'Rules | Nodeglow'; }, []);
   const [showModal, setShowModal] = useState(false);
   const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
   const [form, setForm] = useState<RuleFormState>(DEFAULT_FORM);
@@ -103,6 +105,7 @@ export default function RulesPage() {
   const [fields, setFields] = useState<FieldOption[]>([]);
   const [loadingFields, setLoadingFields] = useState(false);
   const toast = useToastStore((s) => s.show);
+  const { confirm, ConfirmDialogElement } = useConfirm();
 
   const { data: rules, isLoading, refetch } = useQuery({
     queryKey: ['rules'],
@@ -217,7 +220,8 @@ export default function RulesPage() {
   }
 
   async function deleteRule(id: number) {
-    if (!confirm('Delete this rule?')) return;
+    const ok = await confirm({ title: 'Delete rule', description: 'Delete this rule? This cannot be undone.', confirmLabel: 'Delete', variant: 'danger' });
+    if (!ok) return;
     try {
       await post(`/api/v1/rules/${id}/delete`);
       refetch();
@@ -483,6 +487,7 @@ export default function RulesPage() {
           </div>
         </form>
       </Modal>
+      {ConfirmDialogElement}
     </div>
   );
 }

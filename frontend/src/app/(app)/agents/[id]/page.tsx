@@ -2,6 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
@@ -38,6 +39,7 @@ export default function AgentDetailPage() {
 
   return (
     <div>
+      <Breadcrumbs items={[{ label: 'Agents', href: '/agents' }, { label: data?.name ?? `Agent #${agentId}` }]} />
       <PageHeader
         title={data?.name ?? 'Agent'}
         description={data?.hostname ?? ''}
