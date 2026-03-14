@@ -311,6 +311,12 @@ async def run_snmp_polls():
     await _run()
 
 
+async def run_port_discovery():
+    """Discover open ports and SSL certs on monitored hosts."""
+    from services.port_discovery import run_port_discovery as _run
+    await _run()
+
+
 async def run_alert_rules():
     """Evaluate all user-defined alert rules."""
     from services.rules import evaluate_rules
@@ -346,6 +352,8 @@ async def start_scheduler():
                       id="snmp_polls", replace_existing=True)
     scheduler.add_job(run_alert_rules, "interval", seconds=60,
                       id="alert_rules", replace_existing=True)
+    scheduler.add_job(run_port_discovery, "interval", hours=6,
+                      id="port_discovery", replace_existing=True)
     scheduler.start()
 
     # Seed default SNMP OIDs
