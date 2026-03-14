@@ -380,7 +380,7 @@ export function GravityWidget({ hosts }: GravityWidgetProps) {
   const maintCount = hosts.filter((h) => h.host.maintenance).length;
 
   return (
-    <GlassCard className="relative overflow-hidden" style={{ minHeight: isMobile ? 200 : 420 }}>
+    <GlassCard className="relative overflow-hidden" style={{ minHeight: isMobile ? 200 : 350 }}>
       {/* HUD overlay */}
       <div className="absolute top-3 left-3 z-10 flex items-center gap-3">
         <span className="flex items-center gap-1.5 text-xs">
@@ -408,7 +408,7 @@ export function GravityWidget({ hosts }: GravityWidgetProps) {
       {isMobile ? (
         <MobileGrid hosts={hosts} />
       ) : (
-        <div style={{ height: 420 }}>
+        <div style={{ height: 350 }}>
           <Canvas
             camera={{ position: [0, 3, 8], fov: 45 }}
             style={{ background: 'transparent' }}
