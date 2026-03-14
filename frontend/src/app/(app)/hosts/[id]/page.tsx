@@ -1259,7 +1259,7 @@ function EditHostModal({ open, onClose, host, onSaved }: {
   const [form, setForm] = useState({
     name: '',
     hostname: '',
-    check_type: 'icmp',
+    checks: { icmp: true, http: false, https: false, tcp: false } as Record<string, boolean>,
     port: '',
     latency_threshold_ms: '',
     enabled: true,
@@ -1269,10 +1269,11 @@ function EditHostModal({ open, onClose, host, onSaved }: {
   // Sync form when modal opens
   useEffect(() => {
     if (open && host) {
+      const types = (host.check_type ?? 'icmp').split(',').map((t: string) => t.trim());
       setForm({
         name: host.name ?? '',
         hostname: host.hostname ?? '',
-        check_type: host.check_type ?? 'icmp',
+        checks: { icmp: types.includes('icmp'), http: types.includes('http'), https: types.includes('https'), tcp: types.includes('tcp') },
         port: host.port ? String(host.port) : '',
         latency_threshold_ms: host.latency_threshold_ms ? String(host.latency_threshold_ms) : '',
         enabled: host.enabled !== false,
@@ -1283,10 +1284,11 @@ function EditHostModal({ open, onClose, host, onSaved }: {
   async function handleSave() {
     setSaving(true);
     try {
+      const check_type = Object.entries(form.checks).filter(([, v]) => v).map(([k]) => k).join(',') || 'icmp';
       await patch(`/api/v1/hosts/${host.id}`, {
         name: form.name,
         hostname: form.hostname,
-        check_type: form.check_type,
+        check_type,
         port: form.port ? Number(form.port) : null,
         latency_threshold_ms: form.latency_threshold_ms ? Number(form.latency_threshold_ms) : null,
         enabled: form.enabled,
@@ -1309,21 +1311,20 @@ function EditHostModal({ open, onClose, host, onSaved }: {
           <label className="block text-xs text-slate-400 mb-1">Hostname / IP</label>
           <input type="text" value={form.hostname} onChange={(e) => setForm({ ...form, hostname: e.target.value })} className={editInputClass} />
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Check Type</label>
-            <select value={form.check_type} onChange={(e) => setForm({ ...form, check_type: e.target.value })} className={editSelectClass}>
-              <option value="icmp">ICMP (Ping)</option>
-              <option value="http">HTTP</option>
-              <option value="https">HTTPS</option>
-              <option value="tcp">TCP</option>
-              <option value="dns">DNS</option>
-            </select>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Check Types</label>
+          <div className="flex flex-wrap gap-3">
+            {[['icmp', 'ICMP (Ping)'], ['http', 'HTTP'], ['https', 'HTTPS'], ['tcp', 'TCP']].map(([key, label]) => (
+              <label key={key} className="flex items-center gap-1.5">
+                <input type="checkbox" checked={form.checks[key] ?? false} onChange={(e) => setForm({ ...form, checks: { ...form.checks, [key]: e.target.checked } })} className="rounded border-white/20 bg-white/[0.06]" />
+                <span className="text-sm text-slate-300">{label}</span>
+              </label>
+            ))}
           </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Port</label>
-            <input type="text" placeholder="optional" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} className={editInputClass} />
-          </div>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Port</label>
+          <input type="text" placeholder="optional" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} className={editInputClass} />
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
