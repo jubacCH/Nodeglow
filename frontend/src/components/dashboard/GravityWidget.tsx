@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Html } from '@react-three/drei';
+import { OrbitControls, Html, useTexture } from '@react-three/drei';
 import { useRouter } from 'next/navigation';
 import * as THREE from 'three';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -64,10 +64,14 @@ function orbitRadius(h: HostStat, index: number): number {
   return base + spread;
 }
 
-/* ── Earth component — smaller, brighter, more planet-like ── */
+/* ── Earth component — photorealistic with textures ── */
 
 function Earth() {
   const groupRef = useRef<THREE.Group>(null);
+  const [dayMap, bumpMap] = useTexture([
+    '/textures/earth-day.jpg',
+    '/textures/earth-topology.png',
+  ]);
 
   useFrame((_state, delta) => {
     if (groupRef.current) groupRef.current.rotation.y += delta * 0.06;
@@ -75,32 +79,20 @@ function Earth() {
 
   return (
     <group ref={groupRef}>
-      {/* Core planet — bright ocean blue */}
+      {/* Main planet with day texture + bump map */}
       <mesh>
         <sphereGeometry args={[0.7, 64, 64]} />
         <meshStandardMaterial
-          color="#2563EB"
-          emissive="#1d4ed8"
-          emissiveIntensity={0.4}
-          roughness={0.6}
+          map={dayMap}
+          bumpMap={bumpMap}
+          bumpScale={0.03}
+          roughness={0.7}
           metalness={0.05}
         />
       </mesh>
-      {/* Land masses — subtle green-tinted overlay, slightly offset */}
-      <mesh rotation={[0.1, 0.8, 0]}>
-        <sphereGeometry args={[0.702, 32, 32]} />
-        <meshStandardMaterial
-          color="#16a34a"
-          emissive="#166534"
-          emissiveIntensity={0.2}
-          transparent
-          opacity={0.25}
-          roughness={0.9}
-        />
-      </mesh>
-      {/* Atmosphere inner glow */}
+      {/* Atmosphere inner glow — Fresnel-like rim */}
       <mesh>
-        <sphereGeometry args={[0.76, 48, 48]} />
+        <sphereGeometry args={[0.73, 48, 48]} />
         <meshBasicMaterial
           color="#60A5FA"
           transparent
@@ -110,21 +102,21 @@ function Earth() {
       </mesh>
       {/* Atmosphere outer halo */}
       <mesh>
-        <sphereGeometry args={[0.88, 32, 32]} />
+        <sphereGeometry args={[0.82, 32, 32]} />
         <meshBasicMaterial
           color="#38BDF8"
           transparent
-          opacity={0.06}
+          opacity={0.07}
           side={THREE.BackSide}
         />
       </mesh>
-      {/* Bright rim light effect */}
+      {/* Soft blue glow */}
       <mesh>
-        <sphereGeometry args={[1.05, 32, 32]} />
+        <sphereGeometry args={[0.95, 32, 32]} />
         <meshBasicMaterial
           color="#93C5FD"
           transparent
-          opacity={0.025}
+          opacity={0.03}
           side={THREE.BackSide}
         />
       </mesh>
@@ -176,8 +168,8 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
       const t = startAngle.current + clock.getElapsedTime() * speed;
       const x = Math.cos(t) * radius;
       const z = Math.sin(t) * radius;
-      // Inclined orbit — gives 3D depth
-      const y = Math.sin(t + inclination) * radius * 0.35;
+      // Flat orbital plane — hosts hover on same level
+      const y = Math.sin(t + inclination) * radius * 0.03;
       groupRef.current.position.set(x, y, z);
     }
     if (meshRef.current && isOffline) {
@@ -300,10 +292,11 @@ function Scene({ hosts }: { hosts: HostStat[] }) {
 
   return (
     <>
-      {/* Lighting — key light from upper right, blue fill from behind */}
-      <ambientLight intensity={0.2} />
-      <directionalLight position={[4, 3, 2]} intensity={1.0} color="#ffffff" />
-      <pointLight position={[-3, -1, -3]} intensity={0.3} color="#60A5FA" />
+      {/* Lighting — sunlight from right, subtle blue fill */}
+      <ambientLight intensity={0.15} />
+      <directionalLight position={[5, 3, 2]} intensity={1.2} color="#FFF5E6" />
+      <pointLight position={[-4, -2, -4]} intensity={0.25} color="#60A5FA" />
+      <hemisphereLight args={['#87CEEB', '#000814', 0.15]} />
 
       <Stars />
       <Earth />
@@ -416,7 +409,7 @@ export function GravityWidget({ hosts }: GravityWidgetProps) {
       ) : (
         <div style={{ height: 420 }}>
           <Canvas
-            camera={{ position: [0, 3.5, 8], fov: 45 }}
+            camera={{ position: [0, 4, 7.5], fov: 45 }}
             style={{ background: 'transparent' }}
             gl={{ alpha: true, antialias: true }}
             dpr={[1, 2]}
