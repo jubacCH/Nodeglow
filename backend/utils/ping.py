@@ -118,8 +118,12 @@ async def _check_single(host: "PingHost", ct: str) -> tuple[bool, float | None]:
             scheme = "https" if ct == "https" else "http"
             url = f"{scheme}://{hostname}"
         return await check_http(url)
-    if ct == "tcp":
-        port = host.port or 80
+    # TCP — supports both "tcp" (uses host.port) and "tcp:PORT" format
+    if ct == "tcp" or ct.startswith("tcp:"):
+        if ":" in ct:
+            port = int(ct.split(":")[1])
+        else:
+            port = host.port or 80
         return await check_tcp(host.hostname, port)
     return await ping_host(host.hostname)
 
@@ -142,7 +146,8 @@ async def check_host(host: "PingHost") -> tuple[bool, bool, float | None, dict]:
     detail: dict = {}
     for ct, (ok, lat) in zip(types, results):
         label = ct
-        if ct == "tcp" and host.port:
+        # Legacy "tcp" without port suffix — add host.port for clarity
+        if ct == "tcp" and host.port and ":" not in ct:
             label = f"tcp:{host.port}"
         detail[label] = ok
 
