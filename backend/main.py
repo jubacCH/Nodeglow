@@ -121,12 +121,84 @@ async def _get_nav_counts(db) -> dict:
         return _nav_cache["counts"]
 
     from services.integration import count_all_by_type
+    from sqlalchemy import func
+    from models.discovered_port import DiscoveredPort
     raw = await count_all_by_type(db)
     counts = {k: raw.get(k, 0) for k in _NAV_KEYS}
+
+    # Count pending tasks (new ports + new SSL certs)
+    new_ports = (await db.execute(
+        select(func.count()).select_from(DiscoveredPort)
+        .where(DiscoveredPort.last_open == True, DiscoveredPort.status == "new")
+    )).scalar() or 0
+    new_ssl = (await db.execute(
+        select(func.count()).select_from(DiscoveredPort)
+        .where(DiscoveredPort.last_open == True, DiscoveredPort.has_ssl == True, DiscoveredPort.ssl_status == "new")
+    )).scalar() or 0
+    counts["tasks"] = new_ports + new_ssl
 
     _nav_cache["counts"] = counts
     _nav_cache["ts"] = now
     return counts
+
+
+@app.get("/api/tasks")
+async def tasks_api():
+    """Aggregate all pending admin tasks."""
+    from sqlalchemy import func
+    from models.discovered_port import DiscoveredPort
+    from models.ping import PingHost
+
+    async with AsyncSessionLocal() as db:
+        # Discovered ports needing attention (new ports + new SSL)
+        port_rows = (await db.execute(
+            select(DiscoveredPort, PingHost.name.label("host_name"), PingHost.hostname.label("host_hostname"))
+            .join(PingHost, PingHost.id == DiscoveredPort.host_id)
+            .where(DiscoveredPort.last_open == True)
+            .order_by(PingHost.name, DiscoveredPort.port)
+        )).all()
+
+        port_tasks = []
+        ssl_tasks = []
+        for row in port_rows:
+            dp = row[0]
+            host_name = row.host_name
+            host_hostname = row.host_hostname
+            base = {
+                "id": dp.id, "host_id": dp.host_id,
+                "host_name": host_name, "host_hostname": host_hostname,
+                "port": dp.port, "protocol": dp.protocol,
+                "service": dp.service,
+                "first_seen": str(dp.first_seen) if dp.first_seen else None,
+                "last_seen": str(dp.last_seen) if dp.last_seen else None,
+            }
+            port_tasks.append({
+                **base,
+                "status": dp.status,
+            })
+            if dp.has_ssl:
+                ssl_tasks.append({
+                    **base,
+                    "ssl_issuer": dp.ssl_issuer,
+                    "ssl_subject": dp.ssl_subject,
+                    "ssl_expiry_days": dp.ssl_expiry_days,
+                    "ssl_expiry_date": dp.ssl_expiry_date,
+                    "ssl_status": dp.ssl_status,
+                })
+
+        # Summary counts
+        new_ports = sum(1 for p in port_tasks if p["status"] == "new")
+        new_ssl = sum(1 for s in ssl_tasks if s["ssl_status"] == "new")
+
+        return {
+            "port_tasks": port_tasks,
+            "ssl_tasks": ssl_tasks,
+            "summary": {
+                "new_ports": new_ports,
+                "new_ssl": new_ssl,
+                "total_pending": new_ports + new_ssl,
+            },
+        }
 
 
 @app.middleware("http")
