@@ -52,8 +52,8 @@ function orbitRadius(h: HostStat, index: number): number {
     return 4.5 + (index % 5) * 0.25;
   }
   if (h.host.maintenance) {
-    // Maintenance: mid-range ring
-    return 2.8 + (index % 4) * 0.2;
+    // Maintenance: closer mid-range ring
+    return 2.2 + (index % 4) * 0.2;
   }
   // Online hosts: spread across inner rings based on health
   const health = hostHealth(h);
@@ -135,7 +135,7 @@ function OrbitRings({ radii }: { radii: number[] }) {
           <meshBasicMaterial
             color="#ffffff"
             transparent
-            opacity={0.035}
+            opacity={0.06}
             side={THREE.DoubleSide}
           />
         </mesh>
@@ -182,8 +182,8 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
     router.push(`/hosts/${host.host.id}`);
   }, [router, host.host.id]);
 
-  // Smaller nodes — 0.06 base, offline slightly bigger
-  const nodeSize = isOffline ? 0.07 : 0.055;
+  // Node sizes — visible at distance
+  const nodeSize = isOffline ? 0.09 : 0.07;
 
   return (
     <group ref={groupRef}>
@@ -293,10 +293,10 @@ function Scene({ hosts }: { hosts: HostStat[] }) {
   return (
     <>
       {/* Lighting — sunlight from right, subtle blue fill */}
-      <ambientLight intensity={0.15} />
-      <directionalLight position={[5, 3, 2]} intensity={1.2} color="#FFF5E6" />
-      <pointLight position={[-4, -2, -4]} intensity={0.25} color="#60A5FA" />
-      <hemisphereLight args={['#87CEEB', '#000814', 0.15]} />
+      <ambientLight intensity={0.35} />
+      <directionalLight position={[5, 3, 2]} intensity={1.4} color="#FFF5E6" />
+      <pointLight position={[-4, -2, -4]} intensity={0.4} color="#60A5FA" />
+      <hemisphereLight args={['#87CEEB', '#000814', 0.2]} />
 
       <Stars />
       <Earth />
@@ -409,7 +409,7 @@ export function GravityWidget({ hosts }: GravityWidgetProps) {
       ) : (
         <div style={{ height: 420 }}>
           <Canvas
-            camera={{ position: [0, 4, 7.5], fov: 45 }}
+            camera={{ position: [0, 3, 8], fov: 45 }}
             style={{ background: 'transparent' }}
             gl={{ alpha: true, antialias: true }}
             dpr={[1, 2]}
