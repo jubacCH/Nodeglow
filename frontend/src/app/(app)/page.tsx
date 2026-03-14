@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
@@ -12,12 +12,14 @@ import { EChart } from '@/components/charts/EChart';
 import { DraggableDashboard, type WidgetDef } from '@/components/dashboard/DraggableDashboard';
 import { GravityWidget } from '@/components/dashboard/GravityWidget';
 import { useDashboard } from '@/hooks/queries/useDashboard';
+import { useSSE } from '@/hooks/useSSE';
+import type { SyslogMessage } from '@/types';
 import { formatLatency } from '@/lib/utils';
 import {
   Server, ServerOff, Gauge, ShieldAlert, Zap, Clock,
   ArrowUpDown, HardDrive, Activity, AlertTriangle,
   Container, BatteryCharging, Lock, Trophy, Timer,
-  TrendingUp, Wifi,
+  TrendingUp, Wifi, Radio,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -533,6 +535,14 @@ export default function DashboardPage() {
       });
     }
 
+    // ── Live Syslog ──
+    w.push({
+      id: 'live-syslog',
+      title: 'Live Syslog',
+      defaultLayout: { x: 0, y: 17, w: 3, h: 3, minW: 1, minH: 2 },
+      render: () => <LiveSyslogWidget />,
+    });
+
     return w;
   }, [data, isLoading]);
 
@@ -602,5 +612,102 @@ function StatCard({
         )}
       </div>
     </GlassCard>
+  );
+}
+
+/* ── Live Syslog Widget ── */
+
+const SEV_COLORS: Record<number, string> = {
+  0: 'bg-red-500 text-white',
+  1: 'bg-red-400 text-white',
+  2: 'bg-red-400/80 text-white',
+  3: 'bg-orange-400 text-black',
+  4: 'bg-amber-400 text-black',
+  5: 'bg-blue-400 text-white',
+  6: 'bg-sky-400/60 text-white',
+  7: 'bg-slate-500 text-white',
+};
+
+const SEV_LABELS: Record<number, string> = {
+  0: 'EMERG', 1: 'ALERT', 2: 'CRIT', 3: 'ERR',
+  4: 'WARN', 5: 'NOTICE', 6: 'INFO', 7: 'DEBUG',
+};
+
+function LiveSyslogWidget() {
+  const [enabled, setEnabled] = useState(false);
+  const { messages, isStreaming, clear } = useSSE<SyslogMessage>({
+    url: '/syslog/stream',
+    enabled,
+    maxMessages: 100,
+  });
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+          <Radio size={16} className="text-cyan-400" /> Live Syslog
+        </h3>
+        <div className="flex items-center gap-2">
+          {enabled && messages.length > 0 && (
+            <button
+              onClick={clear}
+              className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              Clear
+            </button>
+          )}
+          <button
+            onClick={() => setEnabled((v) => !v)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+              enabled
+                ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                : 'bg-white/[0.06] text-slate-400 hover:bg-white/[0.10]'
+            }`}
+          >
+            {enabled && isStreaming && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+            )}
+            {enabled ? 'Live' : 'Start'}
+          </button>
+        </div>
+      </div>
+
+      {!enabled ? (
+        <p className="text-sm text-slate-500 text-center py-6">
+          Click Start to stream syslog messages
+        </p>
+      ) : messages.length === 0 ? (
+        <p className="text-sm text-slate-500 text-center py-6">
+          Waiting for messages...
+        </p>
+      ) : (
+        <div className="max-h-[260px] overflow-y-auto space-y-0">
+          {messages.map((msg, i) => (
+            <div
+              key={`${msg.timestamp}-${i}`}
+              className="flex items-start gap-2 px-1 py-1 hover:bg-white/[0.02] transition-colors"
+            >
+              <span className="text-[10px] text-slate-600 font-mono whitespace-nowrap shrink-0 pt-0.5 w-12">
+                {msg.timestamp?.slice(-8, -3) || ''}
+              </span>
+              <span
+                className={`inline-block px-1 py-0 rounded text-[9px] font-bold shrink-0 leading-4 ${SEV_COLORS[msg.severity] ?? 'bg-slate-500 text-white'}`}
+              >
+                {SEV_LABELS[msg.severity] ?? msg.severity}
+              </span>
+              <span className="text-[10px] text-sky-300/60 font-mono whitespace-nowrap shrink-0 max-w-[80px] truncate">
+                {msg.hostname}
+              </span>
+              <span className="text-[11px] text-slate-400 truncate min-w-0">
+                {msg.message}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
