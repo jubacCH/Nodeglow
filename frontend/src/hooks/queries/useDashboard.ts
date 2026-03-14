@@ -11,7 +11,7 @@ export interface DashboardData {
   syslog_stats: SyslogStats;
   speedtest_data: SpeedtestData | null;
   storage_pools: StoragePool[];
-  container_data: ContainerInfo[];
+  container_data: ContainerData | null;
   ups_data: UpsData | null;
   ssl_certs: SslCert[];
   recent_incidents: RecentIncident[];
@@ -21,6 +21,8 @@ export interface DashboardData {
   top_latency: TopItem[];
   uptime_ranking: UptimeHost[];
   nodeglow_uptime: string;
+  anomalies: Anomaly[];
+  warnings: ResourceWarning[];
 }
 
 export interface HostStat {
@@ -28,7 +30,10 @@ export interface HostStat {
   online: boolean | null;
   latency: number | null;
   sparkline: number[];
-  uptime_stats: { h24: number; d7: number; d30: number };
+  uptime_pct: number;
+  avg_latency: number | null;
+  health_score: number;
+  uptime_stats?: { h24: number; d7: number; d30: number };
 }
 
 export interface IntHealth {
@@ -41,6 +46,7 @@ export interface IntHealth {
   error: string | null;
   last_check: string | null;
   single_instance: boolean;
+  health_score?: number;
 }
 
 export interface SyslogStats {
@@ -53,44 +59,59 @@ export interface SpeedtestData {
   download_mbps: number;
   upload_mbps: number;
   ping_ms: number;
-  isp: string;
-  server: string;
+  server_name: string;
   timestamp: string;
 }
 
 export interface StoragePool {
-  integration: string;
-  label: string;
-  color: string;
   name: string;
-  pool_name: string;
-  used_pct: number;
-  used_human: string;
-  total_human: string;
-  health: string;
+  source: string;
+  healthy: boolean;
+  pct: number;
+  used_gb: number;
+  total_gb: number;
+  days_until_full?: number;
+  trend_pct_per_day?: number;
+}
+
+export interface ContainerData {
+  environments: ContainerEnv[];
+  running: number;
+  stopped: number;
+}
+
+export interface ContainerEnv {
+  name: string;
+  containers_running: number;
+  containers_stopped: number;
+  containers: ContainerInfo[];
 }
 
 export interface ContainerInfo {
-  integration: string;
   name: string;
   status: string;
   image: string;
 }
 
 export interface UpsData {
-  status: string;
-  load_pct: number;
+  units: UpsUnit[];
+  on_battery: boolean;
+}
+
+export interface UpsUnit {
+  name: string;
+  status_label: string;
+  on_battery: boolean;
   battery_pct: number;
-  voltage: number;
-  temperature: number | null;
+  load_pct: number;
+  runtime_s: number;
+  model: string;
 }
 
 export interface SslCert {
   host_id: number;
   name: string;
-  hostname: string;
-  days_left: number;
-  issuer: string;
+  days: number | null;
 }
 
 export interface RecentIncident {
@@ -122,9 +143,33 @@ export interface TopItem {
 }
 
 export interface UptimeHost {
-  id: number;
+  host_id: number;
   name: string;
-  uptime_pct: number;
+  uptime: number;
+}
+
+export interface Anomaly {
+  name: string;
+  type: string;
+  node: string;
+  cluster_name: string;
+  metric: string;
+  current: number;
+  mean: number;
+  factor: number | null;
+  sustained: number | null;
+  severity: number;
+  host_id?: number;
+}
+
+export interface ResourceWarning {
+  name: string;
+  type: string;
+  node: string;
+  cluster_name: string;
+  metric: string;
+  current: number;
+  threshold: number;
 }
 
 export function useDashboard() {
