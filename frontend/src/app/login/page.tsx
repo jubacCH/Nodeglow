@@ -50,12 +50,8 @@ export default function LoginPage() {
       <div className="relative z-10 w-full max-w-sm mx-4">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-400 to-violet-500 items-center justify-center text-white text-2xl font-bold mb-4">
-            N
-          </div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">
-            Nodeglow
-          </h1>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="Nodeglow" className="w-72 mx-auto mb-4" />
           <p className="text-sm text-slate-500 mt-1">Infrastructure Monitoring</p>
         </div>
 

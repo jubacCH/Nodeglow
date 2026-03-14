@@ -103,9 +103,8 @@ export function Sidebar() {
     >
       {/* Header */}
       <div className="flex items-center gap-3 px-4 h-14 border-b border-white/[0.06]">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-400 to-violet-500 flex items-center justify-center text-white font-bold text-sm">
-          N
-        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo-icon.svg" alt="Nodeglow" className="w-8 h-8" />
         {!sidebarCollapsed && (
           <span className="text-lg font-semibold bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">
             Nodeglow
