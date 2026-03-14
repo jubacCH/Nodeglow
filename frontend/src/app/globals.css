@@ -2,7 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+:root,
+[data-theme="dark"] {
   --ng-bg: #0B0E14;
   --ng-surface: #111621;
   --ng-elevated: #1A1F2E;
@@ -13,12 +14,37 @@
   --ng-text-primary: #F1F5F9;
   --ng-text-secondary: #94A3B8;
   --ng-text-muted: #64748B;
+  --ng-glass-bg: rgba(255, 255, 255, 0.04);
+  --ng-glass-border: rgba(255, 255, 255, 0.08);
+  --ng-glass-bg-elevated: rgba(255, 255, 255, 0.06);
+  --ng-glass-border-elevated: rgba(255, 255, 255, 0.10);
+  --ng-hover: rgba(255, 255, 255, 0.08);
+  --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.03) 0%, transparent 60%);
+}
+
+[data-theme="light"] {
+  --ng-bg: #F1F5F9;
+  --ng-surface: #FFFFFF;
+  --ng-elevated: #FFFFFF;
+  --ng-border: #E2E8F0;
+  --ng-primary: #0284C7;
+  --ng-accent: #7C3AED;
+  --accent: #0284C7;
+  --ng-text-primary: #0F172A;
+  --ng-text-secondary: #475569;
+  --ng-text-muted: #94A3B8;
+  --ng-glass-bg: rgba(255, 255, 255, 0.7);
+  --ng-glass-border: rgba(0, 0, 0, 0.08);
+  --ng-glass-bg-elevated: rgba(255, 255, 255, 0.85);
+  --ng-glass-border-elevated: rgba(0, 0, 0, 0.12);
+  --ng-hover: rgba(0, 0, 0, 0.04);
+  --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(2, 132, 199, 0.04) 0%, transparent 60%);
 }
 
 body {
   color: var(--ng-text-primary);
   background: var(--ng-bg);
-  background-image: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.03) 0%, transparent 60%);
+  background-image: var(--ng-body-gradient);
   background-attachment: fixed;
   font-family: var(--font-inter), system-ui, sans-serif;
 }
@@ -42,10 +68,14 @@ body {
 /* Glass card styles */
 @layer components {
   .glass-card {
-    @apply bg-white/[0.04] backdrop-blur-xl border border-white/[0.06] rounded-lg;
+    background: var(--ng-glass-bg);
+    border-color: var(--ng-glass-border);
+    @apply backdrop-blur-xl border rounded-lg;
   }
   .glass-elevated {
-    @apply bg-white/[0.06] backdrop-blur-2xl border border-white/[0.08] shadow-2xl rounded-lg;
+    background: var(--ng-glass-bg-elevated);
+    border-color: var(--ng-glass-border-elevated);
+    @apply backdrop-blur-2xl border shadow-2xl rounded-lg;
   }
   .ng-input {
     @apply w-full px-3.5 py-2.5 text-sm rounded-lg bg-white/[0.05] border border-white/[0.10] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all;
@@ -74,8 +104,11 @@ table thead th {
 table tbody tr {
   @apply transition-colors;
 }
-table tbody tr:hover {
+[data-theme="dark"] table tbody tr:hover {
   background: rgba(255, 255, 255, 0.03);
+}
+[data-theme="light"] table tbody tr:hover {
+  background: rgba(0, 0, 0, 0.02);
 }
 table tbody td {
   @apply text-sm text-slate-300;
@@ -85,9 +118,13 @@ table tbody td {
 .stat-card-hover {
   transition: border-color 0.2s, box-shadow 0.2s;
 }
-.stat-card-hover:hover {
+[data-theme="dark"] .stat-card-hover:hover {
   border-color: rgba(255, 255, 255, 0.12);
   box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.3);
+}
+[data-theme="light"] .stat-card-hover:hover {
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.08);
 }
 
 /* Page transition */

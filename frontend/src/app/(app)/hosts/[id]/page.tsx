@@ -1273,10 +1273,17 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
   const [customPort, setCustomPort] = useState('');
   const [saving, setSaving] = useState(false);
 
-  function status(key: string): 'on' | 'off' | 'ok' | 'fail' {
-    if (!types.includes(key === 'tcp' ? 'tcp' : key)) return 'off';
-    const dk = key === 'tcp' && host.port ? `tcp:${host.port}` : key;
-    if (dk in detail) return detail[dk] ? 'ok' : 'fail';
+  // Extract TCP ports from check_type entries like "tcp", "tcp:80", "tcp:443"
+  const tcpPorts: number[] = types
+    .filter((t: string) => t === 'tcp' || t.startsWith('tcp:'))
+    .map((t: string) => t.includes(':') ? parseInt(t.split(':')[1]) : (host.port || 0))
+    .filter((p: number) => p > 0);
+
+  function getStatus(key: string): 'on' | 'off' | 'ok' | 'fail' {
+    // For simple types (icmp, http, https)
+    if (!key.startsWith('tcp:') && !types.includes(key)) return 'off';
+    // For tcp:PORT — check if that specific entry exists
+    if (key.startsWith('tcp:') && !types.includes(key) && !types.includes('tcp')) return 'off';
     if (key in detail) return detail[key] ? 'ok' : 'fail';
     return 'on';
   }
@@ -1289,28 +1296,37 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
     qc.invalidateQueries({ queryKey: ['host', hostId] });
   }
 
+  async function removeTcpPort(port: number) {
+    const newTypes = types.filter((t: string) => t !== `tcp:${port}` && t !== 'tcp');
+    if (newTypes.length === 0) newTypes.push('icmp');
+    await patch(`/api/v1/hosts/${host.id}`, { check_type: newTypes.join(',') });
+    qc.invalidateQueries({ queryKey: ['host', hostId] });
+  }
+
   async function addTcpPort() {
     const p = parseInt(customPort);
     if (!p || p < 1 || p > 65535) return;
+    if (tcpPorts.includes(p)) return;
     setSaving(true);
     try {
-      const newTypes = new Set<string>(types);
-      newTypes.add('tcp');
-      await patch(`/api/v1/hosts/${host.id}`, { check_type: Array.from(newTypes).join(','), port: p });
+      // Remove legacy "tcp" entry if present, use "tcp:PORT" format
+      const newTypes = types.filter((t: string) => t !== 'tcp');
+      newTypes.push(`tcp:${p}`);
+      await patch(`/api/v1/hosts/${host.id}`, { check_type: newTypes.join(',') });
       setCustomPort('');
       qc.invalidateQueries({ queryKey: ['host', hostId] });
     } finally { setSaving(false); }
   }
 
-  const checks: { key: string; label: string; icon: typeof Activity }[] = [
-    { key: 'icmp', label: 'Ping (ICMP)', icon: Activity },
-    { key: 'http', label: 'HTTP', icon: Network },
-    { key: 'https', label: 'HTTPS', icon: Shield },
+  const checks: { key: string; label: string }[] = [
+    { key: 'icmp', label: 'Ping (ICMP)' },
+    { key: 'http', label: 'HTTP' },
+    { key: 'https', label: 'HTTPS' },
   ];
 
-  const dotClass = (s: ReturnType<typeof status>) =>
+  const dotClass = (s: ReturnType<typeof getStatus>) =>
     s === 'ok' ? 'bg-emerald-400' : s === 'fail' ? 'bg-red-400' : s === 'on' ? 'bg-slate-400' : 'bg-slate-600';
-  const labelClass = (s: ReturnType<typeof status>) =>
+  const labelClass = (s: ReturnType<typeof getStatus>) =>
     s === 'ok' ? 'text-emerald-400' : s === 'fail' ? 'text-red-400' : s === 'on' ? 'text-slate-300' : 'text-slate-500';
 
   return (
@@ -1321,7 +1337,7 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
       </h3>
       <div className="space-y-2">
         {checks.map(({ key, label }) => {
-          const s = status(key);
+          const s = getStatus(key);
           const active = s !== 'off';
           return (
             <div key={key} className={`flex items-center justify-between px-3 py-2 rounded-md border transition-colors ${active ? 'border-white/[0.08] bg-white/[0.02]' : 'border-white/[0.04] bg-white/[0.01]'}`}>
@@ -1341,47 +1357,43 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
           );
         })}
 
-        {/* TCP Port */}
-        {(() => {
-          const s = status('tcp');
-          const active = s !== 'off';
+        {/* TCP Ports (multiple) */}
+        {tcpPorts.map((port) => {
+          const key = `tcp:${port}`;
+          const s = getStatus(key);
           return (
-            <div className={`flex items-center justify-between px-3 py-2 rounded-md border transition-colors ${active ? 'border-white/[0.08] bg-white/[0.02]' : 'border-white/[0.04] bg-white/[0.01]'}`}>
+            <div key={key} className="flex items-center justify-between px-3 py-2 rounded-md border transition-colors border-white/[0.08] bg-white/[0.02]">
               <div className="flex items-center gap-2.5">
                 <span className={`w-2 h-2 rounded-full ${dotClass(s)}`} />
-                <span className={`text-sm ${labelClass(s)}`}>TCP :{host.port || '—'}</span>
+                <span className={`text-sm ${labelClass(s)}`}>TCP :{port}</span>
                 {s === 'ok' && <span className="text-[10px] text-emerald-500">ok</span>}
                 {s === 'fail' && <span className="text-[10px] text-red-400">failed</span>}
               </div>
-              {active && (
-                <button
-                  onClick={() => toggle('tcp', false)}
-                  className="p-1 rounded text-red-400 hover:bg-red-500/10 transition-colors"
-                  title="Remove TCP check"
-                >
-                  <X size={14} />
-                </button>
-              )}
+              <button
+                onClick={() => removeTcpPort(port)}
+                className="p-1 rounded text-red-400 hover:bg-red-500/10 transition-colors"
+                title="Remove TCP check"
+              >
+                <X size={14} />
+              </button>
             </div>
           );
-        })()}
+        })}
 
         {/* Add custom TCP port */}
-        {!types.includes('tcp') && (
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="number"
-              placeholder="TCP port..."
-              value={customPort}
-              onChange={(e) => setCustomPort(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addTcpPort()}
-              className="flex-1 px-3 py-1.5 text-sm bg-white/[0.04] border border-white/[0.08] rounded-md text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500/50"
-            />
-            <Button size="sm" variant="ghost" onClick={addTcpPort} disabled={saving || !customPort}>
-              <Check size={13} /> Add
-            </Button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 pt-1">
+          <input
+            type="number"
+            placeholder="TCP port..."
+            value={customPort}
+            onChange={(e) => setCustomPort(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addTcpPort()}
+            className="flex-1 px-3 py-1.5 text-sm bg-white/[0.04] border border-white/[0.08] rounded-md text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500/50"
+          />
+          <Button size="sm" variant="ghost" onClick={addTcpPort} disabled={saving || !customPort}>
+            <Check size={13} /> Add
+          </Button>
+        </div>
       </div>
     </GlassCard>
   );
