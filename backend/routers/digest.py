@@ -55,10 +55,12 @@ async def digest_api(request: Request, db: AsyncSession = Depends(get_db)):
         "incidents": {
             "total": data["incidents"]["total"],
             "by_severity": data["incidents"]["by_severity"],
+            "by_status": data["incidents"].get("by_status", {}),
             "mttr_minutes": data["incidents"]["mttr_min"],
             "top": top_incidents,
         },
         "hosts": {
+            "total": data["hosts"].get("total", 0),
             "avg_uptime": data["hosts"]["avg_uptime"],
             "worst": worst_hosts,
         },
@@ -66,9 +68,30 @@ async def digest_api(request: Request, db: AsyncSession = Depends(get_db)):
             "total": data["syslog"].get("total", 0),
             "errors": data["syslog"].get("errors", 0),
             "top_errors": [
-                {"template": t["template"], "count": t["count"]}
+                {"template": t["template"], "count": t["count"], "noise_score": t.get("noise_score")}
                 for t in data["syslog"].get("top_templates", [])
             ],
         },
+        "integrations": [
+            {
+                "name": i["name"],
+                "type": i["type"],
+                "success_rate": i["success_rate"],
+                "total_snapshots": i["total_snapshots"],
+                "failures": i["failures"],
+            }
+            for i in data.get("integrations", [])
+        ],
+        "storage_predictions": [
+            {
+                "host": p.get("host", ""),
+                "disk": p.get("disk", ""),
+                "days_until_full": p.get("days_until_full"),
+                "current_usage_pct": p.get("current_usage_pct"),
+                "confidence": p.get("confidence"),
+            }
+            for p in data.get("storage_predictions", [])
+        ],
+        "ssl_expiring": data.get("ssl_expiring", []),
     }
     return JSONResponse(result)
