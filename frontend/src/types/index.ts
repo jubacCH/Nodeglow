@@ -256,18 +256,39 @@ export interface Digest {
   incidents: {
     total: number;
     by_severity: Record<string, number>;
+    by_status: Record<string, number>;
     mttr_minutes: number | null;
     top: { id: number; title: string; severity: string }[];
   };
   hosts: {
+    total: number;
     avg_uptime: number;
     worst: { id: number; name: string; uptime: number; failures: number }[];
   };
   syslog: {
     total: number;
     errors: number;
-    top_errors: { template: string; count: number }[];
+    top_errors: { template: string; count: number; noise_score?: number }[];
   };
+  integrations: {
+    name: string;
+    type: string;
+    success_rate: number | null;
+    total_snapshots: number;
+    failures: number;
+  }[];
+  storage_predictions: {
+    host: string;
+    disk: string;
+    days_until_full: number | null;
+    current_usage_pct: number | null;
+    confidence: number | null;
+  }[];
+  ssl_expiring: {
+    name: string;
+    hostname: string;
+    days: number;
+  }[];
 }
 
 // ── Nav Counts ──
