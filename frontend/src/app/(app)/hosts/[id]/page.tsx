@@ -992,10 +992,15 @@ export default function HostDetailPage() {
                       )}
                       {dp.status === 'monitored' && (
                         <button
-                          onClick={() => portActionMut.mutate({ portId: dp.id, action: 'unmonitor_port' })}
+                          onClick={async () => {
+                            await portActionMut.mutateAsync({ portId: dp.id, action: 'unmonitor_port' });
+                            if (dp.has_ssl && dp.ssl_status === 'monitored') {
+                              portActionMut.mutate({ portId: dp.id, action: 'unmonitor_ssl' });
+                            }
+                          }}
                           disabled={portActionMut.isPending}
                           className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
-                          title="Stop monitoring this port"
+                          title="Stop monitoring"
                         >
                           <X size={14} />
                         </button>
@@ -1021,7 +1026,7 @@ export default function HostDetailPage() {
                           </button>
                         </>
                       )}
-                      {dp.has_ssl && dp.ssl_status === 'monitored' && (
+                      {dp.has_ssl && dp.ssl_status === 'monitored' && dp.status !== 'monitored' && (
                         <button
                           onClick={() => portActionMut.mutate({ portId: dp.id, action: 'unmonitor_ssl' })}
                           disabled={portActionMut.isPending}
