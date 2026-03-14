@@ -14,7 +14,7 @@ import { GravityWidget } from '@/components/dashboard/GravityWidget';
 import { useDashboard } from '@/hooks/queries/useDashboard';
 import { useSSE } from '@/hooks/useSSE';
 import type { SyslogMessage } from '@/types';
-import { formatLatency } from '@/lib/utils';
+import { cn, formatLatency } from '@/lib/utils';
 import {
   Server, ServerOff, Gauge, ShieldAlert, Zap, Clock,
   ArrowUpDown, HardDrive, Activity, AlertTriangle,
@@ -603,12 +603,12 @@ export default function DashboardPage() {
 
       {/* ── Quick Stats ── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" loading={isLoading} />
-        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" loading={isLoading} />
-        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" loading={isLoading} />
-        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" loading={isLoading} />
-        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" loading={isLoading} />
-        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" loading={isLoading} />
+        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} />
+        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} />
+        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} />
+        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" tint="bg-amber-500/10" alert={!!data?.active_incidents} loading={isLoading} />
+        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" tint="bg-violet-500/10" loading={isLoading} />
+        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} />
       </div>
 
       {/* ── Gravity Globe ── */}
@@ -629,19 +629,26 @@ function StatCard({
   label,
   value,
   color,
+  tint,
   loading,
   suffix,
+  alert,
 }: {
   icon: React.ElementType;
   label: string;
   value?: number;
   color: string;
+  tint?: string;
   loading: boolean;
   suffix?: string;
+  alert?: boolean;
 }) {
   return (
-    <GlassCard className="p-4 flex items-center gap-4">
-      <div className={`p-2.5 rounded-xl bg-white/[0.06] ${color}`}>
+    <GlassCard className={cn(
+      'p-4 flex items-center gap-4',
+      alert && value ? 'border-red-500/20' : '',
+    )}>
+      <div className={`p-2.5 rounded-xl ${tint || 'bg-white/[0.06]'} ${color}`}>
         <Icon size={20} />
       </div>
       <div>
@@ -649,7 +656,7 @@ function StatCard({
         {loading ? (
           <Skeleton className="h-8 w-16 mt-1" />
         ) : (
-          <p className={`text-3xl font-bold tracking-tight ${color}`}>
+          <p className="text-3xl font-bold tracking-tight text-slate-100">
             <AnimatedCounter value={value ?? 0} suffix={suffix} />
           </p>
         )}

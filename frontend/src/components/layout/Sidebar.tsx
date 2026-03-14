@@ -205,7 +205,7 @@ export function Sidebar() {
 
       {/* Main Navigation */}
       <nav className="flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
-        <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+        <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
           {!sidebarCollapsed && 'Main'}
         </p>
         {mainNav.map((item) => {
@@ -243,7 +243,7 @@ export function Sidebar() {
         <div className="pt-2">
           <button
             onClick={() => setIntOpen(!intOpen)}
-            className="flex items-center gap-3 w-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600 hover:text-slate-400"
+            className="flex items-center gap-3 w-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-400"
           >
             {!sidebarCollapsed && <span className="flex-1 text-left">Integrations</span>}
             {!sidebarCollapsed && (
@@ -285,7 +285,7 @@ export function Sidebar() {
 
         {/* System */}
         <div className="pt-2">
-          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
             {!sidebarCollapsed && 'System'}
           </p>
           {systemNav.map((item) => {
