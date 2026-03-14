@@ -210,7 +210,7 @@ export function Sidebar() {
               className={cn(
                 'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                 isActive
-                  ? 'bg-sky-500/10 text-sky-400'
+                  ? 'nav-active'
                   : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200',
               )}
             >
@@ -255,7 +255,7 @@ export function Sidebar() {
                     className={cn(
                       'flex items-center gap-3 px-3 py-1.5 rounded-md text-sm transition-colors pl-7',
                       isActive
-                        ? 'bg-sky-500/10 text-sky-400'
+                        ? 'nav-active'
                         : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200',
                     )}
                   >
@@ -291,7 +291,7 @@ export function Sidebar() {
                 className={cn(
                   'flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                   isActive
-                    ? 'bg-sky-500/10 text-sky-400'
+                    ? 'nav-active'
                     : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200',
                 )}
               >

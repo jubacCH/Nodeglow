@@ -9,6 +9,7 @@
   --ng-border: #1E2433;
   --ng-primary: #38BDF8;
   --ng-accent: #A78BFA;
+  --accent: #38BDF8;
   --ng-text-primary: #F1F5F9;
   --ng-text-secondary: #94A3B8;
   --ng-text-muted: #64748B;
@@ -45,9 +46,20 @@ body {
     @apply bg-white/[0.06] backdrop-blur-2xl border border-white/[0.08] shadow-2xl rounded-lg;
   }
   .ng-input {
-    @apply w-full px-3 py-2 text-sm rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500/50 transition-all;
+    @apply w-full px-3 py-2 text-sm rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 transition-all;
+    --tw-ring-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   }
 }
+
+/* Accent color overrides — driven by theme store */
+.nav-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.accent-text { color: var(--accent); }
+.accent-bg { background: var(--accent); }
+.accent-ring:focus { --tw-ring-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 
 /* Glow pulse animation */
 @keyframes glow-pulse {
