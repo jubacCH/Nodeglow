@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.ping import check_host
 from database import PingHost, PingResult, get_db
+from models.discovered_port import DiscoveredPort
 from models.agent import Agent, AgentSnapshot
 from models.credential import Credential
 from models.integration import IntegrationConfig, Snapshot
@@ -909,3 +910,117 @@ async def api_search_hosts(q: str = "", db: AsyncSession = Depends(get_db)):
         }
         for h in hosts
     ]
+
+
+# ── Port Discovery ────────────────────────────────────────────────────────────
+
+@router.get("/api/{host_id}/discovered-ports")
+async def get_discovered_ports(host_id: int, db: AsyncSession = Depends(get_db)):
+    """Return discovered ports for a host."""
+    ports = (await db.execute(
+        select(DiscoveredPort)
+        .where(DiscoveredPort.host_id == host_id)
+        .order_by(DiscoveredPort.port)
+    )).scalars().all()
+    return [
+        {
+            "id": p.id, "port": p.port, "protocol": p.protocol,
+            "service": p.service, "status": p.status,
+            "has_ssl": p.has_ssl, "ssl_issuer": p.ssl_issuer,
+            "ssl_subject": p.ssl_subject, "ssl_expiry_days": p.ssl_expiry_days,
+            "ssl_expiry_date": p.ssl_expiry_date, "ssl_status": p.ssl_status,
+            "first_seen": str(p.first_seen) if p.first_seen else None,
+            "last_seen": str(p.last_seen) if p.last_seen else None,
+            "last_open": p.last_open,
+        }
+        for p in ports
+    ]
+
+
+@router.patch("/api/{host_id}/discovered-ports/{port_id}")
+async def update_discovered_port(host_id: int, port_id: int, request: Request,
+                                  db: AsyncSession = Depends(get_db)):
+    """Accept or dismiss a discovered port / SSL cert."""
+    dp = (await db.execute(
+        select(DiscoveredPort).where(
+            DiscoveredPort.id == port_id,
+            DiscoveredPort.host_id == host_id,
+        )
+    )).scalar_one_or_none()
+    if not dp:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    body = await request.json()
+    action = body.get("action")         # monitor_port | dismiss_port | monitor_ssl | dismiss_ssl
+
+    host = (await db.execute(
+        select(PingHost).where(PingHost.id == host_id)
+    )).scalar_one_or_none()
+    if not host:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
+
+    if action == "monitor_port":
+        # Add this port to host monitoring (tcp check type)
+        existing_types = set(t.strip() for t in (host.check_type or "").split(",") if t.strip())
+        existing_types.add("tcp")
+        host.check_type = ",".join(sorted(existing_types))
+        if host.port is None or host.port == 0:
+            host.port = dp.port
+        dp.status = "monitored"
+
+    elif action == "dismiss_port":
+        dp.status = "dismissed"
+
+    elif action == "monitor_ssl":
+        # Add https check type and update SSL monitoring
+        existing_types = set(t.strip() for t in (host.check_type or "").split(",") if t.strip())
+        existing_types.add("https")
+        host.check_type = ",".join(sorted(existing_types))
+        if dp.ssl_expiry_days is not None:
+            host.ssl_expiry_days = dp.ssl_expiry_days
+        dp.ssl_status = "monitored"
+
+    elif action == "dismiss_ssl":
+        dp.ssl_status = "dismissed"
+
+    else:
+        return JSONResponse({"error": "Invalid action"}, status_code=400)
+
+    await db.commit()
+    return {"ok": True, "status": dp.status, "ssl_status": dp.ssl_status}
+
+
+@router.post("/api/{host_id}/scan-ports")
+async def trigger_port_scan(host_id: int, db: AsyncSession = Depends(get_db)):
+    """Manually trigger a port scan for a specific host."""
+    host = (await db.execute(
+        select(PingHost).where(PingHost.id == host_id)
+    )).scalar_one_or_none()
+    if not host:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
+
+    from services.port_discovery import discover_ports_for_host
+    await discover_ports_for_host(db, host)
+
+    # Return updated ports
+    ports = (await db.execute(
+        select(DiscoveredPort)
+        .where(DiscoveredPort.host_id == host_id)
+        .order_by(DiscoveredPort.port)
+    )).scalars().all()
+    return {
+        "ok": True,
+        "ports": [
+            {
+                "id": p.id, "port": p.port, "protocol": p.protocol,
+                "service": p.service, "status": p.status,
+                "has_ssl": p.has_ssl, "ssl_issuer": p.ssl_issuer,
+                "ssl_subject": p.ssl_subject, "ssl_expiry_days": p.ssl_expiry_days,
+                "ssl_expiry_date": p.ssl_expiry_date, "ssl_status": p.ssl_status,
+                "first_seen": str(p.first_seen) if p.first_seen else None,
+                "last_seen": str(p.last_seen) if p.last_seen else None,
+                "last_open": p.last_open,
+            }
+            for p in ports
+        ],
+    }
