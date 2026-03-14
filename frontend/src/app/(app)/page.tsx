@@ -645,7 +645,7 @@ function StatCard({
 }) {
   return (
     <GlassCard className={cn(
-      'p-4 flex items-center gap-4',
+      'p-4 flex items-center gap-4 stat-card-hover',
       alert && value ? 'border-red-500/20' : '',
     )}>
       <div className={`p-2.5 rounded-xl ${tint || 'bg-white/[0.06]'} ${color}`}>
