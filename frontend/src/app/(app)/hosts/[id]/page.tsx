@@ -341,49 +341,7 @@ export default function HostDetailPage() {
         )}
       </GlassCard>
 
-      {/* Check Detail */}
-      {host && (() => {
-        const types = (host.check_type || 'icmp').split(',').map((t: string) => t.trim()).filter(Boolean);
-        const detail: Record<string, boolean> = host.check_detail || {};
-        // Merge: show all configured types, use detail for status if available
-        const checks = types.map((t: string) => {
-          const label = t === 'tcp' && host.port ? `tcp:${host.port}` : t;
-          const ok = label in detail ? detail[label] : (t in detail ? detail[t] : null);
-          return { type: t, label, ok };
-        });
-        if (checks.length <= 1 && !host.port_error) return null;
-        return (
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <span className="text-xs text-slate-500 uppercase font-semibold">Checks:</span>
-            {checks.map(({ type, label, ok }: { type: string; label: string; ok: boolean | null }) => (
-              <span
-                key={label}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                  ok === null ? 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
-                  : ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                  : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${ok === null ? 'bg-slate-400' : ok ? 'bg-emerald-400' : 'bg-red-400'}`} />
-                {label.toUpperCase()}
-                {type !== 'icmp' && types.length > 1 && (
-                  <button
-                    onClick={async () => {
-                      const newTypes = types.filter((tt: string) => tt !== type).join(',') || 'icmp';
-                      await patch(`/api/v1/hosts/${host.id}`, { check_type: newTypes });
-                      qc.invalidateQueries({ queryKey: ['host', hostId] });
-                    }}
-                    className="ml-1 hover:text-white transition-colors"
-                    title={`Remove ${label.toUpperCase()} check`}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
-        );
-      })()}
+      {/* Check Detail badges removed — monitoring is now in the overview tab */}
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b border-white/[0.06] mb-6">
@@ -860,6 +818,9 @@ export default function HostDetailPage() {
             )}
           </GlassCard>
 
+          {/* Monitoring */}
+          {host && <MonitoringCard host={host} hostId={hostId} />}
+
           {/* Discovered Ports */}
           <GlassCard className="p-4">
             <div className="flex items-center justify-between mb-3">
@@ -1302,6 +1263,130 @@ function PortsTab({ ports, clients, allHosts }: { ports: PortInfo[]; clients: Co
   );
 }
 
+/* ── Monitoring Card ── */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }) {
+  const qc = useQueryClient();
+  const types = (host.check_type || 'icmp').split(',').map((t: string) => t.trim()).filter(Boolean);
+  const detail: Record<string, boolean> = host.check_detail || {};
+  const [customPort, setCustomPort] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function status(key: string): 'on' | 'off' | 'ok' | 'fail' {
+    if (!types.includes(key === 'tcp' ? 'tcp' : key)) return 'off';
+    const dk = key === 'tcp' && host.port ? `tcp:${host.port}` : key;
+    if (dk in detail) return detail[dk] ? 'ok' : 'fail';
+    if (key in detail) return detail[key] ? 'ok' : 'fail';
+    return 'on';
+  }
+
+  async function toggle(type: string, on: boolean) {
+    const newTypes = new Set<string>(types);
+    if (on) newTypes.add(type); else newTypes.delete(type);
+    if (newTypes.size === 0) newTypes.add('icmp');
+    await patch(`/api/v1/hosts/${host.id}`, { check_type: Array.from(newTypes).join(',') });
+    qc.invalidateQueries({ queryKey: ['host', hostId] });
+  }
+
+  async function addTcpPort() {
+    const p = parseInt(customPort);
+    if (!p || p < 1 || p > 65535) return;
+    setSaving(true);
+    try {
+      const newTypes = new Set<string>(types);
+      newTypes.add('tcp');
+      await patch(`/api/v1/hosts/${host.id}`, { check_type: Array.from(newTypes).join(','), port: p });
+      setCustomPort('');
+      qc.invalidateQueries({ queryKey: ['host', hostId] });
+    } finally { setSaving(false); }
+  }
+
+  const checks: { key: string; label: string; icon: typeof Activity }[] = [
+    { key: 'icmp', label: 'Ping (ICMP)', icon: Activity },
+    { key: 'http', label: 'HTTP', icon: Network },
+    { key: 'https', label: 'HTTPS', icon: Shield },
+  ];
+
+  const dotClass = (s: ReturnType<typeof status>) =>
+    s === 'ok' ? 'bg-emerald-400' : s === 'fail' ? 'bg-red-400' : s === 'on' ? 'bg-slate-400' : 'bg-slate-600';
+  const labelClass = (s: ReturnType<typeof status>) =>
+    s === 'ok' ? 'text-emerald-400' : s === 'fail' ? 'text-red-400' : s === 'on' ? 'text-slate-300' : 'text-slate-500';
+
+  return (
+    <GlassCard className="p-4">
+      <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+        <Activity size={14} className="text-sky-400" />
+        Monitoring
+      </h3>
+      <div className="space-y-2">
+        {checks.map(({ key, label }) => {
+          const s = status(key);
+          const active = s !== 'off';
+          return (
+            <div key={key} className={`flex items-center justify-between px-3 py-2 rounded-md border transition-colors ${active ? 'border-white/[0.08] bg-white/[0.02]' : 'border-white/[0.04] bg-white/[0.01]'}`}>
+              <div className="flex items-center gap-2.5">
+                <span className={`w-2 h-2 rounded-full ${dotClass(s)}`} />
+                <span className={`text-sm ${labelClass(s)}`}>{label}</span>
+                {s === 'ok' && <span className="text-[10px] text-emerald-500">ok</span>}
+                {s === 'fail' && <span className="text-[10px] text-red-400">failed</span>}
+              </div>
+              <button
+                onClick={() => toggle(key, !active)}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${active ? 'bg-sky-500/60' : 'bg-white/10'}`}
+              >
+                <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${active ? 'left-[17px]' : 'left-0.5'}`} />
+              </button>
+            </div>
+          );
+        })}
+
+        {/* TCP Port */}
+        {(() => {
+          const s = status('tcp');
+          const active = s !== 'off';
+          return (
+            <div className={`flex items-center justify-between px-3 py-2 rounded-md border transition-colors ${active ? 'border-white/[0.08] bg-white/[0.02]' : 'border-white/[0.04] bg-white/[0.01]'}`}>
+              <div className="flex items-center gap-2.5">
+                <span className={`w-2 h-2 rounded-full ${dotClass(s)}`} />
+                <span className={`text-sm ${labelClass(s)}`}>TCP :{host.port || '—'}</span>
+                {s === 'ok' && <span className="text-[10px] text-emerald-500">ok</span>}
+                {s === 'fail' && <span className="text-[10px] text-red-400">failed</span>}
+              </div>
+              {active && (
+                <button
+                  onClick={() => toggle('tcp', false)}
+                  className="p-1 rounded text-red-400 hover:bg-red-500/10 transition-colors"
+                  title="Remove TCP check"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Add custom TCP port */}
+        {!types.includes('tcp') && (
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="number"
+              placeholder="TCP port..."
+              value={customPort}
+              onChange={(e) => setCustomPort(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addTcpPort()}
+              className="flex-1 px-3 py-1.5 text-sm bg-white/[0.04] border border-white/[0.08] rounded-md text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500/50"
+            />
+            <Button size="sm" variant="ghost" onClick={addTcpPort} disabled={saving || !customPort}>
+              <Check size={13} /> Add
+            </Button>
+          </div>
+        )}
+      </div>
+    </GlassCard>
+  );
+}
+
 /* ── Edit Host Modal ── */
 
 const editInputClass = 'w-full px-3 py-2 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50';
@@ -1316,8 +1401,6 @@ function EditHostModal({ open, onClose, host, onSaved }: {
   const [form, setForm] = useState({
     name: '',
     hostname: '',
-    checks: { icmp: true, http: false, https: false, tcp: false } as Record<string, boolean>,
-    port: '',
     latency_threshold_ms: '',
     enabled: true,
   });
@@ -1326,12 +1409,9 @@ function EditHostModal({ open, onClose, host, onSaved }: {
   // Sync form when modal opens
   useEffect(() => {
     if (open && host) {
-      const types = (host.check_type ?? 'icmp').split(',').map((t: string) => t.trim());
       setForm({
         name: host.name ?? '',
         hostname: host.hostname ?? '',
-        checks: { icmp: types.includes('icmp'), http: types.includes('http'), https: types.includes('https'), tcp: types.includes('tcp') },
-        port: host.port ? String(host.port) : '',
         latency_threshold_ms: host.latency_threshold_ms ? String(host.latency_threshold_ms) : '',
         enabled: host.enabled !== false,
       });
@@ -1341,12 +1421,9 @@ function EditHostModal({ open, onClose, host, onSaved }: {
   async function handleSave() {
     setSaving(true);
     try {
-      const check_type = Object.entries(form.checks).filter(([, v]) => v).map(([k]) => k).join(',') || 'icmp';
       await patch(`/api/v1/hosts/${host.id}`, {
         name: form.name,
         hostname: form.hostname,
-        check_type,
-        port: form.port ? Number(form.port) : null,
         latency_threshold_ms: form.latency_threshold_ms ? Number(form.latency_threshold_ms) : null,
         enabled: form.enabled,
       });
@@ -1367,21 +1444,6 @@ function EditHostModal({ open, onClose, host, onSaved }: {
         <div>
           <label className="block text-xs text-slate-400 mb-1">Hostname / IP</label>
           <input type="text" value={form.hostname} onChange={(e) => setForm({ ...form, hostname: e.target.value })} className={editInputClass} />
-        </div>
-        <div>
-          <label className="block text-xs text-slate-400 mb-1">Check Types</label>
-          <div className="flex flex-wrap gap-3">
-            {[['icmp', 'ICMP (Ping)'], ['http', 'HTTP'], ['https', 'HTTPS'], ['tcp', 'TCP']].map(([key, label]) => (
-              <label key={key} className="flex items-center gap-1.5">
-                <input type="checkbox" checked={form.checks[key] ?? false} onChange={(e) => setForm({ ...form, checks: { ...form.checks, [key]: e.target.checked } })} className="rounded border-white/20 bg-white/[0.06]" />
-                <span className="text-sm text-slate-300">{label}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-        <div>
-          <label className="block text-xs text-slate-400 mb-1">Port</label>
-          <input type="text" placeholder="optional" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} className={editInputClass} />
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
