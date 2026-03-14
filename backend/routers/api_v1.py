@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import PingHost, PingResult, get_setting
@@ -604,6 +604,10 @@ async def get_agent(
         "online": agent.last_seen is not None and (now - agent.last_seen).total_seconds() < 120,
         "last_seen": agent.last_seen.isoformat() if agent.last_seen else None,
         "enabled": agent.enabled,
+        "log_levels": agent.log_levels or "",
+        "log_channels": agent.log_channels or "",
+        "log_file_paths": agent.log_file_paths or "",
+        "agent_log_level": agent.agent_log_level or "errors",
         "snapshots": [
             {
                 "agent_id": s.agent_id,
@@ -618,6 +622,38 @@ async def get_agent(
             }
             for s in snaps
         ],
+    }
+
+
+@router.patch("/agents/{agent_id}", summary="Update agent log settings")
+async def patch_agent(
+    agent_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    body = await request.json()
+
+    allowed = {"log_levels", "log_channels", "log_file_paths", "agent_log_level", "enabled"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+
+    if "agent_log_level" in updates and updates["agent_log_level"] not in ("off", "errors", "all"):
+        raise HTTPException(400, "agent_log_level must be 'off', 'errors', or 'all'")
+
+    if updates:
+        await db.execute(update(Agent).where(Agent.id == agent_id).values(**updates))
+        await db.commit()
+
+    await db.refresh(agent)
+    return {
+        "ok": True,
+        "log_levels": agent.log_levels or "",
+        "log_channels": agent.log_channels or "",
+        "log_file_paths": agent.log_file_paths or "",
+        "agent_log_level": agent.agent_log_level or "errors",
     }
 
 

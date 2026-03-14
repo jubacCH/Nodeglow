@@ -9,15 +9,21 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Button } from '@/components/ui/Button';
 import { EChart } from '@/components/charts/EChart';
-import { useQuery } from '@tanstack/react-query';
-import { get } from '@/lib/api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { get, patch } from '@/lib/api';
 import { formatUptime } from '@/lib/utils';
-import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick } from 'lucide-react';
+import { useToastStore } from '@/stores/toast';
+import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick, FileText, Save } from 'lucide-react';
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import type { Agent, AgentSnapshot } from '@/types';
 
 interface AgentDetail extends Agent {
   snapshots: AgentSnapshot[];
+  log_levels?: string;
+  log_channels?: string;
+  log_file_paths?: string;
+  agent_log_level?: string;
 }
 
 export default function AgentDetailPage() {
@@ -103,6 +109,9 @@ export default function AgentDetailPage() {
         />
       </div>
 
+      {/* Log Settings */}
+      {data && <LogSettings agentId={agentId} data={data} />}
+
       {/* CPU/Memory Chart */}
       <GlassCard className="p-4 mb-6">
         <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
@@ -154,6 +163,189 @@ export default function AgentDetailPage() {
         )}
       </GlassCard>
     </div>
+  );
+}
+
+const WINDOWS_CHANNELS = [
+  { key: 'System', label: 'System' },
+  { key: 'Application', label: 'Application' },
+  { key: 'Security', label: 'Security' },
+  { key: 'Setup', label: 'Setup' },
+  { key: 'Microsoft-Windows-PowerShell/Operational', label: 'PowerShell' },
+  { key: 'Microsoft-Windows-Windows Defender/Operational', label: 'Defender' },
+  { key: 'Microsoft-Windows-TaskScheduler/Operational', label: 'Task Scheduler' },
+  { key: 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational', label: 'RDP Sessions' },
+  { key: 'Microsoft-Windows-Sysmon/Operational', label: 'Sysmon' },
+  { key: 'Microsoft-Windows-WindowsUpdateClient/Operational', label: 'Windows Update' },
+];
+
+const SEVERITY_LEVELS = [
+  { value: 1, label: 'Critical' },
+  { value: 2, label: 'Error' },
+  { value: 3, label: 'Warning' },
+  { value: 4, label: 'Info' },
+  { value: 5, label: 'Verbose' },
+];
+
+function LogSettings({ agentId, data }: { agentId: number; data: AgentDetail }) {
+  const toast = useToastStore((s) => s.show);
+  const qc = useQueryClient();
+  const isWindows = data.platform?.toLowerCase().includes('windows');
+
+  const [agentLogLevel, setAgentLogLevel] = useState(data.agent_log_level ?? 'errors');
+  const [logLevels, setLogLevels] = useState<Set<number>>(() => {
+    const csv = data.log_levels ?? '1,2,3';
+    return new Set(csv.split(',').filter(Boolean).map(Number));
+  });
+  const [logChannels, setLogChannels] = useState<Set<string>>(() => {
+    const csv = data.log_channels ?? 'System,Application';
+    return new Set(csv.split(',').filter(Boolean));
+  });
+  const [logFilePaths, setLogFilePaths] = useState(data.log_file_paths ?? '');
+  const [saving, setSaving] = useState(false);
+
+  // Sync when data changes from server
+  useEffect(() => {
+    setAgentLogLevel(data.agent_log_level ?? 'errors');
+    setLogLevels(new Set((data.log_levels ?? '1,2,3').split(',').filter(Boolean).map(Number)));
+    setLogChannels(new Set((data.log_channels ?? 'System,Application').split(',').filter(Boolean)));
+    setLogFilePaths(data.log_file_paths ?? '');
+  }, [data.agent_log_level, data.log_levels, data.log_channels, data.log_file_paths]);
+
+  const toggleLevel = (lvl: number) => {
+    setLogLevels((prev) => {
+      const next = new Set(prev);
+      if (next.has(lvl)) next.delete(lvl); else next.add(lvl);
+      return next;
+    });
+  };
+
+  const toggleChannel = (ch: string) => {
+    setLogChannels((prev) => {
+      const next = new Set(prev);
+      if (next.has(ch)) next.delete(ch); else next.add(ch);
+      return next;
+    });
+  };
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await patch(`/api/v1/agents/${agentId}`, {
+        agent_log_level: agentLogLevel,
+        log_levels: Array.from(logLevels).sort().join(','),
+        log_channels: Array.from(logChannels).join(','),
+        log_file_paths: logFilePaths,
+      });
+      qc.invalidateQueries({ queryKey: ['agent', agentId] });
+      toast('Log settings saved', 'success');
+    } catch {
+      toast('Failed to save settings', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <GlassCard className="p-4 mb-6">
+      <h3 className="text-sm font-medium text-slate-300 mb-4 flex items-center gap-2">
+        <FileText size={16} className="text-sky-400" /> Log Collection Settings
+      </h3>
+
+      <div className="space-y-5">
+        {/* Agent Log Level */}
+        <div>
+          <label className="ng-label">Agent Log Level</label>
+          <p className="text-xs text-slate-500 mb-2">Controls which of the agent&apos;s own logs are uploaded</p>
+          <div className="flex gap-2">
+            {(['off', 'errors', 'all'] as const).map((lvl) => (
+              <button
+                key={lvl}
+                onClick={() => setAgentLogLevel(lvl)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  agentLogLevel === lvl
+                    ? 'accent-bg text-white'
+                    : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
+                }`}
+              >
+                {lvl === 'off' ? 'Off' : lvl === 'errors' ? 'Errors only' : 'All'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Windows-specific: Event Log Levels */}
+        {isWindows && (
+          <div>
+            <label className="ng-label">Event Log Severity Levels</label>
+            <p className="text-xs text-slate-500 mb-2">Which Windows Event Log severity levels to collect</p>
+            <div className="flex flex-wrap gap-2">
+              {SEVERITY_LEVELS.map((s) => (
+                <button
+                  key={s.value}
+                  onClick={() => toggleLevel(s.value)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    logLevels.has(s.value)
+                      ? 'accent-bg text-white'
+                      : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Windows-specific: Event Log Channels */}
+        {isWindows && (
+          <div>
+            <label className="ng-label">Event Log Channels</label>
+            <p className="text-xs text-slate-500 mb-2">Which Windows Event Log channels to monitor</p>
+            <div className="flex flex-wrap gap-2">
+              {WINDOWS_CHANNELS.map((ch) => (
+                <button
+                  key={ch.key}
+                  onClick={() => toggleChannel(ch.key)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    logChannels.has(ch.key)
+                      ? 'accent-bg text-white'
+                      : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
+                  }`}
+                >
+                  {ch.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Custom Log File Paths */}
+        <div>
+          <label className="ng-label">Custom Log File Paths</label>
+          <p className="text-xs text-slate-500 mb-2">
+            {isWindows
+              ? 'One file path per line (e.g. C:\\Logs\\app.log)'
+              : 'One file path per line, glob patterns supported (e.g. /var/log/auth.log)'}
+          </p>
+          <textarea
+            value={logFilePaths}
+            onChange={(e) => setLogFilePaths(e.target.value)}
+            rows={3}
+            placeholder={isWindows ? 'C:\\Logs\\app.log' : '/var/log/auth.log\n/var/log/syslog'}
+            className="ng-input font-mono text-xs"
+          />
+        </div>
+
+        {/* Save button */}
+        <div className="flex justify-end">
+          <Button size="sm" onClick={handleSave} disabled={saving}>
+            <Save size={14} />
+            {saving ? 'Saving...' : 'Save Settings'}
+          </Button>
+        </div>
+      </div>
+    </GlassCard>
   );
 }
 
