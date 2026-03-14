@@ -973,6 +973,15 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
             host.port = dp.port
         dp.status = "monitored"
 
+    elif action == "unmonitor_port":
+        # Remove tcp from check types
+        existing_types = set(t.strip() for t in (host.check_type or "").split(",") if t.strip())
+        existing_types.discard("tcp")
+        host.check_type = ",".join(sorted(existing_types)) or "icmp"
+        host.port_error = False
+        host.check_detail = None
+        dp.status = "new"
+
     elif action == "dismiss_port":
         dp.status = "dismissed"
 
@@ -984,6 +993,15 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         if dp.ssl_expiry_days is not None:
             host.ssl_expiry_days = dp.ssl_expiry_days
         dp.ssl_status = "monitored"
+
+    elif action == "unmonitor_ssl":
+        # Remove https from check types
+        existing_types = set(t.strip() for t in (host.check_type or "").split(",") if t.strip())
+        existing_types.discard("https")
+        host.check_type = ",".join(sorted(existing_types)) or "icmp"
+        host.port_error = False
+        host.check_detail = None
+        dp.ssl_status = "new"
 
     elif action == "dismiss_ssl":
         dp.ssl_status = "dismissed"
