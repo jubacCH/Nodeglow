@@ -558,6 +558,38 @@ async def get_agent(
     }
 
 
+@router.delete("/agents/{agent_id}", summary="Delete / decommission an agent")
+async def delete_agent(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+
+    # Clean up related PingHost
+    if agent.hostname:
+        from sqlalchemy import delete as sa_delete
+        hn = agent.hostname.lower()
+        ph = await db.execute(
+            select(PingHost).where(
+                ((func.lower(PingHost.hostname) == hn) | (func.lower(PingHost.name) == hn)),
+                PingHost.source == "agent"
+            )
+        )
+        ping_host = ph.scalar_one_or_none()
+        if ping_host:
+            await db.execute(sa_delete(PingResult).where(PingResult.host_id == ping_host.id))
+            await db.execute(sa_delete(PingHost).where(PingHost.id == ping_host.id))
+
+    from sqlalchemy import delete as sa_delete
+    await db.execute(sa_delete(AgentSnapshot).where(AgentSnapshot.agent_id == agent_id))
+    await db.execute(sa_delete(Agent).where(Agent.id == agent_id))
+    await db.commit()
+    return {"ok": True}
+
+
 # ── Integrations ─────────────────────────────────────────────────────────────
 
 

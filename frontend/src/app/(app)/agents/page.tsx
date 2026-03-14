@@ -8,8 +8,10 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useAgents } from '@/hooks/queries/useAgents';
-import { get } from '@/lib/api';
-import { Plus, X, Copy, Check, Terminal, Monitor } from 'lucide-react';
+import { get, del } from '@/lib/api';
+import { useToastStore } from '@/stores/toast';
+import { useQueryClient } from '@tanstack/react-query';
+import { Plus, X, Copy, Check, Terminal, Monitor, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 
 function MetricBar({ label, value }: { label: string; value: number | null }) {
@@ -141,6 +143,21 @@ function AddAgentDialog({ onClose }: { onClose: () => void }) {
 export default function AgentsPage() {
   const { data: agents, isLoading } = useAgents();
   const [showAdd, setShowAdd] = useState(false);
+  const toast = useToastStore((s) => s.show);
+  const qc = useQueryClient();
+
+  async function handleDelete(agentId: number, name: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Decommission agent "${name}"? This will also remove its associated host and all snapshots.`)) return;
+    try {
+      await del(`/api/v1/agents/${agentId}`);
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      toast('Agent decommissioned', 'success');
+    } catch {
+      toast('Failed to delete agent', 'error');
+    }
+  }
 
   return (
     <div>
@@ -184,6 +201,13 @@ export default function AgentsPage() {
                     <p className="text-xs text-slate-500 font-mono truncate">{agent.hostname ?? '--'}</p>
                   </div>
                   <Badge>{agent.platform ?? '?'}</Badge>
+                  <button
+                    onClick={(e) => handleDelete(agent.id, agent.name, e)}
+                    className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-white/[0.06] transition-colors"
+                    title="Decommission"
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
                 <div className="space-y-2">
                   <MetricBar label="CPU" value={agent.cpu_pct} />
