@@ -6,11 +6,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { useThemeStore } from '@/stores/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useDashboard } from '@/hooks/queries/useDashboard';
+import { useDashboard, useNavCounts } from '@/hooks/queries/useDashboard';
 import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
   Bot, Scan, Radio, ShieldCheck, KeyRound, ChevronDown,
   Settings, Users, Activity, BookOpen, Search, LogOut, Plus,
+  ClipboardList,
 } from 'lucide-react';
 
 interface NavItem {
@@ -32,6 +33,7 @@ const mainNav: NavItem[] = [
   { label: 'SNMP', href: '/snmp', icon: Radio },
   { label: 'SSL', href: '/ssl', icon: ShieldCheck, countKey: 'ssl' },
   { label: 'Credentials', href: '/credentials', icon: KeyRound, countKey: 'credentials' },
+  { label: 'Tasks', href: '/tasks', icon: ClipboardList, countKey: 'tasks' },
 ];
 
 const systemNav: NavItem[] = [
@@ -77,6 +79,7 @@ export function Sidebar() {
   const [searchFocused, setSearchFocused] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const { data: dashData } = useDashboard();
+  const { data: navCounts } = useNavCounts();
 
   // Badge counts for nav items
   const navBadges: Record<string, { count: number; color: string }> = {};
@@ -85,6 +88,10 @@ export function Sidebar() {
     if (offlineCount > 0) navBadges['/hosts'] = { count: offlineCount, color: 'bg-red-500/20 text-red-400' };
     const activeInc = dashData.active_incidents ?? 0;
     if (activeInc > 0) navBadges['/alerts'] = { count: activeInc, color: 'bg-red-500/20 text-red-400' };
+  }
+  if (navCounts) {
+    const taskCount = navCounts.tasks ?? 0;
+    if (taskCount > 0) navBadges['/tasks'] = { count: taskCount, color: 'bg-amber-500/20 text-amber-400' };
   }
 
   // Keyboard shortcuts: Cmd+K for search, g+KEY for navigation
