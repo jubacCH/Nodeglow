@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   FileText,
   Search,
@@ -15,12 +15,16 @@ import {
   ChevronUp,
   Activity,
   Loader2,
+  Tag,
+  Check,
+  X,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { get } from '@/lib/api';
+import { get, patch } from '@/lib/api';
+import { useToastStore } from '@/stores/toast';
 import type { LogTemplate } from '@/types';
 
 interface TemplatesResponse {
@@ -67,6 +71,63 @@ function formatDate(dateStr: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function TagEditor({ templateHash, currentTags, onSaved }: { templateHash: string; currentTags: string; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentTags);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const toast = useToastStore((s) => s.show);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await patch(`/syslog/api/templates/${templateHash}/tags`, { tags: value });
+      onSaved();
+      setEditing(false);
+    } catch {
+      toast('Failed to update tags', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        onClick={(e) => { e.stopPropagation(); setEditing(true); setValue(currentTags); }}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-slate-500 hover:text-slate-300 hover:bg-white/[0.06] transition-colors"
+        title="Edit tags"
+      >
+        <Tag size={10} /> Edit tags
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1" onClick={(e) => e.stopPropagation()}>
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }}
+        placeholder="tag1, tag2, tag3"
+        className="flex-1 px-2 py-1 rounded text-xs bg-white/[0.06] border border-white/[0.08] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-sky-500/50"
+      />
+      <button onClick={save} disabled={saving} className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-colors" title="Save">
+        <Check size={12} />
+      </button>
+      <button onClick={() => setEditing(false)} className="p-1 rounded hover:bg-white/[0.06] text-slate-400 transition-colors" title="Cancel">
+        <X size={12} />
+      </button>
+    </div>
+  );
 }
 
 function RootCausePanel({ templateHash }: { templateHash: string }) {
@@ -130,6 +191,7 @@ export default function SyslogTemplatesPage() {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
+  const qc = useQueryClient();
 
   const { data, isLoading } = useQuery({
     queryKey: ['syslog-templates'],
@@ -350,6 +412,12 @@ export default function SyslogTemplatesPage() {
                           {tag}
                         </Badge>
                       ))}
+
+                      <TagEditor
+                        templateHash={t.template_hash}
+                        currentTags={t.tags || ''}
+                        onSaved={() => qc.invalidateQueries({ queryKey: ['syslog-templates'] })}
+                      />
                     </div>
 
                     {/* Dates */}

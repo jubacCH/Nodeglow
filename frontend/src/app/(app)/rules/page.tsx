@@ -13,7 +13,7 @@ import { api, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { AlertRule } from '@/types';
-import { Plus, Trash2, Power, Pencil } from 'lucide-react';
+import { Plus, Trash2, Power, Pencil, Play } from 'lucide-react';
 
 interface SourceInstance {
   id: number;
@@ -101,6 +101,8 @@ export default function RulesPage() {
   const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
   const [form, setForm] = useState<RuleFormState>(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ current_value: unknown; would_trigger: boolean; detail: string } | null>(null);
   const [sources, setSources] = useState<SourceOption[]>([]);
   const [fields, setFields] = useState<FieldOption[]>([]);
   const [loadingFields, setLoadingFields] = useState(false);
@@ -143,6 +145,29 @@ export default function RulesPage() {
     fetchFields(form.source_type, form.source_id);
   }, [showModal, form.source_type, form.source_id, fetchFields]);
 
+  async function handleTest() {
+    if (!form.source_type || !form.field_path) {
+      toast('Select a source type and field first', 'error');
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await post<{ current_value: unknown; would_trigger: boolean; detail: string }>('/api/rules/test', {
+        source_type: form.source_type,
+        source_id: form.source_id || null,
+        field_path: form.field_path,
+        operator: form.operator,
+        threshold: form.threshold,
+      });
+      setTestResult(result);
+    } catch {
+      toast('Test failed', 'error');
+    } finally {
+      setTesting(false);
+    }
+  }
+
   function openAdd() {
     setEditingRule(null);
     setForm(DEFAULT_FORM);
@@ -159,6 +184,7 @@ export default function RulesPage() {
   function closeModal() {
     setShowModal(false);
     setEditingRule(null);
+    setTestResult(null);
   }
 
   function updateForm(key: keyof RuleFormState, value: string) {
@@ -476,10 +502,31 @@ export default function RulesPage() {
             />
           </div>
 
+          {/* Test Result */}
+          {testResult && (
+            <div className={`rounded-lg border px-4 py-3 text-sm ${
+              testResult.would_trigger
+                ? 'bg-red-500/10 border-red-500/30 text-red-300'
+                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+            }`}>
+              <p className="font-medium mb-1">
+                {testResult.would_trigger ? 'Would trigger!' : 'Would not trigger'}
+              </p>
+              <p className="text-xs opacity-80">{testResult.detail}</p>
+              {testResult.current_value != null && (
+                <p className="text-xs opacity-80 mt-0.5">Current value: <span className="font-mono">{String(testResult.current_value)}</span></p>
+              )}
+            </div>
+          )}
+
           {/* Submit */}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" size="sm" onClick={closeModal}>
               Cancel
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={handleTest} disabled={testing || !form.source_type || !form.field_path}>
+              <Play size={14} />
+              {testing ? 'Testing...' : 'Test Rule'}
             </Button>
             <Button type="submit" size="sm" disabled={submitting}>
               {submitting ? 'Saving...' : editingRule ? 'Update Rule' : 'Create Rule'}

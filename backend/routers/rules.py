@@ -126,6 +126,78 @@ async def get_fields(
     return JSONResponse(fields)
 
 
+@router.post("/api/rules/test")
+async def test_rule(request: Request, db: AsyncSession = Depends(get_db)):
+    """Dry-run a rule config against live data without creating incidents."""
+    body = await request.json()
+    source_type = body.get("source_type", "")
+    source_id = int(body["source_id"]) if body.get("source_id") else None
+    field_path = body.get("field_path", "")
+    operator = body.get("operator", "gt")
+    threshold = body.get("threshold", "")
+
+    if not source_type or not field_path:
+        return JSONResponse({"error": "source_type and field_path required"}, status_code=400)
+
+    # Build a temporary rule-like object to reuse existing logic
+    class _FakeRule:
+        pass
+
+    fake = _FakeRule()
+    fake.source_type = source_type
+    fake.source_id = source_id
+    fake.field_path = field_path
+    fake.operator = operator
+    fake.threshold = threshold
+
+    if source_type == "syslog":
+        from services.rules import _evaluate_syslog_rule
+        from datetime import datetime
+        count = await _evaluate_syslog_rule(fake, datetime.utcnow())
+        op_fn = rules_svc.OPERATORS.get(operator)
+        would_trigger = count > 0
+        return JSONResponse({
+            "current_value": count,
+            "would_trigger": would_trigger,
+            "field_path": field_path,
+            "detail": f"{count} matching messages in last 60s",
+        })
+
+    from services.rules import _get_source_data, extract_field, OPERATORS
+    data = await _get_source_data(db, fake)
+    if data is None:
+        return JSONResponse({
+            "current_value": None,
+            "would_trigger": False,
+            "field_path": field_path,
+            "detail": "No data available for this source",
+        })
+
+    value = extract_field(data, field_path)
+    if value is None:
+        return JSONResponse({
+            "current_value": None,
+            "would_trigger": False,
+            "field_path": field_path,
+            "detail": f"Field '{field_path}' not found in source data",
+        })
+
+    op_fn = OPERATORS.get(operator)
+    would_trigger = False
+    if op_fn:
+        try:
+            would_trigger = op_fn[1](value, threshold)
+        except Exception:
+            pass
+
+    return JSONResponse({
+        "current_value": value if not isinstance(value, (dict, list)) else str(value),
+        "would_trigger": would_trigger,
+        "field_path": field_path,
+        "detail": f"{field_path} = {value} ({op_fn[0] if op_fn else operator} {threshold})",
+    })
+
+
 @router.get("/api/rules/sources")
 async def get_sources(db: AsyncSession = Depends(get_db)):
     """Return available source types and instances."""

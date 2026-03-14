@@ -11,9 +11,10 @@ import { Pagination } from '@/components/ui/Pagination';
 import { useHosts } from '@/hooks/queries/useHosts';
 import { useConfirm } from '@/hooks/useConfirm';
 import { formatLatency, uptimeColor } from '@/lib/utils';
-import { post } from '@/lib/api';
+import { post, patch } from '@/lib/api';
 import { ExportButton } from '@/components/ui/ExportButton';
-import { Plus, Search, X, ArrowUpDown, ArrowUp, ArrowDown, Wrench, Trash2, CheckSquare, Square, Server } from 'lucide-react';
+import { Plus, Search, X, ArrowUpDown, ArrowUp, ArrowDown, Wrench, Trash2, CheckSquare, Square, Server, Pencil } from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
@@ -105,6 +106,8 @@ function HostsPageInner() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkForm, setBulkForm] = useState({ check_type: '', enabled: '', latency_threshold_ms: '' });
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
@@ -233,6 +236,24 @@ function HostsPageInner() {
     }
   }
 
+  async function bulkEdit() {
+    const updates: Record<string, unknown> = {};
+    if (bulkForm.check_type) updates.check_type = bulkForm.check_type;
+    if (bulkForm.enabled !== '') updates.enabled = bulkForm.enabled === 'true';
+    if (bulkForm.latency_threshold_ms) updates.latency_threshold_ms = Number(bulkForm.latency_threshold_ms);
+    if (Object.keys(updates).length === 0) return;
+    setBulkLoading(true);
+    try {
+      await patch('/api/v1/hosts/bulk', { ids: Array.from(selected), updates });
+      setSelected(new Set());
+      setShowBulkEdit(false);
+      setBulkForm({ check_type: '', enabled: '', latency_threshold_ms: '' });
+      qc.invalidateQueries({ queryKey: ['hosts'] });
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+
   const onlineCount = hosts?.filter((h) => h.online === true && !h.maintenance).length ?? 0;
   const offlineCount = hosts?.filter((h) => h.online === false && !h.maintenance).length ?? 0;
   const maintCount = hosts?.filter((h) => h.maintenance).length ?? 0;
@@ -308,6 +329,9 @@ function HostsPageInner() {
         {selectMode && selected.size > 0 && (
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs text-slate-400">{selected.size} selected</span>
+            <Button size="sm" variant="ghost" onClick={() => setShowBulkEdit(true)} disabled={bulkLoading}>
+              <Pencil size={14} /> Edit
+            </Button>
             <Button size="sm" variant="ghost" onClick={() => bulkAction('maintenance')} disabled={bulkLoading}>
               <Wrench size={14} /> Maintenance
             </Button>
@@ -469,6 +493,40 @@ function HostsPageInner() {
         </div>
         <Pagination page={page} pageSize={PAGE_SIZE} total={filteredHosts.length} onPageChange={setPage} />
       </GlassCard>
+      <Modal open={showBulkEdit} onClose={() => setShowBulkEdit(false)} title={`Bulk Edit (${selected.size} hosts)`}>
+        <div className="space-y-4">
+          <p className="text-xs text-slate-500">Leave fields empty to keep unchanged.</p>
+          <div>
+            <label className="ng-label">Check Type</label>
+            <select value={bulkForm.check_type} onChange={(e) => setBulkForm({ ...bulkForm, check_type: e.target.value })} className={selectClass}>
+              <option value="">— No change —</option>
+              <option value="icmp">ICMP (Ping)</option>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+              <option value="tcp">TCP</option>
+              <option value="dns">DNS</option>
+            </select>
+          </div>
+          <div>
+            <label className="ng-label">Enabled</label>
+            <select value={bulkForm.enabled} onChange={(e) => setBulkForm({ ...bulkForm, enabled: e.target.value })} className={selectClass}>
+              <option value="">— No change —</option>
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+          <div>
+            <label className="ng-label">Latency Threshold (ms)</label>
+            <input type="number" placeholder="— No change —" value={bulkForm.latency_threshold_ms} onChange={(e) => setBulkForm({ ...bulkForm, latency_threshold_ms: e.target.value })} className={inputClass} />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" size="sm" onClick={() => setShowBulkEdit(false)}>Cancel</Button>
+            <Button size="sm" onClick={bulkEdit} disabled={bulkLoading}>
+              {bulkLoading ? 'Saving...' : 'Apply Changes'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
       {ConfirmDialogElement}
     </div>
   );
