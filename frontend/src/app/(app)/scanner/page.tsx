@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -47,6 +47,7 @@ interface Schedule {
 /* ---------- page ---------- */
 
 export default function ScannerPage() {
+  useEffect(() => { document.title = 'Scanner | Nodeglow'; }, []);
   const toast = useToastStore((s) => s.show);
   const qc = useQueryClient();
 

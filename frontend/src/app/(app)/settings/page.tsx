@@ -16,6 +16,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { api, get, post, del } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useThemeStore } from '@/stores/theme';
+import { useConfirm } from '@/hooks/useConfirm';
 
 /* ---------- Types ---------- */
 
@@ -148,8 +149,10 @@ function ApiSection({ title, endpoints }: { title: string; endpoints: ApiEndpoin
 /* ---------- Component ---------- */
 
 export default function SettingsPage() {
+  useEffect(() => { document.title = 'Settings | Nodeglow'; }, []);
   const toast = useToastStore();
   const qc = useQueryClient();
+  const { confirm, ConfirmDialogElement } = useConfirm();
 
   const [activeTab, setActiveTab] = useState<Tab>('system');
 
@@ -373,8 +376,14 @@ export default function SettingsPage() {
     createKeyMut.mutate({ name: newKeyName, role: newKeyRole });
   }
 
-  function handleDeleteKey(k: ApiKeyEntry) {
-    if (window.confirm(`Delete API key "${k.name}"?`)) {
+  async function handleDeleteKey(k: ApiKeyEntry) {
+    const ok = await confirm({
+      title: 'Delete API key',
+      description: `Delete API key "${k.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (ok) {
       deleteKeyMut.mutate(k.id);
     }
   }
@@ -1079,6 +1088,7 @@ export default function SettingsPage() {
           </form>
         )}
       </Modal>
+      {ConfirmDialogElement}
     </div>
   );
 }

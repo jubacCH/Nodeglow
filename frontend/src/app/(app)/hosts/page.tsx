@@ -7,9 +7,12 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { Pagination } from '@/components/ui/Pagination';
 import { useHosts } from '@/hooks/queries/useHosts';
+import { useConfirm } from '@/hooks/useConfirm';
 import { formatLatency, uptimeColor } from '@/lib/utils';
 import { post } from '@/lib/api';
+import { ExportButton } from '@/components/ui/ExportButton';
 import { Plus, Search, X, ArrowUpDown, ArrowUp, ArrowDown, Wrench, Trash2, CheckSquare, Square, Server } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -62,7 +65,7 @@ function SortHeader({ label, sortKey, currentKey, dir, onSort }: {
   const active = currentKey === sortKey;
   return (
     <th
-      className="text-left px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-300 transition-colors select-none"
+      className={`text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider cursor-pointer hover:text-slate-300 transition-colors select-none ${active ? 'accent-text' : 'text-slate-400'}`}
       onClick={() => onSort(sortKey)}
     >
       <span className="inline-flex items-center gap-1">
@@ -86,6 +89,7 @@ function statusOrder(h: HostStatus): number {
 }
 
 function HostsPageInner() {
+  useEffect(() => { document.title = 'Hosts | Nodeglow'; }, []);
   const searchParams = useSearchParams();
   const router = useRouter();
   const qc = useQueryClient();
@@ -102,6 +106,9 @@ function HostsPageInner() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
+  const { confirm, ConfirmDialogElement } = useConfirm();
 
   const handleSort = useCallback((key: SortKey) => {
     if (sortKey === key) {
@@ -152,6 +159,14 @@ function HostsPageInner() {
     return result;
   }, [hosts, search, sortKey, sortDir, statusFilter]);
 
+  // Reset page when filters change
+  useEffect(() => { setPage(0); }, [search, statusFilter, sortKey, sortDir]);
+
+  const pagedHosts = useMemo(
+    () => filteredHosts.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    [filteredHosts, page],
+  );
+
   useEffect(() => {
     if (qParam && !isLoading && filteredHosts && filteredHosts.length === 1 && !redirected.current) {
       redirected.current = true;
@@ -195,7 +210,13 @@ function HostsPageInner() {
   async function bulkAction(action: 'maintenance' | 'delete') {
     if (selected.size === 0) return;
     const label = action === 'maintenance' ? 'toggle maintenance' : 'delete';
-    if (!confirm(`${label} for ${selected.size} host(s)?`)) return;
+    const ok = await confirm({
+      title: action === 'delete' ? 'Delete hosts' : 'Toggle maintenance',
+      description: `${label} for ${selected.size} host(s)?`,
+      confirmLabel: action === 'delete' ? 'Delete' : 'Confirm',
+      variant: action === 'delete' ? 'danger' : 'default',
+    });
+    if (!ok) return;
     setBulkLoading(true);
     try {
       for (const id of Array.from(selected)) {
@@ -240,6 +261,21 @@ function HostsPageInner() {
               <CheckSquare size={16} />
               {selectMode ? 'Cancel' : 'Select'}
             </Button>
+            <ExportButton
+              data={(filteredHosts ?? []).map((h) => ({
+                name: h.name, hostname: h.hostname, status: h.online ? 'online' : h.online === false ? 'offline' : 'unknown',
+                check_type: h.check_type, source: h.source, latency_ms: h.latency_ms,
+                uptime_24h: h.uptime_h24, uptime_7d: h.uptime_d7, uptime_30d: h.uptime_d30,
+              }))}
+              filename="hosts"
+              columns={[
+                { key: 'name', label: 'Name' }, { key: 'hostname', label: 'Hostname' },
+                { key: 'status', label: 'Status' }, { key: 'check_type', label: 'Type' },
+                { key: 'source', label: 'Source' }, { key: 'latency_ms', label: 'Latency (ms)' },
+                { key: 'uptime_24h', label: 'Uptime 24h' }, { key: 'uptime_7d', label: 'Uptime 7d' },
+                { key: 'uptime_30d', label: 'Uptime 30d' },
+              ]}
+            />
             <Button size="sm" onClick={() => setShowAdd(true)}>
               <Plus size={16} />
               Add Host
@@ -356,7 +392,7 @@ function HostsPageInner() {
                     <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
                   </tr>
                 ))}
-              {filteredHosts.map((host) => (
+              {pagedHosts.map((host) => (
                 <tr
                   key={host.id}
                   className={`border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer ${selected.has(host.id) ? 'bg-sky-500/5' : ''}`}
@@ -431,7 +467,9 @@ function HostsPageInner() {
             </tbody>
           </table>
         </div>
+        <Pagination page={page} pageSize={PAGE_SIZE} total={filteredHosts.length} onPageChange={setPage} />
       </GlassCard>
+      {ConfirmDialogElement}
     </div>
   );
 }

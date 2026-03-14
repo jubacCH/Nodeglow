@@ -9,7 +9,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Database, Clock, Server, RefreshCw, Download, Cpu, HardDrive,
   MemoryStick, Activity, Shield, AlertTriangle, Plug, Timer,
@@ -151,6 +151,7 @@ function StatRow({ label, value }: { label: string; value: string | number }) {
 /* ---------- Page ---------- */
 
 export default function SystemStatusPage() {
+  useEffect(() => { document.title = 'System Status | Nodeglow'; }, []);
   const toast = useToastStore((s) => s.show);
   const [checking, setChecking] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{

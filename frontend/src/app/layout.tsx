@@ -14,8 +14,11 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Nodeglow',
-  description: 'Homelab & infrastructure monitoring',
+  title: {
+    template: '%s | Nodeglow',
+    default: 'Nodeglow',
+  },
+  description: 'Infrastructure monitoring platform',
   icons: {
     icon: '/favicon.svg',
   },

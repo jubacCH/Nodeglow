@@ -5,7 +5,7 @@ import { SyslogLiveTail } from '@/components/syslog/SyslogLiveTail';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useSyslog } from '@/hooks/queries/useSyslog';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { MessageSquare, Brain } from 'lucide-react';
 
@@ -32,6 +32,7 @@ const SEVERITY_COLORS: Record<number, string> = {
 };
 
 export default function SyslogPage() {
+  useEffect(() => { document.title = 'Syslog | Nodeglow'; }, []);
   const [search, setSearch] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState<string | undefined>(undefined);
   const [liveEnabled, setLiveEnabled] = useState(false);

@@ -6,11 +6,13 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
+import { useEffect } from 'react';
 import type { Digest } from '@/types';
 import { AlertTriangle, Server, FileText } from 'lucide-react';
 import Link from 'next/link';
 
 export default function DigestPage() {
+  useEffect(() => { document.title = 'Digest | Nodeglow'; }, []);
   const { data, isLoading } = useQuery({
     queryKey: ['digest'],
     queryFn: () => get<Digest>('/api/v1/digest'),

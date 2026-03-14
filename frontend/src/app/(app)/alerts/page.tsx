@@ -9,10 +9,11 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useIncidents } from '@/hooks/queries/useAlerts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post } from '@/lib/api';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Wrench, Clock, ShieldCheck, Bell } from 'lucide-react';
 import { timeAgo } from '@/lib/utils';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface MaintenanceHost {
   id: number;
@@ -26,8 +27,10 @@ interface MaintenanceHost {
 type Tab = 'alerts' | 'incidents' | 'maintenance';
 
 export default function AlertsPage() {
+  useEffect(() => { document.title = 'Alerts | Nodeglow'; }, []);
   const [activeTab, setActiveTab] = useState<Tab>('alerts');
   const qc = useQueryClient();
+  const { confirm, ConfirmDialogElement } = useConfirm();
   const { data: incidents, isLoading } = useIncidents();
 
   const { data: maintHosts, isLoading: maintLoading } = useQuery({
@@ -45,7 +48,12 @@ export default function AlertsPage() {
   const openIncidents = incidents?.filter((i) => i.status === 'open') ?? [];
 
   async function removeMaintenance(hostId: number) {
-    if (!confirm('Remove maintenance mode from this host?')) return;
+    const ok = await confirm({
+      title: 'Remove maintenance',
+      description: 'Remove maintenance mode from this host?',
+      confirmLabel: 'Remove',
+    });
+    if (!ok) return;
     await post(`/hosts/api/${hostId}/maintenance`);
     qc.invalidateQueries({ queryKey: ['maintenance-hosts'] });
   }
@@ -214,6 +222,7 @@ export default function AlertsPage() {
           )}
         </div>
       )}
+      {ConfirmDialogElement}
     </div>
   );
 }

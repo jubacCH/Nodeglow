@@ -9,8 +9,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post, patch, del } from '@/lib/api';
 import { useIsAdmin } from '@/stores/auth';
 import { Plus, Trash2, Key } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useToastStore } from '@/stores/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface UserInfo {
   id: number;
@@ -22,6 +23,7 @@ interface UserInfo {
 const ROLES = ['admin', 'editor', 'readonly'] as const;
 
 export default function UsersPage() {
+  useEffect(() => { document.title = 'Users | Nodeglow'; }, []);
   const isAdmin = useIsAdmin();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
@@ -31,6 +33,7 @@ export default function UsersPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const toast = useToastStore((s) => s.show);
+  const { confirm, ConfirmDialogElement } = useConfirm();
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['users'],
@@ -70,7 +73,8 @@ export default function UsersPage() {
   }
 
   async function handleDelete(userId: number) {
-    if (!confirm('Delete this user? This action cannot be undone.')) return;
+    const ok = await confirm({ title: 'Delete user', description: 'Delete this user? This action cannot be undone.', confirmLabel: 'Delete', variant: 'danger' });
+    if (!ok) return;
     try {
       await del(`/api/users/${userId}`);
       refresh();
@@ -254,6 +258,7 @@ export default function UsersPage() {
           </div>
         </div>
       </Modal>
+      {ConfirmDialogElement}
     </div>
   );
 }

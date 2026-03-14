@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useAgents } from '@/hooks/queries/useAgents';
 import { get, del } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 import { useQueryClient } from '@tanstack/react-query';
 import { Plus, X, Copy, Check, Terminal, Monitor, Trash2 } from 'lucide-react';
 import Link from 'next/link';
@@ -141,15 +142,18 @@ function AddAgentDialog({ onClose }: { onClose: () => void }) {
 }
 
 export default function AgentsPage() {
+  useEffect(() => { document.title = 'Agents | Nodeglow'; }, []);
   const { data: agents, isLoading } = useAgents();
   const [showAdd, setShowAdd] = useState(false);
   const toast = useToastStore((s) => s.show);
   const qc = useQueryClient();
+  const { confirm, ConfirmDialogElement } = useConfirm();
 
   async function handleDelete(agentId: number, name: string, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (!confirm(`Decommission agent "${name}"? This will also remove its associated host and all snapshots.`)) return;
+    const ok = await confirm({ title: 'Decommission agent', description: `Decommission agent "${name}"? This will also remove its associated host and all snapshots.`, confirmLabel: 'Decommission', variant: 'danger' });
+    if (!ok) return;
     try {
       await del(`/api/v1/agents/${agentId}`);
       qc.invalidateQueries({ queryKey: ['agents'] });
@@ -229,6 +233,7 @@ export default function AgentsPage() {
           </GlassCard>
         )}
       </div>
+      {ConfirmDialogElement}
     </div>
   );
 }
