@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
@@ -24,6 +24,7 @@ import {
 import Link from 'next/link';
 
 export default function DashboardPage() {
+  useEffect(() => { document.title = 'Dashboard | Nodeglow'; }, []);
   const { data, isLoading } = useDashboard();
 
   const avgLatency = data?.host_stats

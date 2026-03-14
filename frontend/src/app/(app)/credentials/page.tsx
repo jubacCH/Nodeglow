@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, Plus, Trash2, Pencil, Shield, ShieldCheck, Terminal, MonitorDot } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { get, post, api, del } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 
 /* ---------- Types ---------- */
 
@@ -93,8 +94,10 @@ const selectCls =
 /* ---------- Component ---------- */
 
 export default function CredentialsPage() {
+  useEffect(() => { document.title = 'Credentials | Nodeglow'; }, []);
   const toast = useToastStore();
   const qc = useQueryClient();
+  const { confirm, ConfirmDialogElement } = useConfirm();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Credential | null>(null);
@@ -180,10 +183,10 @@ export default function CredentialsPage() {
     }
   }
 
-  function handleDelete(cred: Credential) {
-    if (window.confirm(`Delete credential "${cred.name}"? This cannot be undone.`)) {
-      deleteMut.mutate(cred.id);
-    }
+  async function handleDelete(cred: Credential) {
+    const ok = await confirm({ title: 'Delete credential', description: `Delete credential "${cred.name}"? This cannot be undone.`, confirmLabel: 'Delete', variant: 'danger' });
+    if (!ok) return;
+    deleteMut.mutate(cred.id);
   }
 
   const isSaving = createMut.isPending || updateMut.isPending;
@@ -373,6 +376,7 @@ export default function CredentialsPage() {
           </div>
         </form>
       </Modal>
+      {ConfirmDialogElement}
     </div>
   );
 }

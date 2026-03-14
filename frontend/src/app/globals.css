@@ -79,6 +79,15 @@ table tbody td {
   @apply text-sm text-slate-300;
 }
 
+/* Page transition */
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-page-enter {
+  animation: page-enter 0.2s ease-out;
+}
+
 /* Glow pulse animation */
 @keyframes glow-pulse {
   0%, 100% { box-shadow: 0 0 4px 1px currentColor; }
@@ -120,6 +129,11 @@ table tbody td {
   bottom: 0;
   right: 0;
   cursor: se-resize;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.react-grid-item:hover > .react-resizable-handle {
+  opacity: 1;
 }
 .react-resizable-handle::after {
   content: '';

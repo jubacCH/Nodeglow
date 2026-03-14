@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post } from '@/lib/api';
 import { ShieldCheck, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface SslCert {
   id: number;
@@ -39,6 +39,7 @@ function expiryColor(days: number | null): string {
 }
 
 export default function SslPage() {
+  useEffect(() => { document.title = 'SSL | Nodeglow'; }, []);
   const qc = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const { data, isLoading } = useQuery({

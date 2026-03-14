@@ -186,9 +186,9 @@ function DraggableInner({
         >
           {widgets.map((w) => (
             <div key={w.id}>
-              <GlassCard className="h-full overflow-hidden flex flex-col">
+              <GlassCard className="h-full overflow-hidden flex flex-col group/widget">
                 {!locked && (
-                  <div className="drag-handle cursor-move px-4 py-1.5 border-b border-white/[0.04] flex items-center">
+                  <div className="drag-handle cursor-move px-4 py-1.5 border-b border-white/[0.04] flex items-center opacity-0 group-hover/widget:opacity-100 transition-opacity">
                     <span className="text-[10px] text-slate-500 uppercase tracking-wider select-none">
                       ⋮⋮ {w.title ?? w.id}
                     </span>
