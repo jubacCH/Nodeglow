@@ -7,7 +7,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { useHost, useHostHistory } from '@/hooks/queries/useHosts';
+import { useHost, useHostHistory, useHosts } from '@/hooks/queries/useHosts';
 import { formatLatency, uptimeColor } from '@/lib/utils';
 import { EChart } from '@/components/charts/EChart';
 import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown } from 'lucide-react';
@@ -171,6 +171,7 @@ export default function HostDetailPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: host, isLoading } = useHost(hostId) as { data: any; isLoading: boolean };
   const { data: history, isLoading: historyLoading } = useHostHistory(hostId, 24);
+  const { data: allHosts } = useHosts();
 
   const agent: AgentMetrics | null = host?.agent ?? null;
   const device = host?.integration?.device ?? null;
@@ -353,11 +354,14 @@ export default function HostDetailPage() {
             <div>
               <h3 className="text-sm font-medium text-slate-300 mb-3">
                 Device Metrics
-                {device.type_label && (
-                  <Badge className="ml-2">{device.type_label}</Badge>
+                {(device.type_label || device.type) && (
+                  <Badge className="ml-2">{device.type_label || device.type}</Badge>
                 )}
                 {device.model && (
                   <span className="text-xs text-slate-500 ml-2 font-normal">{device.model}</span>
+                )}
+                {device.node && (
+                  <span className="text-xs text-slate-500 ml-2 font-normal">on {device.node}</span>
                 )}
               </h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -370,13 +374,32 @@ export default function HostDetailPage() {
                     color="text-sky-400"
                   />
                 )}
-                {device.mem_pct != null && (
+                {(device.mem_pct != null || device.mem_used_gb != null) && (
                   <MetricCard
                     icon={MemoryStick}
                     label="Memory"
-                    value={`${device.mem_pct}%`}
-                    pct={device.mem_pct}
+                    value={device.mem_pct != null
+                      ? `${device.mem_pct}%`
+                      : device.mem_total_gb
+                        ? `${((device.mem_used_gb / device.mem_total_gb) * 100).toFixed(1)}%`
+                        : `${device.mem_used_gb} GB`}
+                    pct={device.mem_pct ?? (device.mem_total_gb ? (device.mem_used_gb / device.mem_total_gb) * 100 : null)}
+                    sub={device.mem_used_gb != null && device.mem_total_gb != null
+                      ? `${device.mem_used_gb} / ${device.mem_total_gb} GB`
+                      : undefined}
                     color="text-violet-400"
+                  />
+                )}
+                {device.disk_pct != null && (
+                  <MetricCard
+                    icon={HardDrive}
+                    label="Disk"
+                    value={`${device.disk_pct}%`}
+                    pct={device.disk_pct}
+                    sub={device.disk_used_gb != null && device.disk_total_gb != null
+                      ? `${device.disk_used_gb} / ${device.disk_total_gb} GB`
+                      : undefined}
+                    color="text-amber-400"
                   />
                 )}
                 {device.uptime_s != null && device.uptime_s > 0 && (
@@ -396,12 +419,12 @@ export default function HostDetailPage() {
                     color="text-cyan-400"
                   />
                 )}
-                {(device.rx_bytes != null || device.tx_bytes != null) && (
+                {(device.netin != null || device.rx_bytes != null) && (
                   <MetricCard
                     icon={Network}
                     label="Traffic"
-                    value={formatBytes(device.rx_bytes)}
-                    sub={`TX: ${formatBytes(device.tx_bytes)}`}
+                    value={formatBytes(device.rx_bytes ?? device.netin)}
+                    sub={`TX: ${formatBytes(device.tx_bytes ?? device.netout)}`}
                     color="text-orange-400"
                   />
                 )}
@@ -552,10 +575,30 @@ export default function HostDetailPage() {
                       <span className="text-xs text-slate-300 font-mono">{device.version}</span>
                     </div>
                   )}
-                  {device.type_label && (
+                  {(device.type_label || device.type) && (
                     <div className="flex justify-between">
                       <span className="text-xs text-slate-500">Type</span>
-                      <span className="text-xs text-slate-300">{device.type_label}</span>
+                      <span className="text-xs text-slate-300">{device.type_label || device.type}</span>
+                    </div>
+                  )}
+                  {device.node && (
+                    <div className="flex justify-between">
+                      <span className="text-xs text-slate-500">Node</span>
+                      <span className="text-xs text-slate-300">{device.node}</span>
+                    </div>
+                  )}
+                  {device.id != null && (
+                    <div className="flex justify-between">
+                      <span className="text-xs text-slate-500">VMID</span>
+                      <span className="text-xs text-slate-300 font-mono">{device.id}</span>
+                    </div>
+                  )}
+                  {device.status && (
+                    <div className="flex justify-between">
+                      <span className="text-xs text-slate-500">Status</span>
+                      <span className={`text-xs font-medium ${device.running || device.state === 1 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                        {device.status}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -719,7 +762,7 @@ export default function HostDetailPage() {
       )}
 
       {activeTab === 'ports' && hasPorts && (
-        <PortsTab ports={device.port_table} clients={device.connected_clients ?? []} />
+        <PortsTab ports={device.port_table} clients={device.connected_clients ?? []} allHosts={allHosts ?? []} />
       )}
 
       {activeTab === 'syslog' && (
@@ -754,7 +797,21 @@ function formatRate(bytesPerSec: number | null | undefined): string {
   return `${(bits / 1_000_000_000).toFixed(2)} Gbps`;
 }
 
-function PortsTab({ ports, clients }: { ports: PortInfo[]; clients: ConnectedClient[] }) {
+function PortsTab({ ports, clients, allHosts }: { ports: PortInfo[]; clients: ConnectedClient[]; allHosts: { id: number; hostname: string; name: string }[] }) {
+  // Build lookup: IP → host id, MAC → host id
+  const hostByIp = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const h of allHosts) {
+      if (h.hostname) map[h.hostname.toLowerCase()] = h.id;
+    }
+    return map;
+  }, [allHosts]);
+
+  function clientHostId(c: ConnectedClient): number | null {
+    if (c.ip && hostByIp[c.ip.toLowerCase()]) return hostByIp[c.ip.toLowerCase()];
+    return null;
+  }
+
   // Group clients by switch port
   const clientsByPort: Record<number, ConnectedClient[]> = {};
   for (const c of clients) {
@@ -883,25 +940,29 @@ function PortsTab({ ports, clients }: { ports: PortInfo[]; clients: ConnectedCli
                 </tr>
               </thead>
               <tbody>
-                {clients.map((c) => (
-                  <tr key={c.mac} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                    <td className="px-3 py-2">
-                      <p className="text-xs text-slate-200">{c.hostname}</p>
-                      <p className="text-[10px] text-slate-500 font-mono">{c.mac}</p>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-slate-300 font-mono">{c.ip || '—'}</td>
-                    <td className="px-3 py-2 text-xs text-slate-400">{c.sw_port ?? '—'}</td>
-                    <td className="px-3 py-2">
-                      <span className={`text-xs ${c.is_wireless ? 'text-violet-400' : 'text-cyan-400'}`}>
-                        {c.is_wireless ? `WiFi${c.ssid ? ` (${c.ssid})` : ''}` : 'Wired'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-slate-400">{c.vlan || '—'}</td>
-                    <td className="px-3 py-2 text-xs text-slate-400 font-mono">
-                      ↓{formatRate(c.rx_bytes_r)} ↑{formatRate(c.tx_bytes_r)}
-                    </td>
-                  </tr>
-                ))}
+                {clients.map((c) => {
+                  const hid = clientHostId(c);
+                  const row = (
+                    <tr key={c.mac} className={`border-b border-white/[0.03] hover:bg-white/[0.02] ${hid ? 'cursor-pointer' : ''}`}>
+                      <td className="px-3 py-2">
+                        <p className={`text-xs ${hid ? 'text-sky-400' : 'text-slate-200'}`}>{c.hostname}</p>
+                        <p className="text-[10px] text-slate-500 font-mono">{c.mac}</p>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-300 font-mono">{c.ip || '—'}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{c.sw_port ?? '—'}</td>
+                      <td className="px-3 py-2">
+                        <span className={`text-xs ${c.is_wireless ? 'text-violet-400' : 'text-cyan-400'}`}>
+                          {c.is_wireless ? `WiFi${c.ssid ? ` (${c.ssid})` : ''}` : 'Wired'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{c.vlan || '—'}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400 font-mono">
+                        ↓{formatRate(c.rx_bytes_r)} ↑{formatRate(c.tx_bytes_r)}
+                      </td>
+                    </tr>
+                  );
+                  return hid ? <Link key={c.mac} href={`/hosts/${hid}`}>{row}</Link> : row;
+                })}
               </tbody>
             </table>
           </div>
