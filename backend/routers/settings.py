@@ -101,21 +101,25 @@ async def settings_json(db: AsyncSession = Depends(get_db)):
         "telegram_bot_token", "telegram_chat_id",
         "discord_webhook_url", "webhook_url", "webhook_secret",
         "smtp_host", "smtp_port", "smtp_user", "smtp_from", "smtp_to",
+        "ping_retention_days", "proxmox_retention_days", "integration_retention_days",
+        "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
+        "proxmox_disk_threshold", "syslog_port",
     ]
     result = {}
     for key in keys:
         result[key] = await get_setting(db, key, "")
-    # Booleans that need defaults
-    if not result["site_name"]:
-        result["site_name"] = "NODEGLOW"
-    if not result["ping_interval"]:
-        result["ping_interval"] = "60"
-    if not result["proxmox_interval"]:
-        result["proxmox_interval"] = "60"
-    if not result["timezone"]:
-        result["timezone"] = "UTC"
-    if not result["smtp_port"]:
-        result["smtp_port"] = "587"
+    # Defaults
+    defaults = {
+        "site_name": "NODEGLOW", "ping_interval": "60", "proxmox_interval": "60",
+        "timezone": "UTC", "smtp_port": "587", "ping_retention_days": "30",
+        "proxmox_retention_days": "7", "integration_retention_days": "7",
+        "anomaly_threshold": "2.0", "proxmox_cpu_threshold": "85",
+        "proxmox_ram_threshold": "85", "proxmox_disk_threshold": "90",
+        "syslog_port": "1514",
+    }
+    for key, default in defaults.items():
+        if not result.get(key):
+            result[key] = default
     # Don't expose passwords, just indicate if set
     result["smtp_has_pw"] = bool(await get_setting(db, "smtp_password", ""))
     return JSONResponse(result)
@@ -123,6 +127,7 @@ async def settings_json(db: AsyncSession = Depends(get_db)):
 
 @router.post("/save")
 async def save_settings(
+    request: Request,
     site_name:          str = Form("NODEGLOW"),
     ping_interval:      str = Form("60"),
     proxmox_interval:   str = Form("60"),
@@ -228,6 +233,9 @@ async def save_settings(
     from main import invalidate_settings_cache
     invalidate_settings_cache()
 
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1", status_code=303)
 
 
@@ -310,6 +318,7 @@ async def notifications_settings(request: Request, db: AsyncSession = Depends(ge
 
 @router.post("/notifications/save")
 async def save_notifications(
+    request: Request,
     notify_enabled:      str = Form("0"),
     telegram_bot_token:  str = Form(""),
     telegram_chat_id:    str = Form(""),
@@ -337,6 +346,9 @@ async def save_notifications(
     await set_setting(db, "smtp_to", smtp_to.strip())
     if smtp_password.strip():
         await set_setting(db, "smtp_password", encrypt_value(smtp_password.strip()))
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&tab=notifications", status_code=303)
 
 
