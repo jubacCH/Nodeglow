@@ -493,10 +493,15 @@ async def update_host(
     if not host:
         raise HTTPException(404, "Host not found")
     body = await request.json()
+    old_check_type = host.check_type
     for field in ("name", "hostname", "check_type", "port", "latency_threshold_ms",
                   "enabled", "maintenance"):
         if field in body:
             setattr(host, field, body[field])
+    # Reset port_error state when check types change
+    if "check_type" in body and body["check_type"] != old_check_type:
+        host.port_error = False
+        host.check_detail = None
     await db.commit()
     return {"ok": True, "id": host.id}
 
