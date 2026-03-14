@@ -18,22 +18,23 @@ interface NavItem {
   label: string;
   href: string;
   icon: React.ElementType;
+  iconColor?: string;
   adminOnly?: boolean;
   countKey?: string;
 }
 
 const mainNav: NavItem[] = [
-  { label: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { label: 'Hosts', href: '/hosts', icon: Server, countKey: 'hosts' },
-  { label: 'Alerts', href: '/alerts', icon: AlertTriangle, countKey: 'alerts' },
-  { label: 'Rules', href: '/rules', icon: Bell, countKey: 'rules' },
-  { label: 'Syslog', href: '/syslog', icon: FileText },
-  { label: 'Agents', href: '/agents', icon: Bot, countKey: 'agents' },
-  { label: 'Scanner', href: '/scanner', icon: Scan },
-  { label: 'SNMP', href: '/snmp', icon: Radio },
-  { label: 'SSL', href: '/ssl', icon: ShieldCheck, countKey: 'ssl' },
-  { label: 'Credentials', href: '/credentials', icon: KeyRound, countKey: 'credentials' },
-  { label: 'Tasks', href: '/tasks', icon: ClipboardList, countKey: 'tasks' },
+  { label: 'Dashboard', href: '/', icon: LayoutDashboard, iconColor: 'text-sky-400' },
+  { label: 'Hosts', href: '/hosts', icon: Server, iconColor: 'text-emerald-400', countKey: 'hosts' },
+  { label: 'Alerts', href: '/alerts', icon: AlertTriangle, iconColor: 'text-amber-400', countKey: 'alerts' },
+  { label: 'Rules', href: '/rules', icon: Bell, iconColor: 'text-orange-400', countKey: 'rules' },
+  { label: 'Syslog', href: '/syslog', icon: FileText, iconColor: 'text-violet-400' },
+  { label: 'Agents', href: '/agents', icon: Bot, iconColor: 'text-cyan-400', countKey: 'agents' },
+  { label: 'Scanner', href: '/scanner', icon: Scan, iconColor: 'text-indigo-400' },
+  { label: 'SNMP', href: '/snmp', icon: Radio, iconColor: 'text-teal-400' },
+  { label: 'SSL', href: '/ssl', icon: ShieldCheck, iconColor: 'text-green-400', countKey: 'ssl' },
+  { label: 'Credentials', href: '/credentials', icon: KeyRound, iconColor: 'text-yellow-400', countKey: 'credentials' },
+  { label: 'Tasks', href: '/tasks', icon: ClipboardList, iconColor: 'text-rose-400', countKey: 'tasks' },
 ];
 
 const systemNav: NavItem[] = [
@@ -221,7 +222,8 @@ export function Sidebar() {
                   : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200',
               )}
             >
-              <item.icon size={18} />
+              {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-current" />}
+              <item.icon size={18} className={isActive ? '' : item.iconColor || ''} />
               {!sidebarCollapsed && (
                 <>
                   <span className="flex-1">{item.label}</span>
@@ -296,12 +298,13 @@ export function Sidebar() {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
+                  'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                   isActive
                     ? 'nav-active'
                     : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200',
                 )}
               >
+                {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-current" />}
                 <item.icon size={18} />
                 {!sidebarCollapsed && <span>{item.label}</span>}
               </Link>
