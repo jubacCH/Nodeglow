@@ -68,6 +68,15 @@ export function DraggableDashboard({ widgets }: DraggableDashboardProps) {
       i: w.id,
       ...w.defaultLayout,
     }));
+    // 4-col for xl screens — spread widgets wider
+    const xl = widgets.map((w): LayoutItem => {
+      const dl = w.defaultLayout;
+      // Scale 3-col → 4-col: widen full-width widgets, shift positions
+      if (dl.w >= 3) return { i: w.id, x: 0, y: dl.y, w: 4, h: dl.h, minW: dl.minW, minH: dl.minH };
+      if (dl.w >= 2) return { i: w.id, x: dl.x, y: dl.y, w: 2, h: dl.h, minW: dl.minW, minH: dl.minH };
+      // Row of 3 single widgets → row of 4 (reflow)
+      return { i: w.id, x: dl.x, y: dl.y, w: 1, h: dl.h, minW: dl.minW, minH: dl.minH };
+    });
     // 2-col for medium screens
     const md = widgets.map((w, idx): LayoutItem => ({
       i: w.id,
@@ -87,7 +96,7 @@ export function DraggableDashboard({ widgets }: DraggableDashboardProps) {
       minW: 1,
       minH: w.defaultLayout.minH,
     }));
-    return { lg, md, sm };
+    return { xl, lg, md, sm };
   }, [widgets]);
 
   const [layouts, setLayouts] = useState<LayoutMap>(() => loadLayouts() ?? defaultLayouts);
@@ -174,8 +183,8 @@ function DraggableInner({
           className="react-grid-layout"
           width={width}
           layouts={layouts}
-          breakpoints={{ lg: 1200, md: 768, sm: 0 }}
-          cols={{ lg: 3, md: 2, sm: 1 }}
+          breakpoints={{ xl: 1536, lg: 1200, md: 768, sm: 0 }}
+          cols={{ xl: 4, lg: 3, md: 2, sm: 1 }}
           rowHeight={110}
           isDraggable={!locked}
           isResizable={!locked}

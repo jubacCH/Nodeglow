@@ -85,7 +85,7 @@ export function AppShell({ children }: AppShellProps) {
         <div
           key={pathname}
           className={cn(
-            'max-w-7xl mx-auto animate-page-enter',
+            'max-w-[1920px] mx-auto animate-page-enter',
             density === 'compact' ? 'px-4 py-4' : 'px-6 py-6',
           )}
         >
