@@ -68,7 +68,9 @@ function HostsPageInner() {
     const q = search.toLowerCase();
     return (
       host.name.toLowerCase().includes(q) ||
-      host.hostname.toLowerCase().includes(q)
+      host.hostname.toLowerCase().includes(q) ||
+      (host.check_type && host.check_type.toLowerCase().includes(q)) ||
+      (host.source && host.source.toLowerCase().includes(q))
     );
   });
 

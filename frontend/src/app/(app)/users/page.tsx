@@ -10,6 +10,7 @@ import { get, post, patch, del } from '@/lib/api';
 import { useIsAdmin } from '@/stores/auth';
 import { Plus, Trash2, Key } from 'lucide-react';
 import { useState } from 'react';
+import { useToastStore } from '@/stores/toast';
 
 interface UserInfo {
   id: number;
@@ -29,6 +30,7 @@ export default function UsersPage() {
   const [newPw, setNewPw] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const toast = useToastStore((s) => s.show);
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['users'],
@@ -61,18 +63,20 @@ export default function UsersPage() {
     try {
       await patch(`/api/users/${userId}`, { role });
       refresh();
+      toast('Role updated', 'success');
     } catch {
-      // silently fail
+      toast('Failed to update role', 'error');
     }
   }
 
   async function handleDelete(userId: number) {
-    if (!confirm('Delete this user?')) return;
+    if (!confirm('Delete this user? This action cannot be undone.')) return;
     try {
       await del(`/api/users/${userId}`);
       refresh();
+      toast('User deleted', 'success');
     } catch {
-      // silently fail
+      toast('Failed to delete user', 'error');
     }
   }
 
@@ -83,8 +87,9 @@ export default function UsersPage() {
       await patch(`/api/users/${resetPwUser.id}`, { password: newPw });
       setResetPwUser(null);
       setNewPw('');
+      toast('Password reset', 'success');
     } catch {
-      // silently fail
+      toast('Failed to reset password', 'error');
     } finally {
       setSaving(false);
     }

@@ -265,6 +265,52 @@ async def api_create_instance(
     return JSONResponse({"ok": True, "id": cfg.id, "name": cfg.name})
 
 
+# ── JSON API: edit instance ──────────────────────────────────────────────────
+
+
+@router.patch("/api/integration/{integration_type}/{config_id}")
+async def api_edit_instance(
+    request: Request,
+    integration_type: str,
+    config_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """JSON API for editing an integration instance."""
+    integration_cls = get_integration(integration_type)
+    if not integration_cls:
+        return JSONResponse({"error": "Unknown integration type"}, status_code=404)
+
+    cfg = await int_svc.get_config(db, config_id)
+    if not cfg or cfg.type != integration_type:
+        return JSONResponse({"error": "Instance not found"}, status_code=404)
+
+    existing_config = int_svc.decrypt_config(cfg.config_json)
+    body = await request.json()
+    name = str(body.get("name", "")).strip() or cfg.name
+    config_dict = {}
+    for field in integration_cls.config_fields:
+        val = body.get(field.key)
+        if val is None:
+            # Keep existing value if not provided
+            config_dict[field.key] = existing_config.get(field.key, "")
+            continue
+        if field.field_type == "password" and val == "":
+            # Don't overwrite password with empty string
+            config_dict[field.key] = existing_config.get(field.key, "")
+        elif field.field_type == "checkbox":
+            config_dict[field.key] = bool(val)
+        elif field.field_type == "number":
+            try:
+                config_dict[field.key] = int(val) if val else (field.default if field.default is not None else 0)
+            except (ValueError, TypeError):
+                config_dict[field.key] = field.default if field.default is not None else 0
+        else:
+            config_dict[field.key] = str(val).strip()
+
+    await int_svc.update_config(db, config_id, name=name, config_dict=config_dict)
+    return JSONResponse({"ok": True, "id": config_id, "name": name})
+
+
 # ── JSON API: delete instance ────────────────────────────────────────────────
 
 

@@ -10,9 +10,11 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useIntegrations } from '@/hooks/queries/useIntegrations';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post, del } from '@/lib/api';
-import { Plus, Trash2, X } from 'lucide-react';
+import { Plus, Trash2, X, Pencil } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
+import { useToastStore } from '@/stores/toast';
+import { api } from '@/lib/api';
 
 interface ConfigField {
   key: string;
@@ -40,13 +42,15 @@ export default function IntegrationListPage() {
   const qc = useQueryClient();
   const { data: integrations, isLoading } = useIntegrations(type);
   const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
   const [formData, setFormData] = useState<Record<string, string | boolean>>({});
   const [saving, setSaving] = useState(false);
+  const toast = useToastStore((s) => s.show);
 
   const { data: fieldsData } = useQuery({
     queryKey: ['integration-fields', type],
     queryFn: () => get<FieldsResponse>(`/api/integration/${type}/fields`),
-    enabled: showAdd,
+    enabled: showAdd || editId !== null,
   });
 
   function resetForm() {
@@ -69,6 +73,33 @@ export default function IntegrationListPage() {
       qc.invalidateQueries({ queryKey: ['integrations', type] });
       setShowAdd(false);
       setFormData({});
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openEdit(id: number, name: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setEditId(id);
+    // Pre-fill with name; config fields will show empty (password-safe)
+    setFormData({ name });
+  }
+
+  async function handleSaveEdit() {
+    if (editId === null) return;
+    setSaving(true);
+    try {
+      await api(`/api/integration/${type}/${editId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: formData.name || '', ...formData }),
+      });
+      qc.invalidateQueries({ queryKey: ['integrations', type] });
+      setEditId(null);
+      setFormData({});
+      toast('Integration updated', 'success');
+    } catch {
+      toast('Failed to update integration', 'error');
     } finally {
       setSaving(false);
     }
@@ -170,6 +201,78 @@ export default function IntegrationListPage() {
         </GlassCard>
       )}
 
+      {/* Edit form */}
+      {editId !== null && (
+        <GlassCard className="p-6 mb-6 border border-amber-500/20">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-medium text-slate-200">
+              Edit {fieldsData?.display_name ?? type} Instance
+            </h3>
+            <button onClick={() => { setEditId(null); setFormData({}); }} className="text-slate-400 hover:text-slate-200">
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Name</label>
+              <input
+                type="text"
+                value={(formData.name as string) ?? ''}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                className={inputClass}
+              />
+            </div>
+
+            {fieldsData?.fields.map((field) => (
+              <div key={field.key}>
+                <label className="block text-xs text-slate-400 mb-1">
+                  {field.label}
+                  {field.required && <span className="text-red-400 ml-0.5">*</span>}
+                </label>
+                {field.field_type === 'checkbox' ? (
+                  <label className="flex items-center gap-2 mt-1">
+                    <input
+                      type="checkbox"
+                      checked={!!formData[field.key]}
+                      onChange={(e) => setFormData({ ...formData, [field.key]: e.target.checked })}
+                      className="rounded border-white/20 bg-white/[0.06]"
+                    />
+                    <span className="text-sm text-slate-300">{field.label}</span>
+                  </label>
+                ) : field.field_type === 'select' && field.options ? (
+                  <select
+                    value={(formData[field.key] as string) ?? ''}
+                    onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                    className={selectClass}
+                  >
+                    <option value="">Select...</option>
+                    {field.options.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={field.field_type === 'password' ? 'password' : field.field_type === 'url' ? 'url' : 'text'}
+                    placeholder={field.field_type === 'password' ? '(leave empty to keep current)' : field.placeholder}
+                    value={(formData[field.key] as string) ?? ''}
+                    onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                    className={inputClass}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" size="sm" onClick={() => { setEditId(null); setFormData({}); }}>Cancel</Button>
+            <Button size="sm" onClick={handleSaveEdit} disabled={saving}>
+              {saving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </div>
+        </GlassCard>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {isLoading &&
           Array.from({ length: 3 }).map((_, i) => (
@@ -185,6 +288,13 @@ export default function IntegrationListPage() {
               <div className="flex items-center gap-3 mb-3">
                 <StatusDot status={int.enabled ? 'online' : 'disabled'} />
                 <p className="text-sm font-medium text-slate-200 flex-1">{int.name}</p>
+                <button
+                  onClick={(e) => openEdit(int.id, int.name, e)}
+                  className="text-slate-500 hover:text-sky-400 transition-colors"
+                  title="Edit"
+                >
+                  <Pencil size={14} />
+                </button>
                 <button
                   onClick={(e) => handleDelete(int.id, e)}
                   className="text-slate-500 hover:text-red-400 transition-colors"
