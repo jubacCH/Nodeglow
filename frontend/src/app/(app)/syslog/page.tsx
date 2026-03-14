@@ -8,6 +8,8 @@ import { useSyslog } from '@/hooks/queries/useSyslog';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { MessageSquare, Brain } from 'lucide-react';
+import { ExportButton } from '@/components/ui/ExportButton';
+import { timeAgo } from '@/lib/utils';
 
 const SEVERITY_LABELS: Record<number, string> = {
   0: 'Emergency',
@@ -52,6 +54,25 @@ export default function SyslogPage() {
         <PageHeader
           title="Syslog"
           description="Live syslog messages from all sources"
+          actions={
+            filtered && filtered.length > 0 ? (
+              <ExportButton
+                data={filtered.map(m => ({
+                  timestamp: m.timestamp,
+                  severity: SEVERITY_LABELS[m.severity] ?? m.severity,
+                  hostname: m.hostname,
+                  message: m.message,
+                }))}
+                filename="syslog"
+                columns={[
+                  { key: 'timestamp', label: 'Timestamp' },
+                  { key: 'severity', label: 'Severity' },
+                  { key: 'hostname', label: 'Hostname' },
+                  { key: 'message', label: 'Message' },
+                ]}
+              />
+            ) : undefined
+          }
         />
       </div>
 
@@ -151,8 +172,8 @@ export default function SyslogPage() {
                 ))}
               {filtered?.map((msg, i) => (
                 <tr key={i} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
-                  <td className="px-4 py-3 text-xs text-slate-400 font-mono whitespace-nowrap">
-                    {new Date(msg.timestamp).toLocaleString()}
+                  <td className="px-4 py-3 text-xs text-slate-400 font-mono whitespace-nowrap" title={new Date(msg.timestamp).toLocaleString()}>
+                    {timeAgo(msg.timestamp)}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_COLORS[msg.severity] ?? 'bg-slate-500 text-white'}`}>

@@ -12,7 +12,8 @@ import { get, del } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, X, Copy, Check, Terminal, Monitor, Trash2 } from 'lucide-react';
+import { Plus, X, Copy, Check, Terminal, Monitor, Trash2, Tag } from 'lucide-react';
+import { timeAgo } from '@/lib/utils';
 import Link from 'next/link';
 
 function MetricBar({ label, value }: { label: string; value: number | null }) {
@@ -205,6 +206,11 @@ export default function AgentsPage() {
                     <p className="text-xs text-slate-500 font-mono truncate">{agent.hostname ?? '--'}</p>
                   </div>
                   <Badge>{agent.platform ?? '?'}</Badge>
+                  {agent.agent_version && (
+                    <Badge className="bg-white/[0.04] text-slate-400 border-white/[0.06]">
+                      <Tag size={10} /> v{agent.agent_version}
+                    </Badge>
+                  )}
                   <button
                     onClick={(e) => handleDelete(agent.id, agent.name, e)}
                     className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-white/[0.06] transition-colors"
@@ -219,8 +225,8 @@ export default function AgentsPage() {
                   <MetricBar label="Disk" value={agent.disk_pct} />
                 </div>
                 {agent.last_seen && (
-                  <p className="text-xs text-slate-500 mt-3">
-                    Last seen: {new Date(agent.last_seen).toLocaleString()}
+                  <p className="text-xs text-slate-500 mt-3" title={new Date(agent.last_seen).toLocaleString()}>
+                    Last seen: {timeAgo(agent.last_seen)}
                   </p>
                 )}
               </GlassCard>
