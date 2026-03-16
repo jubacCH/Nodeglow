@@ -25,6 +25,7 @@ pub struct LogEntry {
 pub struct ReportResponse {
     pub ok: bool,
     pub config: Option<ServerConfig>,
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

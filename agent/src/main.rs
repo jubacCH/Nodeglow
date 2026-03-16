@@ -96,6 +96,16 @@ async fn main() {
                     let mut guard = server_config.write().await;
                     *guard = sc;
                 }
+                // Handle remote commands
+                if let Some(cmd) = resp.command {
+                    if cmd == "uninstall" {
+                        info!("Received remote uninstall command");
+                        run_uninstall();
+                        // run_uninstall does not return on success
+                    } else {
+                        warn!("Unknown command: {cmd}");
+                    }
+                }
             }
             Err(e) => {
                 warn!("Report failed: {e}");
@@ -117,6 +127,51 @@ async fn main() {
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(cfg.interval)).await;
+    }
+}
+
+/// Execute platform-specific self-uninstall, then exit.
+fn run_uninstall() {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let install_dir = exe.parent().unwrap_or(std::path::Path::new("."));
+
+    #[cfg(target_os = "windows")]
+    {
+        // Stop scheduled task, remove registry, delete install dir
+        let dir = install_dir.to_string_lossy();
+        let script = format!(
+            r#"Start-Sleep -Seconds 3
+Stop-ScheduledTask -TaskName 'NodeglowAgent' -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+Unregister-ScheduledTask -TaskName 'NodeglowAgent' -Confirm:$false -ErrorAction SilentlyContinue
+Get-Process | Where-Object {{ $_.Path -like '*nodeglow*' }} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\NodeglowAgent' -Force -ErrorAction SilentlyContinue
+Remove-Item -Path '{dir}' -Recurse -Force -ErrorAction SilentlyContinue"#
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-ExecutionPolicy", "Bypass", "-Command", &script])
+            .spawn();
+        info!("Uninstall spawned, exiting agent");
+        std::process::exit(0);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Stop and disable systemd service, delete install dir
+        let dir = install_dir.to_string_lossy();
+        let script = format!(
+            "sleep 3 && systemctl stop nodeglow-agent 2>/dev/null; \
+             systemctl disable nodeglow-agent 2>/dev/null; \
+             rm -f /etc/systemd/system/nodeglow-agent.service; \
+             systemctl daemon-reload 2>/dev/null; \
+             rm -rf '{dir}'"
+        );
+        let _ = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .spawn();
+        info!("Uninstall spawned, exiting agent");
+        std::process::exit(0);
     }
 }
 
