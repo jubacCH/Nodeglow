@@ -743,17 +743,17 @@ $UninstallPS = @'
 $ErrorActionPreference = "SilentlyContinue"
 # Self-elevate if not admin
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
+if (-not $isAdmin) {{
     Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
     exit
-}
+}}
 Write-Host "Uninstalling Nodeglow Agent..." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Stopping agent..."
 Stop-ScheduledTask -TaskName "NodeglowAgent" -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 Unregister-ScheduledTask -TaskName "NodeglowAgent" -Confirm:$false -ErrorAction SilentlyContinue
-Get-Process | Where-Object { $_.Path -like "*nodeglow*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process | Where-Object {{ $_.Path -like "*nodeglow*" }} | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Write-Host "  Removing registry entry..."
 Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\NodeglowAgent" -Force -ErrorAction SilentlyContinue
