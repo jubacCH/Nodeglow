@@ -50,8 +50,14 @@ jobs:
       - name: Build (release)
         shell: bash
         run: |
-          set -euo pipefail
-          cargo build --release --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} 2> /tmp/build-errors.txt || {
+            echo "Build failed. Last 30 lines of errors:"
+            tail -30 /tmp/build-errors.txt
+            tail -20 /tmp/build-errors.txt | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          }
 
       - name: Debug build output
         if: always()
