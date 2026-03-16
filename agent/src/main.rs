@@ -141,18 +141,18 @@ fn run_uninstall() -> ! {
 
     #[cfg(target_os = "windows")]
     {
-        let script = format!(
-            r#"Start-Sleep -Seconds 3
-Stop-ScheduledTask -TaskName 'NodeglowAgent' -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
-Unregister-ScheduledTask -TaskName 'NodeglowAgent' -Confirm:$false -ErrorAction SilentlyContinue
-Get-Process | Where-Object {{ $_.Path -like '*nodeglow*' }} | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\NodeglowAgent' -Force -ErrorAction SilentlyContinue
-Remove-Item -Path '{dir}' -Recurse -Force -ErrorAction SilentlyContinue"#
-        );
+        let script = [
+            "Start-Sleep -Seconds 3",
+            "Stop-ScheduledTask -TaskName 'NodeglowAgent' -ErrorAction SilentlyContinue",
+            "Start-Sleep -Seconds 1",
+            "Unregister-ScheduledTask -TaskName 'NodeglowAgent' -Confirm:$false -ErrorAction SilentlyContinue",
+            "Get-Process | Where-Object { $_.Path -like '*nodeglow*' } | Stop-Process -Force -ErrorAction SilentlyContinue",
+            "Start-Sleep -Seconds 2",
+            "Remove-Item -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NodeglowAgent' -Force -ErrorAction SilentlyContinue",
+        ].join("; ");
+        let full_script = format!("{}; Remove-Item -Path '{}' -Recurse -Force -ErrorAction SilentlyContinue", script, dir);
         let _ = std::process::Command::new("powershell")
-            .args(["-ExecutionPolicy", "Bypass", "-Command", &script])
+            .args(["-ExecutionPolicy", "Bypass", "-Command", &full_script])
             .spawn();
     }
 
@@ -163,7 +163,7 @@ Remove-Item -Path '{dir}' -Recurse -Force -ErrorAction SilentlyContinue"#
              systemctl disable nodeglow-agent 2>/dev/null; \
              rm -f /etc/systemd/system/nodeglow-agent.service; \
              systemctl daemon-reload 2>/dev/null; \
-             rm -rf '{dir}'"
+             rm -rf '{}'", dir
         );
         let _ = std::process::Command::new("sh")
             .args(["-c", &script])
