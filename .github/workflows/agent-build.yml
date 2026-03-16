@@ -53,14 +53,21 @@ jobs:
           set -euo pipefail
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Find and rename binary
+      - name: Debug build output
+        if: always()
         shell: bash
         run: |
           echo "=== Listing release directory ==="
-          ls -la target/${{ matrix.target }}/release/ | head -30
+          ls -la target/${{ matrix.target }}/release/ 2>/dev/null | head -30 || echo "Release dir does not exist"
           echo "=== Looking for nodeglow binaries ==="
           find target/ -name "nodeglow*" -type f 2>/dev/null || echo "No nodeglow binaries found"
-          echo "=== Copying binary ==="
+          echo "=== Cargo version ==="
+          cargo --version
+          rustc --version
+
+      - name: Rename binary
+        shell: bash
+        run: |
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.artifact }}
           ls -lh ${{ matrix.artifact }}
           sha256sum ${{ matrix.artifact }} || certutil -hashfile ${{ matrix.artifact }} SHA256
