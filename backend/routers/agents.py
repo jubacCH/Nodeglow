@@ -756,7 +756,7 @@ Unregister-ScheduledTask -TaskName "NodeglowAgent" -Confirm:$false -ErrorAction 
 Get-Process | Where-Object {{ $_.Path -like "*nodeglow*" }} | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Write-Host "  Removing registry entry..."
-Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\NodeglowAgent" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NodeglowAgent" -Force -ErrorAction SilentlyContinue
 Write-Host "  Removing files..."
 $dir = Split-Path -Parent $PSCommandPath
 Start-Process cmd -ArgumentList "/c timeout /t 3 /nobreak >nul & rmdir /s /q `"$dir`"" -WindowStyle Hidden
