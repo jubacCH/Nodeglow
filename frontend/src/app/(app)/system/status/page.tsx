@@ -68,6 +68,11 @@ interface SystemStatus {
     newest_ping?: string;
     error?: string;
   };
+  disk_forecast: {
+    growth_gb_per_day: number;
+    days_until_full: number | null;
+    trend: 'stable' | 'normal' | 'warning' | 'critical';
+  } | null;
   top_tables: Array<{ name: string; size: string; rows: number }>;
   pool: {
     size?: number;
@@ -298,6 +303,32 @@ export default function SystemStatusPage() {
               {sys.disk_io.read_gb !== undefined && (
                 <div className="mt-2 text-xs text-slate-500">
                   I/O: {sys.disk_io.read_gb} GB read / {sys.disk_io.write_gb} GB write
+                </div>
+              )}
+              {status?.disk_forecast && (
+                <div className={`mt-2 pt-2 border-t border-white/[0.06] text-xs ${
+                  status.disk_forecast.trend === 'critical' ? 'text-red-400' :
+                  status.disk_forecast.trend === 'warning' ? 'text-amber-400' :
+                  status.disk_forecast.trend === 'stable' ? 'text-emerald-400' :
+                  'text-slate-400'
+                }`}>
+                  {status.disk_forecast.trend === 'stable' ? (
+                    <span>Stable — no significant growth</span>
+                  ) : (
+                    <>
+                      <span>+{status.disk_forecast.growth_gb_per_day} GB/day</span>
+                      {status.disk_forecast.days_until_full != null && (
+                        <span className="ml-1">
+                          — full in ~{status.disk_forecast.days_until_full < 1
+                            ? '<1 day'
+                            : status.disk_forecast.days_until_full < 30
+                              ? `${Math.round(status.disk_forecast.days_until_full)}d`
+                              : `${Math.round(status.disk_forecast.days_until_full / 30)}mo`
+                          }
+                        </span>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
             </div>

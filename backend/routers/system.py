@@ -460,6 +460,20 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    # ── Disk forecast ─────────────────────────────────────────────────────
+    disk_forecast = None
+    try:
+        import json as _json
+        from database import get_setting
+        from scheduler import compute_disk_forecast
+        raw = await get_setting(db, "disk_usage_history", "[]")
+        history = _json.loads(raw)
+        if history:
+            total_gb = history[-1].get("total_gb", 0)
+            disk_forecast = compute_disk_forecast(history, total_gb)
+    except Exception:
+        pass
+
     # ── Await thread pool results ────────────────────────────────────────
     sysinfo = await sysinfo_fut
     log_lines = await logs_fut
@@ -484,6 +498,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "maintenance": maintenance_stats,
             "log_intelligence": log_intelligence,
         },
+        "disk_forecast": disk_forecast,
         "logs": log_lines,
     }
 
