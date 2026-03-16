@@ -156,6 +156,12 @@ async def agent_report(request: Request):
             data_json=json.dumps(body),
         )
         db.add(snap)
+
+        # Consume pending command (deliver once, then clear)
+        command = agent.pending_command
+        if command:
+            agent.pending_command = None
+
         await db.commit()
 
     # Broadcast to all WebSocket clients (global hub)
@@ -168,13 +174,16 @@ async def agent_report(request: Request):
         "uptime_s": body.get("uptime_s"),
     })
 
-    # Return config to agent (log levels, channels, file paths, etc.)
-    return {"ok": True, "config": {
+    # Return config + optional command to agent
+    resp = {"ok": True, "config": {
         "log_levels": agent.log_levels or "1,2,3",
         "log_channels": agent.log_channels or "System,Application",
         "log_file_paths": agent.log_file_paths or "",
         "agent_log_level": agent.agent_log_level or "errors",
     }}
+    if command:
+        resp["command"] = command
+    return resp
 
 
 # ── API: Agent log submission ────────────────────────────────────────────────

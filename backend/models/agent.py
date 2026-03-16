@@ -21,6 +21,7 @@ class Agent(Base):
     log_channels = Column(Text, nullable=True, default="System,Application")  # Event Log channels to collect
     log_file_paths = Column(Text, nullable=True)  # Custom log file paths to tail (one per line)
     agent_log_level = Column(String(16), nullable=True, default="errors")  # "off", "errors", "all"
+    pending_command = Column(String(32), nullable=True)  # e.g. "uninstall" — consumed on next report
     last_seen  = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
