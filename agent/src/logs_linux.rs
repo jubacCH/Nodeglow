@@ -72,9 +72,9 @@ pub async fn collect_journal_logs() -> Vec<LogEntry> {
         let timestamp = obj
             .get("__REALTIME_TIMESTAMP")
             .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<u64>().ok())
+            .and_then(|s| s.parse::<i64>().ok())
             .map(|us| {
-                chrono::DateTime::from_timestamp((us / 1_000_000) as i64, ((us % 1_000_000) * 1000) as u32)
+                chrono::DateTime::from_timestamp_micros(us)
                     .unwrap_or_default()
                     .to_rfc3339()
             })
