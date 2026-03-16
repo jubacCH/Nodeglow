@@ -291,6 +291,202 @@ async def cleanup_old_results():
     logger.info("Cleanup done (ping: %dd, integrations: %dd, syslog: %d msgs)", ping_ret, int_ret, total_deleted)
 
 
+# ── Disk space health check ──────────────────────────────────────────────────
+
+DISK_WARNING_PCT = 80
+DISK_CRITICAL_PCT = 90
+DISK_HISTORY_MAX_SAMPLES = 336  # ~7 days at 30min intervals
+
+
+async def _record_disk_sample(used_gb: float, total_gb: float):
+    """Store a disk usage sample in the settings table for trend analysis."""
+    import json
+    from database import get_setting, set_setting
+
+    async with AsyncSessionLocal() as db:
+        raw = await get_setting(db, "disk_usage_history", "[]")
+        try:
+            history = json.loads(raw)
+        except Exception:
+            history = []
+
+        history.append({
+            "ts": datetime.utcnow().isoformat(),
+            "used_gb": used_gb,
+            "total_gb": total_gb,
+        })
+
+        # Keep only last N samples
+        if len(history) > DISK_HISTORY_MAX_SAMPLES:
+            history = history[-DISK_HISTORY_MAX_SAMPLES:]
+
+        await set_setting(db, "disk_usage_history", json.dumps(history))
+        await db.commit()
+
+
+def compute_disk_forecast(history: list[dict], total_gb: float) -> dict | None:
+    """Linear regression on disk usage history to predict days until full."""
+    if len(history) < 6:  # Need at least 3 hours of data
+        return None
+
+    from datetime import datetime as dt
+
+    # Parse timestamps and usage values
+    points = []
+    for sample in history:
+        try:
+            ts = dt.fromisoformat(sample["ts"])
+            points.append((ts.timestamp(), sample["used_gb"]))
+        except Exception:
+            continue
+
+    if len(points) < 6:
+        return None
+
+    # Simple linear regression
+    n = len(points)
+    t0 = points[0][0]
+    xs = [(p[0] - t0) / 86400 for p in points]  # days since first sample
+    ys = [p[1] for p in points]
+
+    sum_x = sum(xs)
+    sum_y = sum(ys)
+    sum_xy = sum(x * y for x, y in zip(xs, ys))
+    sum_xx = sum(x * x for x in xs)
+
+    denom = n * sum_xx - sum_x * sum_x
+    if abs(denom) < 1e-10:
+        return {"growth_gb_per_day": 0, "days_until_full": None, "trend": "stable"}
+
+    slope = (n * sum_xy - sum_x * sum_y) / denom  # GB per day
+
+    if slope <= 0.001:
+        return {"growth_gb_per_day": round(slope, 3), "days_until_full": None, "trend": "stable"}
+
+    current_used = ys[-1]
+    remaining = total_gb - current_used
+    days_until_full = round(remaining / slope, 1)
+
+    trend = "critical" if days_until_full <= 7 else "warning" if days_until_full <= 30 else "normal"
+
+    return {
+        "growth_gb_per_day": round(slope, 3),
+        "days_until_full": days_until_full,
+        "trend": trend,
+    }
+
+
+async def check_disk_space():
+    """Monitor disk usage and create incidents when thresholds are exceeded."""
+    import shutil
+    from hashlib import sha256
+
+    from models.incident import Incident, IncidentEvent
+
+    try:
+        usage = shutil.disk_usage("/")
+    except Exception:
+        logger.debug("disk_usage check failed", exc_info=True)
+        return
+
+    used_pct = round(usage.used / usage.total * 100, 1)
+    free_gb = round(usage.free / (1024 ** 3), 1)
+    used_gb = round(usage.used / (1024 ** 3), 2)
+    total_gb = round(usage.total / (1024 ** 3), 2)
+
+    # Record sample for trend analysis
+    await _record_disk_sample(used_gb, total_gb)
+
+    if used_pct < DISK_WARNING_PCT:
+        # All clear — auto-resolve any existing disk incident
+        async with AsyncSessionLocal() as db:
+            existing = (await db.execute(
+                select(Incident).where(
+                    Incident.rule == "disk_space",
+                    Incident.status.in_(["open", "acknowledged"]),
+                )
+            )).scalars().first()
+            if existing:
+                existing.status = "resolved"
+                existing.resolved_at = datetime.utcnow()
+                db.add(IncidentEvent(
+                    incident_id=existing.id,
+                    event_type="resolved",
+                    message=f"Disk usage back to {used_pct}% ({free_gb} GB free)",
+                ))
+                await db.commit()
+                logger.info("Disk space incident resolved: %.1f%% used", used_pct)
+        return
+
+    severity = "critical" if used_pct >= DISK_CRITICAL_PCT else "warning"
+    title = f"Disk usage at {used_pct}% ({free_gb} GB free)"
+
+    async with AsyncSessionLocal() as db:
+        # Dedup: only one open disk incident at a time
+        existing = (await db.execute(
+            select(Incident).where(
+                Incident.rule == "disk_space",
+                Incident.status.in_(["open", "acknowledged"]),
+            )
+        )).scalars().first()
+
+        if existing:
+            # Update severity if it escalated
+            if severity == "critical" and existing.severity != "critical":
+                existing.severity = "critical"
+            existing.title = title
+            existing.updated_at = datetime.utcnow()
+            db.add(IncidentEvent(
+                incident_id=existing.id,
+                event_type="disk_warning",
+                message=title,
+            ))
+        else:
+            inc = Incident(
+                rule="disk_space",
+                title=title,
+                severity=severity,
+                status="open",
+                host_ids_hash=sha256(b"self-disk").hexdigest()[:16],
+            )
+            db.add(inc)
+            await db.flush()
+            db.add(IncidentEvent(
+                incident_id=inc.id,
+                event_type="created",
+                message=title,
+            ))
+
+        await db.commit()
+
+    logger.warning("Disk space %s: %.1f%% used (%.1f GB free)", severity, used_pct, free_gb)
+
+
+# ── ClickHouse maintenance ───────────────────────────────────────────────────
+
+
+async def cleanup_clickhouse_logs():
+    """Truncate ClickHouse system log tables if they exceed size thresholds."""
+    try:
+        from services.clickhouse_client import query as ch_query
+
+        SAFE_TABLES = {"query_log", "processors_profile_log", "trace_log",
+                       "metric_log", "asynchronous_metric_log", "part_log"}
+
+        rows = await ch_query(
+            "SELECT table, sum(bytes_on_disk) AS bytes "
+            "FROM system.parts WHERE active AND database = 'system' "
+            "GROUP BY table ORDER BY bytes DESC"
+        )
+        for row in rows:
+            size_mb = row["bytes"] / (1024 * 1024)
+            if size_mb > 500 and row["table"] in SAFE_TABLES:
+                await ch_query(f"TRUNCATE TABLE system.{row['table']}")
+                logger.info("Truncated system.%s (was %.0f MB)", row["table"], size_mb)
+    except Exception:
+        logger.debug("ClickHouse log cleanup skipped", exc_info=True)
+
+
 # ── Scheduler lifecycle ──────────────────────────────────────────────────────
 
 
@@ -361,6 +557,10 @@ async def start_scheduler():
                       id="alert_rules", replace_existing=True)
     scheduler.add_job(run_port_discovery, "interval", hours=6,
                       id="port_discovery", replace_existing=True)
+    scheduler.add_job(check_disk_space, "interval", minutes=30,
+                      id="disk_space", replace_existing=True)
+    scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
+                      id="ch_cleanup", replace_existing=True)
     scheduler.start()
 
     # Seed default SNMP OIDs
