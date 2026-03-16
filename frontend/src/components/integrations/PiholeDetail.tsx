@@ -5,23 +5,20 @@ import { EChart } from '@/components/charts/EChart';
 import type { EChartsOption } from 'echarts';
 import Link from 'next/link';
 
-interface PiholeStats {
-  total_queries: number;
-  blocked: number;
-  block_pct: number;
-  domains_on_list: number;
-}
-
-interface PiholeEntry {
-  domain?: string;
-  client?: string;
-  count: number;
-}
-
 interface PiholeData {
-  stats: PiholeStats;
-  top_blocked: PiholeEntry[];
-  top_clients: PiholeEntry[];
+  status: string;
+  queries_today: number;
+  blocked_today: number;
+  blocked_pct: number;
+  domains_blocked: number;
+  dns_queries_all_types: number;
+  clients: number;
+  gravity_last_updated: string;
+  api_version: number;
+  top_queries: { domain: string; count: number }[];
+  top_blocked: { domain: string; count: number }[];
+  local_dns?: { domain: string; ip: string; type?: string }[];
+  reply_types?: Record<string, number>;
 }
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
@@ -40,8 +37,6 @@ function formatNumber(n: number): string {
 }
 
 export function PiholeDetail({ data }: { data: PiholeData }) {
-  const { stats, top_blocked, top_clients } = data;
-
   const pieOption: EChartsOption = {
     tooltip: { trigger: 'item' },
     series: [
@@ -52,8 +47,8 @@ export function PiholeDetail({ data }: { data: PiholeData }) {
         itemStyle: { borderRadius: 6, borderColor: 'transparent', borderWidth: 2 },
         label: { show: false },
         data: [
-          { value: stats.blocked, name: 'Blocked', itemStyle: { color: '#ef4444' } },
-          { value: stats.total_queries - stats.blocked, name: 'Allowed', itemStyle: { color: '#22c55e' } },
+          { value: data.blocked_today, name: 'Blocked', itemStyle: { color: '#ef4444' } },
+          { value: data.queries_today - data.blocked_today, name: 'Allowed', itemStyle: { color: '#22c55e' } },
         ],
       },
     ],
@@ -63,10 +58,20 @@ export function PiholeDetail({ data }: { data: PiholeData }) {
     <div className="space-y-6">
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Queries" value={formatNumber(stats.total_queries)} />
-        <StatCard label="Blocked" value={formatNumber(stats.blocked)} />
-        <StatCard label="Block Rate" value={`${stats.block_pct.toFixed(1)}%`} />
-        <StatCard label="Domains on List" value={formatNumber(stats.domains_on_list)} />
+        <StatCard label="Total Queries" value={formatNumber(data.queries_today)} />
+        <StatCard label="Blocked" value={formatNumber(data.blocked_today)} />
+        <StatCard label="Block Rate" value={`${data.blocked_pct.toFixed(1)}%`} />
+        <StatCard label="Domains on List" value={formatNumber(data.domains_blocked)} />
+      </div>
+
+      {/* Status row */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard label="Status" value={data.status} />
+        <StatCard label="Clients" value={data.clients} />
+        <StatCard label="API Version" value={`v${data.api_version}`} />
+        {data.gravity_last_updated && (
+          <StatCard label="Gravity Updated" value={data.gravity_last_updated} />
+        )}
       </div>
 
       {/* Pie chart + lists */}
@@ -81,34 +86,55 @@ export function PiholeDetail({ data }: { data: PiholeData }) {
         <GlassCard className="p-4">
           <h3 className="text-sm font-medium text-slate-300 mb-3">Top Blocked Domains</h3>
           <div className="space-y-2">
-            {(top_blocked ?? []).slice(0, 10).map((entry, i) => (
+            {(data.top_blocked ?? []).slice(0, 10).map((entry, i) => (
               <div key={entry.domain ?? i} className="flex items-center justify-between text-xs">
                 <span className="text-slate-300 truncate mr-2 font-mono">{entry.domain}</span>
                 <span className="text-slate-500 tabular-nums shrink-0">{formatNumber(entry.count)}</span>
               </div>
             ))}
-            {(!top_blocked || top_blocked.length === 0) && (
+            {(!data.top_blocked || data.top_blocked.length === 0) && (
               <p className="text-xs text-slate-500">No data</p>
             )}
           </div>
         </GlassCard>
 
-        {/* Top clients */}
+        {/* Top queries */}
         <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Top Clients</h3>
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Top Queries</h3>
           <div className="space-y-2">
-            {(top_clients ?? []).slice(0, 10).map((entry, i) => (
-              <div key={entry.client ?? i} className="flex items-center justify-between text-xs">
-                {entry.client ? <Link href={'/hosts?q=' + encodeURIComponent(entry.client)} className="text-sky-400 hover:underline truncate mr-2 font-mono">{entry.client}</Link> : <span className="text-slate-300 truncate mr-2 font-mono">—</span>}
+            {(data.top_queries ?? []).slice(0, 10).map((entry, i) => (
+              <div key={entry.domain ?? i} className="flex items-center justify-between text-xs">
+                <span className="text-slate-300 truncate mr-2 font-mono">{entry.domain}</span>
                 <span className="text-slate-500 tabular-nums shrink-0">{formatNumber(entry.count)}</span>
               </div>
             ))}
-            {(!top_clients || top_clients.length === 0) && (
+            {(!data.top_queries || data.top_queries.length === 0) && (
               <p className="text-xs text-slate-500">No data</p>
             )}
           </div>
         </GlassCard>
       </div>
+
+      {/* Local DNS */}
+      {data.local_dns && data.local_dns.length > 0 && (
+        <GlassCard className="p-4">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Local DNS Records ({data.local_dns.length})</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+            {data.local_dns.map((entry, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs py-1">
+                {entry.type === 'CNAME' && (
+                  <span className="text-[10px] px-1 py-0.5 rounded bg-sky-500/10 text-sky-400">CNAME</span>
+                )}
+                <span className="text-slate-300 font-mono truncate">{entry.domain}</span>
+                <span className="text-slate-500">→</span>
+                <Link href={'/hosts?q=' + encodeURIComponent(entry.ip)} className="text-sky-400 hover:underline font-mono truncate">
+                  {entry.ip}
+                </Link>
+              </div>
+            ))}
+          </div>
+        </GlassCard>
+      )}
     </div>
   );
 }
