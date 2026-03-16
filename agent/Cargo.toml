@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Nodeglow monitoring agent — lightweight, cross-platform system metrics collector"
 license = "MIT"
+rust-version = "1.75"
 
 [[bin]]
 name = "nodeglow-agent"
