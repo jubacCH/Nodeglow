@@ -650,12 +650,12 @@ function OidBrowserTab() {
 
   const queryParams = new URLSearchParams();
   if (mibFilter) queryParams.set('mib', mibFilter);
-  if (keyword) queryParams.set('q', keyword);
+  if (keyword) queryParams.set('search', keyword);
   const qs = queryParams.toString();
 
   const { data: oids, isLoading, isFetching } = useQuery<OidEntry[]>({
     queryKey: ['snmp-oids', qs],
-    queryFn: () => get(`/api/snmp/oids?${qs}`),
+    queryFn: () => get<{ oids: OidEntry[] }>(`/api/snmp/oids?${qs}`).then((r) => r.oids),
     enabled: searchTriggered,
   });
 
