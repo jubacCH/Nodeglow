@@ -18,6 +18,7 @@ const nextConfig = {
       { source: '/setup', destination: `${backend}/setup` },
       { source: '/setup/:path*', destination: `${backend}/setup/:path*` },
       { source: '/install/:path*', destination: `${backend}/install/:path*` },
+      { source: '/agents/download/:path*', destination: `${backend}/agents/download/:path*` },
       { source: '/static/:path*', destination: `${backend}/static/:path*` },
     ];
   },
