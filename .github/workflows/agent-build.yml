@@ -49,14 +49,7 @@ jobs:
 
       - name: Build (release)
         shell: bash
-        run: |
-          cargo build --release --target ${{ matrix.target }} 2>&1 | tee build.log
-          result=${PIPESTATUS[0]}
-          if [ $result -ne 0 ]; then
-            echo "::error::Build failed. Last 50 lines:"
-            tail -50 build.log | while IFS= read -r line; do echo "::error::$line"; done
-            exit 1
-          fi
+        run: cargo build --release --target ${{ matrix.target }} 2>build-errors.log || { cat build-errors.log; exit 1; }
 
       - name: Rename binary
         shell: bash
