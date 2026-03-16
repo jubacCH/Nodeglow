@@ -199,20 +199,22 @@ async fn read_disks() -> anyhow::Result<Vec<DiskInfo>> {
 }
 
 fn nix_statvfs(path: &str) -> Option<(u64, u64, f64)> {
-    use std::ffi::CString;
-    let c_path = CString::new(path).ok()?;
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
-    if ret != 0 {
+    // Use df command as a portable fallback
+    let output = std::process::Command::new("df")
+        .args(["-B1", path])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().nth(1)?;
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 4 {
         return None;
     }
-    let block_size = stat.f_frsize as u64;
-    let total = stat.f_blocks as u64 * block_size;
-    let free = stat.f_bfree as u64 * block_size;
+    let total: u64 = parts[1].parse().ok()?;
+    let used: u64 = parts[2].parse().ok()?;
     if total == 0 {
         return None;
     }
-    let used = total - free;
     let pct = (used as f64 / total as f64 * 100.0 * 10.0).round() / 10.0;
     Some((total, used, pct))
 }
