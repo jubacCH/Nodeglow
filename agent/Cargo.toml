@@ -27,6 +27,9 @@ anyhow = "1"
 [target.'cfg(target_os = "windows")'.dependencies]
 sysinfo = "0.32"
 
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"
+
 [profile.release]
 opt-level = "z"
 lto = true
