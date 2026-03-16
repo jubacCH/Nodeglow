@@ -721,6 +721,20 @@ async def delete_agent(
     return {"ok": True}
 
 
+@router.post("/agents/{agent_id}/uninstall", summary="Queue remote uninstall command for an agent")
+async def uninstall_agent(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    agent.pending_command = "uninstall"
+    await db.commit()
+    return {"ok": True, "message": f"Uninstall command queued for {agent.name}"}
+
+
 # ── Integrations ─────────────────────────────────────────────────────────────
 
 

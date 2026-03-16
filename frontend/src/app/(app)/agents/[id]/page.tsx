@@ -10,11 +10,12 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { Button } from '@/components/ui/Button';
 import { EChart } from '@/components/charts/EChart';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, patch } from '@/lib/api';
+import { get, patch, post } from '@/lib/api';
 import { formatUptime } from '@/lib/utils';
 import { useToastStore } from '@/stores/toast';
-import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick, FileText, Save } from 'lucide-react';
+import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick, FileText, Save, Trash2 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { Agent, AgentSnapshot } from '@/types';
 
@@ -37,11 +38,29 @@ export default function AgentDetailPage() {
     refetchInterval: 15_000,
   });
 
+  const toast = useToastStore((s) => s.show);
+  const router = useRouter();
+  const [uninstalling, setUninstalling] = useState(false);
+
   const online = data?.last_seen
     ? Date.now() - new Date(data.last_seen).getTime() < 120_000
     : false;
 
   const latest = data?.snapshots?.[0];
+
+  async function handleUninstall() {
+    if (!confirm(`Uninstall the agent on "${data?.name}"?\n\nThis will stop the agent process, remove the scheduled task/service, delete all files on the remote machine, and remove the agent from Nodeglow.`)) return;
+    setUninstalling(true);
+    try {
+      await post(`/api/v1/agents/${agentId}/uninstall`);
+      toast('Uninstall command sent — agent will uninstall on next check-in', 'success');
+      router.push('/agents');
+    } catch {
+      toast('Failed to send uninstall command', 'error');
+    } finally {
+      setUninstalling(false);
+    }
+  }
 
   return (
     <div>
@@ -50,9 +69,15 @@ export default function AgentDetailPage() {
         title={data?.name ?? 'Agent'}
         description={data?.hostname ?? ''}
         actions={
-          <Link href="/agents">
-            <Button variant="ghost" size="sm"><ArrowLeft size={16} /> Back</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Button variant="danger" size="sm" onClick={handleUninstall} disabled={uninstalling || !online}>
+              <Trash2 size={14} />
+              {uninstalling ? 'Sending...' : 'Uninstall'}
+            </Button>
+            <Link href="/agents">
+              <Button variant="ghost" size="sm"><ArrowLeft size={16} /> Back</Button>
+            </Link>
+          </div>
         }
       />
 
