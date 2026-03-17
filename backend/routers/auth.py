@@ -71,7 +71,7 @@ async def get_current_user_api(request: Request, db: AsyncSession = Depends(get_
     user = await get_current_user(request, db)
     if not user:
         return JSONResponse({"user": None}, status_code=401)
-    return {"user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"user": {"id": user.id, "username": user.username, "role": user.role or "admin"}}
 
 
 @router.post("/api/auth/logout")
