@@ -821,6 +821,9 @@ export default function HostDetailPage() {
           {/* Monitoring */}
           {host && <MonitoringCard host={host} hostId={hostId} />}
 
+          {/* Maintenance Scheduling */}
+          {host && <MaintenanceCard host={host} hostId={hostId} />}
+
           {/* Discovered Ports */}
           <GlassCard className="p-4">
             <div className="flex items-center justify-between mb-3">
@@ -1395,6 +1398,105 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
           </Button>
         </div>
       </div>
+    </GlassCard>
+  );
+}
+
+/* ── Maintenance Card ── */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function MaintenanceCard({ host, hostId }: { host: any; hostId: number | string }) {
+  const qc = useQueryClient();
+  const toast = useToastStore();
+  const [duration, setDuration] = useState('');
+  const [customDate, setCustomDate] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const isInMaintenance = host.maintenance || false;
+  const maintenanceUntil = host.maintenance_until ? new Date(host.maintenance_until) : null;
+
+  async function handleToggle() {
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {};
+      if (isInMaintenance) {
+        body.action = 'off';
+      } else if (duration === 'custom' && customDate) {
+        body.action = 'schedule';
+        body.until = new Date(customDate).toISOString();
+      } else if (duration) {
+        body.action = 'toggle';
+        body.duration = duration;
+      } else {
+        body.action = 'toggle';
+      }
+      await post(`/api/v1/hosts/${host.id}/maintenance`, body);
+      toast.show(isInMaintenance ? 'Maintenance ended' : 'Maintenance started', 'success');
+      qc.invalidateQueries({ queryKey: ['host', hostId] });
+    } catch {
+      toast.show('Failed to update maintenance', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <GlassCard className="p-4">
+      <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+        <Clock size={14} className="text-amber-400" />
+        Maintenance Window
+      </h3>
+
+      {isInMaintenance ? (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-amber-500/20 bg-amber-500/5">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            <span className="text-sm text-amber-300">In Maintenance</span>
+            {maintenanceUntil && (
+              <span className="text-xs text-slate-400 ml-auto">
+                until {maintenanceUntil.toLocaleString()}
+              </span>
+            )}
+            {!maintenanceUntil && (
+              <span className="text-xs text-slate-500 ml-auto">indefinite</span>
+            )}
+          </div>
+          <Button size="sm" variant="ghost" onClick={handleToggle} disabled={saving}>
+            {saving ? 'Ending...' : 'End Maintenance'}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <select
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              className="ng-input flex-1"
+            >
+              <option value="">Indefinite</option>
+              <option value="1h">1 Hour</option>
+              <option value="2h">2 Hours</option>
+              <option value="4h">4 Hours</option>
+              <option value="8h">8 Hours</option>
+              <option value="12h">12 Hours</option>
+              <option value="24h">24 Hours</option>
+              <option value="custom">Custom Date/Time</option>
+            </select>
+          </div>
+          {duration === 'custom' && (
+            <input
+              type="datetime-local"
+              value={customDate}
+              onChange={(e) => setCustomDate(e.target.value)}
+              min={new Date().toISOString().slice(0, 16)}
+              className="ng-input w-full"
+            />
+          )}
+          <Button size="sm" onClick={handleToggle} disabled={saving || (duration === 'custom' && !customDate)}>
+            {saving ? 'Starting...' : 'Start Maintenance'}
+          </Button>
+        </div>
+      )}
     </GlassCard>
   );
 }

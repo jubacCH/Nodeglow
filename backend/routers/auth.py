@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Session, User, get_db, get_current_user
 from ratelimit import rate_limit
+from services.audit import log_action
 
 router = APIRouter()
 
@@ -38,6 +39,7 @@ async def login(
     token = secrets.token_hex(32)
     expires = datetime.utcnow() + timedelta(days=SESSION_DAYS)
     db.add(Session(token=token, user_id=user.id, expires_at=expires))
+    await log_action(db, request, "auth.login", "user", user.id, user.username)
     await db.commit()
     response = JSONResponse({"ok": True, "user": {"id": user.id, "username": user.username, "role": user.role}})
     is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
@@ -60,6 +62,7 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
         session = await db.get(Session, token)
         if session:
             await db.delete(session)
+            await log_action(db, request, "auth.logout")
             await db.commit()
     response = JSONResponse({"ok": True})
     response.delete_cookie("nodeglow_session")

@@ -19,12 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import PingHost, PingResult, get_setting
 from models.agent import Agent, AgentSnapshot
 from models.api_key import ApiKey
+from models.audit import AuditLog
 from models.base import get_db
 from models.incident import Incident, IncidentEvent
 from models.integration import IntegrationConfig, Snapshot
 from services.clickhouse_client import query as ch_query, _where_clauses as ch_where
 from services import ping as ping_svc
 from services import snapshot as snap_svc
+from services.audit import log_action
 
 router = APIRouter(prefix="/api/v1", tags=["API v1"])
 
@@ -401,6 +403,7 @@ async def get_host(
         "port": host.port,
         "enabled": host.enabled,
         "maintenance": host.maintenance or False,
+        "maintenance_until": host.maintenance_until.isoformat() if host.maintenance_until else None,
         "source": host.source or "manual",
         "source_detail": host.source_detail,
         "latency_threshold_ms": host.latency_threshold_ms,
@@ -479,6 +482,8 @@ async def create_host(
     )
     db.add(host)
     await db.commit()
+    await log_action(db, request, "host.create", "host", host.id, host.name)
+    await db.commit()
     return {"id": host.id, "name": host.name, "hostname": host.hostname}
 
 
@@ -495,9 +500,12 @@ async def update_host(
     body = await request.json()
     old_check_type = host.check_type
     for field in ("name", "hostname", "check_type", "port", "latency_threshold_ms",
-                  "enabled", "maintenance"):
+                  "enabled", "maintenance", "maintenance_until"):
         if field in body:
-            setattr(host, field, body[field])
+            val = body[field]
+            if field == "maintenance_until" and isinstance(val, str):
+                val = datetime.fromisoformat(val.replace("Z", "+00:00")).replace(tzinfo=None)
+            setattr(host, field, val)
     # Reset port_error state when check types change
     if "check_type" in body and body["check_type"] != old_check_type:
         host.port_error = False
@@ -534,13 +542,16 @@ async def bulk_update_hosts(
 @router.delete("/hosts/{host_id}", summary="Delete a host")
 async def delete_host(
     host_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_editor),
 ):
     host = await db.get(PingHost, host_id)
     if not host:
         raise HTTPException(404, "Host not found")
+    host_name = host.name
     await db.delete(host)
+    await log_action(db, request, "host.delete", "host", host_id, host_name)
     await db.commit()
     return {"ok": True}
 
@@ -1119,6 +1130,7 @@ async def acknowledge_incident(
         event_type="acknowledged",
         summary=f"Acknowledged by {incident.acknowledged_by}",
     ))
+    await log_action(db, request, "incident.acknowledge", "incident", incident_id, incident.title)
     await db.commit()
     return {"ok": True, "status": "acknowledged"}
 
@@ -1126,6 +1138,7 @@ async def acknowledge_incident(
 @router.post("/incidents/{incident_id}/resolve", summary="Resolve an incident")
 async def resolve_incident(
     incident_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_editor),
 ):
@@ -1142,6 +1155,7 @@ async def resolve_incident(
         event_type="resolved",
         summary=f"Resolved via API by {_key.name}",
     ))
+    await log_action(db, request, "incident.resolve", "incident", incident_id, incident.title)
     await db.commit()
     return {"ok": True, "status": "resolved"}
 
@@ -1194,3 +1208,216 @@ async def query_syslog(
         }
         for r in rows
     ]
+
+
+# ── Topology ──────────────────────────────────────────────────────────────────
+
+
+@router.get("/topology", summary="Network topology graph data")
+async def get_topology(
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    from services.topology import build_topology
+
+    topo = await build_topology(db)
+
+    # Load hosts for metadata
+    result = await db.execute(select(PingHost))
+    hosts = result.scalars().all()
+    now = datetime.utcnow()
+
+    nodes = []
+    edges = []
+    for h in hosts:
+        online = h.status == "up" if hasattr(h, "status") else not getattr(h, "is_down", True)
+        nodes.append({
+            "id": h.id,
+            "name": h.name,
+            "hostname": h.hostname,
+            "status": "up" if online else "down",
+            "check_type": h.check_type,
+            "source": h.source,
+            "maintenance": h.maintenance or False,
+        })
+        parent = topo.get(h.id)
+        if parent is not None:
+            edges.append({"source": parent, "target": h.id})
+
+    return {"nodes": nodes, "edges": edges}
+
+
+# ── Audit Log ─────────────────────────────────────────────────────────────────
+
+
+@router.get("/audit", summary="Query audit log")
+async def query_audit(
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
+    action: str = Query(None, description="Filter by action"),
+    user: str = Query(None, description="Filter by username"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    q = select(AuditLog).order_by(AuditLog.timestamp.desc())
+    if action:
+        q = q.where(AuditLog.action == action)
+    if user:
+        q = q.where(AuditLog.username == user)
+    q = q.offset(offset).limit(limit)
+
+    result = await db.execute(q)
+    logs = result.scalars().all()
+
+    # Total count for pagination
+    count_q = select(func.count(AuditLog.id))
+    if action:
+        count_q = count_q.where(AuditLog.action == action)
+    if user:
+        count_q = count_q.where(AuditLog.username == user)
+    total = (await db.execute(count_q)).scalar() or 0
+
+    return {
+        "total": total,
+        "logs": [
+            {
+                "id": l.id,
+                "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+                "user_id": l.user_id,
+                "username": l.username,
+                "action": l.action,
+                "target_type": l.target_type,
+                "target_id": l.target_id,
+                "target_name": l.target_name,
+                "details": json.loads(l.details) if l.details else None,
+                "ip_address": l.ip_address,
+            }
+            for l in logs
+        ],
+    }
+
+
+# ── Backup / Restore ─────────────────────────────────────────────────────────
+
+
+@router.get("/backup/info", summary="Backup info (table counts, DB size)")
+async def backup_info(
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
+):
+    from services.backup import get_backup_info
+    return await get_backup_info(db)
+
+
+@router.get("/backup", summary="Download full database backup as JSON")
+async def download_backup(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
+):
+    from services.backup import export_backup
+    data = await export_backup(db)
+    await log_action(db, request, "backup.export", details={"tables": len(data.get("tables", {}))})
+    await db.commit()
+    return JSONResponse(
+        content=data,
+        headers={"Content-Disposition": f"attachment; filename=nodeglow-backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.json"},
+    )
+
+
+@router.post("/backup/restore", summary="Restore database from backup JSON")
+async def restore_backup(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
+):
+    from services.backup import import_backup
+    body = await request.json()
+    result = await import_backup(db, body)
+    await log_action(db, request, "backup.restore", details={"rows": result.get("total_rows", 0)})
+    await db.commit()
+    return result
+
+
+# ── Maintenance Scheduling ────────────────────────────────────────────────────
+
+
+@router.post("/hosts/{host_id}/maintenance", summary="Schedule maintenance window")
+async def schedule_maintenance(
+    host_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    host = await db.get(PingHost, host_id)
+    if not host:
+        raise HTTPException(404, "Host not found")
+    body = await request.json()
+    action = body.get("action", "toggle")
+
+    if action == "off":
+        host.maintenance = False
+        host.maintenance_until = None
+    elif action == "schedule":
+        until = body.get("until")
+        if not until:
+            raise HTTPException(400, "until (ISO datetime) is required for scheduling")
+        host.maintenance = True
+        host.maintenance_until = datetime.fromisoformat(until.replace("Z", "+00:00")).replace(tzinfo=None)
+    else:
+        # Toggle with optional duration
+        if host.maintenance:
+            host.maintenance = False
+            host.maintenance_until = None
+        else:
+            host.maintenance = True
+            duration = body.get("duration")
+            hours_map = {"1h": 1, "2h": 2, "4h": 4, "8h": 8, "12h": 12, "24h": 24}
+            if duration in hours_map:
+                host.maintenance_until = datetime.utcnow() + timedelta(hours=hours_map[duration])
+            elif duration == "custom" and body.get("until"):
+                host.maintenance_until = datetime.fromisoformat(body["until"].replace("Z", "+00:00")).replace(tzinfo=None)
+            else:
+                host.maintenance_until = None
+
+    await log_action(db, request, "maintenance.toggle", "host", host_id, host.name,
+                     {"maintenance": host.maintenance, "until": host.maintenance_until.isoformat() if host.maintenance_until else None})
+    await db.commit()
+    return {
+        "ok": True,
+        "maintenance": host.maintenance,
+        "maintenance_until": host.maintenance_until.isoformat() if host.maintenance_until else None,
+    }
+
+
+# ── Watched Services (Agent) ─────────────────────────────────────────────────
+
+
+@router.get("/agents/{agent_id}/services", summary="Get watched services for an agent")
+async def get_watched_services(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    services = json.loads(agent.watched_services) if agent.watched_services else []
+    return {"agent_id": agent_id, "services": services}
+
+
+@router.put("/agents/{agent_id}/services", summary="Set watched services for an agent")
+async def set_watched_services(
+    agent_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+    body = await request.json()
+    services = body.get("services", [])
+    agent.watched_services = json.dumps(services) if services else None
+    await db.commit()
+    return {"ok": True, "services": services}
