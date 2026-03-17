@@ -1,9 +1,6 @@
-"""Self-update: check GitHub for new commits and apply updates."""
-import asyncio
-import json
+"""Self-update: check GitHub for new commits and apply updates via sidecar."""
 import logging
 import os
-import subprocess
 
 import httpx
 from fastapi import APIRouter, Request
@@ -14,224 +11,59 @@ from ratelimit import rate_limit
 router = APIRouter(prefix="/api/update")
 log = logging.getLogger(__name__)
 
-GITHUB_REPO = "jubacCH/Nodeglow"
-REPO_PATH = "/opt/repo"
-COMPOSE_FILE = f"{REPO_PATH}/docker-compose.yml"
-
-
-def _get_version_string() -> str:
-    """Read VERSION file from mounted repo or fallback."""
-    for path in [f"{REPO_PATH}/VERSION", "/app/VERSION"]:
-        try:
-            with open(path) as f:
-                return f.read().strip()
-        except Exception:
-            pass
-    return ""
-
-
-def _get_local_version() -> dict:
-    """Read the build-time version info."""
-    version = _get_version_string()
-    # Try build-time embedded version first
-    try:
-        with open("/app/.build-version") as f:
-            info = json.load(f)
-            if version:
-                info["version"] = version
-            return info
-    except Exception:
-        pass
-    # Fallback: try git in mounted repo
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=3, cwd=REPO_PATH,
-        )
-        if result.returncode == 0:
-            info = {"commit": result.stdout.strip()[:7], "full_commit": result.stdout.strip()}
-            if version:
-                info["version"] = version
-            return info
-    except Exception:
-        pass
-    # Fallback: try git in /app
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=3, cwd="/app",
-        )
-        if result.returncode == 0:
-            info = {"commit": result.stdout.strip()}
-            if version:
-                info["version"] = version
-            return info
-    except Exception:
-        pass
-    return {"commit": "unknown", "version": version or "unknown"}
-
-
-def _get_local_full_commit() -> str:
-    """Get the full commit hash from the mounted repo."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=3, cwd=REPO_PATH,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return ""
+SIDECAR_URL = os.environ.get("UPDATE_SIDECAR_URL", "http://updater:9100")
 
 
 @router.get("/check")
 @rate_limit(max_requests=5, window_seconds=60)
 async def check_for_updates(request: Request):
-    """Compare local commit with GitHub remote. Returns update availability + changelog."""
-    local = _get_local_version()
-    local_full = _get_local_full_commit()
-
-    # Check if repo mount is available
-    repo_available = os.path.isdir(os.path.join(REPO_PATH, ".git"))
-
-    if not repo_available:
-        return JSONResponse({
-            "local": local,
-            "update_available": False,
-            "error": "Repository not mounted at /opt/repo. Update checking unavailable.",
-        })
-
-    # Fetch latest from remote
+    """Check for available updates via the update sidecar."""
     try:
-        fetch = subprocess.run(
-            ["git", "fetch", "origin", "main", "--quiet"],
-            capture_output=True, text=True, timeout=30, cwd=REPO_PATH,
-        )
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            ver_resp = await client.get(f"{SIDECAR_URL}/version")
+            local = ver_resp.json() if ver_resp.status_code == 200 else {"commit": "unknown"}
+
+            check_resp = await client.get(f"{SIDECAR_URL}/check")
+            check = check_resp.json() if check_resp.status_code == 200 else {}
     except Exception as e:
-        log.error("Git fetch failed: %s", e)
+        log.error("Update sidecar unreachable: %s", e)
         return JSONResponse({
-            "local": local,
+            "local": {"commit": "unknown"},
             "update_available": False,
-            "error": "Git fetch failed. Check server logs for details.",
+            "error": "Update service unavailable. Is the updater sidecar running?",
         })
-
-    # Count commits behind
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD..origin/main"],
-            capture_output=True, text=True, timeout=5, cwd=REPO_PATH,
-        )
-        commits_behind = int(result.stdout.strip()) if result.returncode == 0 else 0
-    except Exception:
-        commits_behind = 0
-
-    # Get remote HEAD
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "origin/main"],
-            capture_output=True, text=True, timeout=5, cwd=REPO_PATH,
-        )
-        remote_commit = result.stdout.strip() if result.returncode == 0 else "unknown"
-    except Exception:
-        remote_commit = "unknown"
-
-    # Get remote VERSION file content
-    remote_version = ""
-    if commits_behind > 0:
-        try:
-            result = subprocess.run(
-                ["git", "show", "origin/main:VERSION"],
-                capture_output=True, text=True, timeout=5, cwd=REPO_PATH,
-            )
-            if result.returncode == 0:
-                remote_version = result.stdout.strip()
-        except Exception:
-            pass
-
-    # Get changelog (commit messages)
-    changelog = []
-    if commits_behind > 0:
-        try:
-            result = subprocess.run(
-                ["git", "log", "--oneline", "--no-decorate", f"HEAD..origin/main"],
-                capture_output=True, text=True, timeout=5, cwd=REPO_PATH,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if line.strip():
-                        parts = line.split(" ", 1)
-                        changelog.append({
-                            "hash": parts[0],
-                            "message": parts[1] if len(parts) > 1 else "",
-                        })
-        except Exception:
-            pass
 
     return JSONResponse({
         "local": local,
-        "remote_commit": remote_commit,
-        "remote_version": remote_version or local.get("version", ""),
-        "commits_behind": commits_behind,
-        "update_available": commits_behind > 0,
-        "changelog": changelog,
+        "remote_commit": check.get("changelog", [{}])[0].get("hash", "") if check.get("changelog") else "",
+        "remote_version": "",
+        "commits_behind": check.get("commits_behind", 0),
+        "update_available": check.get("update_available", False),
+        "changelog": check.get("changelog", []),
     })
 
 
 @router.post("/apply")
 @rate_limit(max_requests=2, window_seconds=300)
 async def apply_update(request: Request):
-    """Pull latest code and rebuild the container. Returns immediately — container will restart."""
-    # Check admin role
+    """Apply update via the sidecar (which has Docker socket access)."""
     user = getattr(request.state, "current_user", None)
     if not user or getattr(user, "role", "admin") != "admin":
         return JSONResponse({"error": "Admin access required"}, status_code=403)
 
-    repo_available = os.path.isdir(os.path.join(REPO_PATH, ".git"))
-    if not repo_available:
-        return JSONResponse({"error": "Repository not mounted"}, status_code=400)
-
-    docker_sock = os.path.exists("/var/run/docker.sock")
-    if not docker_sock:
-        return JSONResponse({"error": "Docker socket not mounted"}, status_code=400)
-
-    # Step 1: Git pull
     try:
-        result = subprocess.run(
-            ["git", "pull", "origin", "main"],
-            capture_output=True, text=True, timeout=60, cwd=REPO_PATH,
-        )
-        if result.returncode != 0:
-            log.error("Git pull failed: %s", result.stderr.strip())
-            return JSONResponse({
-                "error": "Git pull failed. Check server logs for details.",
-            }, status_code=500)
-        pull_output = result.stdout.strip()
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(f"{SIDECAR_URL}/apply")
+            result = resp.json()
     except Exception as e:
-        log.error("Git pull error: %s", e)
-        return JSONResponse({"error": "Git pull failed. Check server logs for details."}, status_code=500)
+        log.error("Update sidecar error: %s", e)
+        return JSONResponse({"error": "Update service unavailable"}, status_code=503)
 
-    # Step 2: Rebuild and restart (fire-and-forget — container will restart)
-    log.info("Update: git pull done (%s). Starting rebuild...", pull_output)
-
-    async def _rebuild():
-        """Run docker compose rebuild in background. This will kill the current container."""
-        await asyncio.sleep(1)  # Give time for HTTP response to be sent
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker", "compose", "-f", COMPOSE_FILE,
-                "up", "-d", "--build", "--no-deps", "nodeglow",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            # Don't await — this process will kill us
-        except Exception as e:
-            log.error("Rebuild failed: %s", e)
-
-    asyncio.create_task(_rebuild())
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error", "Update failed")}, status_code=500)
 
     return JSONResponse({
         "ok": True,
         "message": "Update started. The application will restart in a few seconds.",
-        "pull_output": pull_output,
+        "pull_output": result.get("pull_output", ""),
     })

@@ -60,16 +60,18 @@ app = FastAPI(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ── CORS (development: Next.js on localhost:3000) ─────────────────────────────
+# ── CORS (configurable via CORS_ORIGINS env var, defaults to none in production) ──
 from starlette.middleware.cors import CORSMiddleware
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_origins = os.environ.get("CORS_ORIGINS", "").strip()
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in _cors_origins.split(",")],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 @app.get("/api/v2/nav-counts")
@@ -301,7 +303,7 @@ async def inject_globals(request: Request, call_next):
 async def ws_live(websocket: WebSocket):
     # Authenticate via session cookie before accepting
     from database import AsyncSessionLocal as _ASL
-    from models.settings import Session as _Sess, User as _User
+    from models.settings import Session as _Sess, _hash_token as _ht
     from sqlalchemy import select as _sel
     from datetime import datetime as _dt
     token = websocket.cookies.get("nodeglow_session")
@@ -310,7 +312,7 @@ async def ws_live(websocket: WebSocket):
         return
     async with _ASL() as _db:
         row = (await _db.execute(
-            _sel(_Sess).where(_Sess.token == token, _Sess.expires_at > _dt.utcnow())
+            _sel(_Sess).where(_Sess.token == _ht(token), _Sess.expires_at > _dt.utcnow())
         )).scalar_one_or_none()
         if not row:
             await websocket.close(code=4401, reason="Unauthorized")

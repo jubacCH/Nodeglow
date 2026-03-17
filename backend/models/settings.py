@@ -1,10 +1,16 @@
 """Settings, User, and Session models."""
+import hashlib
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.base import Base, decrypt_value, encrypt_value
+
+
+def _hash_token(token: str) -> str:
+    """SHA-256 hash a token for secure storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 class Setting(Base):
@@ -36,9 +42,10 @@ async def get_current_user(request, db: AsyncSession):
     token = request.cookies.get("nodeglow_session")
     if not token:
         return None
+    token_hash = _hash_token(token)
     now = datetime.utcnow()
     result = await db.execute(
-        select(Session).where(Session.token == token, Session.expires_at > now)
+        select(Session).where(Session.token == token_hash, Session.expires_at > now)
     )
     session = result.scalar_one_or_none()
     if not session:

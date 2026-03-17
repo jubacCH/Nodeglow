@@ -43,13 +43,12 @@ services:
       - "8000"             # Internal only — frontend proxies all requests
     volumes:
       - ./data:/data
-      - .:/opt/repo                                # Git repo (for self-update)
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker API (for self-update)
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nodeglow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-nodeglow}
       CLICKHOUSE_URL: http://nodeglow:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@clickhouse:8123/nodeglow
       DATA_DIR: /data
       SYSLOG_PORT: "1514"
+      UPDATE_SIDECAR_URL: http://updater:9100
     depends_on:
       db:
         condition: service_healthy
@@ -57,6 +56,16 @@ services:
         condition: service_healthy
     cap_add:
       - NET_RAW   # Required for ICMP ping
+    restart: unless-stopped
+
+  updater:
+    build: ./sidecar
+    container_name: nodeglow-updater
+    volumes:
+      - .:/opt/repo
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "9100"
     restart: unless-stopped
 
   frontend:
