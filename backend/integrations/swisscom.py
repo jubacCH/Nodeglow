@@ -123,10 +123,6 @@ class SwisscomIntegration(BaseIntegration):
             placeholder="192.168.1.1",
         ),
         ConfigField(
-            key="username", label="Username",
-            placeholder="admin", required=False, default="admin",
-        ),
-        ConfigField(
             key="password", label="Admin Password",
             field_type="password", encrypted=True,
         ),
