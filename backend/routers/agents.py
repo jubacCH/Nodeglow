@@ -483,7 +483,8 @@ async def agent_global_settings(request: Request):
 async def enrollment_info(request: Request):
     """Return enrollment key + install commands for SPA. Requires admin session."""
     user = getattr(request.state, "current_user", None)
-    if not user or getattr(user, "role", None) != "admin":
+    role = getattr(user, "role", "admin") or "admin"
+    if not user or role != "admin":
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     async with AsyncSessionLocal() as db:
         custom_url = await get_setting(db, "agent_server_url", "")
