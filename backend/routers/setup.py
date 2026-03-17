@@ -32,7 +32,7 @@ async def complete_setup(
     # Only create user if none exist
     count = (await db.execute(select(func.count()).select_from(User))).scalar()
     if count == 0:
-        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
         db.add(User(username=username.strip() or "admin", password_hash=pw_hash, role="admin"))
 
     await set_setting(db, "site_name", site_name.strip() or "NODEGLOW")
