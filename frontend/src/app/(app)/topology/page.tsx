@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useMemo, useRef, useCallback, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useTopology } from '@/hooks/queries/useTopology';
-import { Network, Server, Wrench, ChevronRight } from 'lucide-react';
+import { Network, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 
 /* ── Types ── */
 
@@ -25,144 +25,385 @@ interface TopoEdge {
   target: number;
 }
 
-/* ── Build tree structure ── */
+/* ── Tree builder ── */
 
 interface TreeNode {
   node: TopoNode;
   children: TreeNode[];
 }
 
-function buildTree(nodes: TopoNode[], edges: TopoEdge[]): TreeNode[] {
-  const childToParent = new Map<number, number>();
-  for (const e of edges) childToParent.set(e.target, e.source);
-
+function buildTrees(nodes: TopoNode[], edges: TopoEdge[]): { trees: TreeNode[]; orphans: TopoNode[] } {
   const nodeMap = new Map<number, TopoNode>();
   for (const n of nodes) nodeMap.set(n.id, n);
 
-  // Find roots (nodes that are not children of anything)
   const childIds = new Set(edges.map((e) => e.target));
-  const roots = nodes.filter((n) => !childIds.has(n.id));
-
-  // Build tree recursively
   const parentToChildren = new Map<number, number[]>();
   for (const e of edges) {
     if (!parentToChildren.has(e.source)) parentToChildren.set(e.source, []);
     parentToChildren.get(e.source)!.push(e.target);
   }
 
-  function buildSubtree(n: TopoNode): TreeNode {
-    const childIds = parentToChildren.get(n.id) ?? [];
-    const children = childIds
+  function build(n: TopoNode): TreeNode {
+    const cIds = parentToChildren.get(n.id) ?? [];
+    const children = cIds
       .map((id) => nodeMap.get(id))
       .filter((c): c is TopoNode => !!c)
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((c) => buildSubtree(c));
+      .map((c) => build(c));
     return { node: n, children };
   }
 
-  // Sort roots: those with children first, then alphabetical
-  const sorted = roots.sort((a, b) => {
-    const ac = (parentToChildren.get(a.id) ?? []).length;
-    const bc = (parentToChildren.get(b.id) ?? []).length;
-    if (ac !== bc) return bc - ac;
-    return a.name.localeCompare(b.name);
-  });
+  const roots = nodes.filter((n) => !childIds.has(n.id));
+  const withChildren = roots.filter((r) => (parentToChildren.get(r.id) ?? []).length > 0);
+  const orphans = roots.filter((r) => (parentToChildren.get(r.id) ?? []).length === 0);
 
-  return sorted.map((r) => buildSubtree(r));
+  const trees = withChildren
+    .sort((a, b) => (parentToChildren.get(b.id)?.length ?? 0) - (parentToChildren.get(a.id)?.length ?? 0) || a.name.localeCompare(b.name))
+    .map((r) => build(r));
+
+  return { trees, orphans: orphans.sort((a, b) => a.name.localeCompare(b.name)) };
 }
 
-/* ── Status helpers ── */
+/* ── Layout engine: compute x,y for each node ── */
 
-function statusColor(n: TopoNode) {
-  if (n.maintenance) return { dot: 'bg-amber-400', ring: 'ring-amber-400/20', text: 'text-amber-400', bg: 'bg-amber-500/5 border-amber-500/20' };
-  if (n.status === 'down') return { dot: 'bg-red-400', ring: 'ring-red-400/20', text: 'text-red-400', bg: 'bg-red-500/5 border-red-500/20' };
-  return { dot: 'bg-emerald-400', ring: 'ring-emerald-400/20', text: 'text-emerald-400', bg: 'bg-emerald-500/5 border-emerald-500/20' };
+const NODE_W = 160;
+const NODE_H = 52;
+const GAP_X = 32;
+const GAP_Y = 80;
+
+interface LayoutNode {
+  id: number;
+  x: number;
+  y: number;
+  node: TopoNode;
+  parentId: number | null;
 }
 
-function statusLabel(n: TopoNode) {
-  if (n.maintenance) return 'Maintenance';
-  if (n.status === 'down') return 'Offline';
-  return 'Online';
+function layoutTree(tree: TreeNode, offsetX: number): { nodes: LayoutNode[]; width: number } {
+  const result: LayoutNode[] = [];
+
+  function measure(t: TreeNode): number {
+    if (t.children.length === 0) return NODE_W;
+    return t.children.reduce((sum, c) => sum + measure(c) + GAP_X, -GAP_X);
+  }
+
+  function place(t: TreeNode, x: number, y: number, parentId: number | null) {
+    const totalW = measure(t);
+    const cx = x + totalW / 2 - NODE_W / 2;
+    result.push({ id: t.node.id, x: cx, y, node: t.node, parentId });
+
+    let childX = x;
+    for (const child of t.children) {
+      const childW = measure(child);
+      place(child, childX, y + NODE_H + GAP_Y, t.node.id);
+      childX += childW + GAP_X;
+    }
+  }
+
+  const totalW = measure(tree);
+  place(tree, offsetX, 0, null);
+  return { nodes: result, width: totalW };
 }
 
-/* ── Tree Node Component ── */
+/* ── Colors ── */
 
-function TreeNodeCard({ tree, depth = 0 }: { tree: TreeNode; depth?: number }) {
-  const { node, children } = tree;
-  const s = statusColor(node);
-  const hasChildren = children.length > 0;
-  const [collapsed, setCollapsed] = useState(false);
+function nodeColors(n: TopoNode) {
+  if (n.maintenance) return { fill: '#78350f', stroke: '#f59e0b', text: '#fbbf24', dot: '#fbbf24', line: '#78350f' };
+  if (n.status === 'down') return { fill: '#450a0a', stroke: '#dc2626', text: '#f87171', dot: '#f87171', line: '#7f1d1d' };
+  return { fill: '#022c22', stroke: '#059669', text: '#34d399', dot: '#34d399', line: '#064e3b' };
+}
+
+/* ── Canvas-based topology map ── */
+
+function TopologyCanvas({
+  trees,
+  orphans,
+}: {
+  trees: TreeNode[];
+  orphans: TopoNode[];
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 40, y: 40 });
+  const [dragging, setDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [hoveredId, setHoveredId] = useState<number | null>(null);
+
+  // Layout all trees side by side
+  const { allNodes, edges, totalW, totalH } = useMemo(() => {
+    const allNodes: LayoutNode[] = [];
+    const edges: { from: LayoutNode; to: LayoutNode }[] = [];
+    let offsetX = 0;
+    let maxH = 0;
+
+    for (const tree of trees) {
+      const { nodes, width } = layoutTree(tree, offsetX);
+      allNodes.push(...nodes);
+      offsetX += width + GAP_X * 3;
+
+      // Find max depth
+      const maxY = Math.max(...nodes.map((n) => n.y));
+      if (maxY + NODE_H > maxH) maxH = maxY + NODE_H;
+    }
+
+    // Place orphans in a grid below the trees
+    if (orphans.length > 0) {
+      const orphanY = maxH + GAP_Y * 1.5;
+      const cols = Math.max(Math.ceil(Math.sqrt(orphans.length * 2)), 4);
+      orphans.forEach((o, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        allNodes.push({
+          id: o.id,
+          x: col * (NODE_W + GAP_X / 2),
+          y: orphanY + row * (NODE_H + GAP_X / 2),
+          node: o,
+          parentId: null,
+        });
+      });
+      const orphanRows = Math.ceil(orphans.length / cols);
+      maxH = orphanY + orphanRows * (NODE_H + GAP_X / 2);
+    }
+
+    // Build edges
+    const nodeById = new Map(allNodes.map((n) => [n.id, n]));
+    for (const n of allNodes) {
+      if (n.parentId != null) {
+        const parent = nodeById.get(n.parentId);
+        if (parent) edges.push({ from: parent, to: n });
+      }
+    }
+
+    return { allNodes, edges, totalW: offsetX || NODE_W, totalH: maxH + NODE_H };
+  }, [trees, orphans]);
+
+  // Draw
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+
+    const ctx = canvas.getContext('2d')!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    ctx.save();
+    ctx.translate(pan.x, pan.y);
+    ctx.scale(zoom, zoom);
+
+    // Draw edges
+    for (const { from, to } of edges) {
+      const fromX = from.x + NODE_W / 2;
+      const fromY = from.y + NODE_H;
+      const toX = to.x + NODE_W / 2;
+      const toY = to.y;
+      const midY = fromY + (toY - fromY) / 2;
+
+      const colors = nodeColors(to.node);
+      ctx.strokeStyle = colors.line;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(fromX, fromY);
+      ctx.bezierCurveTo(fromX, midY, toX, midY, toX, toY);
+      ctx.stroke();
+
+      // Small dot at connection point
+      ctx.fillStyle = colors.dot;
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      ctx.arc(toX, toY, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Draw nodes
+    for (const ln of allNodes) {
+      const c = nodeColors(ln.node);
+      const isHovered = hoveredId === ln.id;
+      const r = 8;
+
+      // Shadow for hovered
+      if (isHovered) {
+        ctx.shadowColor = c.dot;
+        ctx.shadowBlur = 16;
+      }
+
+      // Background
+      ctx.fillStyle = isHovered ? c.stroke + '30' : c.fill;
+      ctx.strokeStyle = isHovered ? c.dot : c.stroke + '80';
+      ctx.lineWidth = isHovered ? 2 : 1;
+      ctx.beginPath();
+      ctx.roundRect(ln.x, ln.y, NODE_W, NODE_H, r);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Status dot
+      ctx.fillStyle = c.dot;
+      ctx.beginPath();
+      ctx.arc(ln.x + 14, ln.y + NODE_H / 2, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Glow ring
+      ctx.strokeStyle = c.dot;
+      ctx.globalAlpha = 0.25;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(ln.x + 14, ln.y + NODE_H / 2, 7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Name
+      ctx.fillStyle = isHovered ? '#f8fafc' : '#e2e8f0';
+      ctx.font = `600 12px ui-sans-serif, system-ui, sans-serif`;
+      ctx.textBaseline = 'top';
+      const name = ln.node.name.length > 16 ? ln.node.name.slice(0, 15) + '…' : ln.node.name;
+      ctx.fillText(name, ln.x + 26, ln.y + 10);
+
+      // Hostname
+      ctx.fillStyle = '#64748b';
+      ctx.font = `400 10px ui-monospace, monospace`;
+      const host = ln.node.hostname.length > 20 ? ln.node.hostname.slice(0, 19) + '…' : ln.node.hostname;
+      ctx.fillText(host, ln.x + 26, ln.y + 28);
+
+      // Status badge right side
+      ctx.fillStyle = c.dot;
+      ctx.globalAlpha = 0.15;
+      ctx.beginPath();
+      ctx.roundRect(ln.x + NODE_W - 8 - (ln.node.maintenance ? 14 : 6), ln.y + NODE_H / 2 - 4, ln.node.maintenance ? 14 : 6, 8, 4);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+  }, [allNodes, edges, pan, zoom, hoveredId]);
+
+  useEffect(() => {
+    draw();
+  }, [draw]);
+
+  useEffect(() => {
+    const obs = new ResizeObserver(() => draw());
+    if (containerRef.current) obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, [draw]);
+
+  // Hit test
+  const hitTest = useCallback((clientX: number, clientY: number): number | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (clientX - rect.left - pan.x) / zoom;
+    const my = (clientY - rect.top - pan.y) / zoom;
+    for (const ln of allNodes) {
+      if (mx >= ln.x && mx <= ln.x + NODE_W && my >= ln.y && my <= ln.y + NODE_H) {
+        return ln.id;
+      }
+    }
+    return null;
+  }, [allNodes, pan, zoom]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    setDragging(true);
+    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+  }, [pan]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (dragging) {
+      setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+    }
+    const id = hitTest(e.clientX, e.clientY);
+    setHoveredId(id);
+    if (canvasRef.current) {
+      canvasRef.current.style.cursor = id != null ? 'pointer' : dragging ? 'grabbing' : 'grab';
+    }
+  }, [dragging, dragStart, hitTest]);
+
+  const handleMouseUp = useCallback(() => setDragging(false), []);
+
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    const id = hitTest(e.clientX, e.clientY);
+    if (id != null) router.push(`/hosts/${id}`);
+  }, [hitTest, router]);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setZoom((z) => Math.max(0.3, Math.min(3, z * delta)));
+  }, []);
+
+  const fitView = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const padding = 60;
+    const scaleX = (rect.width - padding * 2) / totalW;
+    const scaleY = (rect.height - padding * 2) / totalH;
+    const newZoom = Math.min(scaleX, scaleY, 1.5);
+    setZoom(newZoom);
+    setPan({
+      x: (rect.width - totalW * newZoom) / 2,
+      y: padding,
+    });
+  }, [totalW, totalH]);
+
+  // Fit on first render
+  useEffect(() => { fitView(); }, [fitView]);
 
   return (
-    <div className={depth > 0 ? 'ml-6 sm:ml-10' : ''}>
-      {/* Connector line */}
-      {depth > 0 && (
-        <div className="flex items-center gap-0 -mb-[1px] ml-[-20px] sm:ml-[-36px]">
-          <div className="w-5 sm:w-9 border-b border-l border-white/[0.08] h-5 rounded-bl-lg" />
-        </div>
-      )}
+    <div className="relative" ref={containerRef}>
+      <canvas
+        ref={canvasRef}
+        className="w-full"
+        style={{ height: 560 }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => { setDragging(false); setHoveredId(null); }}
+        onClick={handleClick}
+        onWheel={handleWheel}
+      />
 
-      {/* Node card */}
-      <div className={`group relative rounded-lg border transition-all hover:border-white/[0.15] ${s.bg}`}>
-        <div className="flex items-center gap-3 px-3 py-2.5">
-          {/* Status dot */}
-          <div className="relative shrink-0">
-            <span className={`block w-2.5 h-2.5 rounded-full ${s.dot}`} />
-            {node.status === 'down' && !node.maintenance && (
-              <span className={`absolute inset-0 w-2.5 h-2.5 rounded-full ${s.dot} animate-ping opacity-40`} />
-            )}
-          </div>
-
-          {/* Info */}
-          <Link href={`/hosts/${node.id}`} className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium truncate group-hover:text-sky-400 transition-colors" style={{ color: 'var(--ng-text-primary)' }}>
-                {node.name}
-              </span>
-              <span className={`text-[10px] font-medium ${s.text}`}>{statusLabel(node)}</span>
-            </div>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-[11px] text-slate-500 truncate font-mono">{node.hostname}</span>
-              <span className="text-[10px] text-slate-600">{node.check_type}</span>
-              {node.source !== 'manual' && (
-                <span className="text-[10px] text-slate-600">via {node.source}</span>
-              )}
-            </div>
-          </Link>
-
-          {/* Badges + expand */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {node.maintenance && <Wrench size={12} className="text-amber-400" />}
-            {hasChildren && (
-              <button
-                onClick={() => setCollapsed(!collapsed)}
-                className="p-1 rounded hover:bg-white/[0.08] transition-colors text-slate-500 hover:text-slate-300"
-                title={collapsed ? 'Expand' : 'Collapse'}
-              >
-                <ChevronRight size={14} className={`transition-transform ${collapsed ? '' : 'rotate-90'}`} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Children count badge */}
-        {hasChildren && collapsed && (
-          <div className="absolute -right-2 -top-2">
-            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 text-[10px] font-bold border border-sky-500/30">
-              {children.length}
-            </span>
-          </div>
-        )}
+      {/* Controls */}
+      <div className="absolute top-3 right-3 flex flex-col gap-1">
+        <button onClick={() => setZoom((z) => Math.min(3, z * 1.2))} className="p-1.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-slate-400 transition-colors" title="Zoom in">
+          <ZoomIn size={14} />
+        </button>
+        <button onClick={() => setZoom((z) => Math.max(0.3, z / 1.2))} className="p-1.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-slate-400 transition-colors" title="Zoom out">
+          <ZoomOut size={14} />
+        </button>
+        <button onClick={fitView} className="p-1.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-slate-400 transition-colors" title="Fit to view">
+          <Maximize2 size={14} />
+        </button>
       </div>
 
-      {/* Children */}
-      {hasChildren && !collapsed && (
-        <div className="space-y-1.5 mt-1.5">
-          {children.map((child) => (
-            <TreeNodeCard key={child.node.id} tree={child} depth={depth + 1} />
-          ))}
-        </div>
-      )}
+      {/* Hint */}
+      <div className="absolute bottom-3 left-3 text-[10px] text-slate-600">
+        Drag to pan · Scroll to zoom · Click node to open
+      </div>
+
+      {/* Legend */}
+      <div className="absolute bottom-3 right-3 flex items-center gap-3">
+        {[
+          { color: '#34d399', label: 'Online' },
+          { color: '#f87171', label: 'Offline' },
+          { color: '#fbbf24', label: 'Maintenance' },
+        ].map((l) => (
+          <div key={l.label} className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full" style={{ background: l.color }} />
+            <span className="text-[10px] text-slate-500">{l.label}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -173,20 +414,19 @@ export default function TopologyPage() {
   useEffect(() => { document.title = 'Topology | Nodeglow'; }, []);
   const { data, isLoading } = useTopology();
 
-  const tree = useMemo(() => {
-    if (!data) return [];
-    return buildTree(data.nodes, data.edges);
+  const { trees, orphans } = useMemo(() => {
+    if (!data) return { trees: [], orphans: [] };
+    return buildTrees(data.nodes, data.edges);
   }, [data]);
 
   const onlineCount = data?.nodes.filter((n) => n.status === 'up' && !n.maintenance).length ?? 0;
   const offlineCount = data?.nodes.filter((n) => n.status === 'down' && !n.maintenance).length ?? 0;
   const maintCount = data?.nodes.filter((n) => n.maintenance).length ?? 0;
-
   const connectedCount = data?.edges.length ?? 0;
 
   return (
     <div>
-      <PageHeader title="Network Topology" description="Hierarchical view of monitored infrastructure" />
+      <PageHeader title="Network Topology" description="Infrastructure dependency map" />
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
@@ -204,72 +444,20 @@ export default function TopologyPage() {
         ))}
       </div>
 
-      {isLoading ? (
-        <GlassCard className="p-4 space-y-3">
-          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
-        </GlassCard>
-      ) : !data || data.nodes.length === 0 ? (
-        <GlassCard className="p-8">
-          <div className="flex flex-col items-center justify-center text-slate-500">
+      {/* Topology map */}
+      <GlassCard className="overflow-hidden">
+        {isLoading ? (
+          <Skeleton className="w-full h-[560px]" />
+        ) : !data || data.nodes.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-[560px] text-slate-500">
             <Network size={48} className="mb-3 opacity-20" />
             <p className="text-sm">No topology data</p>
-            <p className="text-xs mt-1 text-slate-600">Add hosts and integrations to build the hierarchy</p>
+            <p className="text-xs mt-1 text-slate-600">Add hosts and integrations to build the map</p>
           </div>
-        </GlassCard>
-      ) : (
-        <div className="space-y-6">
-          {/* Trees with parents */}
-          {tree.filter((t) => t.children.length > 0).length > 0 && (
-            <GlassCard className="p-4">
-              <h3 className="text-sm font-medium mb-4 flex items-center gap-2" style={{ color: 'var(--ng-text-primary)' }}>
-                <Network size={14} className="text-sky-400" />
-                Connected Devices
-              </h3>
-              <div className="space-y-3">
-                {tree.filter((t) => t.children.length > 0).map((t) => (
-                  <TreeNodeCard key={t.node.id} tree={t} />
-                ))}
-              </div>
-            </GlassCard>
-          )}
-
-          {/* Standalone nodes (no parent, no children) */}
-          {tree.filter((t) => t.children.length === 0).length > 0 && (
-            <GlassCard className="p-4">
-              <h3 className="text-sm font-medium mb-4 flex items-center gap-2" style={{ color: 'var(--ng-text-primary)' }}>
-                <Server size={14} className="text-slate-400" />
-                Standalone Hosts
-                <span className="text-xs text-slate-500 font-normal">({tree.filter((t) => t.children.length === 0).length})</span>
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {tree.filter((t) => t.children.length === 0).map((t) => {
-                  const n = t.node;
-                  const s = statusColor(n);
-                  return (
-                    <Link
-                      key={n.id}
-                      href={`/hosts/${n.id}`}
-                      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all hover:border-white/[0.15] ${s.bg}`}
-                    >
-                      <div className="relative shrink-0">
-                        <span className={`block w-2.5 h-2.5 rounded-full ${s.dot}`} />
-                        {n.status === 'down' && !n.maintenance && (
-                          <span className={`absolute inset-0 w-2.5 h-2.5 rounded-full ${s.dot} animate-ping opacity-40`} />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate" style={{ color: 'var(--ng-text-primary)' }}>{n.name}</p>
-                        <p className="text-[11px] text-slate-500 truncate font-mono">{n.hostname}</p>
-                      </div>
-                      <span className={`text-[10px] font-medium ${s.text}`}>{statusLabel(n)}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            </GlassCard>
-          )}
-        </div>
-      )}
+        ) : (
+          <TopologyCanvas trees={trees} orphans={orphans} />
+        )}
+      </GlassCard>
     </div>
   );
 }
