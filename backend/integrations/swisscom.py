@@ -1,110 +1,196 @@
-"""Swisscom Internet-Box integration – router stats, WAN health, connected devices."""
+"""Swisscom Internet-Box integration – device info, WAN status, connected devices.
+
+Uses the native /ws/ REST API (Arcadyan IB5 platform) with X-Sah authentication.
+No external library required — just httpx.
+"""
 from __future__ import annotations
 
+import json
 import logging
+
+import httpx
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
 
 
-# ── Sagemcom Client Wrapper ──────────────────────────────────────────────────
+# ── Internet-Box REST API Client ─────────────────────────────────────────────
 
 
-async def _fetch_swisscom(
-    host: str, username: str, password: str, encryption: str, ssl: bool,
-) -> dict:
-    """Connect to the Swisscom Internet-Box via sagemcom-api and collect data."""
-    from aiohttp import ClientSession
-    from sagemcom_api.client import SagemcomClient
-    from sagemcom_api.enums import EncryptionMethod
+class InternetBoxAPI:
+    """Async client for Swisscom Internet-Box /ws/ REST API."""
 
-    enc = EncryptionMethod.SHA512 if encryption == "SHA512" else EncryptionMethod.MD5
+    def __init__(self, host: str, password: str):
+        if not host.startswith("http"):
+            host = f"https://{host}"
+        self.base = host.rstrip("/")
+        self.password = password
+        self._context: str | None = None
 
-    async with ClientSession() as session:
-        client = SagemcomClient(
-            host=host,
-            username=username,
-            password=password,
-            authentication_method=enc,
-            session=session,
-            ssl=ssl,
-            verify_ssl=False,
+    async def _login(self, client: httpx.AsyncClient) -> str:
+        """Authenticate and return contextID."""
+        resp = await client.post(
+            f"{self.base}/ws",
+            content=json.dumps({
+                "service": "sah.Device.Information",
+                "method": "createContext",
+                "parameters": {
+                    "applicationName": "nodeglow",
+                    "username": "admin",
+                    "password": self.password,
+                },
+            }),
+            headers={
+                "Content-Type": "application/x-sah-ws-1-call+json",
+                "Authorization": "X-Sah-Login",
+            },
         )
-        try:
-            await client.login()
+        resp.raise_for_status()
+        data = resp.json()
+        ctx = data.get("data", {}).get("contextID", "")
+        if not ctx:
+            raise ConnectionError("Login failed — no contextID returned")
+        return ctx
 
-            # ── Device info ──
-            info = await client.get_device_info()
-            device_info = {
-                "model": info.model_name or info.product_class or "Internet-Box",
-                "serial": info.serial_number or "",
-                "firmware": info.software_version or info.external_firmware_version or "",
-                "mac": info.mac_address or "",
-                "uptime_s": info.up_time or 0,
-                "manufacturer": info.manufacturer or "Swisscom",
-                "reboot_count": info.reboot_count,
+    async def _get(self, client: httpx.AsyncClient, path: str) -> dict:
+        """GET /ws/<path> with auth header."""
+        resp = await client.get(
+            f"{self.base}/ws/{path}",
+            headers={"Authorization": f"X-Sah {self._context}"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def _params_dict(self, node: dict) -> dict[str, object]:
+        """Extract {name: value} from a ws/ node's parameters list."""
+        return {p["name"]: p.get("value", "") for p in node.get("parameters", [])}
+
+    async def fetch_all(self) -> dict:
+        """Collect all data from the Internet-Box."""
+        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            self._context = await self._login(client)
+
+            # ── Device Info ──
+            di = await self._get(client, "DeviceInfo")
+            di_params = self._params_dict(di)
+
+            device = {
+                "model": di_params.get("ModelName", "Internet-Box"),
+                "serial": di_params.get("SerialNumber", ""),
+                "firmware": di_params.get("SoftwareVersion", ""),
+                "mac": di_params.get("BaseMAC", ""),
+                "uptime_s": di_params.get("UpTime", 0),
+                "manufacturer": di_params.get("Manufacturer", "Arcadyan"),
+                "external_ip": di_params.get("ExternalIPAddress", ""),
+                "hardware": di_params.get("HardwareVersion", ""),
+                "status": di_params.get("DeviceStatus", ""),
+                "reboots": di_params.get("NumberOfReboots", 0),
+                "first_use": di_params.get("FirstUseDate", ""),
             }
 
-            # ── Connected hosts ──
-            hosts_raw = await client.get_hosts(only_active=False)
-            hosts = []
+            # ── Memory ──
+            try:
+                mem = await self._get(client, "DeviceInfo/MemoryStatus")
+                mem_p = self._params_dict(mem)
+                device["mem_total_kb"] = mem_p.get("Total", 0)
+                device["mem_free_kb"] = mem_p.get("Free", 0)
+                total = int(mem_p.get("Total", 0) or 0)
+                free = int(mem_p.get("Free", 0) or 0)
+                if total > 0:
+                    device["mem_pct"] = round((total - free) / total * 100, 1)
+            except Exception:
+                pass
+
+            # ── WAN Info ──
+            wan: dict = {}
+            try:
+                nm = await self._get(client, "NMC")
+                nm_p = self._params_dict(nm)
+                wan["interface"] = nm_p.get("ActiveWANInterface", "")
+            except Exception:
+                pass
+            try:
+                wn = await self._get(client, "NetMaster/WAN")
+                wan["physical"] = self._params_dict(wn).get("PhysicalInterface", "")
+                for inst in wn.get("instances", []):
+                    ip = self._params_dict(inst)
+                    wan_name = ip.get("Name", "")
+                    if wan_name:
+                        wan[f"link_{wan_name}"] = ip.get("PhysicalInterface", "")
+            except Exception:
+                pass
+
+            # ── Connected Devices ──
+            hosts: list[dict] = []
             active_count = 0
-            for h in hosts_raw:
-                active = getattr(h, "active", False) or False
-                if active:
-                    active_count += 1
-                hosts.append({
-                    "name": h.name or h.host_name or "",
-                    "ip": h.ip_address or "",
-                    "mac": (h.phys_address or "").upper(),
-                    "active": active,
-                    "interface": getattr(h, "interface_type", "") or "",
-                    "device_type": getattr(h, "detected_device_type", "") or "",
-                })
+            try:
+                dev = await self._get(client, "Devices/Device")
+                for inst in dev.get("instances", []):
+                    p = self._params_dict(inst)
+                    # Skip internal/self entries
+                    src = p.get("DiscoverySource", "")
+                    if src.startswith("self"):
+                        continue
+                    tags = p.get("Tags", "")
+                    if "voice" in tags and "physical" in tags and "lan" not in tags:
+                        continue
 
-            # ── WAN / IP info via XPath (best-effort) ──
-            wan_info: dict = {}
-            xpaths_to_try = {
-                "wan_ip": "Device/IP/Interfaces/Interface[Alias='IP_DATA']/IPv4Addresses/IPv4Address[@uid='1']/IPAddress",
-                "wan_gateway": "Device/IP/Interfaces/Interface[Alias='IP_DATA']/IPv4Addresses/IPv4Address[@uid='1']/SubnetMask",
-                "dns_servers": "Device/DNS/Client/Servers",
-            }
-            for key, xpath in xpaths_to_try.items():
-                try:
-                    val = await client.get_value_by_xpath(xpath)
-                    wan_info[key] = val
-                except Exception:
-                    pass
+                    active = bool(p.get("Active", False))
+                    if active:
+                        active_count += 1
 
-            # ── WAN traffic stats (best-effort) ──
-            traffic: dict = {}
-            traffic_xpaths = {
-                "wan_rx_bytes": "Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats/BytesReceived",
-                "wan_tx_bytes": "Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats/BytesSent",
-                "wan_rx_packets": "Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats/PacketsReceived",
-                "wan_tx_packets": "Device/IP/Interfaces/Interface[Alias='IP_DATA']/Stats/PacketsSent",
-            }
-            for key, xpath in traffic_xpaths.items():
-                try:
-                    val = await client.get_value_by_xpath(xpath)
-                    if isinstance(val, (int, float, str)):
-                        traffic[key] = int(val) if str(val).isdigit() else val
-                    else:
-                        traffic[key] = val
-                except Exception:
-                    pass
+                    # Get IP addresses from children
+                    ip_addr = ""
+                    for child in inst.get("children", []):
+                        cname = child.get("objectInfo", {}).get("name", "")
+                        if cname == "IPv4Address":
+                            for ip_inst in child.get("instances", []):
+                                ip_p = self._params_dict(ip_inst)
+                                addr = ip_p.get("Address", "")
+                                if addr:
+                                    ip_addr = addr
+                                    break
+
+                    hosts.append({
+                        "name": p.get("Name", ""),
+                        "mac": p.get("Key", ""),
+                        "active": active,
+                        "device_type": p.get("DeviceType", ""),
+                        "ip": ip_addr,
+                        "first_seen": p.get("FirstSeen", ""),
+                        "last_connection": p.get("LastConnection", ""),
+                    })
+            except Exception:
+                logger.exception("Failed to get devices")
+
+            # ── WiFi Status ──
+            wifi: dict = {}
+            try:
+                wf = await self._get(client, "NMC/Wifi")
+                wf_p = self._params_dict(wf)
+                wifi["enabled"] = bool(wf_p.get("Status", False))
+                wifi["scheduler"] = bool(wf_p.get("Scheduler", False))
+            except Exception:
+                pass
 
             return {
-                "device": device_info,
+                "device": device,
+                "wan": wan,
+                "wifi": wifi,
                 "hosts": hosts,
                 "hosts_active": active_count,
                 "hosts_total": len(hosts),
-                "wan": wan_info,
-                "traffic": traffic,
             }
-        finally:
-            await client.logout()
+
+    async def health_check(self) -> bool:
+        """Quick login test."""
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                await self._login(client)
+                return True
+        except Exception:
+            return False
 
 
 # ── Integration Plugin ────────────────────────────────────────────────────────
@@ -126,54 +212,20 @@ class SwisscomIntegration(BaseIntegration):
             key="password", label="Admin Password",
             field_type="password", encrypted=True,
         ),
-        ConfigField(
-            key="encryption", label="Encryption", field_type="select",
-            options=[
-                {"value": "SHA512", "label": "SHA512 (default)"},
-                {"value": "MD5", "label": "MD5 (older boxes)"},
-            ],
-            default="SHA512", required=False,
-        ),
-        ConfigField(
-            key="ssl", label="Use HTTPS", field_type="checkbox",
-            required=False, default=False,
-        ),
     ]
+
+    def _api(self) -> InternetBoxAPI:
+        return InternetBoxAPI(
+            host=self.config.get("host", "192.168.1.1"),
+            password=self.config.get("password", ""),
+        )
 
     async def collect(self) -> CollectorResult:
         try:
-            data = await _fetch_swisscom(
-                host=self.config.get("host", "192.168.1.1"),
-                username=self.config.get("username", "admin") or "admin",
-                password=self.config.get("password", ""),
-                encryption=self.config.get("encryption", "SHA512") or "SHA512",
-                ssl=self.config.get("ssl", False),
-            )
+            data = await self._api().fetch_all()
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
 
     async def health_check(self) -> bool:
-        from aiohttp import ClientSession
-        from sagemcom_api.client import SagemcomClient
-        from sagemcom_api.enums import EncryptionMethod
-
-        enc_str = self.config.get("encryption", "SHA512") or "SHA512"
-        enc = EncryptionMethod.SHA512 if enc_str == "SHA512" else EncryptionMethod.MD5
-
-        try:
-            async with ClientSession() as session:
-                client = SagemcomClient(
-                    host=self.config.get("host", "192.168.1.1"),
-                    username=self.config.get("username", "admin") or "admin",
-                    password=self.config.get("password", ""),
-                    authentication_method=enc,
-                    session=session,
-                    ssl=self.config.get("ssl", False),
-                    verify_ssl=False,
-                )
-                await client.login()
-                await client.logout()
-                return True
-        except Exception:
-            return False
+        return await self._api().health_check()
