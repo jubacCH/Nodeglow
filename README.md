@@ -18,62 +18,22 @@ A self-hosted infrastructure monitoring platform with **log intelligence**, **in
 
 ## Tech Stack
 
-```mermaid
-block-beta
-  columns 4
-
-  block:frontend("Frontend"):4
-    A["Jinja2"] B["Tailwind CSS"] C["Chart.js"] D["GridStack"]
-  end
-
-  space:4
-
-  block:app("FastAPI · Uvicorn · Python 3.11+"):4
-    E["Scheduler"] F["Correlation"] G["Log Intelligence"] H["Alert Rules"]
-  end
-
-  space:4
-
-  block:plugins("15 Integration Plugins"):4
-    I["Proxmox"] J["UniFi"] K["TrueNAS"] L["+ 12 more"]
-  end
-
-  space:4
-
-  block:pg("PostgreSQL 16"):2
-    M["Config · Hosts · Users · Incidents"]
-  end
-  block:ch("ClickHouse"):2
-    N["Syslog · Time-Series"]
-  end
-
-  space:4
-
-  block:infra("Infrastructure"):4
-    O["Docker Compose"] P["Syslog UDP/TCP"] Q["Agent Win/Linux"] R["REST API"]
-  end
-
-  frontend --> app
-  app --> plugins
-  plugins --> pg
-  plugins --> ch
-  pg --> infra
-  ch --> infra
-```
-
 | Layer | Technology | Purpose |
 |---|---|---|
-| **Web framework** | FastAPI + Uvicorn | Async HTTP server, REST API, SSE |
-| **Templates** | Jinja2 + Tailwind CSS | Server-rendered HTML with SPA navigation |
-| **Charts** | Chart.js | Latency sparklines, syslog rate charts, heatmaps |
-| **Dashboard** | GridStack.js | Drag-and-drop widget layout |
-| **Primary DB** | PostgreSQL 16 (asyncpg) | Config, hosts, users, incidents, templates |
-| **Log DB** | ClickHouse | High-volume syslog storage, time-series queries |
+| **Frontend** | Next.js 14 + React 18 | SPA with server-side rendering |
+| **Styling** | Tailwind CSS | Utility-first CSS |
+| **Charts** | ECharts 6 | Latency sparklines, syslog rate charts, heatmaps |
+| **3D Visualization** | Three.js + React Three Fiber | Gravity well host visualization |
+| **Dashboard** | React Grid Layout | Drag-and-drop widget layout |
+| **State** | Zustand + TanStack Query | Client state + server data fetching |
+| **Backend** | FastAPI + Uvicorn | Async HTTP server, REST API |
+| **Primary DB** | PostgreSQL 16 (asyncpg) | Config, hosts, users, incidents, API keys |
+| **Log DB** | ClickHouse 24.8 | High-volume syslog storage, time-series queries |
 | **ORM** | SQLAlchemy 2.0 (async) | Models, migrations (Alembic) |
 | **Scheduler** | APScheduler | Periodic ping, integration polling, cleanup |
 | **Encryption** | Fernet (SHA256) | Integration credentials at rest |
-| **Notifications** | Telegram, Discord, Email | Alert delivery via configurable channels |
-| **Agent** | Python (PyInstaller .exe) | Windows/Linux host agent with auto-update |
+| **Notifications** | Telegram, Discord, Email, Webhook | Alert delivery via configurable channels |
+| **Agent** | Rust (Tokio + reqwest) | Windows/Linux host agent with auto-update |
 
 ---
 
@@ -85,9 +45,9 @@ block-beta
 | **30-day heatmap** | Visual uptime history per host |
 | **SLA tracking** | Uptime % for 24h / 7d / 30d |
 | **Health score** | Composite score (0–100%) from latency, uptime, CPU, RAM, disk, syslog errors |
-| **Gravity well** | Animated particle visualization — healthy hosts orbit center, unhealthy drift outward |
+| **Gravity well** | Animated 3D particle visualization — healthy hosts orbit center, unhealthy drift outward |
 | **Maintenance mode** | Pauses checks, hides host from alarms |
-| **SSL expiry** | Badge + alert when certificate expires in <30 days |
+| **SSL monitoring** | Certificate expiry tracking with alerts, auto-discovery via port scanner |
 | **Latency thresholds** | Per-host or global alarm when latency exceeds limit |
 | **15 integrations** | Generic plugin system — see table below |
 | **Syslog receiver** | UDP/TCP syslog (RFC 3164/5424) with auto-host assignment and full-text search |
@@ -96,28 +56,29 @@ block-beta
 | **Precursor detection** | Learns which log patterns precede host-down, integration failures, incidents |
 | **Incident correlation** | Auto-detects related failures (multi-host down, syslog + ping, integration + host) |
 | **Alert rules** | Custom triggers on any field — supports contains, regex, numeric operators |
-| **Alerts page** | Offline hosts, integration errors, UPS on battery, SSL expiry, maintenance |
+| **Subnet scanner** | Port discovery with service identification and SSL certificate detection |
+| **SNMP monitoring** | MIB uploads, OID polling, configurable thresholds |
 | **Anomaly detection** | Proxmox VM CPU/RAM spike detection (statistical + threshold) |
 | **System status** | Self-monitoring page with CPU, RAM, disk, DB stats, scheduler, logs |
-| **Agent system** | Auto-enrolling Windows/Linux agents with auto-update |
-| **REST API** | Full API with key auth (readonly/editor/admin roles) |
+| **Agent system** | Rust-based Windows/Linux agents with auto-enrollment and auto-update |
+| **REST API** | Full API with key auth (`X-API-Key`, readonly/editor/admin roles) |
 | **Multi-user** | Admin / Editor / Read-only roles |
 | **Notifications** | Telegram, Discord, Email (SMTP), Webhook |
-| **Sparklines** | 2h latency sparklines in dashboard host cards |
-| **SPA navigation** | Instant page transitions without full reload |
+| **Tasks** | Aggregated pending admin work (new ports, SSL certs) |
+| **Digest** | Log summary and aggregation view |
 | **Data retention** | Configurable per integration type, automatic cleanup |
 
 ---
 
 ## Integrations
 
-All integrations use a generic plugin system (`BaseIntegration` ABC). Adding a new integration = one Python file + one HTML template.
+All integrations use a generic plugin system (`BaseIntegration` ABC). Adding a new integration = one Python file.
 
 | Integration | What is monitored |
 |---|---|
 | **Proxmox** | Nodes, VMs, LXC containers — CPU, RAM, disk, IO rates |
 | **UniFi** | APs, switches, clients, signal strength, port PoE |
-| **UniFi NAS (UNAS)** | Storage, volumes, RAID |
+| **UniFi NAS** | Storage, volumes, RAID |
 | **Pi-hole** | Query stats, blocking %, top domains |
 | **AdGuard Home** | Query stats, blocking %, filter lists |
 | **Portainer** | Docker containers across all endpoints |
@@ -150,13 +111,49 @@ docker compose up -d
 
 Open **http://localhost:8000** — the setup wizard runs on first start.
 
-> Data is stored in PostgreSQL (managed by Docker Compose). The `./data/` volume holds the encryption key.
+> Data is stored in PostgreSQL + ClickHouse (managed by Docker Compose). The `./data/` volume holds the encryption key.
+
+---
+
+## Agent
+
+Nodeglow includes a lightweight Rust agent for Windows and Linux that collects system metrics and logs.
+
+### Install
+
+**Windows** (PowerShell as Admin):
+```powershell
+irm http://YOUR_SERVER:8000/install/windows | iex
+```
+
+**Linux**:
+```bash
+curl -fsSL http://YOUR_SERVER:8000/install/linux | sudo bash
+```
+
+### What the agent collects
+
+- CPU, memory, swap, disk usage (per mount)
+- Network interfaces (RX/TX bytes)
+- Top processes by CPU
+- OS info, CPU info, uptime
+- Docker containers (if available)
+- CPU temperature (if available)
+- Windows Event Logs / Linux journal logs
+
+### How it works
+
+1. Agent enrolls with the server using a shared enrollment key
+2. Reports metrics every 30s (configurable)
+3. Auto-creates a host entry in Nodeglow on enrollment
+4. Checks for updates every 5 minutes (SHA256 hash comparison)
+5. Receives remote commands (e.g. uninstall) from the server
 
 ---
 
 ## Configuration
 
-All settings are available at **`/settings`**:
+All settings are available at **Settings** (admin only):
 
 | Setting | Default | Description |
 |---|---|---|
@@ -177,49 +174,51 @@ All settings are available at **`/settings`**:
 
 ```
 nodeglow/
+├── frontend/                # Next.js 14 SPA
+│   └── src/
+│       ├── app/             # Pages (dashboard, hosts, alerts, syslog, ...)
+│       ├── components/      # Reusable UI components
+│       ├── hooks/           # React Query hooks
+│       └── stores/          # Zustand state stores
 ├── backend/
-│   ├── main.py                # FastAPI app, middleware, router registration
-│   ├── config.py              # Environment config, secret key
-│   ├── models/                # SQLAlchemy models
-│   │   ├── base.py            # Engine, session factory, encryption helpers
-│   │   ├── integration.py     # IntegrationConfig + Snapshot (generic)
-│   │   ├── incident.py        # Incident + IncidentEvent
-│   │   ├── alert_rule.py      # User-defined alert rules
-│   │   └── log_template.py    # LogTemplate, HostBaseline, PrecursorPattern
-│   ├── integrations/          # Plugin system (one file per integration)
-│   │   ├── _base.py           # BaseIntegration ABC, ConfigField, CollectorResult
-│   │   ├── __init__.py        # Auto-discovery + registry
-│   │   └── ...                # 15 integration plugins
-│   ├── services/              # Business logic layer
-│   │   ├── snapshot.py        # Snapshot CRUD + batch queries
-│   │   ├── integration.py     # Integration CRUD + encryption
-│   │   ├── syslog.py          # UDP/TCP syslog server + parser + live tail (SSE)
-│   │   ├── correlation.py     # Incident correlation engine (5 rules, auto-resolve)
-│   │   ├── log_intelligence.py # Template extraction, tagging, baselines, precursors
-│   │   ├── rules.py           # Alert rule evaluation engine
-│   │   └── clickhouse_client.py # ClickHouse connection + query helpers
-│   ├── routers/               # FastAPI routers (HTML + JSON)
-│   ├── scheduler.py           # APScheduler (ping, integrations, SSL, cleanup, intelligence)
-│   ├── notifications.py       # Telegram, Discord, Email, Webhook
-│   ├── templates/             # Jinja2 templates
-│   │   ├── base.html          # Layout, sidebar, SPA navigation
-│   │   ├── widgets/           # Dashboard widget templates (GridStack)
-│   │   └── integrations/      # Generic list/detail templates
-│   └── static/                # CSS, JS, icons, agent binaries
-├── docker-compose.yml         # App + PostgreSQL + ClickHouse
-└── data/                      # Encryption key (Docker volume)
+│   ├── main.py              # FastAPI app, middleware, router registration
+│   ├── models/              # SQLAlchemy models (PostgreSQL)
+│   ├── integrations/        # Plugin system (one file per integration)
+│   │   ├── _base.py         # BaseIntegration ABC
+│   │   └── ...              # 15 integration plugins
+│   ├── services/            # Business logic
+│   │   ├── syslog.py        # UDP/TCP syslog receiver + parser
+│   │   ├── correlation.py   # Incident correlation engine
+│   │   ├── log_intelligence.py  # Template extraction, tagging, baselines
+│   │   ├── port_discovery.py    # Subnet scanner + SSL detection
+│   │   └── snmp.py          # SNMP polling + MIB parsing
+│   ├── routers/             # FastAPI routers (JSON API)
+│   ├── scheduler.py         # APScheduler background jobs
+│   └── static/              # Agent binaries for auto-update
+├── agent/                   # Rust agent (Windows + Linux)
+│   ├── src/
+│   │   ├── main.rs          # Entry point + main loop
+│   │   ├── collector.rs     # Unified metrics schema
+│   │   ├── collector_linux.rs   # Linux metrics (/proc, /sys)
+│   │   ├── collector_windows.rs # Windows metrics (sysinfo crate)
+│   │   ├── client.rs        # HTTP client (enroll, report, update)
+│   │   └── updater.rs       # Auto-update logic
+│   └── Cargo.toml
+├── docker-compose.yml       # PostgreSQL + ClickHouse + Backend + Frontend
+└── data/                    # Encryption key (Docker volume)
 ```
 
 ### Data flow
 
 1. **Scheduler** (APScheduler, async) runs collector functions on configurable intervals.
 2. Each collector stores a **snapshot** row in PostgreSQL (`data_json` column holds full JSON).
-3. **Routers** read the latest snapshot on page load — no live API calls on every request.
+3. **Frontend** (Next.js) fetches data via REST API from the backend.
 4. **Syslog receiver** processes messages through the intelligence pipeline (template extraction, auto-tagging, burst detection) and batch-inserts into ClickHouse.
 5. **Log intelligence** (30s interval) computes baselines, learns precursor patterns, and refreshes noise scores.
 6. **Correlation engine** (60s interval) detects related failures and creates incidents.
 7. **Alert rules** (60s interval) evaluate user-defined conditions and fire notifications/incidents.
-8. Background **cleanup job** (daily at 03:00) prunes data older than configured retention.
+8. **Agents** report metrics and logs every 30s, auto-update when new binaries are available.
+9. Background **cleanup job** (daily at 03:00) prunes data older than configured retention.
 
 ---
 
