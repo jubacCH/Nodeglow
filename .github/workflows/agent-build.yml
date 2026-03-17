@@ -70,6 +70,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
 
       - name: Download Linux binary
         uses: actions/download-artifact@v4
@@ -85,6 +88,7 @@ jobs:
 
       - name: Copy to backend static (for auto-update serving)
         run: |
+          mkdir -p backend/static
           cp dist/nodeglow-agent-linux backend/static/nodeglow-agent-linux
           cp dist/nodeglow-agent.exe backend/static/nodeglow-agent.exe
           chmod +x backend/static/nodeglow-agent-linux
@@ -94,11 +98,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
           git add backend/static/nodeglow-agent-linux backend/static/nodeglow-agent.exe
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
             git commit -m "ci: update Rust agent binaries [skip ci]"
-            git push
+            git push origin main
           fi
