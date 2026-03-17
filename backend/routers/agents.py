@@ -6,6 +6,10 @@ import hmac
 import json
 import logging
 import secrets
+
+def _hash_agent_token(token: str) -> str:
+    """SHA-256 hash an agent token for secure storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
 from datetime import datetime
 from pathlib import Path
 
@@ -67,16 +71,18 @@ async def agent_enroll(request: Request):
         existing = result.scalars().first()
         if existing:
             # Rotate token on re-enrollment for security
-            existing.token = secrets.token_hex(24)
+            raw_token = secrets.token_hex(24)
+            existing.token = _hash_agent_token(raw_token)
             existing.platform = plat or existing.platform
             existing.arch = arch or existing.arch
             existing.last_seen = datetime.utcnow()
             await db.commit()
-            return {"ok": True, "token": existing.token, "agent_id": existing.id}
+            return {"ok": True, "token": raw_token, "agent_id": existing.id}
 
         # Create new agent
-        token = secrets.token_hex(24)
-        agent = Agent(name=hostname, hostname=hostname, token=token, platform=plat, arch=arch)
+        raw_token = secrets.token_hex(24)
+        token_hash = _hash_agent_token(raw_token)
+        agent = Agent(name=hostname, hostname=hostname, token=token_hash, platform=plat, arch=arch)
         db.add(agent)
 
         # Auto-create PingHost using client IP (more reliable for ICMP)
@@ -98,7 +104,7 @@ async def agent_enroll(request: Request):
         await db.commit()
         await db.refresh(agent)
         logger.info("Agent auto-enrolled: %s (id=%d)", hostname, agent.id)
-        return {"ok": True, "token": agent.token, "agent_id": agent.id}
+        return {"ok": True, "token": raw_token, "agent_id": agent.id}
 
 
 # ── API: Agent reports metrics ───────────────────────────────────────────────
@@ -120,7 +126,8 @@ async def agent_report(request: Request):
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Agent).where(Agent.token == token, Agent.enabled == True))
+        token_hash = _hash_agent_token(token)
+        result = await db.execute(select(Agent).where(Agent.token == token_hash, Agent.enabled == True))
         agent = result.scalar_one_or_none()
         if not agent:
             return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
@@ -207,7 +214,8 @@ async def agent_logs(request: Request):
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Agent).where(Agent.token == token, Agent.enabled == True))
+        token_hash = _hash_agent_token(token)
+        result = await db.execute(select(Agent).where(Agent.token == token_hash, Agent.enabled == True))
         agent = result.scalar_one_or_none()
         if not agent:
             return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
