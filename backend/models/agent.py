@@ -22,6 +22,7 @@ class Agent(Base):
     log_file_paths = Column(Text, nullable=True)  # Custom log file paths to tail (one per line)
     agent_log_level = Column(String(16), nullable=True, default="errors")  # "off", "errors", "all"
     pending_command = Column(String(32), nullable=True)  # e.g. "uninstall" — consumed on next report
+    watched_services = Column(Text, nullable=True)  # JSON list: ["nginx", "postgresql", ...]
     last_seen  = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

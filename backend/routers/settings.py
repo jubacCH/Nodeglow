@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import encrypt_value, get_db, get_setting, set_setting
 from models.api_key import ApiKey
 from models.integration import IntegrationConfig
+from services.audit import log_action
 
 router = APIRouter(prefix="/settings")
 log = logging.getLogger(__name__)
@@ -232,6 +233,9 @@ async def save_settings(
 
     from main import invalidate_settings_cache
     invalidate_settings_cache()
+
+    await log_action(db, request, "settings.update")
+    await db.commit()
 
     accept = request.headers.get("accept", "")
     if "application/json" in accept:

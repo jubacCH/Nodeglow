@@ -35,6 +35,7 @@ from models.api_key import ApiKey
 from models.notification import NotificationLog
 from models.alert_rule import AlertRule
 from models.discovered_port import DiscoveredPort
+from models.audit import AuditLog
 
 
 async def init_db():
@@ -66,5 +67,6 @@ __all__ = [
     "NotificationLog",
     "AlertRule",
     "DiscoveredPort",
+    "AuditLog",
     "init_db",
 ]

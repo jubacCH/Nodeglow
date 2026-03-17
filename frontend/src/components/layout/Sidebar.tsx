@@ -11,7 +11,7 @@ import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
   Bot, Scan, Radio, ShieldCheck, KeyRound, ChevronDown,
   Settings, Users, Activity, BookOpen, Search, LogOut, Plus,
-  ClipboardList, Sun, Moon,
+  ClipboardList, Sun, Moon, Network, Shield,
 } from 'lucide-react';
 
 interface NavItem {
@@ -35,10 +35,12 @@ const mainNav: NavItem[] = [
   { label: 'SSL', href: '/ssl', icon: ShieldCheck, iconColor: 'text-green-400', countKey: 'ssl' },
   { label: 'Credentials', href: '/credentials', icon: KeyRound, iconColor: 'text-yellow-400', countKey: 'credentials' },
   { label: 'Tasks', href: '/tasks', icon: ClipboardList, iconColor: 'text-rose-400', countKey: 'tasks' },
+  { label: 'Topology', href: '/topology', icon: Network, iconColor: 'text-purple-400' },
 ];
 
 const systemNav: NavItem[] = [
   { label: 'Status', href: '/system/status', icon: Activity },
+  { label: 'Audit Log', href: '/system/audit', icon: Shield, adminOnly: true },
   { label: 'Digest', href: '/digest', icon: BookOpen },
   { label: 'Settings', href: '/settings', icon: Settings, adminOnly: true },
   { label: 'Users', href: '/users', icon: Users, adminOnly: true },
