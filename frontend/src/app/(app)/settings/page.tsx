@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Settings, Activity, Bell, Palette, Key,
+  Settings, Activity, Bell, Palette, Key, Database,
   Plus, Trash2, Copy, Send, Clock, CheckCircle,
-  XCircle, AlertTriangle,
+  XCircle, AlertTriangle, Download, Upload,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -20,7 +20,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 
 /* ---------- Types ---------- */
 
-type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api';
+type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'backup';
 
 interface SettingsData {
   site_name: string;
@@ -103,6 +103,7 @@ const TAB_ICONS: Record<Tab, typeof Settings> = {
   notifications: Bell,
   appearance: Palette,
   api: Key,
+  backup: Database,
 };
 
 const inputCls = 'ng-input max-w-sm';
@@ -251,6 +252,19 @@ export default function SettingsPage() {
     queryFn: () => get('/settings/notifications/history'),
     enabled: activeTab === 'notifications',
   });
+
+  const { data: backupInfo, isLoading: backupInfoLoading } = useQuery<{
+    tables: Record<string, number>;
+    total_rows: number;
+    db_size: string;
+  }>({
+    queryKey: ['backup-info'],
+    queryFn: () => get('/api/v1/backup/info'),
+    enabled: activeTab === 'backup',
+  });
+
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
 
   /* ---- Mutations ---- */
 
@@ -420,6 +434,7 @@ export default function SettingsPage() {
     { key: 'notifications', label: 'Notifications' },
     { key: 'appearance', label: 'Appearance' },
     { key: 'api', label: 'API' },
+    { key: 'backup', label: 'Backup' },
   ];
 
   const isSaving = saveSettingsMut.isPending || saveNotifMut.isPending;
@@ -1040,6 +1055,147 @@ export default function SettingsPage() {
                 </tbody>
               </table>
             )}
+          </GlassCard>
+        </div>
+      )}
+
+      {/* ==================== BACKUP TAB ==================== */}
+      {activeTab === 'backup' && (
+        <div className="space-y-4">
+          {/* Database Info */}
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-3 flex items-center gap-2">
+              <Database size={16} className="text-sky-400" />
+              Database Overview
+            </h3>
+            {backupInfoLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-6 w-48" />
+                <Skeleton className="h-6 w-32" />
+              </div>
+            ) : backupInfo ? (
+              <div>
+                <div className="flex gap-6 mb-4">
+                  <div>
+                    <p className="text-2xl font-bold" style={{ color: 'var(--ng-text-primary)' }}>{backupInfo.total_rows.toLocaleString()}</p>
+                    <p className="text-xs text-slate-400">Total Rows</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold" style={{ color: 'var(--ng-text-primary)' }}>{backupInfo.db_size}</p>
+                    <p className="text-xs text-slate-400">Database Size</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold" style={{ color: 'var(--ng-text-primary)' }}>{Object.keys(backupInfo.tables).length}</p>
+                    <p className="text-xs text-slate-400">Tables</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {Object.entries(backupInfo.tables).map(([name, count]) => (
+                    <div key={name} className="flex items-center justify-between px-3 py-1.5 rounded border border-white/[0.06] bg-white/[0.02]">
+                      <span className="text-xs text-slate-400">{name}</span>
+                      <span className="text-xs font-mono" style={{ color: 'var(--ng-text-primary)' }}>{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </GlassCard>
+
+          {/* Export */}
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-2 flex items-center gap-2">
+              <Download size={16} className="text-emerald-400" />
+              Export Backup
+            </h3>
+            <p className="text-xs text-slate-400 mb-4">
+              Download a full JSON backup of all PostgreSQL tables. This includes all hosts, agents, integrations, incidents, settings, and more.
+            </p>
+            <Button
+              size="sm"
+              disabled={backupLoading}
+              onClick={async () => {
+                setBackupLoading(true);
+                try {
+                  const res = await fetch('/api/v1/backup', { credentials: 'include' });
+                  if (!res.ok) throw new Error('Backup failed');
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `nodeglow-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast.show('Backup downloaded', 'success');
+                } catch {
+                  toast.show('Backup failed', 'error');
+                } finally {
+                  setBackupLoading(false);
+                }
+              }}
+            >
+              <Download size={14} />
+              {backupLoading ? 'Exporting...' : 'Download Backup'}
+            </Button>
+          </GlassCard>
+
+          {/* Restore */}
+          <GlassCard className="p-4 border-red-500/20">
+            <h3 className="text-base font-semibold text-slate-200 mb-2 flex items-center gap-2">
+              <Upload size={16} className="text-orange-400" />
+              Restore Backup
+            </h3>
+            <div className="p-3 rounded-md bg-red-500/5 border border-red-500/20 mb-4">
+              <p className="text-xs text-red-300">
+                <strong>Warning:</strong> Restoring a backup will replace ALL existing data. This action cannot be undone.
+                Make sure to export a backup first.
+              </p>
+            </div>
+            <input
+              type="file"
+              accept=".json"
+              id="backup-file"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const ok = await confirm({
+                  title: 'Restore Backup',
+                  description: `Are you sure you want to restore from "${file.name}"? This will replace ALL existing data.`,
+                  variant: 'danger',
+                  confirmLabel: 'Restore',
+                });
+                if (!ok) { e.target.value = ''; return; }
+                setRestoreLoading(true);
+                try {
+                  const text = await file.text();
+                  const data = JSON.parse(text);
+                  const res = await fetch('/api/v1/backup/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(data),
+                  });
+                  if (!res.ok) throw new Error('Restore failed');
+                  const result = await res.json();
+                  toast.show(`Restored ${result.total_rows} rows successfully`, 'success');
+                  qc.invalidateQueries({ queryKey: ['backup-info'] });
+                } catch {
+                  toast.show('Restore failed — check file format', 'error');
+                } finally {
+                  setRestoreLoading(false);
+                  e.target.value = '';
+                }
+              }}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={restoreLoading}
+              onClick={() => document.getElementById('backup-file')?.click()}
+            >
+              <Upload size={14} />
+              {restoreLoading ? 'Restoring...' : 'Upload & Restore'}
+            </Button>
           </GlassCard>
         </div>
       )}
