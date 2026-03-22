@@ -41,6 +41,7 @@ async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
     integration_retention = await get_setting(db, "integration_retention_days", "7")
 
     syslog_port         = await get_setting(db, "syslog_port", "1514")
+    syslog_allowlist    = await get_setting(db, "syslog_allowlist_only", "0")
 
     notify_enabled      = await get_setting(db, "notify_enabled", "0")
     telegram_bot_token  = await get_setting(db, "telegram_bot_token", "")
@@ -76,6 +77,7 @@ async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
         "phpipam_sync_hours": phpipam_sync_hours,
         "integration_retention": integration_retention,
         "syslog_port": syslog_port,
+        "syslog_allowlist_only": syslog_allowlist,
         "notify_enabled": notify_enabled,
         "telegram_bot_token": telegram_bot_token,
         "telegram_chat_id": telegram_chat_id,
@@ -108,7 +110,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "smtp_host", "smtp_port", "smtp_user", "smtp_from", "smtp_to",
         "ping_retention_days", "proxmox_retention_days", "integration_retention_days",
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
-        "proxmox_disk_threshold", "syslog_port",
+        "proxmox_disk_threshold", "syslog_port", "syslog_allowlist_only",
     ]
     result = {}
     for key in keys:
@@ -146,6 +148,7 @@ async def save_settings(
     disk_threshold:     str = Form("90"),
     integration_retention: str = Form("7"),
     syslog_port:        str = Form("1514"),
+    syslog_allowlist_only: str = Form("0"),
     db: AsyncSession = Depends(get_db),
 ):
     await set_setting(db, "site_name", site_name.strip())
@@ -216,6 +219,9 @@ async def save_settings(
     except ValueError:
         new_sp = 1514
     await set_setting(db, "syslog_port", str(new_sp))
+
+    # Syslog allowlist (only accept from known hosts)
+    await set_setting(db, "syslog_allowlist_only", "1" if syslog_allowlist_only == "1" else "0")
 
     # Restart syslog server if port changed
     if str(new_sp) != old_syslog_port:
