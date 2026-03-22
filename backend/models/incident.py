@@ -1,7 +1,7 @@
 """Incident and IncidentEvent models for the correlation engine."""
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from models.base import Base
@@ -20,6 +20,8 @@ class Incident(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
     acknowledged_by = Column(String(128), nullable=True)
+    postmortem = Column(Text, nullable=True)
+    postmortem_generated_at = Column(DateTime, nullable=True)
 
     events = relationship("IncidentEvent", back_populates="incident",
                           cascade="all, delete-orphan", order_by="IncidentEvent.timestamp")
