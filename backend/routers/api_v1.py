@@ -35,6 +35,14 @@ router = APIRouter(prefix="/api/v1", tags=["API v1"])
 
 
 def _hash_key(key: str) -> str:
+    """HMAC-SHA256 with SECRET_KEY as pepper (preferred)."""
+    import hmac
+    from config import SECRET_KEY
+    return hmac.new(SECRET_KEY.encode(), key.encode(), hashlib.sha256).hexdigest()
+
+
+def _hash_key_legacy(key: str) -> str:
+    """Plain SHA256 — kept for backward compatibility with existing keys."""
     return hashlib.sha256(key.encode()).hexdigest()
 
 
@@ -42,16 +50,22 @@ async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) 
     """Validate API key from header/query param, or fall back to session auth."""
     key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
     if key:
-        hashed = _hash_key(key)
-        result = await db.execute(
-            select(ApiKey).where(ApiKey.key_hash == hashed, ApiKey.enabled == True)
-        )
-        api_key = result.scalar_one_or_none()
-        if not api_key:
-            raise HTTPException(status_code=401, detail="Invalid or disabled API key.")
-        api_key.last_used = datetime.utcnow()
-        await db.commit()
-        return api_key
+        # Try HMAC hash first, fall back to legacy SHA256
+        for hasher in (_hash_key, _hash_key_legacy):
+            hashed = hasher(key)
+            result = await db.execute(
+                select(ApiKey).where(ApiKey.key_hash == hashed, ApiKey.enabled == True)
+            )
+            api_key = result.scalar_one_or_none()
+            if api_key:
+                # Migrate legacy key to HMAC on successful auth
+                hmac_hash = _hash_key(key)
+                if api_key.key_hash != hmac_hash:
+                    api_key.key_hash = hmac_hash
+                api_key.last_used = datetime.utcnow()
+                await db.commit()
+                return api_key
+        raise HTTPException(status_code=401, detail="Invalid or disabled API key.")
 
     # Fall back to session auth (set by middleware)
     user = getattr(request.state, "current_user", None)

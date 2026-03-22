@@ -72,9 +72,23 @@ def _validate_host(value: str) -> str | None:
             return "Loopback addresses are not allowed"
         if addr.is_link_local:
             return "Link-local addresses are not allowed (cloud metadata risk)"
+        # Block cloud provider metadata IPs
+        _metadata_ips = (
+            ipaddress.ip_address("169.254.169.254"),  # AWS / GCP metadata
+            ipaddress.ip_address("168.63.129.16"),     # Azure wireserver
+            ipaddress.ip_address("100.100.100.200"),   # Alibaba Cloud metadata
+        )
+        if addr in _metadata_ips:
+            return "Cloud metadata endpoints are not allowed"
     except ValueError:
         # It's a hostname — block metadata hostnames
-        if host.lower() in ("metadata.google.internal", "instance-data"):
+        _metadata_hosts = (
+            "metadata.google.internal",
+            "instance-data",
+            "metadata.internal",
+            "kubernetes.default.svc",
+        )
+        if host.lower() in _metadata_hosts:
             return "Cloud metadata endpoints are not allowed"
 
     return None
