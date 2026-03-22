@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from database import AsyncSessionLocal, get_setting, init_db
 from models.integration import IntegrationConfig
@@ -98,7 +99,7 @@ async def health():
         async with AsyncSessionLocal() as db:
             await db.execute(sa_text("SELECT 1"))
         return {"status": "ok", "db": "connected"}
-    except Exception:
+    except (OSError, SQLAlchemyError):
         return {"status": "error", "db": "connection failed"}
 
 
@@ -303,7 +304,7 @@ async def inject_globals(request: Request, call_next):
 async def ws_live(websocket: WebSocket):
     # Authenticate via session cookie before accepting
     from database import AsyncSessionLocal as _ASL
-    from models.settings import Session as _Sess, _hash_token as _ht
+    from models.settings import Session as _Sess, User as _User, _hash_token as _ht
     from sqlalchemy import select as _sel
     from datetime import datetime as _dt
     token = websocket.cookies.get("nodeglow_session")
@@ -311,15 +312,17 @@ async def ws_live(websocket: WebSocket):
         await websocket.close(code=4401, reason="Unauthorized")
         return
     async with _ASL() as _db:
-        row = (await _db.execute(
+        session = (await _db.execute(
             _sel(_Sess).where(_Sess.token == _ht(token), _Sess.expires_at > _dt.utcnow())
         )).scalar_one_or_none()
-        if not row:
+        if not session:
             await websocket.close(code=4401, reason="Unauthorized")
             return
+        user = (await _db.execute(_sel(_User).where(_User.id == session.user_id))).scalar_one_or_none()
+        role = getattr(user, "role", "admin") or "admin"
 
     from services.websocket import register, unregister
-    await register(websocket)
+    await register(websocket, role=role)
     try:
         while True:
             await websocket.receive_text()
@@ -328,18 +331,6 @@ async def ws_live(websocket: WebSocket):
     finally:
         unregister(websocket)
 
-
-# ── Legacy redirect: /ping → /hosts ──────────────────────────────────────────
-from fastapi.responses import RedirectResponse
-
-@app.get("/ping/{path:path}")
-@app.get("/ping")
-async def _ping_redirect(request: Request, path: str = ""):
-    qs = str(request.query_params)
-    target = f"/hosts/{path}" if path else "/hosts"
-    if qs:
-        target += f"?{qs}"
-    return RedirectResponse(url=target, status_code=301)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
