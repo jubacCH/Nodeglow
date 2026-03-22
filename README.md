@@ -10,9 +10,13 @@ A self-hosted infrastructure monitoring platform with **log intelligence**, **in
 |---|---|
 | ![Dashboard](docs/screenshots/dashboard.png) | ![Hosts](docs/screenshots/hosts.png) |
 
-| Host Detail | Incidents |
+| Host Detail | Syslog Dashboard |
 |---|---|
-| ![Host Detail](docs/screenshots/host-detail.png) | ![Incidents](docs/screenshots/incidents.png) |
+| ![Host Detail](docs/screenshots/host-detail.png) | ![Syslog Dashboard](docs/screenshots/syslog-dashboard.png) |
+
+| Syslog Messages | Alerts |
+|---|---|
+| ![Syslog](docs/screenshots/syslog.png) | ![Alerts](docs/screenshots/alerts.png) |
 
 ---
 
