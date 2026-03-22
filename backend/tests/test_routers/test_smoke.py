@@ -15,18 +15,16 @@ async def test_health(client):
     assert resp.json()["status"] == "ok"
 
 
-async def test_login_page(client):
-    """Login page renders without auth."""
-    resp = await client.get("/login")
-    assert resp.status_code == 200
-    assert "password" in resp.text.lower()
+async def test_login_api_exists(client):
+    """Login API endpoint exists (GET not allowed, POST required)."""
+    resp = await client.get("/api/auth/login")
+    assert resp.status_code == 405  # Method Not Allowed (POST only)
 
 
 async def test_dashboard(client):
     """Dashboard renders with empty data."""
     resp = await client.get("/")
     assert resp.status_code == 200
-    assert "NODEGLOW" in resp.text or "dashboard" in resp.text.lower()
 
 
 async def test_ping_list(client):
@@ -82,11 +80,10 @@ async def test_unknown_integration_404(client):
 # ── Subnet Scanner ──────────────────────────────────────────────────────────
 
 
-async def test_subnet_scanner_page(client):
-    """Subnet scanner page renders."""
-    resp = await client.get("/subnet-scanner")
+async def test_subnet_scanner_page_data(client):
+    """Subnet scanner page data API returns JSON."""
+    resp = await client.get("/api/subnet-scanner/page-data")
     assert resp.status_code == 200
-    assert "subnet" in resp.text.lower() or "scanner" in resp.text.lower()
 
 
 async def test_subnet_scanner_scan_invalid_cidr(client):

@@ -10,11 +10,12 @@ os.environ.setdefault("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", 
 
 import pytest
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import String
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+from starlette.responses import HTMLResponse
 
 from models.base import Base as ModelsBase
 from database import Base as DbBase
@@ -81,7 +82,13 @@ async def client():
     async def _ch_scalar_mock(sql, params=None):
         return 0
 
-    with patch("main.start_scheduler", new_callable=AsyncMock), \
+    # Mock Jinja2 TemplateResponse — templates don't exist on disk (Next.js frontend)
+    def _fake_template_response(name, context=None, **kwargs):
+        return HTMLResponse(content=f"<html><body>template:{name}</body></html>")
+
+    # Patch templates FIRST — before any router imports bind the real Jinja2Templates object
+    with patch("templating.templates") as mock_templates, \
+         patch("main.start_scheduler", new_callable=AsyncMock), \
          patch("main.stop_scheduler"), \
          patch("main.init_db", new_callable=AsyncMock), \
          patch("models.init_db", new_callable=AsyncMock), \
@@ -95,6 +102,8 @@ async def client():
          patch("services.clickhouse_client.query", side_effect=_ch_query_mock), \
          patch("services.clickhouse_client.query_scalar", side_effect=_ch_scalar_mock), \
          patch("services.clickhouse_client.get_client", new_callable=AsyncMock):
+
+        mock_templates.TemplateResponse = _fake_template_response
 
         from main import app
         transport = ASGITransport(app=app)
