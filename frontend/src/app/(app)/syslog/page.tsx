@@ -10,7 +10,6 @@ import Link from 'next/link';
 import { MessageSquare, Brain, ChevronRight, ChevronDown, MapPin } from 'lucide-react';
 import { ExportButton } from '@/components/ui/ExportButton';
 import { timeAgo } from '@/lib/utils';
-import type { SyslogMessage } from '@/types';
 
 const SEVERITY_LABELS: Record<number, string> = {
   0: 'Emergency',
