@@ -1177,6 +1177,110 @@ async def resolve_incident(
 # ── Syslog ───────────────────────────────────────────────────────────────────
 
 
+@router.get("/syslog/stats", summary="Syslog dashboard statistics")
+async def syslog_stats(
+    _key: ApiKey = Depends(require_api_key),
+    hours: int = Query(24, ge=1, le=720, description="Lookback window in hours"),
+):
+    """Aggregated syslog statistics for dashboard charts."""
+    from models.syslog import SEVERITY_LABELS
+    from services.clickhouse_client import query as ch_query, query_scalar as ch_scalar
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+
+    result = {
+        "total": 0,
+        "severity_distribution": [],
+        "top_hosts": [],
+        "top_apps": [],
+        "message_rate": [],
+        "geo_distribution": [],
+    }
+
+    try:
+        # Total count
+        result["total"] = int(await ch_scalar(
+            "SELECT count() FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)}",
+            {"t": since},
+        ) or 0)
+
+        # Severity distribution
+        sev_rows = await ch_query(
+            "SELECT severity, count() AS cnt FROM syslog_messages "
+            "WHERE timestamp >= {t:DateTime64(3)} GROUP BY severity ORDER BY severity",
+            {"t": since},
+        )
+        result["severity_distribution"] = [
+            {"severity": r["severity"], "label": SEVERITY_LABELS.get(r["severity"], f"Sev {r['severity']}"), "count": r["cnt"]}
+            for r in sev_rows if r["severity"] is not None
+        ]
+
+        # Top 10 hosts
+        host_rows = await ch_query(
+            "SELECT coalesce(nullIf(hostname, ''), source_ip) AS host, "
+            "source_ip, count() AS cnt FROM syslog_messages "
+            "WHERE timestamp >= {t:DateTime64(3)} "
+            "GROUP BY host, source_ip ORDER BY cnt DESC LIMIT 10",
+            {"t": since},
+        )
+        result["top_hosts"] = [
+            {"hostname": r["host"], "source_ip": r["source_ip"], "count": r["cnt"]}
+            for r in host_rows
+        ]
+
+        # Top 10 applications
+        app_rows = await ch_query(
+            "SELECT app_name, count() AS cnt FROM syslog_messages "
+            "WHERE timestamp >= {t:DateTime64(3)} AND app_name != '' "
+            "GROUP BY app_name ORDER BY cnt DESC LIMIT 10",
+            {"t": since},
+        )
+        result["top_apps"] = [
+            {"app_name": r["app_name"], "count": r["cnt"]}
+            for r in app_rows
+        ]
+
+        # Message rate — choose bucket size based on hours
+        if hours <= 6:
+            bucket_fn, bucket_min = "toStartOfFiveMinutes", 5
+        elif hours <= 24:
+            bucket_fn, bucket_min = "toStartOfFifteenMinutes", 15
+        else:
+            bucket_fn, bucket_min = "toStartOfHour", 60
+
+        rate_rows = await ch_query(
+            f"SELECT {bucket_fn}(timestamp) AS bucket, "
+            "count() AS cnt, countIf(severity <= 3) AS errors "
+            "FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)} "
+            "GROUP BY bucket ORDER BY bucket",
+            {"t": since},
+        )
+        result["message_rate"] = [
+            {
+                "bucket": r["bucket"].isoformat() if hasattr(r["bucket"], "isoformat") else str(r["bucket"]),
+                "count": r["cnt"],
+                "errors": r["errors"],
+            }
+            for r in rate_rows
+        ]
+
+        # Geo distribution (only if data exists)
+        geo_rows = await ch_query(
+            "SELECT geo_country, count() AS cnt FROM syslog_messages "
+            "WHERE timestamp >= {t:DateTime64(3)} AND geo_country != '' "
+            "GROUP BY geo_country ORDER BY cnt DESC LIMIT 20",
+            {"t": since},
+        )
+        result["geo_distribution"] = [
+            {"country": r["geo_country"], "count": r["cnt"]}
+            for r in geo_rows
+        ]
+    except Exception:
+        pass
+
+    return result
+
+
 @router.get("/syslog", summary="Query syslog messages")
 async def query_syslog(
     db: AsyncSession = Depends(get_db),
