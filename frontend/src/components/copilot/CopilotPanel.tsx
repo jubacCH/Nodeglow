@@ -12,13 +12,13 @@ interface Message {
 /** Lightweight markdown → HTML for chat messages (no external deps). */
 function renderMarkdown(text: string): string {
   return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')  // escape HTML
-    .replace(/^### (.+)$/gm, '<strong class="text-sky-300 text-xs uppercase tracking-wide">$1</strong>')
-    .replace(/^## (.+)$/gm, '<strong class="text-sky-300 text-sm">$1</strong>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong class="text-slate-50">$1</strong>')
-    .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded bg-white/[0.08] text-sky-200 text-xs">$1</code>')
-    .replace(/^- (.+)$/gm, '<span class="flex gap-1.5"><span class="text-slate-500">•</span><span>$1</span></span>')
-    .replace(/^(\d+)\. (.+)$/gm, '<span class="flex gap-1.5"><span class="text-slate-500">$1.</span><span>$2</span></span>');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^### (.+)$/gm, '<strong class="glow-heading text-xs uppercase tracking-wide">$1</strong>')
+    .replace(/^## (.+)$/gm, '<strong class="glow-heading text-sm">$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong class="glow-bold">$1</strong>')
+    .replace(/`([^`]+)`/g, '<code class="glow-code px-1 py-0.5 rounded text-xs">$1</code>')
+    .replace(/^- (.+)$/gm, '<span class="flex gap-1.5"><span class="glow-bullet">•</span><span>$1</span></span>')
+    .replace(/^(\d+)\. (.+)$/gm, '<span class="flex gap-1.5"><span class="glow-bullet">$1.</span><span>$2</span></span>');
 }
 
 const SUGGESTIONS = [
@@ -160,11 +160,18 @@ export function GlowPanel() {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col w-[420px] h-[500px] rounded-xl border bg-[#0a0e1a]/95 backdrop-blur-xl shadow-2xl"
-      style={{ borderColor: 'rgba(255,255,255,0.08)' }}
+    <div
+      className="fixed bottom-4 right-4 z-50 flex flex-col w-[420px] h-[500px] rounded-xl border backdrop-blur-xl shadow-2xl"
+      style={{
+        background: 'var(--ng-surface)',
+        borderColor: 'var(--ng-glass-border)',
+      }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+      <div
+        className="flex items-center justify-between px-4 py-3 border-b"
+        style={{ borderColor: 'var(--ng-glass-border)' }}
+      >
         <div className="flex items-center gap-2">
           <Sparkles size={16} className="text-violet-400" />
           <span className="text-sm font-semibold bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">
@@ -173,7 +180,8 @@ export function GlowPanel() {
         </div>
         <button
           onClick={close}
-          className="p-1 rounded-md text-slate-400 hover:text-slate-200 hover:bg-white/[0.08] transition-colors"
+          className="p-1 rounded-md transition-colors"
+          style={{ color: 'var(--ng-text-muted)' }}
         >
           <X size={16} />
         </button>
@@ -184,13 +192,19 @@ export function GlowPanel() {
         {messages.length === 0 && !error && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <Sparkles size={32} className="text-violet-400/40 mb-3" />
-            <p className="text-sm text-slate-400 mb-4">Ask about your infrastructure</p>
+            <p className="text-sm mb-4" style={{ color: 'var(--ng-text-muted)' }}>
+              Ask about your infrastructure
+            </p>
             <div className="flex flex-wrap gap-2 justify-center">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   onClick={() => sendMessage(s)}
-                  className="px-3 py-1.5 text-xs rounded-full border border-white/[0.08] text-slate-400 hover:text-sky-400 hover:border-sky-500/30 hover:bg-sky-500/5 transition-colors"
+                  className="px-3 py-1.5 text-xs rounded-full border hover:text-sky-400 hover:border-sky-500/30 hover:bg-sky-500/5 transition-colors"
+                  style={{
+                    borderColor: 'var(--ng-glass-border)',
+                    color: 'var(--ng-text-secondary)',
+                  }}
                 >
                   {s}
                 </button>
@@ -205,11 +219,20 @@ export function GlowPanel() {
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${
+              className="max-w-[85%] px-3 py-2 rounded-lg text-sm border"
+              style={
                 msg.role === 'user'
-                  ? 'bg-sky-500/15 text-sky-50 border border-sky-500/20'
-                  : 'bg-white/[0.06] text-slate-100 border border-white/[0.08]'
-              }`}
+                  ? {
+                      background: 'var(--ng-accent-bg, rgba(56, 189, 248, 0.12))',
+                      borderColor: 'var(--ng-accent-border, rgba(56, 189, 248, 0.2))',
+                      color: 'var(--ng-text-primary)',
+                    }
+                  : {
+                      background: 'var(--ng-glass-bg)',
+                      borderColor: 'var(--ng-glass-border)',
+                      color: 'var(--ng-text-primary)',
+                    }
+              }
             >
               {msg.role === 'assistant' ? (
                 <div className="whitespace-pre-wrap break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
@@ -218,9 +241,9 @@ export function GlowPanel() {
               )}
               {msg.role === 'assistant' && isStreaming && i === messages.length - 1 && (
                 <span className="inline-flex gap-0.5 ml-1">
-                  <span className="w-1 h-1 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-1 h-1 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-1 h-1 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: 'var(--ng-text-muted)', animationDelay: '0ms' }} />
+                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: 'var(--ng-text-muted)', animationDelay: '150ms' }} />
+                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: 'var(--ng-text-muted)', animationDelay: '300ms' }} />
                 </span>
               )}
             </div>
@@ -236,7 +259,7 @@ export function GlowPanel() {
       </div>
 
       {/* Input */}
-      <div className="px-4 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+      <div className="px-4 py-3 border-t" style={{ borderColor: 'var(--ng-glass-border)' }}>
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}
@@ -245,7 +268,12 @@ export function GlowPanel() {
             onKeyDown={handleKeyDown}
             placeholder="Ask about your infrastructure..."
             rows={1}
-            className="flex-1 resize-none rounded-lg px-3 py-2 text-sm bg-white/[0.04] border border-white/[0.08] text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500/50 transition-colors"
+            className="flex-1 resize-none rounded-lg px-3 py-2 text-sm border focus:outline-none focus:ring-1 focus:ring-sky-500/50 transition-colors"
+            style={{
+              background: 'var(--ng-glass-bg)',
+              borderColor: 'var(--ng-glass-border)',
+              color: 'var(--ng-text-primary)',
+            }}
             disabled={isStreaming}
           />
           <button

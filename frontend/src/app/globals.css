@@ -289,3 +289,9 @@ table tbody td {
   border-right: 2px solid rgba(255, 255, 255, 0.15);
   border-bottom: 2px solid rgba(255, 255, 255, 0.15);
 }
+
+/* Glow panel markdown theme classes */
+.glow-heading { color: var(--ng-primary); }
+.glow-bold { color: var(--ng-text-primary); }
+.glow-code { background: var(--ng-glass-bg); color: var(--ng-primary); }
+.glow-bullet { color: var(--ng-text-muted); }
