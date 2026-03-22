@@ -52,6 +52,10 @@ interface SettingsData {
   smtp_from: string;
   smtp_to: string;
   smtp_has_pw: boolean;
+  notify_telegram_min_severity: string;
+  notify_discord_min_severity: string;
+  notify_webhook_min_severity: string;
+  notify_email_min_severity: string;
 }
 
 interface ApiKeyEntry {
@@ -113,6 +117,15 @@ const TAB_ICONS: Record<Tab, typeof Settings> = {
 const inputCls = 'ng-input max-w-sm';
 
 const inputSmCls = 'ng-input w-40';
+
+const selectSmCls = 'w-full max-w-[180px] px-2 py-1.5 rounded-md bg-[var(--ng-surface)] border border-white/[0.06] text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-colors [&>option]:text-slate-200';
+
+const SEVERITY_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: 'warning', label: 'Warning+' },
+  { value: 'error', label: 'Error+' },
+  { value: 'critical', label: 'Critical only' },
+] as const;
 
 /* ---------- Helpers ---------- */
 
@@ -196,6 +209,10 @@ export default function SettingsPage() {
   const [smtpFrom, setSmtpFrom] = useState('');
   const [smtpTo, setSmtpTo] = useState('');
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
+  const [telegramMinSev, setTelegramMinSev] = useState('all');
+  const [discordMinSev, setDiscordMinSev] = useState('all');
+  const [webhookMinSev, setWebhookMinSev] = useState('all');
+  const [emailMinSev, setEmailMinSev] = useState('all');
 
   /* ---- Appearance state (from Zustand theme store) ---- */
   const themeStore = useThemeStore();
@@ -249,6 +266,10 @@ export default function SettingsPage() {
     setDigestEnabled(s.digest_enabled === '1');
     setDigestDay(s.digest_day || '0');
     setDigestHour(s.digest_hour || '9');
+    setTelegramMinSev(s.notify_telegram_min_severity || 'all');
+    setDiscordMinSev(s.notify_discord_min_severity || 'all');
+    setWebhookMinSev(s.notify_webhook_min_severity || 'all');
+    setEmailMinSev(s.notify_email_min_severity || 'all');
   }, []);
 
   useEffect(() => {
@@ -265,6 +286,7 @@ export default function SettingsPage() {
     queryKey: ['notification-history'],
     queryFn: () => get('/settings/notifications/history'),
     enabled: activeTab === 'notifications',
+    refetchInterval: activeTab === 'notifications' ? 30_000 : false,
   });
 
   const { data: backupInfo, isLoading: backupInfoLoading } = useQuery<{
@@ -389,6 +411,10 @@ export default function SettingsPage() {
     params.set('smtp_password', smtpPassword);
     params.set('smtp_from', smtpFrom);
     params.set('smtp_to', smtpTo);
+    params.set('notify_telegram_min_severity', telegramMinSev);
+    params.set('notify_discord_min_severity', discordMinSev);
+    params.set('notify_webhook_min_severity', webhookMinSev);
+    params.set('notify_email_min_severity', emailMinSev);
     saveNotifMut.mutate(params);
   }
 
@@ -683,6 +709,12 @@ export default function SettingsPage() {
                   placeholder="-1001234567890"
                 />
               </div>
+              <div>
+                <label className="ng-label">Minimum Severity</label>
+                <select value={telegramMinSev} onChange={(e) => setTelegramMinSev(e.target.value)} className={selectSmCls}>
+                  {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
             </div>
           </GlassCard>
 
@@ -700,15 +732,23 @@ export default function SettingsPage() {
                 {testingChannel === 'discord' ? 'Sending...' : 'Test'}
               </Button>
             </div>
-            <div>
-              <label className="ng-label">Webhook URL</label>
-              <input
-                type="text"
-                value={discordWebhook}
-                onChange={(e) => setDiscordWebhook(e.target.value)}
-                className={inputCls}
-                placeholder="https://discord.com/api/webhooks/..."
-              />
+            <div className="space-y-3">
+              <div>
+                <label className="ng-label">Webhook URL</label>
+                <input
+                  type="text"
+                  value={discordWebhook}
+                  onChange={(e) => setDiscordWebhook(e.target.value)}
+                  className={inputCls}
+                  placeholder="https://discord.com/api/webhooks/..."
+                />
+              </div>
+              <div>
+                <label className="ng-label">Minimum Severity</label>
+                <select value={discordMinSev} onChange={(e) => setDiscordMinSev(e.target.value)} className={selectSmCls}>
+                  {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
             </div>
           </GlassCard>
 
@@ -746,6 +786,12 @@ export default function SettingsPage() {
                   className={inputCls}
                   placeholder="Optional signing secret"
                 />
+              </div>
+              <div>
+                <label className="ng-label">Minimum Severity</label>
+                <select value={webhookMinSev} onChange={(e) => setWebhookMinSev(e.target.value)} className={selectSmCls}>
+                  {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
               </div>
             </div>
           </GlassCard>
@@ -827,6 +873,12 @@ export default function SettingsPage() {
                   placeholder="admin@example.com"
                 />
               </div>
+              <div>
+                <label className="ng-label">Minimum Severity</label>
+                <select value={emailMinSev} onChange={(e) => setEmailMinSev(e.target.value)} className={selectSmCls}>
+                  {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
             </div>
           </GlassCard>
 
@@ -906,41 +958,64 @@ export default function SettingsPage() {
           </GlassCard>
 
           {/* Notification History */}
-          {notifHistory && notifHistory.length > 0 && (
-            <GlassCard className="p-4">
-              <h3 className="text-base font-semibold text-slate-200 mb-3">Recent Notifications</h3>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {notifHistory.map((n) => (
-                  <div
-                    key={n.id}
-                    className="flex items-center gap-3 text-xs py-1.5 border-b border-white/[0.04] last:border-0"
-                  >
-                    {n.status === 'sent' ? (
-                      <CheckCircle size={14} className="text-emerald-400 shrink-0" />
-                    ) : (
-                      <XCircle size={14} className="text-red-400 shrink-0" />
-                    )}
-                    <Badge variant="severity" severity={n.status === 'sent' ? 'info' : 'critical'}>
-                      {n.channel}
-                    </Badge>
-                    <span className="text-slate-300 truncate">{n.title}</span>
-                    {n.error && (
-                      <span className="text-red-400 truncate ml-auto flex items-center gap-1">
-                        <AlertTriangle size={12} />
-                        {n.error}
-                      </span>
-                    )}
-                    {n.timestamp && (
-                      <span className="text-slate-500 shrink-0 ml-auto flex items-center gap-1">
-                        <Clock size={12} />
-                        {new Date(n.timestamp).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                ))}
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-3">Notification History</h3>
+            {!notifHistory || notifHistory.length === 0 ? (
+              <p className="text-xs text-slate-500">No notifications sent yet.</p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-white/[0.06] text-left text-xs text-slate-400 uppercase tracking-wider">
+                      <th className="py-2 font-medium w-8"></th>
+                      <th className="py-2 font-medium">Time</th>
+                      <th className="py-2 font-medium">Channel</th>
+                      <th className="py-2 font-medium">Title</th>
+                      <th className="py-2 font-medium">Severity</th>
+                      <th className="py-2 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.04]">
+                    {notifHistory.slice(0, 20).map((n) => (
+                      <tr key={n.id} className="hover:bg-white/[0.03] transition-colors">
+                        <td className="py-1.5">
+                          {n.status === 'sent' ? (
+                            <CheckCircle size={14} className="text-emerald-400" />
+                          ) : (
+                            <XCircle size={14} className="text-red-400" />
+                          )}
+                        </td>
+                        <td className="py-1.5 text-xs text-slate-400 whitespace-nowrap">
+                          {n.timestamp ? new Date(n.timestamp).toLocaleString() : '--'}
+                        </td>
+                        <td className="py-1.5">
+                          <Badge variant="severity" severity="info">{n.channel}</Badge>
+                        </td>
+                        <td className="py-1.5 text-xs text-slate-300 max-w-[200px] truncate" title={n.title}>
+                          {n.title}
+                        </td>
+                        <td className="py-1.5">
+                          <Badge variant="severity" severity={n.severity === 'critical' ? 'critical' : n.severity === 'warning' ? 'warning' : 'info'}>
+                            {n.severity}
+                          </Badge>
+                        </td>
+                        <td className="py-1.5">
+                          {n.status === 'sent' ? (
+                            <span className="text-xs text-emerald-400">Sent</span>
+                          ) : (
+                            <span className="text-xs text-red-400 flex items-center gap-1" title={n.error || ''}>
+                              <AlertTriangle size={10} />
+                              Failed
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            </GlassCard>
-          )}
+            )}
+          </GlassCard>
         </div>
       )}
 
