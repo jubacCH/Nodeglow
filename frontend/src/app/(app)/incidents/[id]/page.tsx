@@ -11,7 +11,7 @@ import { get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import type { Incident, IncidentEvent } from '@/types';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
-import { ArrowLeft, CheckCircle, Eye, Zap, Search } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Eye, FileText, Zap, Search, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 import Link from 'next/link';
 
@@ -77,6 +77,8 @@ interface IncidentDetail extends Incident {
   events: IncidentEvent[];
   related_logs?: RelatedLog[];
   log_analysis?: LogAnalysis | null;
+  postmortem?: string | null;
+  postmortem_generated_at?: string | null;
 }
 
 export default function IncidentDetailPage() {
@@ -88,6 +90,11 @@ export default function IncidentDetailPage() {
     queryKey: ['incident', incidentId],
     queryFn: () => get<IncidentDetail>(`/api/v1/incidents/${incidentId}`),
     enabled: incidentId > 0,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (d && d.status === 'resolved' && !d.postmortem) return 5000;
+      return false;
+    },
   });
 
   async function acknowledge() {
@@ -186,6 +193,16 @@ export default function IncidentDetailPage() {
             )}
           </GlassCard>
 
+          {/* Postmortem */}
+          {data.status === 'resolved' && (
+            <PostmortemSection
+              incidentId={incidentId}
+              postmortem={data.postmortem}
+              generatedAt={data.postmortem_generated_at}
+              onRegenerate={refetch}
+            />
+          )}
+
           {/* Log Analysis */}
           {data.log_analysis && (
             <LogAnalysisSection analysis={data.log_analysis} />
@@ -202,6 +219,95 @@ export default function IncidentDetailPage() {
         </GlassCard>
       )}
     </div>
+  );
+}
+
+/* ---------- Postmortem Section ---------- */
+
+function PostmortemSection({
+  incidentId,
+  postmortem,
+  generatedAt,
+  onRegenerate,
+}: {
+  incidentId: number;
+  postmortem?: string | null;
+  generatedAt?: string | null;
+  onRegenerate: () => void;
+}) {
+  const toast = useToastStore((s) => s.show);
+  const [regenerating, setRegenerating] = useState(false);
+
+  async function handleRegenerate() {
+    setRegenerating(true);
+    try {
+      await post(`/api/v1/incidents/${incidentId}/postmortem`);
+      toast('Postmortem generation started', 'success');
+      setTimeout(onRegenerate, 3000);
+    } catch {
+      toast('Failed to start postmortem generation', 'error');
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  const isFailed = postmortem?.startsWith('[Generation failed]');
+
+  return (
+    <GlassCard className="p-4 mt-6">
+      <div className="flex items-center gap-2 mb-4">
+        <FileText size={16} className="text-sky-400" />
+        <h3 className="text-sm font-medium text-slate-300">Postmortem</h3>
+        {generatedAt && !isFailed && (
+          <span className="text-[10px] text-slate-500 ml-auto">
+            Generated {new Date(generatedAt).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      {postmortem && !isFailed ? (
+        <>
+          <div className="bg-white/[0.03] rounded-lg p-4 border border-white/[0.06]">
+            <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+              {postmortem}
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleRegenerate}
+              disabled={regenerating}
+            >
+              <RefreshCw size={14} className={regenerating ? 'animate-spin' : ''} />
+              Regenerate
+            </Button>
+          </div>
+        </>
+      ) : isFailed ? (
+        <>
+          <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+            <p className="text-xs text-amber-400">{postmortem}</p>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleRegenerate}
+              disabled={regenerating}
+            >
+              <RefreshCw size={14} className={regenerating ? 'animate-spin' : ''} />
+              Retry
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="flex items-center gap-3 py-4">
+          <div className="w-4 h-4 border-2 border-sky-400/50 border-t-sky-400 rounded-full animate-spin" />
+          <span className="text-sm text-slate-400">Generating postmortem...</span>
+        </div>
+      )}
+    </GlassCard>
   );
 }
 

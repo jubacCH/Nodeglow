@@ -133,6 +133,8 @@ export interface Incident {
   updated_at: string;
   resolved_at: string | null;
   acknowledged_by: string | null;
+  postmortem?: string | null;
+  postmortem_generated_at?: string | null;
 }
 
 export interface IncidentEvent {
