@@ -565,6 +565,37 @@ async def run_weekly_digest():
         logger.error("Weekly digest email failed: %s", exc)
 
 
+async def update_geoip():
+    """Weekly GeoIP database update (if enabled and license key is set)."""
+    from database import get_setting, decrypt_value
+    from services.geoip_updater import download_geolite2
+
+    async with AsyncSessionLocal() as db:
+        enabled = await get_setting(db, "geoip_enabled", "0")
+        if enabled != "1":
+            return
+
+        key_enc = await get_setting(db, "geoip_license_key", "")
+        if not key_enc:
+            return
+
+        try:
+            license_key = decrypt_value(key_enc)
+        except Exception:
+            license_key = key_enc
+
+    result = await download_geolite2(license_key)
+
+    if result["success"]:
+        from database import set_setting
+        async with AsyncSessionLocal() as db:
+            await set_setting(db, "geoip_last_updated", datetime.utcnow().isoformat())
+            await db.commit()
+        logger.info("GeoIP database updated (%.1f MB)", result.get("size_mb", 0))
+    else:
+        logger.error("GeoIP update failed: %s", result.get("message", "unknown error"))
+
+
 async def run_alert_rules():
     """Evaluate all user-defined alert rules."""
     from services.rules import evaluate_rules
@@ -606,6 +637,11 @@ async def start_scheduler():
                       id="disk_space", replace_existing=True)
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
                       id="ch_cleanup", replace_existing=True)
+
+    # GeoIP database update (Tuesdays at 03:00 — MaxMind updates weekly on Tuesdays)
+    scheduler.add_job(update_geoip, "cron",
+                      day_of_week="tue", hour=3, minute=0,
+                      id="geoip_update", replace_existing=True)
 
     # Weekly digest email (default: Monday 9:00, configurable)
     digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
