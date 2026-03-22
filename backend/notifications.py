@@ -144,6 +144,31 @@ async def _send_email(host: str, port: int, user: str, password: str,
     await loop.run_in_executor(None, _send)
 
 
+# ── Severity Filtering ────────────────────────────────────────────────────────
+
+# Numeric severity levels (lower = more severe, syslog-style)
+_SEVERITY_LEVELS: dict[str, int] = {
+    "critical": 2,
+    "error": 3,
+    "warning": 4,
+    "info": 7,
+    "all": 7,
+}
+
+
+def _severity_passes(incident_severity: str, min_severity: str) -> bool:
+    """Check if an incident severity meets the minimum threshold for a channel.
+
+    Lower numeric value = more severe. A channel set to 'warning' (4) will
+    accept critical(2), error(3), and warning(4) but reject info(7).
+    """
+    if not min_severity or min_severity == "all":
+        return True
+    threshold = _SEVERITY_LEVELS.get(min_severity, 7)
+    actual = _SEVERITY_LEVELS.get(incident_severity, 7)
+    return actual <= threshold
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def notify(title: str, message: str, severity: str = "critical",
@@ -172,16 +197,22 @@ async def notify(title: str, message: str, severity: str = "critical",
         smtp_from   = await get_setting(db, "smtp_from", "")
         smtp_to     = await get_setting(db, "smtp_to", "")
 
+        # Per-channel minimum severity filters
+        min_sev_telegram = await get_setting(db, "notify_telegram_min_severity", "all")
+        min_sev_discord  = await get_setting(db, "notify_discord_min_severity", "all")
+        min_sev_webhook  = await get_setting(db, "notify_webhook_min_severity", "all")
+        min_sev_email    = await get_setting(db, "notify_email_min_severity", "all")
+
     channels_list = []  # (name, coroutine) pairs
     color = {"critical": 0xe74c3c, "warning": 0xf39c12, "info": 0x2ecc71}.get(severity, 0x2ecc71)
 
-    if tg_token and tg_chat:
+    if tg_token and tg_chat and _severity_passes(severity, min_sev_telegram):
         channels_list.append(("telegram", _send_telegram(tg_token, tg_chat, f"<b>{title}</b>\n{message}")))
-    if dc_webhook:
+    if dc_webhook and _severity_passes(severity, min_sev_discord):
         channels_list.append(("discord", _send_discord(dc_webhook, title, message, color)))
-    if wh_url:
+    if wh_url and _severity_passes(severity, min_sev_webhook):
         channels_list.append(("webhook", _send_webhook(wh_url, wh_secret, title, message, severity)))
-    if smtp_host and smtp_user and smtp_pw_enc and smtp_to:
+    if smtp_host and smtp_user and smtp_pw_enc and smtp_to and _severity_passes(severity, min_sev_email):
         try:
             smtp_pw = decrypt_value(smtp_pw_enc)
         except Exception:
