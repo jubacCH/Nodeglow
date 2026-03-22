@@ -6,13 +6,15 @@ X-API-Key header or ?api_key= query parameter.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1107,6 +1109,8 @@ async def get_incident(
         "updated_at": incident.updated_at.isoformat(),
         "resolved_at": incident.resolved_at.isoformat() if incident.resolved_at else None,
         "acknowledged_by": incident.acknowledged_by,
+        "postmortem": incident.postmortem,
+        "postmortem_generated_at": incident.postmortem_generated_at.isoformat() if incident.postmortem_generated_at else None,
         "events": [
             {
                 "timestamp": e.timestamp.isoformat(),
@@ -1171,7 +1175,32 @@ async def resolve_incident(
     ))
     await log_action(db, request, "incident.resolve", "incident", incident_id, incident.title)
     await db.commit()
+    try:
+        from services.postmortem import generate_postmortem
+        asyncio.create_task(generate_postmortem(incident.id))
+    except Exception:
+        pass
     return {"ok": True, "status": "resolved"}
+
+
+@router.post("/incidents/{incident_id}/postmortem", summary="Generate or regenerate postmortem")
+async def regenerate_postmortem(
+    incident_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+    if incident.status != "resolved":
+        raise HTTPException(400, "Postmortem can only be generated for resolved incidents")
+
+    try:
+        from services.postmortem import generate_postmortem
+        asyncio.create_task(generate_postmortem(incident.id))
+    except Exception:
+        pass
+    return {"ok": True, "message": "Postmortem generation started"}
 
 
 # ── Syslog ───────────────────────────────────────────────────────────────────
@@ -1617,3 +1646,88 @@ async def set_watched_services(
     agent.watched_services = json.dumps(services) if services else None
     await db.commit()
     return {"ok": True, "services": services}
+
+
+# ── AI Copilot ────────────────────────────────────────────────────────────────
+
+_copilot_log = logging.getLogger("copilot")
+
+COPILOT_SYSTEM_PROMPT = """You are the Nodeglow AI Ops Copilot — an expert infrastructure analyst embedded \
+in a homelab/SMB monitoring platform. You have real-time access to the operator's infrastructure data \
+provided below as context.
+
+Your role:
+- Analyze host availability, incidents, syslog error patterns, and integration health.
+- Highlight anomalies, correlations, and actionable insights.
+- Be concise and specific. Use bullet points and short paragraphs.
+- When referencing hosts, incidents, or integrations, mention their names/IDs.
+- If the data shows no issues, say so briefly — don't invent problems.
+- You may suggest Nodeglow features (alert rules, maintenance windows, etc.) when relevant.
+- Do NOT fabricate data that isn't in the context. If you lack information, say so.
+
+## Current Infrastructure State
+
+{context}
+"""
+
+
+@router.post("/copilot/chat", summary="AI Copilot chat (streaming SSE)")
+async def copilot_chat(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    """Stream an AI copilot response as SSE events."""
+    from services.ai_client import stream_completion
+    from services.ai_context import gather_infrastructure_context
+
+    body = await request.json()
+    user_message = (body.get("message") or "").strip()
+    history = body.get("history") or []
+
+    if not user_message:
+        raise HTTPException(400, "message is required")
+
+    # Gather live infrastructure context
+    try:
+        context = await gather_infrastructure_context(db)
+    except Exception as e:
+        _copilot_log.warning("Failed to gather context: %s", e)
+        context = "Infrastructure context unavailable."
+
+    system_prompt = COPILOT_SYSTEM_PROMPT.format(context=context)
+
+    # Build messages: history + new user message
+    messages = []
+    for h in history:
+        role = h.get("role")
+        content = h.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_message})
+
+    async def event_stream():
+        try:
+            async for delta in stream_completion(system_prompt, messages):
+                yield f"data: {json.dumps({'delta': delta})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except RuntimeError as e:
+            if "not configured" in str(e):
+                yield f"data: {json.dumps({'error': 'Claude API key not configured. Go to Settings > AI to add your key.', 'done': True})}\n\n"
+            else:
+                _copilot_log.exception("Copilot stream error")
+                yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+        except Exception as e:
+            _copilot_log.exception("Copilot stream error")
+            yield f"data: {json.dumps({'error': 'An unexpected error occurred.', 'done': True})}\n\n"
+
+    # Check API key availability before starting the stream
+    from services.ai_client import _get_api_key
+    api_key = await _get_api_key()
+    if not api_key:
+        return JSONResponse(
+            {"error": "Claude API key not configured. Go to Settings > AI to add your key."},
+            status_code=503,
+        )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

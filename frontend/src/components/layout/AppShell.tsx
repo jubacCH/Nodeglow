@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { Sidebar } from './Sidebar';
+import { CopilotPanel } from '@/components/copilot/CopilotPanel';
 import { ToastContainer } from '@/components/ui/Toast';
 import { KeyboardShortcuts } from '@/components/ui/KeyboardShortcuts';
 import { useAuthStore } from '@/stores/auth';
@@ -94,6 +95,7 @@ export function AppShell({ children }: AppShellProps) {
           {children}
         </div>
       </main>
+      <CopilotPanel />
       <ToastContainer />
       <KeyboardShortcuts />
     </div>
