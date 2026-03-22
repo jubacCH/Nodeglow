@@ -457,9 +457,11 @@ async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
     if role not in ("readonly", "editor", "admin"):
         return JSONResponse({"error": "Invalid role"}, status_code=400)
 
+    import hmac
+    from config import SECRET_KEY
     raw_key = f"ng_{os.urandom(24).hex()}"
     prefix = raw_key[:8]
-    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    key_hash = hmac.new(SECRET_KEY.encode(), raw_key.encode(), hashlib.sha256).hexdigest()
 
     user = getattr(request.state, "current_user", None)
     api_key = ApiKey(

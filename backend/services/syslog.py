@@ -16,6 +16,33 @@ from models.ping import PingHost
 
 log = logging.getLogger("nodeglow.syslog")
 
+# ── Per-IP rate limiter for syslog ingestion ────────────────────────────────
+
+_SYSLOG_RATE_WINDOW = 10        # seconds
+_SYSLOG_RATE_MAX = 500          # max messages per IP per window
+_ip_msg_counts: dict[str, list] = {}  # ip -> [count, window_start]
+_rate_dropped: dict[str, int] = {}    # ip -> dropped count (for periodic logging)
+
+
+def _syslog_rate_ok(source_ip: str) -> bool:
+    """Return True if this IP is within the rate limit, False if it should be dropped."""
+    import time
+    now = time.monotonic()
+    entry = _ip_msg_counts.get(source_ip)
+    if entry is None or now - entry[1] >= _SYSLOG_RATE_WINDOW:
+        _ip_msg_counts[source_ip] = [1, now]
+        # Log and reset drop counter on window reset
+        dropped = _rate_dropped.pop(source_ip, 0)
+        if dropped:
+            log.warning("Syslog rate limit: dropped %d messages from %s in last window", dropped, source_ip)
+        return True
+    entry[0] += 1
+    if entry[0] > _SYSLOG_RATE_MAX:
+        _rate_dropped[source_ip] = _rate_dropped.get(source_ip, 0) + 1
+        return False
+    return True
+
+
 # ── RFC 3164 (BSD syslog) parser ────────────────────────────────────────────
 
 # <PRI>TIMESTAMP HOSTNAME APP[PID]: MESSAGE
@@ -385,6 +412,8 @@ async def _flush_loop():
 class SyslogUDPProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple):
         source_ip = addr[0]
+        if not _syslog_rate_ok(source_ip):
+            return
         try:
             raw = data.decode("utf-8", errors="replace")
         except Exception:
@@ -413,6 +442,8 @@ class SyslogTCPHandler:
                     break
                 raw = line.decode("utf-8", errors="replace").strip()
                 if not raw:
+                    continue
+                if not _syslog_rate_ok(source_ip):
                     continue
                 parsed = parse_syslog(raw, source_ip)
                 if not parsed:

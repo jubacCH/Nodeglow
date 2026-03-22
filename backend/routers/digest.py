@@ -4,6 +4,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from models.api_key import ApiKey
+from routers.api_v1 import require_api_key
 from services.digest import build_weekly_digest
 from templating import templates
 
@@ -21,7 +23,11 @@ async def digest_page(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/api/v1/digest")
-async def digest_api(request: Request, db: AsyncSession = Depends(get_db)):
+async def digest_api(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _api_key: ApiKey = Depends(require_api_key),
+):
     data = await build_weekly_digest(db)
     # Serialize for JSON (convert datetimes, ORM objects)
     # Serialize top incidents
