@@ -1,13 +1,13 @@
 import { create } from 'zustand';
 
-interface CopilotState {
+interface GlowState {
   isOpen: boolean;
   toggle: () => void;
   open: () => void;
   close: () => void;
 }
 
-export const useCopilotStore = create<CopilotState>((set) => ({
+export const useGlowStore = create<GlowState>((set) => ({
   isOpen: false,
   toggle: () => set((s) => ({ isOpen: !s.isOpen })),
   open: () => set({ isOpen: true }),

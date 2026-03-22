@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { useThemeStore } from '@/stores/theme';
 import { useAuthStore } from '@/stores/auth';
-import { useCopilotStore } from '@/stores/copilot';
+import { useGlowStore } from '@/stores/glow';
 import { useDashboard, useNavCounts } from '@/hooks/queries/useDashboard';
 import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
@@ -79,7 +79,7 @@ export function Sidebar() {
   const { sidebarCollapsed, colorMode, toggleColorMode } = useThemeStore();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
-  const { isOpen: copilotOpen, toggle: toggleCopilot } = useCopilotStore();
+  const { isOpen: glowOpen, toggle: toggleGlow } = useGlowStore();
   const [intOpen, setIntOpen] = useState(() => pathname.startsWith('/integration'));
   const [search, setSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -319,20 +319,20 @@ export function Sidebar() {
         </div>
       </nav>
 
-      {/* AI Copilot toggle */}
+      {/* Glow toggle */}
       {!sidebarCollapsed && (
         <div className="px-3 py-1">
           <button
-            onClick={toggleCopilot}
+            onClick={toggleGlow}
             className={cn(
               'flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors',
-              copilotOpen
+              glowOpen
                 ? 'bg-violet-500/15 text-violet-400 border border-violet-500/20 shadow-[0_0_8px_rgba(139,92,246,0.15)]'
                 : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200',
             )}
           >
-            <Sparkles size={18} className={copilotOpen ? 'text-violet-400' : 'text-violet-400/60'} />
-            <span>AI Copilot</span>
+            <Sparkles size={18} className={glowOpen ? 'text-violet-400' : 'text-violet-400/60'} />
+            <span>Glow</span>
           </button>
         </div>
       )}

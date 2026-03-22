@@ -1264,7 +1264,7 @@ export default function SettingsPage() {
               Claude API Key
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              Powers the AI Copilot and auto-postmortem features. Requires a Claude API key from{' '}
+              Powers Glow and auto-postmortem features. Requires a Claude API key from{' '}
               <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">
                 console.anthropic.com
               </a>

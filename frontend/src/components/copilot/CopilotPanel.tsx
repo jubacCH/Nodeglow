@@ -2,11 +2,23 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Sparkles, X, Send, AlertCircle } from 'lucide-react';
-import { useCopilotStore } from '@/stores/copilot';
+import { useGlowStore } from '@/stores/glow';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+}
+
+/** Lightweight markdown → HTML for chat messages (no external deps). */
+function renderMarkdown(text: string): string {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')  // escape HTML
+    .replace(/^### (.+)$/gm, '<strong class="text-sky-300 text-xs uppercase tracking-wide">$1</strong>')
+    .replace(/^## (.+)$/gm, '<strong class="text-sky-300 text-sm">$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong class="text-slate-50">$1</strong>')
+    .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded bg-white/[0.08] text-sky-200 text-xs">$1</code>')
+    .replace(/^- (.+)$/gm, '<span class="flex gap-1.5"><span class="text-slate-500">•</span><span>$1</span></span>')
+    .replace(/^(\d+)\. (.+)$/gm, '<span class="flex gap-1.5"><span class="text-slate-500">$1.</span><span>$2</span></span>');
 }
 
 const SUGGESTIONS = [
@@ -22,8 +34,8 @@ function getCsrfToken(): string {
   return decodeURIComponent(match[1]);
 }
 
-export function CopilotPanel() {
-  const { isOpen, close } = useCopilotStore();
+export function GlowPanel() {
+  const { isOpen, close } = useGlowStore();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -60,7 +72,7 @@ export function CopilotPanel() {
     setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
     try {
-      const res = await fetch('/api/v1/copilot/chat', {
+      const res = await fetch('/api/v1/glow/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -156,7 +168,7 @@ export function CopilotPanel() {
         <div className="flex items-center gap-2">
           <Sparkles size={16} className="text-violet-400" />
           <span className="text-sm font-semibold bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">
-            AI Copilot
+            Glow
           </span>
         </div>
         <button
@@ -195,11 +207,15 @@ export function CopilotPanel() {
             <div
               className={`max-w-[85%] px-3 py-2 rounded-lg text-sm ${
                 msg.role === 'user'
-                  ? 'bg-sky-500/15 text-sky-100 border border-sky-500/20'
-                  : 'bg-white/[0.04] text-slate-300 border border-white/[0.06]'
+                  ? 'bg-sky-500/15 text-sky-50 border border-sky-500/20'
+                  : 'bg-white/[0.06] text-slate-100 border border-white/[0.08]'
               }`}
             >
-              <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+              {msg.role === 'assistant' ? (
+                <div className="whitespace-pre-wrap break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+              ) : (
+                <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+              )}
               {msg.role === 'assistant' && isStreaming && i === messages.length - 1 && (
                 <span className="inline-flex gap-0.5 ml-1">
                   <span className="w-1 h-1 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
