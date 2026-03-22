@@ -37,6 +37,9 @@ interface SettingsData {
   proxmox_disk_threshold: string;
   syslog_port: string;
   syslog_allowlist_only: string;
+  digest_enabled: string;
+  digest_day: string;
+  digest_hour: string;
   notify_enabled: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
@@ -174,6 +177,11 @@ export default function SettingsPage() {
   const [syslogPort, setSyslogPort] = useState('1514');
   const [syslogAllowlist, setSyslogAllowlist] = useState(false);
 
+  /* ---- Digest state ---- */
+  const [digestEnabled, setDigestEnabled] = useState(false);
+  const [digestDay, setDigestDay] = useState('0');
+  const [digestHour, setDigestHour] = useState('9');
+
   /* ---- Notifications state ---- */
   const [notifyEnabled, setNotifyEnabled] = useState(false);
   const [telegramToken, setTelegramToken] = useState('');
@@ -238,6 +246,9 @@ export default function SettingsPage() {
     setDiskThreshold(s.proxmox_disk_threshold || '90');
     setSyslogPort(s.syslog_port || '1514');
     setSyslogAllowlist(s.syslog_allowlist_only === '1');
+    setDigestEnabled(s.digest_enabled === '1');
+    setDigestDay(s.digest_day || '0');
+    setDigestHour(s.digest_hour || '9');
   }, []);
 
   useEffect(() => {
@@ -289,6 +300,16 @@ export default function SettingsPage() {
       toast.show('Notification settings saved', 'success');
     },
     onError: () => toast.show('Failed to save notification settings', 'error'),
+  });
+
+  const saveDigestMut = useMutation({
+    mutationFn: (body: { digest_enabled: boolean; digest_day: number; digest_hour: number }) =>
+      post('/settings/digest/save', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      toast.show('Digest settings saved', 'success');
+    },
+    onError: () => toast.show('Failed to save digest settings', 'error'),
   });
 
   const testNotifMut = useMutation({
@@ -814,6 +835,75 @@ export default function SettingsPage() {
               {isSaving ? 'Saving...' : 'Save Notification Settings'}
             </Button>
           </div>
+
+          {/* Weekly Digest */}
+          <GlassCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-200">Weekly Digest Email</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Send a weekly summary of incidents, host uptime, syslog stats, and SSL expiry. Requires SMTP configured above.</p>
+              </div>
+              <button
+                onClick={() => setDigestEnabled(!digestEnabled)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  digestEnabled ? 'bg-sky-500' : 'bg-white/[0.1]'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                    digestEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+            {digestEnabled && (
+              <div className="space-y-3 mt-3 pt-3 border-t border-white/[0.06]">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="ng-label">Day of Week</label>
+                    <select
+                      value={digestDay}
+                      onChange={(e) => setDigestDay(e.target.value)}
+                      className={inputSmCls}
+                    >
+                      <option value="0">Monday</option>
+                      <option value="1">Tuesday</option>
+                      <option value="2">Wednesday</option>
+                      <option value="3">Thursday</option>
+                      <option value="4">Friday</option>
+                      <option value="5">Saturday</option>
+                      <option value="6">Sunday</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="ng-label">Hour (UTC)</label>
+                    <select
+                      value={digestHour}
+                      onChange={(e) => setDigestHour(e.target.value)}
+                      className={inputSmCls}
+                    >
+                      {Array.from({ length: 24 }, (_, i) => (
+                        <option key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    onClick={() => saveDigestMut.mutate({
+                      digest_enabled: digestEnabled,
+                      digest_day: Number(digestDay),
+                      digest_hour: Number(digestHour),
+                    })}
+                    disabled={saveDigestMut.isPending}
+                  >
+                    {saveDigestMut.isPending ? 'Saving...' : 'Save Digest Settings'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </GlassCard>
 
           {/* Notification History */}
           {notifHistory && notifHistory.length > 0 && (

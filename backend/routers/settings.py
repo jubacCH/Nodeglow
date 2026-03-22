@@ -43,6 +43,10 @@ async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
     syslog_port         = await get_setting(db, "syslog_port", "1514")
     syslog_allowlist    = await get_setting(db, "syslog_allowlist_only", "0")
 
+    digest_enabled      = await get_setting(db, "digest_enabled", "0")
+    digest_day          = await get_setting(db, "digest_day", "0")
+    digest_hour         = await get_setting(db, "digest_hour", "9")
+
     notify_enabled      = await get_setting(db, "notify_enabled", "0")
     telegram_bot_token  = await get_setting(db, "telegram_bot_token", "")
     telegram_chat_id    = await get_setting(db, "telegram_chat_id", "")
@@ -78,6 +82,9 @@ async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
         "integration_retention": integration_retention,
         "syslog_port": syslog_port,
         "syslog_allowlist_only": syslog_allowlist,
+        "digest_enabled": digest_enabled,
+        "digest_day": digest_day,
+        "digest_hour": digest_hour,
         "notify_enabled": notify_enabled,
         "telegram_bot_token": telegram_bot_token,
         "telegram_chat_id": telegram_chat_id,
@@ -111,6 +118,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "ping_retention_days", "proxmox_retention_days", "integration_retention_days",
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
         "proxmox_disk_threshold", "syslog_port", "syslog_allowlist_only",
+        "digest_enabled", "digest_day", "digest_hour",
     ]
     result = {}
     for key in keys:
@@ -123,6 +131,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "anomaly_threshold": "2.0", "proxmox_cpu_threshold": "85",
         "proxmox_ram_threshold": "85", "proxmox_disk_threshold": "90",
         "syslog_port": "1514",
+        "digest_day": "0", "digest_hour": "9",
     }
     for key, default in defaults.items():
         if not result.get(key):
@@ -360,10 +369,38 @@ async def save_notifications(
     await set_setting(db, "smtp_to", smtp_to.strip())
     if smtp_password.strip():
         await set_setting(db, "smtp_password", encrypt_value(smtp_password.strip()))
+
+    await db.commit()
     accept = request.headers.get("accept", "")
     if "application/json" in accept:
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1&tab=notifications", status_code=303)
+
+
+@router.post("/digest/save")
+async def save_digest_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    body = await request.json()
+    digest_enabled = "1" if body.get("digest_enabled") else "0"
+    digest_day = str(max(0, min(6, int(body.get("digest_day", 0)))))
+    digest_hour = str(max(0, min(23, int(body.get("digest_hour", 9)))))
+
+    await set_setting(db, "digest_enabled", digest_enabled)
+    await set_setting(db, "digest_day", digest_day)
+    await set_setting(db, "digest_hour", digest_hour)
+
+    # Reschedule the digest job
+    from scheduler import scheduler
+    job = scheduler.get_job("weekly_digest")
+    if job:
+        job.reschedule(trigger="cron", day_of_week=int(digest_day),
+                       hour=int(digest_hour), minute=0)
+
+    await log_action(db, request, "digest.settings.update")
+    await db.commit()
+    return JSONResponse({"ok": True})
 
 
 @router.post("/notifications/test")
