@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+import subprocess
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -38,7 +39,7 @@ async def ping_host(hostname: str, timeout: float = 2.0) -> tuple[bool, float | 
                         pass
             return True, None
         return False, None
-    except Exception:
+    except (OSError, asyncio.TimeoutError, subprocess.SubprocessError):
         return False, None
 
 
@@ -53,7 +54,7 @@ async def check_http(url: str, timeout: float = 5.0) -> tuple[bool, float | None
             resp = await client.get(url)
             latency = round((time.perf_counter() - start) * 1000, 2)
             return resp.status_code < 500, latency
-    except Exception:
+    except (httpx.HTTPError, OSError, asyncio.TimeoutError):
         return False, None
 
 
@@ -70,10 +71,10 @@ async def check_tcp(hostname: str, port: int, timeout: float = 3.0) -> tuple[boo
         writer.close()
         try:
             await writer.wait_closed()
-        except Exception:
+        except OSError:
             pass
         return True, latency
-    except Exception:
+    except (OSError, asyncio.TimeoutError):
         return False, None
 
 
@@ -99,7 +100,8 @@ async def get_ssl_expiry_days(hostname: str, port: int = 443) -> int | None:
         expiry = datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
         delta = expiry - datetime.now(timezone.utc)
         return max(0, delta.days)
-    except Exception:
+    except (ssl.SSLError, OSError, asyncio.TimeoutError,
+            subprocess.SubprocessError, ValueError, IndexError):
         return None
 
 

@@ -1,8 +1,9 @@
 """
 Backwards-compatibility shim – all models and helpers now live in models/.
 
-Everything is re-exported so existing ``from database import …`` statements
-keep working unchanged.
+DEPRECATED: New code should import from ``models`` or ``models.base`` directly.
+This module only re-exports for legacy compatibility and will be removed in a
+future cleanup pass.
 """
 from models.base import (          # noqa: F401 – re-export
     Base,
