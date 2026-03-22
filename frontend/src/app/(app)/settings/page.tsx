@@ -36,6 +36,7 @@ interface SettingsData {
   proxmox_ram_threshold: string;
   proxmox_disk_threshold: string;
   syslog_port: string;
+  syslog_allowlist_only: string;
   notify_enabled: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
@@ -171,6 +172,7 @@ export default function SettingsPage() {
   const [ramThreshold, setRamThreshold] = useState('85');
   const [diskThreshold, setDiskThreshold] = useState('90');
   const [syslogPort, setSyslogPort] = useState('1514');
+  const [syslogAllowlist, setSyslogAllowlist] = useState(false);
 
   /* ---- Notifications state ---- */
   const [notifyEnabled, setNotifyEnabled] = useState(false);
@@ -235,6 +237,7 @@ export default function SettingsPage() {
     setRamThreshold(s.proxmox_ram_threshold || '85');
     setDiskThreshold(s.proxmox_disk_threshold || '90');
     setSyslogPort(s.syslog_port || '1514');
+    setSyslogAllowlist(s.syslog_allowlist_only === '1');
   }, []);
 
   useEffect(() => {
@@ -339,6 +342,7 @@ export default function SettingsPage() {
     params.set('ram_threshold', ramThreshold);
     params.set('disk_threshold', diskThreshold);
     params.set('syslog_port', syslogPort);
+    params.set('syslog_allowlist_only', syslogAllowlist ? '1' : '0');
     return params;
   }
 
@@ -569,6 +573,26 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </GlassCard>
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-3">Syslog Settings</h3>
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={syslogAllowlist}
+                  onClick={() => setSyslogAllowlist(!syslogAllowlist)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${syslogAllowlist ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                >
+                  <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${syslogAllowlist ? 'translate-x-4' : 'translate-x-0'}`} />
+                </button>
+                <div>
+                  <label className="ng-label mb-0">Host Allowlist</label>
+                  <p className="text-xs text-slate-400">Only accept syslog from IPs that match a host in your Hosts list</p>
+                </div>
+              </div>
+            </div>
           </GlassCard>
           <div className="flex justify-end">
             <Button size="sm" onClick={handleSaveMonitoring} disabled={isSaving}>

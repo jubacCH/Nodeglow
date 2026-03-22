@@ -227,18 +227,30 @@ def parse_syslog(raw: str, source_ip: str) -> dict:
 _host_cache: dict[str, int] = {}  # ip_or_hostname -> host_id
 _host_cache_ts: float = 0.0
 _HOST_CACHE_TTL = 120  # seconds
+_allowlist_only: bool = False  # when True, only accept syslog from known hosts
+_allowlist_ips: set[str] = set()  # resolved IPs of known hosts (fast lookup)
+
+
+def _is_allowed_source(source_ip: str) -> bool:
+    """Check if source IP is from a known host. Only enforced when allowlist is enabled."""
+    if not _allowlist_only:
+        return True
+    return source_ip in _allowlist_ips
 
 
 async def _refresh_host_cache():
-    global _host_cache, _host_cache_ts
+    global _host_cache, _host_cache_ts, _allowlist_only, _allowlist_ips
     import time
     now = time.time()
     if now - _host_cache_ts < _HOST_CACHE_TTL and _host_cache:
         return
     try:
+        from database import get_setting
         async with AsyncSessionLocal() as db:
             hosts = (await db.execute(select(PingHost))).scalars().all()
+            _allowlist_only = (await get_setting(db, "syslog_allowlist_only", "0")) == "1"
         cache: dict[str, int] = {}
+        allowed_ips: set[str] = set()
         loop = asyncio.get_running_loop()
         for h in hosts:
             cache[h.hostname.lower()] = h.id
@@ -257,12 +269,22 @@ async def _refresh_host_cache():
             try:
                 resolved_ip = await loop.run_in_executor(None, socket.gethostbyname, raw)
                 cache[resolved_ip] = h.id
+                allowed_ips.add(resolved_ip)
             except Exception:
                 pass
 
+            # If raw is already an IP, add it directly
+            try:
+                socket.inet_aton(raw)
+                allowed_ips.add(raw)
+            except OSError:
+                pass
+
         _host_cache = cache
+        _allowlist_ips = allowed_ips
         _host_cache_ts = now
-        log.debug("Syslog host cache refreshed: %d entries from %d hosts", len(cache), len(hosts))
+        log.debug("Syslog host cache refreshed: %d entries from %d hosts (allowlist=%s, %d IPs)",
+                  len(cache), len(hosts), _allowlist_only, len(allowed_ips))
     except Exception as e:
         log.warning("Failed to refresh host cache: %s", e)
 
@@ -412,6 +434,8 @@ async def _flush_loop():
 class SyslogUDPProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple):
         source_ip = addr[0]
+        if not _is_allowed_source(source_ip):
+            return
         if not _syslog_rate_ok(source_ip):
             return
         try:
@@ -435,6 +459,9 @@ class SyslogTCPHandler:
     async def handle(self):
         addr = self.writer.get_extra_info("peername")
         source_ip = addr[0] if addr else "0.0.0.0"
+        if not _is_allowed_source(source_ip):
+            self.writer.close()
+            return
         try:
             while True:
                 line = await asyncio.wait_for(self.reader.readline(), timeout=300)
