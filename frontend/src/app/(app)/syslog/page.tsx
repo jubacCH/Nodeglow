@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useSyslog } from '@/hooks/queries/useSyslog';
 import { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { MessageSquare, Brain, ChevronRight, ChevronDown, MapPin } from 'lucide-react';
+import { MessageSquare, BarChart3, Brain, ChevronRight, ChevronDown, MapPin } from 'lucide-react';
 import { ExportButton } from '@/components/ui/ExportButton';
 import { timeAgo } from '@/lib/utils';
 
@@ -82,6 +82,9 @@ export default function SyslogPage() {
         <span className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-white/[0.06] text-slate-100">
           <MessageSquare size={15} /> Messages
         </span>
+        <Link href="/syslog/dashboard" className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors">
+          <BarChart3 size={15} /> Dashboard
+        </Link>
         <Link href="/syslog/templates" className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors">
           <Brain size={15} /> Intelligence
         </Link>

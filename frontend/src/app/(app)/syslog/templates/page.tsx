@@ -18,6 +18,7 @@ import {
   Tag,
   Check,
   X,
+  BarChart3,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -255,6 +256,9 @@ export default function SyslogTemplatesPage() {
       <div className="flex items-center gap-1 mb-4">
         <Link href="/syslog" className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors">
           <FileText size={15} /> Messages
+        </Link>
+        <Link href="/syslog/dashboard" className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors">
+          <BarChart3 size={15} /> Dashboard
         </Link>
         <span className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-white/[0.06] text-slate-100">
           <TrendingUp size={15} /> Intelligence
