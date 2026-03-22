@@ -121,6 +121,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
         "proxmox_disk_threshold", "syslog_port", "syslog_allowlist_only",
         "digest_enabled", "digest_day", "digest_hour",
+        "geoip_enabled", "geoip_last_updated",
     ]
     result = {}
     for key in keys:
@@ -140,6 +141,8 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
             result[key] = default
     # Don't expose passwords, just indicate if set
     result["smtp_has_pw"] = bool(await get_setting(db, "smtp_password", ""))
+    result["claude_has_key"] = bool(await get_setting(db, "claude_api_key", ""))
+    result["geoip_has_key"] = bool(await get_setting(db, "geoip_license_key", ""))
     return JSONResponse(result)
 
 
@@ -561,6 +564,28 @@ async def geoip_download(request: Request, db: AsyncSession = Depends(get_db)):
 
     status_code = 200 if result["success"] else 500
     return JSONResponse(result, status_code=status_code)
+
+
+@router.post("/ai/save")
+async def save_ai_settings(
+    request: Request,
+    claude_api_key: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save Claude AI API key. Admin only."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+
+    if claude_api_key.strip():
+        await set_setting(db, "claude_api_key", encrypt_value(claude_api_key.strip()))
+    await db.commit()
+
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/settings?saved=1", status_code=303)
 
 
 @router.delete("/api-keys/{key_id}")
