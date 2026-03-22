@@ -14,3 +14,4 @@ alembic==1.14.1
 psutil==6.1.1
 clickhouse-connect==0.8.9
 maxminddb==2.6.2
+anthropic>=0.52.0
