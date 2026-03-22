@@ -51,9 +51,16 @@ async def insert_batch(rows: list[dict]) -> None:
         "timestamp", "received_at", "source_ip", "hostname", "host_id",
         "facility", "severity", "app_name", "message",
         "template_hash", "tags", "noise_score",
+        "extracted_fields", "geo_country", "geo_city",
     ]
     data = []
     for row in rows:
+        # Convert extracted_fields dict to list of tuples for Map column
+        fields = row.get("extracted_fields") or {}
+        if isinstance(fields, dict):
+            fields_map = fields
+        else:
+            fields_map = {}
         data.append([
             row.get("timestamp") or datetime.utcnow(),
             row.get("received_at") or datetime.utcnow(),
@@ -67,6 +74,9 @@ async def insert_batch(rows: list[dict]) -> None:
             row.get("template_hash") or "",
             row.get("tags") or "",
             row.get("noise_score") if row.get("noise_score") is not None else 50,
+            fields_map,
+            row.get("geo_country") or "",
+            row.get("geo_city") or "",
         ])
     await client.insert("syslog_messages", data, column_names=columns)
 
@@ -97,8 +107,14 @@ def _where_clauses(
     host_source_ip: str = "",
     host_name: str = "",
     sev_list: list[int] | None = None,
+    country: str = "",
 ) -> tuple[str, dict]:
-    """Build WHERE clause string + params dict for syslog queries."""
+    """Build WHERE clause string + params dict for syslog queries.
+
+    Supports special search syntax in `q`:
+    - field:key=value  — search extracted_fields Map column
+    - country:XX       — filter by geo_country
+    """
     clauses = ["timestamp >= {since:DateTime64(3)}"]
     params: dict = {"since": since}
 
@@ -117,13 +133,29 @@ def _where_clauses(
     if app:
         clauses.append("positionCaseInsensitive(app_name, {app:String}) > 0")
         params["app"] = app
+    if country:
+        clauses.append("geo_country = {country:String}")
+        params["country"] = country
     if q:
-        # Multi-token search using hasToken (uses bloom filter index)
         tokens = q.split()
+        fi = 0
         for i, token in enumerate(tokens[:5]):
-            key = f"q{i}"
-            clauses.append(f"positionCaseInsensitive(message, {{{key}:String}}) > 0")
-            params[key] = token
+            # field:key=value syntax for searching extracted_fields
+            if token.startswith("field:") and "=" in token:
+                parts = token[6:].split("=", 1)
+                fk = f"fk{fi}"
+                fv = f"fv{fi}"
+                clauses.append(f"extracted_fields[{{{fk}:String}}] = {{{fv}:String}}")
+                params[fk] = parts[0]
+                params[fv] = parts[1]
+                fi += 1
+            elif token.startswith("country:"):
+                clauses.append("geo_country = {geo_c:String}")
+                params["geo_c"] = token[8:]
+            else:
+                key = f"q{i}"
+                clauses.append(f"positionCaseInsensitive(message, {{{key}:String}}) > 0")
+                params[key] = token
     if host_id is not None:
         sub = ["host_id = {hid:Int32}"]
         params["hid"] = host_id
@@ -135,9 +167,33 @@ def _where_clauses(
             params["hname"] = host_name
         clauses.append(f"({' OR '.join(sub)})")
     if sev_list:
-        # Validate all values are integers to prevent injection
         safe_sevs = [int(s) for s in sev_list]
         in_vals = ",".join(str(s) for s in safe_sevs)
         clauses.append(f"severity IN ({in_vals})")
 
     return " AND ".join(clauses), params
+
+
+async def query_aggregated(
+    since: datetime,
+    source_ip: str = "",
+    template_hash: str = "",
+    severity: int | None = None,
+) -> list[dict]:
+    """Query the aggregated syslog table for trend/dashboard data."""
+    clauses = ["bucket >= {since:DateTime}"]
+    params: dict = {"since": since}
+    if source_ip:
+        clauses.append("source_ip = {sip:String}")
+        params["sip"] = source_ip
+    if template_hash:
+        clauses.append("template_hash = {th:String}")
+        params["th"] = template_hash
+    if severity is not None:
+        clauses.append("severity = {sev:Int8}")
+        params["sev"] = severity
+    where = " AND ".join(clauses)
+    return await query(
+        f"SELECT * FROM syslog_aggregated WHERE {where} ORDER BY bucket DESC LIMIT 1000",
+        params,
+    )

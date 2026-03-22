@@ -379,6 +379,16 @@ async def _enqueue(parsed: dict):
         parsed["tags"] = enrichment["tags"]
         parsed["noise_score"] = enrichment["noise_score"]
         parsed["is_new_template"] = enrichment["is_new_template"]
+        parsed["extracted_fields"] = enrichment.get("extracted_fields", {})
+    except Exception:
+        pass  # intelligence is optional, never block ingestion
+
+    # GeoIP enrichment (resolve external IPs in message to country/city)
+    try:
+        from services.geoip import enrich_message
+        geo = enrich_message(parsed.get("message", ""))
+        parsed["geo_country"] = geo["geo_country"]
+        parsed["geo_city"] = geo["geo_city"]
     except Exception:
         pass  # intelligence is optional, never block ingestion
 
@@ -412,6 +422,9 @@ async def _flush_buffer():
         row.setdefault("template_hash", "")
         row.setdefault("noise_score", 50)
         row.setdefault("received_at", datetime.utcnow())
+        # Ensure extracted_fields is a dict
+        if not isinstance(row.get("extracted_fields"), dict):
+            row["extracted_fields"] = {}
         cleaned.append(row)
 
     try:
