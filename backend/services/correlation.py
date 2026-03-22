@@ -9,6 +9,9 @@ Rules:
 4. syslog_spike      – Syslog error rate 5x above baseline
 5. log_anomaly       – Per-host log volume > baseline + 3σ
 6. port_error        – Host online (ICMP OK) but service check (HTTP/HTTPS/TCP) failed
+7. fleet_wide_issue  – Same template on 3+ hosts simultaneously
+8. severity_trend    – Error template with rising frequency trend
+9. content_anomaly   – New templates on stable host / severity upgrade
 """
 import hashlib
 import json
@@ -455,6 +458,100 @@ async def _rule_log_anomaly(db):
             )
 
 
+# ── Rule 7: Fleet-Wide Issue ───────────────────────────────────────────────
+
+async def _rule_fleet_wide(db):
+    """Detect same template appearing on 3+ hosts simultaneously."""
+    from services.log_intelligence import detect_fleet_patterns
+    from models.log_template import LogTemplate
+
+    fleet_issues = await detect_fleet_patterns(db)
+    if not fleet_issues:
+        return
+
+    for issue in fleet_issues:
+        th = issue["template_hash"]
+        host_count = issue["host_count"]
+
+        # Get template text for the incident title
+        tpl = (await db.execute(
+            select(LogTemplate.template).where(LogTemplate.template_hash == th)
+        )).scalar()
+        tpl_text = (tpl or th)[:80]
+
+        severity = "critical" if host_count > 5 else "warning"
+        await _find_or_create_incident(
+            db,
+            rule="fleet_wide_issue",
+            title=f"Fleet-wide: {tpl_text} ({host_count} hosts)",
+            severity=severity,
+            host_ids=[0],
+            event_type="fleet_pattern",
+            summary=f"Template detected on {host_count} hosts simultaneously: {tpl_text}",
+            detail=json.dumps({"hosts": issue.get("hosts", [])[:10]}),
+        )
+
+
+# ── Rule 8: Severity Trend ────────────────────────────────────────────────
+
+async def _rule_severity_trend(db):
+    """Rising error templates create warning incidents."""
+    from models.log_template import LogTemplate
+
+    rising = (await db.execute(
+        select(LogTemplate).where(
+            LogTemplate.trend_direction == "rising",
+            LogTemplate.trend_score > 0.1,
+            LogTemplate.severity_mode.isnot(None),
+            LogTemplate.severity_mode <= 3,
+        )
+    )).scalars().all()
+
+    for tpl in rising:
+        await _find_or_create_incident(
+            db,
+            rule="severity_trend",
+            title=f"Rising error trend: {tpl.template[:60]}",
+            severity="warning",
+            host_ids=[0],
+            event_type="syslog_trend",
+            summary=f"Template is trending up (+{round(tpl.trend_score * 100)}%/hr): {tpl.template[:100]}",
+        )
+
+
+# ── Rule 9: Content Anomaly ──────────────────────────────────────────────
+
+async def _rule_content_anomaly(db):
+    """Detect new templates on stable hosts and severity upgrades."""
+    from services.log_intelligence import detect_content_anomalies
+
+    anomalies = await detect_content_anomalies(db)
+    for anomaly in anomalies:
+        if anomaly["type"] == "template_diversity_spike":
+            await _find_or_create_incident(
+                db,
+                rule="content_anomaly",
+                title=f"Template diversity spike: {anomaly['source_ip']}",
+                severity="warning",
+                host_ids=[0],
+                event_type="content_anomaly",
+                summary=f"{anomaly['source_ip']}: {anomaly['current']} distinct templates "
+                        f"(baseline: {anomaly['baseline']})",
+            )
+        elif anomaly["type"] == "severity_upgrade":
+            await _find_or_create_incident(
+                db,
+                rule="content_anomaly",
+                title=f"Severity upgrade: {anomaly.get('template', '')[:60]}",
+                severity="warning",
+                host_ids=[0],
+                event_type="severity_upgrade",
+                summary=f"Template normally at severity {anomaly.get('normal_severity')} "
+                        f"now at severity {anomaly.get('current_severity')} "
+                        f"({anomaly.get('count')} occurrences)",
+            )
+
+
 # ── Auto-Resolve ────────────────────────────────────────────────────────────
 
 async def _auto_resolve(db):
@@ -471,8 +568,9 @@ async def _auto_resolve(db):
     offline_ids = {h.id for h in offline_hosts}
 
     for incident in open_incidents:
-        # Skip syslog_spike / log_anomaly / alert_rules – auto-resolve after timeout
-        if incident.rule in ("syslog_spike", "log_anomaly") or incident.rule.startswith("alert_rule_"):
+        # Skip syslog/fleet/trend/content rules – auto-resolve after timeout
+        if incident.rule in ("syslog_spike", "log_anomaly", "fleet_wide_issue",
+                             "severity_trend", "content_anomaly") or incident.rule.startswith("alert_rule_"):
             # Resolve if last update was > 10min ago (no new activity)
             if incident.updated_at < datetime.utcnow() - timedelta(minutes=10):
                 incident.status = "resolved"
@@ -573,6 +671,9 @@ async def run_correlation():
             await _rule_port_error(db)
             await _rule_syslog_spike(db)
             await _rule_log_anomaly(db)
+            await _rule_fleet_wide(db)
+            await _rule_severity_trend(db)
+            await _rule_content_anomaly(db)
             await _auto_resolve(db)
             await db.commit()
         except Exception as e:

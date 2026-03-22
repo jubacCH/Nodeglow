@@ -2,7 +2,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, DateTime, Float, ForeignKey, Index, Integer,
+    Boolean, Column, DateTime, Float, ForeignKey, Index, Integer,
     SmallInteger, String, Text,
 )
 
@@ -23,6 +23,9 @@ class LogTemplate(Base):
     noise_score = Column(SmallInteger, default=50, index=True)  # 0=very interesting, 100=total noise
     tags = Column(String(256), default="")           # comma-separated auto-tags
     avg_rate_per_hour = Column(Float, default=0.0)   # learned average rate
+    trend_direction = Column(String(16), default="stable")  # rising, falling, stable
+    trend_score = Column(Float, default=0.0)                # rate of change (slope)
+    severity_mode = Column(SmallInteger, nullable=True)     # most common severity
 
     __table_args__ = (
         Index("ix_log_tpl_first_seen", "first_seen"),
@@ -40,6 +43,8 @@ class HostBaseline(Base):
     avg_rate = Column(Float, default=0.0)            # messages per hour
     std_rate = Column(Float, default=0.0)            # standard deviation
     sample_count = Column(Integer, default=0)        # how many weeks of data
+    avg_template_count = Column(Float, default=0.0)  # baseline distinct template count
+    std_template_count = Column(Float, default=0.0)  # std dev of template count
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -56,10 +61,30 @@ class PrecursorPattern(Base):
     precedes_event = Column(String(64), nullable=False)  # "host_down", "high_latency"
     confidence = Column(Float, default=0.0)          # 0.0 - 1.0
     avg_lead_time_sec = Column(Integer, default=0)   # seconds before event
+    min_lead_time_sec = Column(Integer, default=0)   # shortest observed lead time
+    max_lead_time_sec = Column(Integer, default=0)   # longest observed lead time
     occurrence_count = Column(Integer, default=0)     # how often observed
     total_checked = Column(Integer, default=0)        # total times template appeared
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         Index("ix_precursor_tpl_event", "template_id", "precedes_event", unique=True),
+    )
+
+
+class FleetPattern(Base):
+    """A log template appearing on 3+ hosts simultaneously — fleet-wide issue."""
+    __tablename__ = "fleet_patterns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_hash = Column(String(32), nullable=False, index=True)
+    host_count = Column(Integer, default=0)
+    source_ips = Column(Text, default="")           # comma-separated IPs
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_checked = Column(DateTime, default=datetime.utcnow)
+    is_baseline = Column(Boolean, default=False)    # True if normally fleet-wide
+    status = Column(String(16), default="active")   # active, resolved
+
+    __table_args__ = (
+        Index("ix_fleet_hash_status", "template_hash", "status"),
     )

@@ -157,6 +157,62 @@ _TAG_RULES = [
 ]
 
 
+# ── Structured Field Extraction ──────────────────────────────────────────────
+
+_KV_RE = re.compile(r'(\w[\w.-]*)=((?:"[^"]*"|\S+))')
+_JSON_RE = re.compile(r'\{[^{}]{5,}\}')
+_CEF_RE = re.compile(
+    r"CEF:\d+\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|(.*)"
+)
+
+_MAX_FIELDS = 20
+_MAX_VALUE_LEN = 256
+
+
+def extract_structured_fields(message: str) -> dict[str, str]:
+    """Extract key=value pairs, embedded JSON, and CEF fields from a message.
+    Returns a dict of field name → value (max 20 fields, 256 chars per value)."""
+    fields: dict[str, str] = {}
+    if not message:
+        return fields
+
+    # CEF format
+    cef = _CEF_RE.match(message)
+    if cef:
+        fields["cef_vendor"] = cef.group(1)[:_MAX_VALUE_LEN]
+        fields["cef_product"] = cef.group(2)[:_MAX_VALUE_LEN]
+        fields["cef_event"] = cef.group(5)[:_MAX_VALUE_LEN]
+        for m in _KV_RE.finditer(cef.group(7)):
+            if len(fields) >= _MAX_FIELDS:
+                break
+            fields[m.group(1)] = m.group(2).strip('"')[:_MAX_VALUE_LEN]
+        return fields
+
+    # Embedded JSON
+    for jm in _JSON_RE.finditer(message):
+        try:
+            import json as _json
+            obj = _json.loads(jm.group())
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if len(fields) >= _MAX_FIELDS:
+                        break
+                    if isinstance(v, (str, int, float, bool)):
+                        fields[str(k)] = str(v)[:_MAX_VALUE_LEN]
+        except (ValueError, TypeError):
+            pass
+
+    # key=value pairs
+    for m in _KV_RE.finditer(message):
+        if len(fields) >= _MAX_FIELDS:
+            break
+        key, val = m.group(1), m.group(2).strip('"')
+        if len(key) > 2 and not key.isdigit():
+            fields[key] = val[:_MAX_VALUE_LEN]
+
+    return fields
+
+
 def auto_tag(message: str) -> list[str]:
     """Return auto-detected tags for a message."""
     tags = []
@@ -337,12 +393,16 @@ def process_message(message: str, severity: Optional[int] = None) -> dict:
     if severity is not None and severity <= 3:
         noise = max(0, noise - 20)  # errors are never pure noise
 
+    # Structured field extraction (fast regex, ~5μs)
+    extracted = extract_structured_fields(message)
+
     return {
         "template_hash": h,
         "tags": tags,
         "is_new_template": is_new,
         "noise_score": noise,
         "is_burst": is_burst,
+        "extracted_fields": extracted,
     }
 
 
@@ -571,16 +631,18 @@ async def _learn_precursors_for_event(
     db: AsyncSession, event_type: str,
     events: list[tuple[int, datetime]], now: datetime,
 ):
-    """Learn which templates appeared before a specific event type."""
+    """Learn which templates appeared before a specific event type.
+    Measures actual lead times instead of using hardcoded values."""
     from services.clickhouse_client import query as ch_query
 
     template_before: dict[int, int] = defaultdict(int)
+    template_lead_times: dict[int, list[float]] = defaultdict(list)
     total_events = 0
 
     for host_id, event_ts in events:
         window_start = event_ts - timedelta(minutes=5)
         msg_rows = await ch_query(
-            """SELECT message FROM syslog_messages
+            """SELECT message, timestamp FROM syslog_messages
                WHERE host_id = {hid:Int32}
                AND timestamp >= {ts_start:DateTime64(3)}
                AND timestamp <= {ts_end:DateTime64(3)}
@@ -588,17 +650,22 @@ async def _learn_precursors_for_event(
                LIMIT 50""",
             {"hid": host_id, "ts_start": window_start, "ts_end": event_ts},
         )
-        syslog_msgs = [r["message"] for r in msg_rows]
 
-        if syslog_msgs:
+        if msg_rows:
             total_events += 1
             seen_templates = set()
-            for msg in syslog_msgs:
-                _, h = extract_template(msg)
+            for row in msg_rows:
+                _, h = extract_template(row["message"])
                 tpl_id = _template_cache.get(h)
                 if tpl_id and tpl_id not in seen_templates:
                     seen_templates.add(tpl_id)
                     template_before[tpl_id] += 1
+                    # Measure actual lead time
+                    msg_ts = row["timestamp"]
+                    if isinstance(msg_ts, datetime):
+                        delta = (event_ts - msg_ts).total_seconds()
+                        if 0 < delta <= 300:
+                            template_lead_times[tpl_id].append(delta)
 
     if not total_events:
         return
@@ -607,6 +674,17 @@ async def _learn_precursors_for_event(
         confidence = before_count / total_events
         if confidence < 0.3:
             continue
+
+        # Compute actual lead time stats
+        deltas = template_lead_times.get(tpl_id, [])
+        if deltas:
+            avg_lead = int(sum(deltas) / len(deltas))
+            min_lead = int(min(deltas))
+            max_lead = int(max(deltas))
+        else:
+            avg_lead = 150
+            min_lead = 0
+            max_lead = 300
 
         existing = (await db.execute(
             select(PrecursorPattern).where(
@@ -619,13 +697,18 @@ async def _learn_precursors_for_event(
             existing.confidence = confidence
             existing.occurrence_count = before_count
             existing.total_checked = total_events
+            existing.avg_lead_time_sec = avg_lead
+            existing.min_lead_time_sec = min_lead
+            existing.max_lead_time_sec = max_lead
             existing.updated_at = now
         else:
             db.add(PrecursorPattern(
                 template_id=tpl_id,
                 precedes_event=event_type,
                 confidence=confidence,
-                avg_lead_time_sec=150,
+                avg_lead_time_sec=avg_lead,
+                min_lead_time_sec=min_lead,
+                max_lead_time_sec=max_lead,
                 occurrence_count=before_count,
                 total_checked=total_events,
                 updated_at=now,
@@ -733,6 +816,329 @@ async def refresh_noise_scores(db: AsyncSession):
     log.info("Noise scores refreshed for %d templates", len(templates))
 
 
+# ── Severity Trend Detection (periodic) ──────────────────────────────────────
+
+async def compute_severity_trends(db: AsyncSession):
+    """Detect templates increasing in frequency or escalating severity.
+    Updates trend_direction, trend_score, and severity_mode on LogTemplate."""
+    from services.clickhouse_client import query as ch_query
+
+    templates = (await db.execute(
+        select(LogTemplate).where(LogTemplate.count >= 5)
+    )).scalars().all()
+    if not templates:
+        return
+
+    hashes = [t.template_hash for t in templates]
+    # Hourly counts over last 48h per template + avg severity
+    rows = await ch_query(
+        """SELECT template_hash,
+                  toStartOfHour(timestamp) AS h,
+                  count() AS cnt,
+                  avg(severity) AS avg_sev
+           FROM syslog_messages
+           WHERE template_hash IN ({hashes:Array(String)})
+             AND timestamp >= now() - INTERVAL 48 HOUR
+           GROUP BY template_hash, h
+           ORDER BY template_hash, h""",
+        {"hashes": hashes},
+    )
+
+    # Group by template_hash
+    by_hash: dict[str, list] = defaultdict(list)
+    sev_by_hash: dict[str, list] = defaultdict(list)
+    for r in rows:
+        by_hash[r["template_hash"]].append(r)
+        sev_by_hash[r["template_hash"]].append(r["avg_sev"])
+
+    tpl_map = {t.template_hash: t for t in templates}
+    updated = 0
+
+    for h, data_points in by_hash.items():
+        tpl = tpl_map.get(h)
+        if not tpl or len(data_points) < 4:
+            continue
+
+        # Linear regression on hourly counts
+        counts = [d["cnt"] for d in data_points]
+        n = len(counts)
+        xs = list(range(n))
+        sum_x = sum(xs)
+        sum_y = sum(counts)
+        sum_xy = sum(x * y for x, y in zip(xs, counts))
+        sum_xx = sum(x * x for x in xs)
+        denom = n * sum_xx - sum_x * sum_x
+
+        if abs(denom) > 1e-10:
+            slope = (n * sum_xy - sum_x * sum_y) / denom
+        else:
+            slope = 0.0
+
+        avg_count = sum_y / n if n else 1
+        # Normalize slope relative to average (% change per hour)
+        rel_slope = slope / max(avg_count, 1.0)
+
+        if rel_slope > 0.05:
+            direction = "rising"
+        elif rel_slope < -0.05:
+            direction = "falling"
+        else:
+            direction = "stable"
+
+        tpl.trend_direction = direction
+        tpl.trend_score = round(rel_slope, 4)
+
+        # Severity mode: most common severity
+        sevs = sev_by_hash.get(h, [])
+        if sevs:
+            tpl.severity_mode = round(sum(sevs) / len(sevs))
+
+        updated += 1
+
+    await db.commit()
+    if updated:
+        log.info("Severity trends computed for %d templates", updated)
+
+
+# ── Template Diversity Per Host (periodic) ───────────────────────────────────
+
+async def compute_template_diversity(db: AsyncSession):
+    """Count distinct templates per host and update baselines."""
+    from services.clickhouse_client import query as ch_query
+
+    rows = await ch_query(
+        """SELECT source_ip,
+                  countDistinct(template_hash) AS diversity,
+                  countDistinctIf(template_hash, severity <= 3) AS error_diversity
+           FROM syslog_messages
+           WHERE timestamp >= now() - INTERVAL 1 HOUR
+             AND template_hash != ''
+           GROUP BY source_ip""",
+    )
+
+    if not rows:
+        return
+
+    now = datetime.utcnow()
+    hour = now.hour
+    dow = now.weekday()
+
+    for r in rows:
+        baseline = (await db.execute(
+            select(HostBaseline).where(
+                HostBaseline.host_key == r["source_ip"],
+                HostBaseline.hour_of_day == hour,
+                HostBaseline.day_of_week == dow,
+            )
+        )).scalar_one_or_none()
+
+        if baseline:
+            # Exponential moving average for template diversity
+            alpha = 0.3
+            baseline.avg_template_count = (
+                alpha * r["diversity"] + (1 - alpha) * baseline.avg_template_count
+            )
+            # Update std using Welford's online algorithm (simplified)
+            diff = r["diversity"] - baseline.avg_template_count
+            baseline.std_template_count = max(
+                1.0, (1 - alpha) * baseline.std_template_count + alpha * abs(diff)
+            )
+
+    await db.commit()
+    log.info("Template diversity computed for %d hosts", len(rows))
+
+
+# ── Cross-Host Correlation (fleet-wide issue detection) ──────────────────────
+
+async def detect_fleet_patterns(db: AsyncSession) -> list[dict]:
+    """Detect same template hash appearing on 3+ hosts simultaneously."""
+    from services.clickhouse_client import query as ch_query
+    from models.log_template import FleetPattern
+
+    rows = await ch_query(
+        """SELECT template_hash,
+                  countDistinct(source_ip) AS host_count,
+                  groupArray(DISTINCT source_ip) AS hosts
+           FROM syslog_messages
+           WHERE timestamp >= now() - INTERVAL 10 MINUTE
+             AND severity <= 4
+             AND template_hash != ''
+           GROUP BY template_hash
+           HAVING host_count >= 3
+           ORDER BY host_count DESC
+           LIMIT 20""",
+    )
+
+    if not rows:
+        return []
+
+    now = datetime.utcnow()
+    fleet_issues = []
+
+    for r in rows:
+        th = r["template_hash"]
+        host_count = r["host_count"]
+        hosts = r["hosts"] if isinstance(r["hosts"], list) else []
+
+        # Check if this pattern is normally fleet-wide (baseline check)
+        existing = (await db.execute(
+            select(FleetPattern).where(
+                FleetPattern.template_hash == th,
+                FleetPattern.status == "active",
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            existing.host_count = host_count
+            existing.source_ips = ",".join(hosts[:20])
+            existing.last_checked = now
+        else:
+            # Check if this was fleet-wide yesterday (baseline)
+            baseline_count = await ch_query(
+                """SELECT countDistinct(source_ip) AS cnt
+                   FROM syslog_messages
+                   WHERE template_hash = {th:String}
+                     AND timestamp >= now() - INTERVAL 25 HOUR
+                     AND timestamp <= now() - INTERVAL 24 HOUR
+                     AND severity <= 4""",
+                {"th": th},
+            )
+            is_baseline = False
+            if baseline_count and baseline_count[0]["cnt"] >= 3:
+                is_baseline = True
+
+            if not is_baseline:
+                fp = FleetPattern(
+                    template_hash=th,
+                    host_count=host_count,
+                    source_ips=",".join(hosts[:20]),
+                    first_seen=now,
+                    last_checked=now,
+                    is_baseline=False,
+                    status="active",
+                )
+                db.add(fp)
+                fleet_issues.append({
+                    "template_hash": th,
+                    "host_count": host_count,
+                    "hosts": hosts[:10],
+                })
+
+    # Auto-resolve old fleet patterns
+    stale = (await db.execute(
+        select(FleetPattern).where(
+            FleetPattern.status == "active",
+            FleetPattern.last_checked < now - timedelta(minutes=15),
+        )
+    )).scalars().all()
+    for fp in stale:
+        fp.status = "resolved"
+
+    await db.commit()
+    return fleet_issues
+
+
+# ── Content-Based Anomalies ──────────────────────────────────────────────────
+
+async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
+    """Detect new templates on stable hosts and severity upgrades."""
+    from services.clickhouse_client import query as ch_query
+
+    now = datetime.utcnow()
+    hour = now.hour
+    dow = now.weekday()
+    anomalies = []
+
+    # Get hosts with template diversity baselines
+    baselines = (await db.execute(
+        select(HostBaseline).where(
+            HostBaseline.hour_of_day == hour,
+            HostBaseline.day_of_week == dow,
+            HostBaseline.avg_template_count > 0,
+            HostBaseline.sample_count >= 3,
+        )
+    )).scalars().all()
+
+    if not baselines:
+        return anomalies
+
+    stable_hosts = {
+        b.host_key: b for b in baselines
+        if b.avg_template_count < 10 and b.std_template_count < 3
+    }
+
+    if not stable_hosts:
+        return anomalies
+
+    # Current hour: per-host new templates (templates not seen before on this host)
+    host_keys = list(stable_hosts.keys())
+    rows = await ch_query(
+        """SELECT source_ip, template_hash, min(severity) AS min_sev
+           FROM syslog_messages
+           WHERE timestamp >= now() - INTERVAL 1 HOUR
+             AND source_ip IN ({ips:Array(String)})
+             AND template_hash != ''
+           GROUP BY source_ip, template_hash""",
+        {"ips": host_keys},
+    )
+
+    # Count distinct templates per host
+    host_templates: dict[str, list] = defaultdict(list)
+    for r in rows:
+        host_templates[r["source_ip"]].append(r)
+
+    for sip, tpl_rows in host_templates.items():
+        baseline = stable_hosts.get(sip)
+        if not baseline:
+            continue
+
+        diversity = len(tpl_rows)
+        threshold = baseline.avg_template_count + 3 * max(baseline.std_template_count, 1)
+
+        if diversity > threshold and diversity > 5:
+            anomalies.append({
+                "source_ip": sip,
+                "type": "template_diversity_spike",
+                "current": diversity,
+                "baseline": round(baseline.avg_template_count, 1),
+            })
+
+    # Severity upgrade detection: templates with severity much lower than normal
+    templates_with_mode = (await db.execute(
+        select(LogTemplate).where(
+            LogTemplate.severity_mode.isnot(None),
+            LogTemplate.severity_mode >= 5,  # normally info/debug
+        )
+    )).scalars().all()
+
+    if templates_with_mode:
+        sev_hashes = [t.template_hash for t in templates_with_mode]
+        sev_rows = await ch_query(
+            """SELECT template_hash, min(severity) AS min_sev, count() AS cnt
+               FROM syslog_messages
+               WHERE template_hash IN ({hashes:Array(String)})
+                 AND timestamp >= now() - INTERVAL 2 HOUR
+                 AND severity <= 3
+               GROUP BY template_hash
+               HAVING cnt >= 3""",
+            {"hashes": sev_hashes},
+        )
+        tpl_map = {t.template_hash: t for t in templates_with_mode}
+        for r in sev_rows:
+            tpl = tpl_map.get(r["template_hash"])
+            if tpl:
+                anomalies.append({
+                    "type": "severity_upgrade",
+                    "template_hash": r["template_hash"],
+                    "template": tpl.template[:100],
+                    "normal_severity": tpl.severity_mode,
+                    "current_severity": r["min_sev"],
+                    "count": r["cnt"],
+                })
+
+    return anomalies
+
+
 # ── Main periodic job (called by scheduler) ──────────────────────────────────
 
 async def run_intelligence():
@@ -745,6 +1151,8 @@ async def run_intelligence():
             await compute_baselines(db)
             await learn_precursors(db)
             await refresh_noise_scores(db)
+            await compute_severity_trends(db)
+            await compute_template_diversity(db)
         except Exception as e:
             log.error("Intelligence engine error: %s", e, exc_info=True)
             await db.rollback()

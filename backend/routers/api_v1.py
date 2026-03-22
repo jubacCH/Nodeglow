@@ -1224,6 +1224,80 @@ async def query_syslog(
     ]
 
 
+@router.get("/syslog/intelligence", summary="Syslog intelligence summary")
+async def syslog_intelligence(
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    """Returns active anomalies, fleet patterns, severity trends, and precursors."""
+    from models.log_template import LogTemplate, PrecursorPattern, FleetPattern
+    from services.log_intelligence import detect_baseline_anomalies, get_active_bursts
+
+    result = {
+        "anomalies": [],
+        "bursts": [],
+        "fleet_patterns": [],
+        "trends": [],
+        "precursors": [],
+    }
+
+    try:
+        result["anomalies"] = await detect_baseline_anomalies(db)
+    except Exception:
+        pass
+    result["bursts"] = get_active_bursts()
+
+    try:
+        fleet = (await db.execute(
+            select(FleetPattern).where(FleetPattern.status == "active")
+            .order_by(FleetPattern.host_count.desc()).limit(10)
+        )).scalars().all()
+        result["fleet_patterns"] = [
+            {"template_hash": fp.template_hash, "host_count": fp.host_count,
+             "source_ips": fp.source_ips.split(",") if fp.source_ips else []}
+            for fp in fleet
+        ]
+    except Exception:
+        pass
+
+    try:
+        rising = (await db.execute(
+            select(LogTemplate).where(
+                LogTemplate.trend_direction == "rising",
+                LogTemplate.trend_score > 0.05,
+            ).order_by(LogTemplate.trend_score.desc()).limit(10)
+        )).scalars().all()
+        result["trends"] = [
+            {"template_hash": t.template_hash, "template": t.template[:120],
+             "trend_score": round(t.trend_score * 100, 1),
+             "severity_mode": t.severity_mode, "count": t.count}
+            for t in rising
+        ]
+    except Exception:
+        pass
+
+    try:
+        precs = (await db.execute(
+            select(PrecursorPattern, LogTemplate)
+            .join(LogTemplate, PrecursorPattern.template_id == LogTemplate.id)
+            .where(PrecursorPattern.confidence >= 0.3)
+            .order_by(PrecursorPattern.confidence.desc())
+            .limit(10)
+        )).all()
+        result["precursors"] = [
+            {"template_hash": tpl.template_hash, "template": tpl.template[:100],
+             "event": p.precedes_event, "confidence": round(p.confidence * 100),
+             "avg_lead_time": p.avg_lead_time_sec,
+             "min_lead_time": p.min_lead_time_sec,
+             "max_lead_time": p.max_lead_time_sec}
+            for p, tpl in precs
+        ]
+    except Exception:
+        pass
+
+    return result
+
+
 # ── Topology ──────────────────────────────────────────────────────────────────
 
 

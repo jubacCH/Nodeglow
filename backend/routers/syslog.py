@@ -240,13 +240,50 @@ async def syslog_page(
     saved_views = (await db.execute(select(SyslogView).order_by(SyslogView.name))).scalars().all()
     alert_spike = await _check_severity_spike()
 
-    intelligence = {"anomalies": [], "new_templates": [], "precursors": [], "bursts": []}
+    intelligence = {"anomalies": [], "new_templates": [], "precursors": [], "bursts": [],
+                    "fleet_patterns": [], "content_anomalies": [], "trends": []}
     try:
-        from models.log_template import LogTemplate, PrecursorPattern
-        from services.log_intelligence import detect_baseline_anomalies, get_active_bursts
+        from models.log_template import LogTemplate, PrecursorPattern, FleetPattern
+        from services.log_intelligence import detect_baseline_anomalies, get_active_bursts, detect_content_anomalies
 
         intelligence["anomalies"] = await detect_baseline_anomalies(db)
         intelligence["bursts"] = get_active_bursts()
+
+        # Content anomalies
+        try:
+            intelligence["content_anomalies"] = await detect_content_anomalies(db)
+        except Exception:
+            pass
+
+        # Active fleet patterns
+        try:
+            fleet = (await db.execute(
+                select(FleetPattern).where(FleetPattern.status == "active")
+                .order_by(FleetPattern.host_count.desc()).limit(5)
+            )).scalars().all()
+            intelligence["fleet_patterns"] = [
+                {"template_hash": fp.template_hash, "host_count": fp.host_count,
+                 "source_ips": fp.source_ips}
+                for fp in fleet
+            ]
+        except Exception:
+            pass
+
+        # Rising trends
+        try:
+            rising = (await db.execute(
+                select(LogTemplate).where(
+                    LogTemplate.trend_direction == "rising",
+                    LogTemplate.trend_score > 0.05,
+                ).order_by(LogTemplate.trend_score.desc()).limit(5)
+            )).scalars().all()
+            intelligence["trends"] = [
+                {"template": t.template[:100], "trend_score": round(t.trend_score * 100, 1),
+                 "severity_mode": t.severity_mode, "template_hash": t.template_hash}
+                for t in rising
+            ]
+        except Exception:
+            pass
 
         new_tpls = (await db.execute(
             select(LogTemplate)
@@ -555,6 +592,7 @@ async def template_browser(
         "count": LogTemplate.count.desc(),
         "noise": LogTemplate.noise_score.asc(),
         "new": LogTemplate.first_seen.desc(),
+        "trend": LogTemplate.trend_score.desc(),
     }
     query = query.order_by(sort_map.get(sort, LogTemplate.last_seen.desc()))
 
@@ -609,6 +647,9 @@ async def template_browser(
                 "last_seen": str(t.last_seen),
                 "tags": t.tags or "",
                 "avg_rate_per_hour": rate_map.get(t.template_hash),
+                "trend_direction": t.trend_direction or "stable",
+                "trend_score": round((t.trend_score or 0) * 100, 1),
+                "severity_mode": t.severity_mode,
             }
             for t in tpls
         ],
@@ -726,6 +767,143 @@ async def root_cause_suggestions(
         "first_seen": first_seen.isoformat() if first_seen else None,
         "last_seen": last_seen.isoformat() if last_seen else None,
         "aftermath": aftermath_list[:10],  # top 10 patterns
+        "sample_size": len(sample),
+    }
+
+
+# ── Reverse Root-Cause (what CAUSED this?) ──────────────────────────────────
+
+@router.get("/api/reverse-cause/{template_hash}")
+async def reverse_cause(
+    template_hash: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """For a given log template, look BACKWARD to find what messages preceded it.
+    Helps answer: 'what caused this error?'"""
+    from models.log_template import LogTemplate
+    from services.log_intelligence import extract_template
+
+    if not re.match(r"^[a-f0-9]{16}$", template_hash):
+        return {"error": "Invalid template hash"}
+
+    since = datetime.utcnow() - timedelta(days=30)
+
+    # Get the template text
+    tpl_row = (await db.execute(
+        select(LogTemplate.template).where(LogTemplate.template_hash == template_hash)
+    )).scalar()
+
+    # Get a sample of recent occurrences
+    occurrences = await ch_query(
+        """SELECT timestamp, source_ip, hostname, host_id, severity
+           FROM syslog_messages
+           WHERE template_hash = {th:String} AND timestamp >= {since:DateTime64(3)}
+           ORDER BY timestamp DESC
+           LIMIT 200""",
+        {"th": template_hash, "since": since},
+    )
+
+    if not occurrences:
+        return {"total_count": 0, "predecessors": [], "cross_host": [], "template": ""}
+
+    # For each occurrence, look BACKWARD 5-10 minutes for predecessor messages
+    predecessor_counts: dict[str, dict] = {}
+    hosts_seen = set()
+    sample = occurrences[:50]
+
+    for occ in sample:
+        hosts_seen.add(occ["source_ip"])
+        ts = occ["timestamp"]
+        ts_start = ts - timedelta(minutes=10) if isinstance(ts, datetime) else datetime.utcnow() - timedelta(minutes=10)
+
+        # Same host predecessors
+        predecessors = await ch_query(
+            """SELECT template_hash, message, severity
+               FROM syslog_messages
+               WHERE source_ip = {sip:String}
+                 AND timestamp >= {ts_start:DateTime64(3)}
+                 AND timestamp < {ts:DateTime64(3)}
+                 AND template_hash != {th:String}
+                 AND template_hash != ''
+               ORDER BY timestamp DESC
+               LIMIT 20""",
+            {"sip": occ["source_ip"], "ts_start": ts_start, "ts": ts, "th": template_hash},
+        )
+
+        for pred in predecessors:
+            ph = pred["template_hash"]
+            if ph not in predecessor_counts:
+                predecessor_counts[ph] = {
+                    "count": 0,
+                    "example": pred["message"][:200],
+                    "severity_sum": 0,
+                    "template_hash": ph,
+                }
+            predecessor_counts[ph]["count"] += 1
+            predecessor_counts[ph]["severity_sum"] += pred["severity"] if pred["severity"] is not None else 6
+
+    # Rank by frequency and severity (more severe = more likely cause)
+    predecessors_list = []
+    for ph, info in predecessor_counts.items():
+        pct = round(info["count"] / len(sample) * 100)
+        avg_sev = info["severity_sum"] / info["count"] if info["count"] else 6
+        predecessors_list.append({
+            "template_hash": ph,
+            "example": info["example"],
+            "frequency": info["count"],
+            "percentage": pct,
+            "avg_severity": round(avg_sev, 1),
+        })
+    predecessors_list.sort(key=lambda x: (-x["frequency"], x["avg_severity"]))
+
+    # Cross-host: did something happen on OTHER hosts right before?
+    cross_host = []
+    if len(hosts_seen) > 0:
+        for occ in sample[:10]:
+            ts = occ["timestamp"]
+            ts_start = ts - timedelta(minutes=5) if isinstance(ts, datetime) else datetime.utcnow() - timedelta(minutes=5)
+            xh_rows = await ch_query(
+                """SELECT template_hash, source_ip, count() AS cnt
+                   FROM syslog_messages
+                   WHERE source_ip != {sip:String}
+                     AND timestamp >= {ts_start:DateTime64(3)}
+                     AND timestamp < {ts:DateTime64(3)}
+                     AND severity <= 3
+                     AND template_hash != ''
+                   GROUP BY template_hash, source_ip
+                   ORDER BY cnt DESC
+                   LIMIT 5""",
+                {"sip": occ["source_ip"], "ts_start": ts_start, "ts": ts},
+            )
+            for r in xh_rows:
+                cross_host.append({
+                    "template_hash": r["template_hash"],
+                    "source_ip": r["source_ip"],
+                    "count": r["cnt"],
+                })
+
+    # Deduplicate cross-host by template_hash
+    xh_agg: dict[str, dict] = {}
+    for xh in cross_host:
+        key = xh["template_hash"]
+        if key not in xh_agg:
+            xh_agg[key] = {"template_hash": key, "hosts": set(), "total_count": 0}
+        xh_agg[key]["hosts"].add(xh["source_ip"])
+        xh_agg[key]["total_count"] += xh["count"]
+
+    cross_host_list = [
+        {"template_hash": v["template_hash"], "host_count": len(v["hosts"]),
+         "total_count": v["total_count"]}
+        for v in xh_agg.values()
+    ]
+    cross_host_list.sort(key=lambda x: -x["total_count"])
+
+    return {
+        "total_count": len(occurrences),
+        "hosts_affected": len(hosts_seen),
+        "template": tpl_row or "",
+        "predecessors": predecessors_list[:10],
+        "cross_host": cross_host_list[:5],
         "sample_size": len(sample),
     }
 
