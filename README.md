@@ -1,6 +1,6 @@
 # Nodeglow
 
-A self-hosted infrastructure monitoring platform with **log intelligence**, **incident correlation**, and **15 integrations** — built for homelabs and small networks.
+A self-hosted infrastructure monitoring platform with **log intelligence**, **incident correlation**, and **16 integrations** — built for homelabs and small networks.
 
 ---
 
@@ -49,8 +49,8 @@ A self-hosted infrastructure monitoring platform with **log intelligence**, **in
 | **Maintenance mode** | Pauses checks, hides host from alarms |
 | **SSL monitoring** | Certificate expiry tracking with alerts, auto-discovery via port scanner |
 | **Latency thresholds** | Per-host or global alarm when latency exceeds limit |
-| **15 integrations** | Generic plugin system — see table below |
-| **Syslog receiver** | UDP/TCP syslog (RFC 3164/5424) with auto-host assignment and full-text search |
+| **16 integrations** | Generic plugin system — see table below |
+| **Syslog receiver** | UDP/TCP syslog (RFC 3164/5424) with auto-host assignment, full-text search, host allowlist |
 | **Log intelligence** | Template extraction, auto-tagging (11 categories), noise scoring, burst detection |
 | **Baseline anomalies** | Per-host hourly rate baselines with spike and silence detection |
 | **Precursor detection** | Learns which log patterns precede host-down, integration failures, incidents |
@@ -65,7 +65,7 @@ A self-hosted infrastructure monitoring platform with **log intelligence**, **in
 | **Multi-user** | Admin / Editor / Read-only roles |
 | **Notifications** | Telegram, Discord, Email (SMTP), Webhook |
 | **Tasks** | Aggregated pending admin work (new ports, SSL certs) |
-| **Digest** | Log summary and aggregation view |
+| **Weekly digest** | Scheduled email summary — incidents, host availability, syslog stats, SSL expiry |
 | **Data retention** | Configurable per integration type, automatic cleanup |
 
 ---
@@ -91,6 +91,7 @@ All integrations use a generic plugin system (`BaseIntegration` ABC). Adding a n
 | **Speedtest** | Download, upload, latency — scheduled via `speedtest-cli` |
 | **UPS / NUT** | Battery charge, status (on-line / on-battery), runtime |
 | **Redfish / iDRAC** | Server hardware temps, fans, power, system info |
+| **Swisscom Internet-Box** | WAN status, connected devices, device info (Arcadyan IB5) |
 
 ---
 
@@ -167,6 +168,8 @@ All settings are available at **Settings** (admin only):
 | CPU/RAM/Disk threshold | 85 / 85 / 90 % | Threshold for anomaly alerts |
 | Anomaly multiplier | 2.0x | Alert when metric > Nx 24h avg |
 | Syslog port | 1514 | UDP/TCP syslog listener port |
+| Syslog host allowlist | Off | Only accept syslog from IPs in the Hosts list |
+| Weekly digest | Off | Scheduled email summary (day + hour configurable) |
 
 ---
 
@@ -185,7 +188,7 @@ nodeglow/
 │   ├── models/              # SQLAlchemy models (PostgreSQL)
 │   ├── integrations/        # Plugin system (one file per integration)
 │   │   ├── _base.py         # BaseIntegration ABC
-│   │   └── ...              # 15 integration plugins
+│   │   └── ...              # 16 integration plugins
 │   ├── services/            # Business logic
 │   │   ├── syslog.py        # UDP/TCP syslog receiver + parser
 │   │   ├── correlation.py   # Incident correlation engine
