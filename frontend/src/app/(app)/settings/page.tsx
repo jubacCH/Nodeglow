@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings, Activity, Bell, Palette, Key, Database,
   Plus, Trash2, Copy, Send, CheckCircle,
-  XCircle, AlertTriangle, Download, Upload,
+  XCircle, AlertTriangle, Download, Upload, Sparkles,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -20,7 +20,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 
 /* ---------- Types ---------- */
 
-type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'backup';
+type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'ai' | 'backup';
 
 interface SettingsData {
   site_name: string;
@@ -52,6 +52,7 @@ interface SettingsData {
   smtp_from: string;
   smtp_to: string;
   smtp_has_pw: boolean;
+  claude_has_key: boolean;
   notify_telegram_min_severity: string;
   notify_discord_min_severity: string;
   notify_webhook_min_severity: string;
@@ -111,6 +112,7 @@ const TAB_ICONS: Record<Tab, typeof Settings> = {
   notifications: Bell,
   appearance: Palette,
   api: Key,
+  ai: Sparkles,
   backup: Database,
 };
 
@@ -222,6 +224,10 @@ export default function SettingsPage() {
   const [fontSize, setFontSize] = useState<'sm' | 'base' | 'lg'>(
     themeStore.fontSize <= 12 ? 'sm' : themeStore.fontSize >= 16 ? 'lg' : 'base'
   );
+
+  /* ---- AI settings state ---- */
+  const [claudeApiKey, setClaudeApiKey] = useState('');
+  const [aiSaving, setAiSaving] = useState(false);
 
   /* ---- API keys state ---- */
   const [createKeyModal, setCreateKeyModal] = useState(false);
@@ -485,6 +491,7 @@ export default function SettingsPage() {
     { key: 'notifications', label: 'Notifications' },
     { key: 'appearance', label: 'Appearance' },
     { key: 'api', label: 'API' },
+    { key: 'ai', label: 'AI' },
     { key: 'backup', label: 'Backup' },
   ];
 
@@ -1245,6 +1252,72 @@ export default function SettingsPage() {
               </table>
             )}
           </GlassCard>
+        </div>
+      )}
+
+      {/* ==================== AI TAB ==================== */}
+      {activeTab === 'ai' && (
+        <div className="space-y-4">
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
+              <Sparkles size={16} className="text-violet-400" />
+              Claude API Key
+            </h3>
+            <p className="text-xs text-slate-400 mb-4">
+              Powers the AI Copilot and auto-postmortem features. Requires a Claude API key from{' '}
+              <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">
+                console.anthropic.com
+              </a>
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="ng-label">API Key</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={claudeApiKey}
+                    onChange={(e) => setClaudeApiKey(e.target.value)}
+                    className={inputCls}
+                    placeholder="sk-ant-..."
+                  />
+                  {settings && (
+                    <span className={`text-xs whitespace-nowrap ${
+                      settings.claude_has_key
+                        ? 'text-emerald-400'
+                        : 'text-slate-500'
+                    }`}>
+                      {settings.claude_has_key
+                        ? 'Key configured'
+                        : 'No key configured'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </GlassCard>
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              disabled={aiSaving || !claudeApiKey.trim()}
+              onClick={async () => {
+                setAiSaving(true);
+                try {
+                  const params = new URLSearchParams();
+                  params.set('claude_api_key', claudeApiKey);
+                  await api('/settings/ai/save', { method: 'POST', body: params });
+                  setClaudeApiKey('');
+                  qc.invalidateQueries({ queryKey: ['settings'] });
+                  toast.show('AI settings saved', 'success');
+                } catch {
+                  toast.show('Failed to save AI settings', 'error');
+                } finally {
+                  setAiSaving(false);
+                }
+              }}
+            >
+              {aiSaving ? 'Saving...' : 'Save API Key'}
+            </Button>
+          </div>
         </div>
       )}
 
