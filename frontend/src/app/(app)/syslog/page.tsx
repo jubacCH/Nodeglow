@@ -5,11 +5,12 @@ import { SyslogLiveTail } from '@/components/syslog/SyslogLiveTail';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useSyslog } from '@/hooks/queries/useSyslog';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { MessageSquare, Brain } from 'lucide-react';
+import { MessageSquare, Brain, ChevronRight, ChevronDown, MapPin } from 'lucide-react';
 import { ExportButton } from '@/components/ui/ExportButton';
 import { timeAgo } from '@/lib/utils';
+import type { SyslogMessage } from '@/types';
 
 const SEVERITY_LABELS: Record<number, string> = {
   0: 'Emergency',
@@ -38,6 +39,7 @@ export default function SyslogPage() {
   const [search, setSearch] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState<string | undefined>(undefined);
   const [liveEnabled, setLiveEnabled] = useState(false);
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const { data: messages, isLoading } = useSyslog({
     severity: selectedSeverity,
     limit: 200,
@@ -170,26 +172,78 @@ export default function SyslogPage() {
                     <td className="px-4 py-3"><Skeleton className="h-5 w-full" /></td>
                   </tr>
                 ))}
-              {filtered?.map((msg, i) => (
-                <tr key={i} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
-                  <td className="px-4 py-3 text-xs text-slate-400 font-mono whitespace-nowrap" title={new Date(msg.timestamp).toLocaleString()}>
-                    {timeAgo(msg.timestamp)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_COLORS[msg.severity] ?? 'bg-slate-500 text-white'}`}>
-                      {SEVERITY_LABELS[msg.severity] ?? msg.severity}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-xs font-mono whitespace-nowrap">
-                    <Link href={`/hosts?q=${encodeURIComponent(msg.hostname)}`} className="text-slate-300 hover:text-sky-400 transition-colors">
-                      {msg.hostname}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-slate-300 max-w-md truncate">
-                    {msg.message}
-                  </td>
-                </tr>
-              ))}
+              {filtered?.map((msg, i) => {
+                const fields = msg.extracted_fields ?? {};
+                const fieldKeys = Object.keys(fields);
+                const hasDetails = fieldKeys.length > 0 || msg.geo_country;
+                const isExpanded = expandedRow === i;
+                return (
+                  <Fragment key={i}>
+                    <tr
+                      className={`border-b border-white/[0.06] transition-colors ${hasDetails ? 'cursor-pointer hover:bg-white/[0.06]' : 'hover:bg-white/[0.06]'}`}
+                      onClick={() => hasDetails && setExpandedRow(isExpanded ? null : i)}
+                    >
+                      <td className="px-4 py-3 text-xs text-slate-400 font-mono whitespace-nowrap" title={new Date(msg.timestamp).toLocaleString()}>
+                        <span className="flex items-center gap-1">
+                          {hasDetails && (isExpanded
+                            ? <ChevronDown size={12} className="text-slate-500 flex-shrink-0" />
+                            : <ChevronRight size={12} className="text-slate-500 flex-shrink-0" />
+                          )}
+                          {timeAgo(msg.timestamp)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_COLORS[msg.severity] ?? 'bg-slate-500 text-white'}`}>
+                          {SEVERITY_LABELS[msg.severity] ?? msg.severity}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs font-mono whitespace-nowrap">
+                        <Link href={`/hosts?q=${encodeURIComponent(msg.hostname)}`} className="text-slate-300 hover:text-sky-400 transition-colors" onClick={(e) => e.stopPropagation()}>
+                          {msg.hostname}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-slate-300 max-w-md truncate">
+                        <span className="flex items-center gap-2">
+                          {msg.message}
+                          {fieldKeys.length > 0 && (
+                            <span className="flex-shrink-0 text-[10px] text-sky-400/70 bg-sky-400/10 px-1.5 py-0.5 rounded">
+                              {fieldKeys.length} fields
+                            </span>
+                          )}
+                          {msg.geo_country && (
+                            <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-emerald-400/70 bg-emerald-400/10 px-1.5 py-0.5 rounded">
+                              <MapPin size={9} />{msg.geo_country}{msg.geo_city ? ` · ${msg.geo_city}` : ''}
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                    {isExpanded && hasDetails && (
+                      <tr className="border-b border-white/[0.06] bg-white/[0.02]">
+                        <td colSpan={4} className="px-4 py-3">
+                          <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-xs">
+                            {fieldKeys.map((key) => (
+                              <div key={key} className="flex items-center gap-1.5">
+                                <span className="text-sky-400 font-medium">{key}</span>
+                                <span className="text-slate-500">=</span>
+                                <span className="text-slate-300 font-mono">{fields[key]}</span>
+                              </div>
+                            ))}
+                            {msg.geo_country && (
+                              <div className="flex items-center gap-1.5">
+                                <MapPin size={11} className="text-emerald-400" />
+                                <span className="text-emerald-400 font-medium">geo</span>
+                                <span className="text-slate-500">=</span>
+                                <span className="text-slate-300 font-mono">{msg.geo_country}{msg.geo_city ? ` / ${msg.geo_city}` : ''}</span>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
               {!isLoading && (!filtered || filtered.length === 0) && (
                 <tr>
                   <td colSpan={4} className="px-4 py-16">

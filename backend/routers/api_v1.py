@@ -1200,7 +1200,8 @@ async def query_syslog(
 
     rows = await ch_query(
         f"""SELECT timestamp, source_ip, hostname, facility, severity,
-                   app_name, message, host_id, tags, noise_score
+                   app_name, message, host_id, tags, noise_score,
+                   extracted_fields, geo_country, geo_city
             FROM syslog_messages
             WHERE {where}{extra}
             ORDER BY timestamp DESC
@@ -1219,6 +1220,9 @@ async def query_syslog(
             "host_id": r["host_id"],
             "tags": r["tags"],
             "noise_score": r["noise_score"],
+            "extracted_fields": dict(r["extracted_fields"]) if r.get("extracted_fields") else {},
+            "geo_country": r.get("geo_country") or "",
+            "geo_city": r.get("geo_city") or "",
         }
         for r in rows
     ]
