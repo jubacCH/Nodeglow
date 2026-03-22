@@ -157,6 +157,9 @@ export interface SyslogMessage {
   tags: string[];
   noise_score: number;
   template_hash: string;
+  extracted_fields: Record<string, string>;
+  geo_country: string;
+  geo_city: string;
 }
 
 export interface LogTemplate {
