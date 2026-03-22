@@ -520,6 +520,51 @@ async def run_port_discovery():
     await _run()
 
 
+async def run_weekly_digest():
+    """Build and send weekly digest email."""
+    from database import get_setting, decrypt_value
+    from services.digest import build_weekly_digest, format_digest_html, format_digest_text
+    from notifications import _send_email, _log_notification
+
+    async with AsyncSessionLocal() as db:
+        enabled = await get_setting(db, "digest_enabled", "0")
+        if enabled != "1":
+            return
+
+        smtp_host = await get_setting(db, "smtp_host", "")
+        smtp_user = await get_setting(db, "smtp_user", "")
+        smtp_pw_enc = await get_setting(db, "smtp_password", "")
+        smtp_to = await get_setting(db, "smtp_to", "")
+        if not (smtp_host and smtp_user and smtp_pw_enc and smtp_to):
+            logger.warning("Weekly digest skipped: SMTP not configured")
+            return
+
+        smtp_port = int(await get_setting(db, "smtp_port", "587"))
+        smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
+
+        try:
+            smtp_pw = decrypt_value(smtp_pw_enc)
+        except Exception:
+            smtp_pw = smtp_pw_enc
+
+        digest = await build_weekly_digest(db)
+
+    html_body = format_digest_html(digest)
+    text_body = format_digest_text(digest)
+
+    try:
+        await _send_email(
+            smtp_host, smtp_port, smtp_user, smtp_pw,
+            smtp_from, smtp_to,
+            "[Nodeglow] Weekly Digest", text_body, html_body,
+        )
+        await _log_notification("email", "Weekly Digest", "Automated weekly digest", "info", "sent")
+        logger.info("Weekly digest email sent to %s", smtp_to)
+    except Exception as exc:
+        await _log_notification("email", "Weekly Digest", "Automated weekly digest", "info", "failed", str(exc))
+        logger.error("Weekly digest email failed: %s", exc)
+
+
 async def run_alert_rules():
     """Evaluate all user-defined alert rules."""
     from services.rules import evaluate_rules
@@ -561,6 +606,14 @@ async def start_scheduler():
                       id="disk_space", replace_existing=True)
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
                       id="ch_cleanup", replace_existing=True)
+
+    # Weekly digest email (default: Monday 9:00, configurable)
+    digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
+    digest_hour = int(await get_setting(db, "digest_hour", "9"))
+    scheduler.add_job(run_weekly_digest, "cron",
+                      day_of_week=digest_day, hour=digest_hour, minute=0,
+                      id="weekly_digest", replace_existing=True)
+
     scheduler.start()
 
     # Seed default SNMP OIDs

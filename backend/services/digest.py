@@ -213,3 +213,201 @@ async def build_weekly_digest(db: AsyncSession) -> dict:
         digest["ssl_expiring"] = []
 
     return digest
+
+
+def format_digest_html(digest: dict) -> str:
+    """Format digest data as a styled HTML email body."""
+    period = f"{digest['period_start'].strftime('%Y-%m-%d')} — {digest['period_end'].strftime('%Y-%m-%d')}"
+
+    # ── Incidents section ──
+    inc = digest.get("incidents", {})
+    inc_total = inc.get("total", 0)
+    mttr = inc.get("mttr_min")
+    by_sev = inc.get("by_severity", {})
+    sev_parts = ", ".join(f"{k}: {v}" for k, v in sorted(by_sev.items())) or "none"
+
+    inc_rows = ""
+    for i in inc.get("top", [])[:5]:
+        title = getattr(i, "title", str(i)) if not isinstance(i, dict) else i.get("title", "")
+        severity = getattr(i, "severity", "") if not isinstance(i, dict) else i.get("severity", "")
+        status = getattr(i, "status", "") if not isinstance(i, dict) else i.get("status", "")
+        sev_color = {"critical": "#FB7185", "warning": "#FBBF24"}.get(severity, "#38BDF8")
+        inc_rows += f"""<tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:#CBD5E1;font-size:13px">{_esc(title)}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:{sev_color};font-size:13px">{severity}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:#94A3B8;font-size:13px">{status}</td>
+        </tr>"""
+
+    # ── Host availability section ──
+    hosts = digest.get("hosts", {})
+    avg_uptime = hosts.get("avg_uptime", 100)
+    worst_hosts = hosts.get("worst", [])[:5]
+    host_rows = ""
+    for h in worst_hosts:
+        uptime = h.get("uptime_pct", 100)
+        color = "#FB7185" if uptime < 95 else "#FBBF24" if uptime < 99 else "#34D399"
+        host_rows += f"""<tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:#CBD5E1;font-size:13px">{_esc(h.get('name', ''))}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:{color};font-size:13px">{uptime}%</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:#94A3B8;font-size:13px">{h.get('failures', 0)} failures</td>
+        </tr>"""
+
+    # ── Syslog section ──
+    syslog = digest.get("syslog", {})
+    syslog_total = syslog.get("total", 0)
+    syslog_errors = syslog.get("errors", 0)
+
+    # ── Integrations section ──
+    integrations = digest.get("integrations", [])
+    int_rows = ""
+    for i in integrations[:5]:
+        rate = i.get("success_rate")
+        rate_str = f"{rate}%" if rate is not None else "—"
+        color = "#FB7185" if rate is not None and rate < 90 else "#34D399"
+        int_rows += f"""<tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:#CBD5E1;font-size:13px">{_esc(i.get('name', ''))}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:#94A3B8;font-size:13px">{i.get('type', '')}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:{color};font-size:13px">{rate_str}</td>
+        </tr>"""
+
+    # ── SSL section ──
+    ssl_expiring = digest.get("ssl_expiring", [])
+    ssl_rows = ""
+    for s in ssl_expiring[:5]:
+        days = s.get("days", 0)
+        color = "#FB7185" if days <= 7 else "#FBBF24" if days <= 14 else "#38BDF8"
+        ssl_rows += f"""<tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:#CBD5E1;font-size:13px">{_esc(s.get('name', ''))}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #1E293B;color:{color};font-size:13px">{days} days</td>
+        </tr>"""
+
+    table_style = 'style="width:100%;border-collapse:collapse;margin:8px 0 16px 0"'
+    th_style = 'style="padding:6px 12px;text-align:left;border-bottom:2px solid #334155;color:#64748B;font-size:11px;text-transform:uppercase;letter-spacing:1px"'
+
+    def _section(title: str, content: str) -> str:
+        return f"""
+        <div style="margin-bottom:24px">
+            <h2 style="color:#E2E8F0;font-size:15px;font-weight:600;margin:0 0 8px 0;padding-bottom:8px;border-bottom:1px solid #1E293B">{title}</h2>
+            {content}
+        </div>"""
+
+    # Build sections
+    sections = []
+
+    # Summary stats
+    summary = f"""
+    <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="background:#1E293B;border-radius:8px;padding:12px 16px;flex:1;min-width:120px">
+            <div style="color:#64748B;font-size:11px;text-transform:uppercase;letter-spacing:1px">Incidents</div>
+            <div style="color:#E2E8F0;font-size:24px;font-weight:700;margin-top:4px">{inc_total}</div>
+            <div style="color:#94A3B8;font-size:12px">{sev_parts}</div>
+        </div>
+        <div style="background:#1E293B;border-radius:8px;padding:12px 16px;flex:1;min-width:120px">
+            <div style="color:#64748B;font-size:11px;text-transform:uppercase;letter-spacing:1px">Avg Uptime</div>
+            <div style="color:{'#34D399' if avg_uptime >= 99 else '#FBBF24' if avg_uptime >= 95 else '#FB7185'};font-size:24px;font-weight:700;margin-top:4px">{avg_uptime}%</div>
+        </div>
+        <div style="background:#1E293B;border-radius:8px;padding:12px 16px;flex:1;min-width:120px">
+            <div style="color:#64748B;font-size:11px;text-transform:uppercase;letter-spacing:1px">MTTR</div>
+            <div style="color:#E2E8F0;font-size:24px;font-weight:700;margin-top:4px">{f'{mttr} min' if mttr else '—'}</div>
+        </div>
+        <div style="background:#1E293B;border-radius:8px;padding:12px 16px;flex:1;min-width:120px">
+            <div style="color:#64748B;font-size:11px;text-transform:uppercase;letter-spacing:1px">Syslog</div>
+            <div style="color:#E2E8F0;font-size:24px;font-weight:700;margin-top:4px">{_fmt_count(syslog_total)}</div>
+            <div style="color:#FB7185;font-size:12px">{_fmt_count(syslog_errors)} errors</div>
+        </div>
+    </div>"""
+    sections.append(_section("Weekly Summary", summary))
+
+    # Incidents table
+    if inc_rows:
+        sections.append(_section("Top Incidents", f"""
+            <table {table_style}><thead><tr>
+                <th {th_style}>Title</th><th {th_style}>Severity</th><th {th_style}>Status</th>
+            </tr></thead><tbody>{inc_rows}</tbody></table>"""))
+
+    # Host availability
+    if host_rows:
+        sections.append(_section("Lowest Availability", f"""
+            <table {table_style}><thead><tr>
+                <th {th_style}>Host</th><th {th_style}>Uptime</th><th {th_style}>Issues</th>
+            </tr></thead><tbody>{host_rows}</tbody></table>"""))
+
+    # Integrations
+    if int_rows:
+        sections.append(_section("Integration Health", f"""
+            <table {table_style}><thead><tr>
+                <th {th_style}>Name</th><th {th_style}>Type</th><th {th_style}>Success Rate</th>
+            </tr></thead><tbody>{int_rows}</tbody></table>"""))
+
+    # SSL
+    if ssl_rows:
+        sections.append(_section("SSL Certificates Expiring Soon", f"""
+            <table {table_style}><thead><tr>
+                <th {th_style}>Host</th><th {th_style}>Expires In</th>
+            </tr></thead><tbody>{ssl_rows}</tbody></table>"""))
+
+    body = "".join(sections)
+
+    return f"""\
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:640px;margin:0 auto;padding:0">
+  <div style="background:#0B1120;border-radius:12px;overflow:hidden;border:1px solid #1E293B">
+    <div style="padding:24px 28px;border-bottom:1px solid #1E293B;background:linear-gradient(135deg,#0B1120,#1E293B)">
+      <div style="color:#38BDF8;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:3px;margin-bottom:8px">Weekly Digest</div>
+      <h1 style="color:#E2E8F0;font-size:20px;font-weight:600;margin:0">{period}</h1>
+    </div>
+    <div style="padding:24px 28px">
+      {body}
+    </div>
+    <div style="padding:16px 28px;border-top:1px solid #1E293B;text-align:center">
+      <span style="color:#475569;font-size:11px;letter-spacing:3px;font-weight:500">NODEGLOW</span>
+    </div>
+  </div>
+</div>"""
+
+
+def format_digest_text(digest: dict) -> str:
+    """Format digest data as plain text email body."""
+    period = f"{digest['period_start'].strftime('%Y-%m-%d')} — {digest['period_end'].strftime('%Y-%m-%d')}"
+    inc = digest.get("incidents", {})
+    hosts = digest.get("hosts", {})
+    syslog = digest.get("syslog", {})
+
+    lines = [
+        f"NODEGLOW Weekly Digest — {period}",
+        "=" * 50,
+        "",
+        f"Incidents: {inc.get('total', 0)}",
+        f"MTTR: {inc.get('mttr_min', '—')} min",
+        f"Avg Uptime: {hosts.get('avg_uptime', 100)}%",
+        f"Syslog: {syslog.get('total', 0)} messages, {syslog.get('errors', 0)} errors",
+        "",
+    ]
+
+    worst = hosts.get("worst", [])[:5]
+    if worst:
+        lines.append("Lowest Availability:")
+        for h in worst:
+            lines.append(f"  {h.get('name', '')}: {h.get('uptime_pct', 100)}% ({h.get('failures', 0)} failures)")
+        lines.append("")
+
+    ssl = digest.get("ssl_expiring", [])
+    if ssl:
+        lines.append("SSL Expiring Soon:")
+        for s in ssl:
+            lines.append(f"  {s.get('name', '')}: {s.get('days', 0)} days")
+
+    return "\n".join(lines)
+
+
+def _esc(s: str) -> str:
+    """Escape HTML entities."""
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _fmt_count(n: int) -> str:
+    """Format large numbers with K/M suffix."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
