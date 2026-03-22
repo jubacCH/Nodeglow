@@ -1648,31 +1648,20 @@ async def set_watched_services(
     return {"ok": True, "services": services}
 
 
-# ── AI Copilot ────────────────────────────────────────────────────────────────
+# ── Glow (AI Assistant) ───────────────────────────────────────────────────────
 
-_copilot_log = logging.getLogger("copilot")
+_glow_log = logging.getLogger("glow")
 
-COPILOT_SYSTEM_PROMPT = """You are the Nodeglow AI Ops Copilot — an expert infrastructure analyst embedded \
-in a homelab/SMB monitoring platform. You have real-time access to the operator's infrastructure data \
-provided below as context.
+GLOW_SYSTEM_PROMPT = """Nodeglow Glow assistant. Analyse the infrastructure data below and answer concisely.
+Rules: be specific, use bullet points, reference host/incident names. Never invent data not in context.
 
-Your role:
-- Analyze host availability, incidents, syslog error patterns, and integration health.
-- Highlight anomalies, correlations, and actionable insights.
-- Be concise and specific. Use bullet points and short paragraphs.
-- When referencing hosts, incidents, or integrations, mention their names/IDs.
-- If the data shows no issues, say so briefly — don't invent problems.
-- You may suggest Nodeglow features (alert rules, maintenance windows, etc.) when relevant.
-- Do NOT fabricate data that isn't in the context. If you lack information, say so.
+{context}"""
 
-## Current Infrastructure State
-
-{context}
-"""
+_MAX_HISTORY = 10  # keep last N messages to limit token usage
 
 
-@router.post("/copilot/chat", summary="AI Copilot chat (streaming SSE)")
-async def copilot_chat(
+@router.post("/glow/chat", summary="Glow AI chat (streaming SSE)")
+async def glow_chat(
     request: Request,
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
@@ -1692,14 +1681,14 @@ async def copilot_chat(
     try:
         context = await gather_infrastructure_context(db)
     except Exception as e:
-        _copilot_log.warning("Failed to gather context: %s", e)
+        _glow_log.warning("Failed to gather context: %s", e)
         context = "Infrastructure context unavailable."
 
-    system_prompt = COPILOT_SYSTEM_PROMPT.format(context=context)
+    system_prompt = GLOW_SYSTEM_PROMPT.format(context=context)
 
-    # Build messages: history + new user message
+    # Build messages: keep only last N history entries to limit tokens
     messages = []
-    for h in history:
+    for h in history[-_MAX_HISTORY:]:
         role = h.get("role")
         content = h.get("content", "")
         if role in ("user", "assistant") and content:
@@ -1715,10 +1704,10 @@ async def copilot_chat(
             if "not configured" in str(e):
                 yield f"data: {json.dumps({'error': 'Claude API key not configured. Go to Settings > AI to add your key.', 'done': True})}\n\n"
             else:
-                _copilot_log.exception("Copilot stream error")
+                _glow_log.exception("Glow stream error")
                 yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
         except Exception as e:
-            _copilot_log.exception("Copilot stream error")
+            _glow_log.exception("Glow stream error")
             yield f"data: {json.dumps({'error': 'An unexpected error occurred.', 'done': True})}\n\n"
 
     # Check API key availability before starting the stream

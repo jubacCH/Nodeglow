@@ -11,32 +11,13 @@ from services.ai_client import generate_completion
 log = logging.getLogger("nodeglow.postmortem")
 
 SYSTEM_PROMPT = """\
-You are an infrastructure postmortem analyst for Nodeglow, a homelab monitoring system.
-Generate a concise postmortem report based ONLY on the provided incident data.
-
-Use markdown formatting with the following sections:
-
-## Summary
-2-3 sentences describing what happened.
-
-## Timeline
-Chronological list of key events.
-
-## Root Cause Analysis
-What triggered the incident based on the available data.
-
+Generate a concise incident postmortem from the data provided. Use markdown with these sections:
+## Summary (2-3 sentences)
+## Timeline (bullet points)
+## Root Cause
 ## Impact
-What systems or services were affected.
-
 ## Recommendations
-Actionable steps to prevent recurrence.
-
-Rules:
-- Be concise and factual.
-- Base your analysis ONLY on the provided data — do not make up information.
-- If there is insufficient data for a section, say so briefly.
-- Use bullet points where appropriate.
-"""
+Only use provided data. Be brief."""
 
 
 async def generate_postmortem(incident_id: int) -> None:
@@ -57,8 +38,8 @@ async def generate_postmortem(incident_id: int) -> None:
             try:
                 result = await generate_completion(
                     system_prompt=SYSTEM_PROMPT,
-                    user_message=f"Generate a postmortem for this incident:\n\n{context}",
-                    max_tokens=2000,
+                    user_message=context,
+                    max_tokens=1024,
                 )
                 incident.postmortem = result
             except Exception as e:

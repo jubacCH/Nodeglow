@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 _semaphore = asyncio.Semaphore(2)  # max 2 concurrent API calls
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"  # fast + cheap for monitoring queries
 
 
 async def _get_api_key() -> str | None:
@@ -29,7 +29,7 @@ async def _get_api_key() -> str | None:
 async def generate_completion(
     system_prompt: str,
     user_message: str,
-    max_tokens: int = 2048,
+    max_tokens: int = 1024,
     model: str = DEFAULT_MODEL,
 ) -> str:
     """Non-streaming completion (used for postmortem generation)."""
@@ -51,7 +51,7 @@ async def generate_completion(
 async def stream_completion(
     system_prompt: str,
     messages: list[dict],
-    max_tokens: int = 1500,
+    max_tokens: int = 1024,
     model: str = DEFAULT_MODEL,
 ) -> AsyncGenerator[str, None]:
     """Streaming completion (used for copilot chat). Yields text deltas."""
