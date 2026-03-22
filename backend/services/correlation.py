@@ -13,6 +13,7 @@ Rules:
 8. severity_trend    – Error template with rising frequency trend
 9. content_anomaly   – New templates on stable host / severity upgrade
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -589,6 +590,11 @@ async def _auto_resolve(db):
                     )
                 except Exception as exc:
                     log.warning("Failed to send resolve notification: %s", exc)
+                try:
+                    from services.postmortem import generate_postmortem
+                    asyncio.create_task(generate_postmortem(incident.id))
+                except Exception:
+                    pass
             continue
 
         if not incident.host_ids_hash:
@@ -657,6 +663,11 @@ async def _auto_resolve(db):
                 )
             except Exception as exc:
                 log.warning("Failed to send resolve notification: %s", exc)
+            try:
+                from services.postmortem import generate_postmortem
+                asyncio.create_task(generate_postmortem(incident.id))
+            except Exception:
+                pass
 
 
 # ── Main entry point ────────────────────────────────────────────────────────
