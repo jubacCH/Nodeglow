@@ -115,6 +115,8 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "telegram_bot_token", "telegram_chat_id",
         "discord_webhook_url", "webhook_url", "webhook_secret",
         "smtp_host", "smtp_port", "smtp_user", "smtp_from", "smtp_to",
+        "notify_telegram_min_severity", "notify_discord_min_severity",
+        "notify_webhook_min_severity", "notify_email_min_severity",
         "ping_retention_days", "proxmox_retention_days", "integration_retention_days",
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
         "proxmox_disk_threshold", "syslog_port", "syslog_allowlist_only",
@@ -354,6 +356,10 @@ async def save_notifications(
     smtp_password:       str = Form(""),
     smtp_from:           str = Form(""),
     smtp_to:             str = Form(""),
+    notify_telegram_min_severity: str = Form("all"),
+    notify_discord_min_severity:  str = Form("all"),
+    notify_webhook_min_severity:  str = Form("all"),
+    notify_email_min_severity:    str = Form("all"),
     db: AsyncSession = Depends(get_db),
 ):
     await set_setting(db, "notify_enabled", "1" if notify_enabled == "on" else "0")
@@ -369,6 +375,16 @@ async def save_notifications(
     await set_setting(db, "smtp_to", smtp_to.strip())
     if smtp_password.strip():
         await set_setting(db, "smtp_password", encrypt_value(smtp_password.strip()))
+
+    # Per-channel severity filters
+    valid_severities = {"all", "warning", "error", "critical"}
+    for key, val in [
+        ("notify_telegram_min_severity", notify_telegram_min_severity),
+        ("notify_discord_min_severity", notify_discord_min_severity),
+        ("notify_webhook_min_severity", notify_webhook_min_severity),
+        ("notify_email_min_severity", notify_email_min_severity),
+    ]:
+        await set_setting(db, key, val.strip() if val.strip() in valid_severities else "all")
 
     await db.commit()
     accept = request.headers.get("accept", "")
@@ -514,6 +530,37 @@ async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
     db.add(api_key)
     await db.commit()
     return JSONResponse({"ok": True, "key": raw_key, "id": api_key.id, "prefix": prefix})
+
+
+@router.post("/geoip/download")
+async def geoip_download(request: Request, db: AsyncSession = Depends(get_db)):
+    """Trigger a manual GeoLite2-City database download. Admin only."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+
+    from database import decrypt_value
+    from services.geoip_updater import download_geolite2
+
+    key_enc = await get_setting(db, "geoip_license_key", "")
+    if not key_enc:
+        return JSONResponse({"success": False, "message": "No GeoIP license key configured"}, status_code=400)
+
+    try:
+        license_key = decrypt_value(key_enc)
+    except Exception:
+        license_key = key_enc
+
+    result = await download_geolite2(license_key)
+
+    if result["success"]:
+        from datetime import datetime
+        await set_setting(db, "geoip_last_updated", datetime.utcnow().isoformat())
+        await db.commit()
+
+    status_code = 200 if result["success"] else 500
+    return JSONResponse(result, status_code=status_code)
 
 
 @router.delete("/api-keys/{key_id}")
