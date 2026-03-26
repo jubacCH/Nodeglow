@@ -16,7 +16,7 @@ from models.ping import PingHost
 from models.snmp import SnmpHostConfig, SnmpMib, SnmpOid, SnmpResult
 from services.snmp import (
     DEFAULT_OIDS, OID_PRESETS, import_mib, poll_host, seed_default_oids,
-    search_mib_library, download_mib_from_library,
+    search_mib_library, download_mib_from_library, scrape_oids_from_observium,
 )
 
 router = APIRouter()
@@ -161,21 +161,54 @@ async def api_import_from_library(request: Request,
     if existing.scalar_one_or_none():
         return JSONResponse({"error": f"{mib_name} is already imported"}, status_code=409)
 
-    # Download
+    # Try downloading raw MIB file first
     mib_text = await download_mib_from_library(mib_name, vendor)
-    if not mib_text:
-        return JSONResponse(
-            {"error": f"Could not download {mib_name} — not available in public repositories. Download the MIB file from the vendor and upload it manually."},
-            status_code=404,
-        )
+    if mib_text:
+        module_name, oid_count = await import_mib(db, f"{mib_name}.mib", mib_text)
+        return JSONResponse({
+            "ok": True,
+            "module": module_name,
+            "oids_added": oid_count,
+        })
 
-    # Parse & import
-    module_name, oid_count = await import_mib(db, f"{mib_name}.mib", mib_text)
-    return JSONResponse({
-        "ok": True,
-        "module": module_name,
-        "oids_added": oid_count,
-    })
+    # Fallback: scrape OID data from observium HTML page
+    scraped = await scrape_oids_from_observium(mib_name)
+    if scraped:
+        # Create MIB record
+        mib = SnmpMib(name=mib_name, filename="observium-scrape", oid_count=0)
+        db.add(mib)
+
+        # Insert OID entries
+        added = 0
+        for entry in scraped:
+            existing_oid = await db.execute(
+                select(SnmpOid).where(SnmpOid.oid == entry["oid"])
+            )
+            if existing_oid.scalar_one_or_none():
+                continue
+            db.add(SnmpOid(
+                oid=entry["oid"],
+                name=entry["name"],
+                mib_name=mib_name,
+                syntax=entry.get("syntax"),
+                description=entry.get("description"),
+                is_table=entry.get("is_table", False),
+            ))
+            added += 1
+
+        mib.oid_count = added
+        await db.commit()
+        return JSONResponse({
+            "ok": True,
+            "module": mib_name,
+            "oids_added": added,
+            "source": "observium-scrape",
+        })
+
+    return JSONResponse(
+        {"error": f"Could not download {mib_name} from any source."},
+        status_code=404,
+    )
 
 
 @router.get("/api/snmp/oids")
