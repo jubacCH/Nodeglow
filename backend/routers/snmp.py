@@ -165,7 +165,7 @@ async def api_import_from_library(request: Request,
     mib_text = await download_mib_from_library(mib_name, vendor)
     if not mib_text:
         return JSONResponse(
-            {"error": f"Could not download {mib_name}. Try uploading manually."},
+            {"error": f"Could not download {mib_name} — not available in public repositories. Download the MIB file from the vendor and upload it manually."},
             status_code=404,
         )
 

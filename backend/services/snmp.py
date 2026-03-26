@@ -21,11 +21,13 @@ logger = logging.getLogger(__name__)
 # ── MIB Library (online) ─────────────────────────────────────────────────────
 
 MIB_SEARCH_URL = "https://mibs.observium.org/search.php"
+
+# Download URL patterns — tried in order; {name} = MIB name, {vendor} = vendor dir
 MIB_DOWNLOAD_URLS = [
-    # Try LibreNMS first (most comprehensive), then standard dirs
     "https://raw.githubusercontent.com/librenms/librenms/master/mibs/{name}",
     "https://raw.githubusercontent.com/librenms/librenms/master/mibs/{vendor}/{name}",
     "https://raw.githubusercontent.com/observium/observium-community/master/mibs/{vendor}/{name}",
+    "https://raw.githubusercontent.com/netdisco/mibs/master/{vendor}/{name}",
 ]
 
 # Simple in-memory cache for search results
@@ -69,45 +71,58 @@ async def search_mib_library(query: str) -> list[dict]:
     return results
 
 
+def _is_valid_mib(text: str) -> bool:
+    """Check if text looks like a valid ASN.1 MIB definition."""
+    return "DEFINITIONS" in text and "BEGIN" in text and "<html" not in text[:200].lower()
+
+
 async def download_mib_from_library(mib_name: str, vendor: str = "") -> str | None:
     """Download a MIB file from online repositories. Returns MIB text or None."""
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        # Try each URL pattern
-        for pattern in MIB_DOWNLOAD_URLS:
-            url = pattern.format(name=mib_name, vendor=vendor)
-            try:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    text = resp.text
-                    # Basic validation — should contain DEFINITIONS ::= BEGIN
-                    if "DEFINITIONS" in text and "BEGIN" in text:
-                        logger.info("Downloaded MIB %s from %s", mib_name, url)
-                        return text
-            except Exception:
-                continue
-
-        # If vendor-specific didn't work, try common vendor subdirectories
+        # Build vendor directory variants to try
+        vendor_dirs: list[str] = []
         if vendor:
-            common_dirs = [vendor.lower(), vendor.upper(), vendor.capitalize()]
-        else:
-            common_dirs = ["rfc", "ietf", "cisco", "net-snmp"]
+            v = vendor.strip()
+            vendor_dirs = list(dict.fromkeys([v, v.lower(), v.upper(), v.capitalize()]))
 
-        for vdir in common_dirs:
-            for pattern in MIB_DOWNLOAD_URLS:
-                if "{vendor}" not in pattern:
-                    continue
-                url = pattern.format(name=mib_name, vendor=vdir)
+        # Phase 1: Try each URL pattern with exact vendor
+        for pattern in MIB_DOWNLOAD_URLS:
+            if "{vendor}" in pattern:
+                for vdir in vendor_dirs:
+                    url = pattern.format(name=mib_name, vendor=vdir)
+                    try:
+                        resp = await client.get(url)
+                        if resp.status_code == 200 and _is_valid_mib(resp.text):
+                            logger.info("Downloaded MIB %s from %s", mib_name, url)
+                            return resp.text
+                    except Exception:
+                        continue
+            else:
+                url = pattern.format(name=mib_name, vendor="")
                 try:
                     resp = await client.get(url)
-                    if resp.status_code == 200:
-                        text = resp.text
-                        if "DEFINITIONS" in text and "BEGIN" in text:
-                            logger.info("Downloaded MIB %s from %s", mib_name, url)
-                            return text
+                    if resp.status_code == 200 and _is_valid_mib(resp.text):
+                        logger.info("Downloaded MIB %s from %s", mib_name, url)
+                        return resp.text
                 except Exception:
                     continue
 
-    logger.warning("Could not download MIB %s from any source", mib_name)
+        # Phase 2: If no vendor given, try common directories
+        if not vendor_dirs:
+            for vdir in ["rfc", "ietf", "cisco", "net-snmp"]:
+                for pattern in MIB_DOWNLOAD_URLS:
+                    if "{vendor}" not in pattern:
+                        continue
+                    url = pattern.format(name=mib_name, vendor=vdir)
+                    try:
+                        resp = await client.get(url)
+                        if resp.status_code == 200 and _is_valid_mib(resp.text):
+                            logger.info("Downloaded MIB %s from %s", mib_name, url)
+                            return resp.text
+                    except Exception:
+                        continue
+
+    logger.warning("Could not download MIB %s from any source (vendor=%s)", mib_name, vendor)
     return None
 
 # ── Default OIDs (always available without MIB import) ───────────────────────
