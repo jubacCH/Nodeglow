@@ -22,7 +22,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import type { HostStatus } from '@/types';
 
 const inputClass = 'ng-input';
-const selectClass = 'ng-input [&>option]:text-slate-200';
+const selectClass = 'ng-input [&>option]:text-[var(--ng-text-primary)]';
 
 function UptimeBar({ h24, d7, d30 }: { h24: number | null; d7: number | null; d30: number | null }) {
   const bars = [
