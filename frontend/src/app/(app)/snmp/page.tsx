@@ -62,6 +62,7 @@ interface OidEntry {
 interface LibraryMib {
   name: string;
   description?: string;
+  vendor?: string;
 }
 
 interface PageData {
@@ -197,7 +198,7 @@ function MibLibraryTab() {
 
   /* library import */
   const importMut = useMutation({
-    mutationFn: (mib_name: string) => post('/api/snmp/mibs/library/import', { mib_name }),
+    mutationFn: (mib: LibraryMib) => post('/api/snmp/mibs/library/import', { mib_name: mib.name, vendor: mib.vendor }),
     onSuccess: () => {
       toast.show('MIB imported', 'success');
       qc.invalidateQueries({ queryKey: ['snmp-page'] });
@@ -319,6 +320,7 @@ function MibLibraryTab() {
                 >
                   <div>
                     <span className="text-sm font-mono text-slate-200">{m.name}</span>
+                    {m.vendor && <span className="ml-2 text-[10px] text-slate-500 font-mono">{m.vendor}</span>}
                     {m.description && (
                       <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{m.description}</p>
                     )}
@@ -326,7 +328,7 @@ function MibLibraryTab() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => importMut.mutate(m.name)}
+                    onClick={() => importMut.mutate(m)}
                     disabled={importMut.isPending}
                   >
                     <Download size={13} />
