@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.base import decrypt_value, encrypt_value
@@ -317,13 +317,36 @@ async def import_mib(db: AsyncSession, filename: str, mib_text: str) -> tuple[st
 async def seed_default_oids(db: AsyncSession) -> int:
     """Seed the default OID definitions (run once at startup)."""
     added = 0
+    mib_names_seen: set[str] = set()
     for oid, (name, mib_name, syntax) in DEFAULT_OIDS.items():
+        # Ensure a SnmpMib record exists for each referenced MIB
+        if mib_name not in mib_names_seen:
+            mib_names_seen.add(mib_name)
+            existing_mib = await db.execute(
+                select(SnmpMib).where(SnmpMib.name == mib_name)
+            )
+            if not existing_mib.scalar_one_or_none():
+                db.add(SnmpMib(name=mib_name, filename="built-in", oid_count=0))
+
         existing = await db.execute(select(SnmpOid).where(SnmpOid.oid == oid))
         if existing.scalar_one_or_none():
             continue
         db.add(SnmpOid(oid=oid, name=name, mib_name=mib_name, syntax=syntax))
         added += 1
+
+    # Update oid_count on seeded MIB records
     if added:
+        for mib_name in mib_names_seen:
+            count_q = await db.execute(
+                select(func.count(SnmpOid.id)).where(SnmpOid.mib_name == mib_name)
+            )
+            count = count_q.scalar() or 0
+            mib_q = await db.execute(
+                select(SnmpMib).where(SnmpMib.name == mib_name)
+            )
+            mib_rec = mib_q.scalar_one_or_none()
+            if mib_rec:
+                mib_rec.oid_count = count
         await db.commit()
     return added
 

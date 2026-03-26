@@ -186,8 +186,8 @@ function MibLibraryTab() {
     if (!libraryQuery.trim()) return;
     setSearching(true);
     try {
-      const res = await get<LibraryMib[]>(`/api/snmp/mibs/library/search?q=${encodeURIComponent(libraryQuery)}`);
-      setLibraryResults(res);
+      const res = await get<{ results: LibraryMib[] }>(`/api/snmp/mibs/library/search?q=${encodeURIComponent(libraryQuery)}`);
+      setLibraryResults(res.results ?? []);
     } catch {
       toast.show('Search failed', 'error');
     } finally {
@@ -646,17 +646,17 @@ function AddHostModal({
 function OidBrowserTab() {
   const [mibFilter, setMibFilter] = useState('');
   const [keyword, setKeyword] = useState('');
-  const [searchTriggered, setSearchTriggered] = useState(false);
+  const [appliedMib, setAppliedMib] = useState('');
+  const [appliedKeyword, setAppliedKeyword] = useState('');
 
   const queryParams = new URLSearchParams();
-  if (mibFilter) queryParams.set('mib', mibFilter);
-  if (keyword) queryParams.set('search', keyword);
+  if (appliedMib) queryParams.set('mib', appliedMib);
+  if (appliedKeyword) queryParams.set('search', appliedKeyword);
   const qs = queryParams.toString();
 
   const { data: oids, isLoading, isFetching } = useQuery<OidEntry[]>({
     queryKey: ['snmp-oids', qs],
     queryFn: () => get<{ oids: OidEntry[] }>(`/api/snmp/oids?${qs}`).then((r) => r.oids),
-    enabled: searchTriggered,
   });
 
   const { data: pageData } = useQuery<PageData>({
@@ -666,7 +666,10 @@ function OidBrowserTab() {
 
   const mibNames = (pageData?.mibs ?? []).map((m) => m.name);
 
-  const doSearch = () => setSearchTriggered(true);
+  const doSearch = () => {
+    setAppliedMib(mibFilter);
+    setAppliedKeyword(keyword);
+  };
 
   const inputCls =
     'w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500/50';
@@ -683,10 +686,7 @@ function OidBrowserTab() {
         <div className="flex gap-2">
           <select
             value={mibFilter}
-            onChange={(e) => {
-              setMibFilter(e.target.value);
-              setSearchTriggered(false);
-            }}
+            onChange={(e) => setMibFilter(e.target.value)}
             className={`${inputCls} !bg-[var(--ng-surface)] max-w-[200px]`}
           >
             <option value="" className="text-slate-200">All MIBs</option>
@@ -702,10 +702,7 @@ function OidBrowserTab() {
               type="text"
               placeholder="Search OIDs by name or OID string..."
               value={keyword}
-              onChange={(e) => {
-                setKeyword(e.target.value);
-                setSearchTriggered(false);
-              }}
+              onChange={(e) => setKeyword(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && doSearch()}
               className={`${inputCls} pl-9`}
             />
@@ -738,17 +735,10 @@ function OidBrowserTab() {
                   <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
                 </tr>
               ))}
-            {!isLoading && !isFetching && searchTriggered && (oids?.length ?? 0) === 0 && (
+            {!isLoading && !isFetching && (oids?.length ?? 0) === 0 && (
               <tr>
                 <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                  No OIDs found. Try a different filter or search term.
-                </td>
-              </tr>
-            )}
-            {!isLoading && !isFetching && !searchTriggered && (
-              <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                  Select a MIB or enter a keyword and click Search to browse OIDs.
+                  No OIDs found. Seed defaults or upload a MIB first.
                 </td>
               </tr>
             )}
