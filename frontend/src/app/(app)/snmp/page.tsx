@@ -22,6 +22,7 @@ import {
   Server,
   BookOpen,
   RefreshCw,
+  CheckSquare,
 } from 'lucide-react';
 
 /* ---------- types ---------- */
@@ -661,12 +662,14 @@ function AddHostModal({
 
 function OidBrowserTab() {
   const toast = useToastStore();
+  const qc = useQueryClient();
   const [mibFilter, setMibFilter] = useState('');
   const [keyword, setKeyword] = useState('');
   const [appliedMib, setAppliedMib] = useState('');
   const [appliedKeyword, setAppliedKeyword] = useState('');
   const [selectedConfig, setSelectedConfig] = useState('');
   const [testResults, setTestResults] = useState<Record<string, string> | null>(null);
+  const [selectedOids, setSelectedOids] = useState<Set<string>>(new Set());
 
   const queryParams = new URLSearchParams();
   if (appliedMib) queryParams.set('mib', appliedMib);
@@ -690,7 +693,41 @@ function OidBrowserTab() {
     setAppliedMib(mibFilter);
     setAppliedKeyword(keyword);
     setTestResults(null);
+    setSelectedOids(new Set());
   };
+
+  /* toggle OID selection */
+  const toggleOid = (oid: string) => {
+    setSelectedOids((prev) => {
+      const next = new Set(prev);
+      if (next.has(oid)) next.delete(oid);
+      else next.add(oid);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (!oids?.length) return;
+    if (selectedOids.size === oids.length) {
+      setSelectedOids(new Set());
+    } else {
+      setSelectedOids(new Set(oids.map((o) => o.oid)));
+    }
+  };
+
+  /* add selected OIDs to host monitoring */
+  const addToMonitoringMut = useMutation({
+    mutationFn: () =>
+      patch(`/api/snmp/hosts/${selectedConfig}`, {
+        oids: Array.from(selectedOids),
+      }),
+    onSuccess: () => {
+      toast.show(`${selectedOids.size} OIDs added to monitoring`, 'success');
+      setSelectedOids(new Set());
+      qc.invalidateQueries({ queryKey: ['snmp-page'] });
+    },
+    onError: () => toast.show('Failed to update host config', 'error'),
+  });
 
   /* test OIDs against host */
   const testMut = useMutation({
@@ -721,7 +758,7 @@ function OidBrowserTab() {
   });
 
   const hasResults = testResults !== null;
-  const colSpan = hasResults ? 5 : 4;
+  const colSpan = (hasResults ? 5 : 4) + 1; /* +1 for checkbox col */
 
   const inputCls =
     'w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500/50';
@@ -806,6 +843,21 @@ function OidBrowserTab() {
               Clear results
             </button>
           )}
+          {selectedOids.size > 0 && selectedConfig && (
+            <Button
+              size="sm"
+              onClick={() => addToMonitoringMut.mutate()}
+              disabled={addToMonitoringMut.isPending}
+            >
+              <CheckSquare size={14} />
+              {addToMonitoringMut.isPending
+                ? 'Adding...'
+                : `Add ${selectedOids.size} OID${selectedOids.size > 1 ? 's' : ''} to monitoring`}
+            </Button>
+          )}
+          {selectedOids.size > 0 && !selectedConfig && (
+            <span className="text-xs text-amber-400">Select a host to add OIDs to monitoring</span>
+          )}
         </div>
       </div>
 
@@ -814,6 +866,14 @@ function OidBrowserTab() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-white/[0.06]">
+              <th className="w-10 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={!!oids?.length && selectedOids.size === oids.length}
+                  onChange={toggleAll}
+                  className="rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50 focus:ring-offset-0 cursor-pointer"
+                />
+              </th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">OID</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Name</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">MIB</th>
@@ -827,6 +887,7 @@ function OidBrowserTab() {
             {(isLoading || isFetching) &&
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={i} className="border-b border-white/[0.06]">
+                  <td className="px-4 py-3"><Skeleton className="h-4 w-4" /></td>
                   <td className="px-4 py-3"><Skeleton className="h-5 w-48" /></td>
                   <td className="px-4 py-3"><Skeleton className="h-5 w-32" /></td>
                   <td className="px-4 py-3"><Skeleton className="h-5 w-24" /></td>
@@ -844,8 +905,23 @@ function OidBrowserTab() {
             {!isFetching &&
               oids?.map((oid, i) => {
                 const val = getValue(oid.oid);
+                const isSelected = selectedOids.has(oid.oid);
                 return (
-                  <tr key={`${oid.oid}-${i}`} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
+                  <tr
+                    key={`${oid.oid}-${i}`}
+                    className={`border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer ${
+                      isSelected ? 'bg-sky-500/[0.06]' : ''
+                    }`}
+                    onClick={() => toggleOid(oid.oid)}
+                  >
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleOid(oid.oid)}
+                        className="rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50 focus:ring-offset-0 cursor-pointer"
+                      />
+                    </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-300 select-all">{oid.oid}</td>
                     <td className="px-4 py-3 text-sm text-slate-200">{oid.name}</td>
                     <td className="px-4 py-3">
