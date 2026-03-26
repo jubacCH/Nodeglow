@@ -122,7 +122,7 @@ def invalidate_nav_cache():
 _NAV_KEYS = (
     "proxmox", "unifi", "unas", "pihole", "adguard", "portainer",
     "truenas", "synology", "firewall", "hass", "gitea", "phpipam",
-    "speedtest", "ups", "redfish",
+    "speedtest", "ups", "redfish", "swisscom",
 )
 
 

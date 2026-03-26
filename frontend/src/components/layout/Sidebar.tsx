@@ -47,6 +47,7 @@ const systemNav: NavItem[] = [
   { label: 'Users', href: '/users', icon: Users, adminOnly: true },
 ];
 
+// Static fallback for search — active integrations are loaded dynamically from navCounts
 const integrationTypes = [
   { slug: 'proxmox', label: 'Proxmox' },
   { slug: 'unifi', label: 'UniFi' },
@@ -260,33 +261,42 @@ export function Sidebar() {
           </button>
           {intOpen && !sidebarCollapsed && (
             <div className="space-y-0.5">
-              {integrationTypes.map((int) => {
-                const href = `/integration/${int.slug}`;
-                const isActive = pathname.startsWith(href);
-                return (
-                  <Link
-                    key={int.slug}
-                    href={href}
-                    className={cn(
-                      'flex items-center gap-3 px-3 py-1.5 rounded-md text-sm transition-colors pl-7',
-                      isActive
-                        ? 'nav-active'
-                        : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200',
-                    )}
-                  >
-                    <span className="flex-1">{int.label}</span>
-                  </Link>
-                );
-              })}
-              {isAdmin && (
-                <Link
-                  href="/credentials"
-                  className="flex items-center gap-2 px-3 py-1.5 pl-7 text-sm text-slate-500 hover:text-sky-400 transition-colors"
-                >
-                  <Plus size={14} />
-                  <span>Add Integration</span>
-                </Link>
-              )}
+              {integrationTypes
+                .filter((int) => navCounts && (navCounts[int.slug] ?? 0) > 0)
+                .map((int) => {
+                  const href = `/integration/${int.slug}`;
+                  const isActive = pathname.startsWith(href);
+                  const count = navCounts?.[int.slug] ?? 0;
+                  return (
+                    <Link
+                      key={int.slug}
+                      href={href}
+                      className={cn(
+                        'flex items-center gap-3 px-3 py-1.5 rounded-md text-sm transition-colors pl-7',
+                        isActive
+                          ? 'nav-active'
+                          : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200',
+                      )}
+                    >
+                      <span className="flex-1">{int.label}</span>
+                      {count > 1 && (
+                        <span className="text-[10px] text-slate-500">{count}</span>
+                      )}
+                    </Link>
+                  );
+                })}
+              <Link
+                href="/integration/store"
+                className={cn(
+                  'flex items-center gap-2 px-3 py-1.5 pl-7 text-sm transition-colors',
+                  pathname === '/integration/store'
+                    ? 'nav-active'
+                    : 'text-slate-500 hover:text-sky-400',
+                )}
+              >
+                <Plus size={14} />
+                <span>Add Integration</span>
+              </Link>
             </div>
           )}
         </div>
