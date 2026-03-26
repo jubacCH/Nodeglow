@@ -148,7 +148,7 @@ async def api_import_from_library(request: Request,
                                   db: AsyncSession = Depends(get_db)):
     """Download a MIB from the online library and import it."""
     body = await request.json()
-    mib_name = body.get("name", "").strip()
+    mib_name = (body.get("mib_name") or body.get("name") or "").strip()
     vendor = body.get("vendor", "").strip()
 
     if not mib_name:
