@@ -17,6 +17,7 @@ from models.snmp import SnmpHostConfig, SnmpMib, SnmpOid, SnmpResult
 from services.snmp import (
     DEFAULT_OIDS, OID_PRESETS, import_mib, poll_host, seed_default_oids,
     search_mib_library, download_mib_from_library, scrape_oids_from_observium,
+    snmp_get, snmp_v3_get, get_credential,
 )
 
 router = APIRouter()
@@ -313,6 +314,58 @@ async def api_update_snmp_host(config_id: int, request: Request,
 
 
 # ── SNMP Polling API ────────────────────────────────────────────────────────
+
+
+@router.post("/api/snmp/hosts/{config_id}/test-oids")
+async def api_test_oids(config_id: int, request: Request,
+                        db: AsyncSession = Depends(get_db)):
+    """Test specific OIDs against a host. Read-only, no DB storage."""
+    body = await request.json()
+    oids = body.get("oids", [])
+    if not oids or not isinstance(oids, list):
+        return JSONResponse({"error": "oids list required"}, status_code=400)
+    oids = oids[:200]  # cap
+
+    q = await db.execute(
+        select(SnmpHostConfig, PingHost.hostname)
+        .join(PingHost, PingHost.id == SnmpHostConfig.host_id)
+        .where(SnmpHostConfig.id == config_id)
+    )
+    row = q.first()
+    if not row:
+        return JSONResponse({"error": "Host config not found"}, status_code=404)
+
+    config, hostname = row
+    for prefix in ("https://", "http://"):
+        if hostname.startswith(prefix):
+            hostname = hostname[len(prefix):]
+    hostname = hostname.split("/")[0].split(":")[0]
+
+    cred_data = {}
+    if config.credential_id:
+        cred_data = await get_credential(db, config.credential_id) or {}
+
+    port = config.port or 161
+    cred_type = cred_data.get("type", "snmp_v2c")
+
+    try:
+        if cred_type == "snmp_v3":
+            results = await snmp_v3_get(
+                hostname, port,
+                username=cred_data.get("username", ""),
+                auth_proto=cred_data.get("auth_protocol", "SHA"),
+                auth_pass=cred_data.get("auth_password", ""),
+                priv_proto=cred_data.get("priv_protocol", "AES"),
+                priv_pass=cred_data.get("priv_password", ""),
+                oids=oids,
+            )
+        else:
+            community = cred_data.get("community", "public")
+            results = await snmp_get(hostname, port, community, oids)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    return JSONResponse({"ok": True, "results": {k: str(v) for k, v in results.items()}})
 
 
 @router.post("/api/snmp/hosts/{config_id}/poll")
