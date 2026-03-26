@@ -601,14 +601,21 @@ async def api_status(
 
 
 @router.get("/api/integrations")
-async def api_list_integrations():
-    """Return metadata for all registered integrations."""
+async def api_list_integrations(db: AsyncSession = Depends(get_db)):
+    """Return metadata for all registered integrations with config counts."""
     registry = get_registry()
-    return JSONResponse({
-        name: {
+    from services.integration import count_all_by_type
+    counts = await count_all_by_type(db)
+    return JSONResponse([
+        {
+            "name": name,
             "display_name": cls.display_name,
             "icon": cls.icon,
+            "icon_svg": cls.icon_svg or "",
+            "color": cls.color,
             "description": cls.description,
+            "single_instance": cls.single_instance,
+            "configured": counts.get(name, 0),
         }
-        for name, cls in registry.items()
-    })
+        for name, cls in sorted(registry.items(), key=lambda x: x[1].display_name)
+    ])
