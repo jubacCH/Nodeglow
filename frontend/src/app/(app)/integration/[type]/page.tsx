@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useIntegrations } from '@/hooks/queries/useIntegrations';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post, del } from '@/lib/api';
-import { Plus, Trash2, X, Pencil } from 'lucide-react';
+import { Plus, Trash2, X, Pencil, AlertCircle, Clock } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { useToastStore } from '@/stores/toast';
@@ -285,37 +285,54 @@ export default function IntegrationListPage() {
               <Skeleton className="h-4 w-32" />
             </GlassCard>
           ))}
-        {integrations?.map((int) => (
-          <Link key={int.id} href={`/integration/${type}/${int.id}`}>
-            <GlassCard className="p-4 hover:bg-white/[0.06] transition-colors cursor-pointer">
-              <div className="flex items-center gap-3 mb-3">
-                <StatusDot status={int.enabled ? 'online' : 'disabled'} />
-                <p className="text-sm font-medium text-slate-200 flex-1">{int.name}</p>
-                <button
-                  onClick={(e) => openEdit(int.id, int.name, e)}
-                  className="text-slate-500 hover:text-sky-400 transition-colors"
-                  title="Edit"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  onClick={(e) => handleDelete(int.id, e)}
-                  className="text-slate-500 hover:text-red-400 transition-colors"
-                  title="Delete"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge>{int.type}</Badge>
-                {!int.enabled && <Badge variant="severity" severity="warning">Disabled</Badge>}
-              </div>
-              <p className="text-xs text-slate-500 mt-2">
-                Created: {new Date(int.created_at).toLocaleDateString()}
-              </p>
-            </GlassCard>
-          </Link>
-        ))}
+        {integrations?.map((int) => {
+          const statusKey = !int.enabled ? 'disabled' : int.status === 'ok' ? 'online' : int.status === 'error' ? 'offline' : 'unknown';
+          return (
+            <Link key={int.id} href={`/integration/${type}/${int.id}`}>
+              <GlassCard className="p-4 hover:bg-white/[0.06] transition-colors cursor-pointer">
+                <div className="flex items-center gap-3 mb-2">
+                  <StatusDot status={statusKey} pulse={int.status === 'error' && int.enabled} />
+                  <p className="text-sm font-medium text-slate-200 flex-1 truncate">{int.name}</p>
+                  <button
+                    onClick={(e) => openEdit(int.id, int.name, e)}
+                    className="text-slate-500 hover:text-sky-400 transition-colors"
+                    title="Edit"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={(e) => handleDelete(int.id, e)}
+                    className="text-slate-500 hover:text-red-400 transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Badge>{int.type}</Badge>
+                  {!int.enabled && <Badge variant="severity" severity="warning">Disabled</Badge>}
+                  {int.enabled && int.status === 'error' && <Badge variant="severity" severity="critical">Error</Badge>}
+                  {int.enabled && int.status === 'no_data' && <Badge>No data</Badge>}
+                </div>
+                {int.error && int.enabled && (
+                  <div className="flex items-start gap-1.5 mb-2 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/15">
+                    <AlertCircle size={12} className="text-red-400 mt-0.5 shrink-0" />
+                    <p className="text-[11px] text-red-400/90 line-clamp-2">{int.error}</p>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                  {int.last_check && (
+                    <span className="flex items-center gap-1" title={new Date(int.last_check).toLocaleString()}>
+                      <Clock size={10} />
+                      {new Date(int.last_check).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                  <span>Created {new Date(int.created_at).toLocaleDateString()}</span>
+                </div>
+              </GlassCard>
+            </Link>
+          );
+        })}
         {!isLoading && (!integrations || integrations.length === 0) && !showAdd && (
           <GlassCard className="p-8 col-span-full">
             <p className="text-center text-sm text-slate-500">No {type} integrations configured</p>

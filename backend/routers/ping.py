@@ -115,6 +115,19 @@ async def api_status(db: AsyncSession = Depends(get_db)):
         )).scalars().all()
         latest_by_host = {r.host_id: r for r in latest_rows}
 
+    # Batch: last successful ping per host (for "last seen" on offline hosts)
+    last_seen_by_host: dict[int, datetime] = {}
+    if host_ids:
+        last_ok_rows = (await db.execute(
+            select(
+                PingResult.host_id,
+                func.max(PingResult.timestamp).label("last_ok"),
+            )
+            .where(PingResult.host_id.in_(host_ids), PingResult.success == True)
+            .group_by(PingResult.host_id)
+        )).all()
+        last_seen_by_host = {r.host_id: r.last_ok for r in last_ok_rows if r.last_ok}
+
     # Batch: uptime stats (total/success counts per host for 24h, 7d, 30d)
     uptime_by_host: dict[int, dict] = {}
     if host_ids:
@@ -188,6 +201,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
             "uptime_h24": up.get("h24"),
             "uptime_d7": up.get("d7"),
             "uptime_d30": up.get("d30"),
+            "last_seen": last_seen_by_host[host.id].isoformat() if host.id in last_seen_by_host else None,
         })
     return out
 
