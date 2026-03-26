@@ -31,8 +31,9 @@ async def generate_completion(
     user_message: str,
     max_tokens: int = 1024,
     model: str = DEFAULT_MODEL,
-) -> str:
-    """Non-streaming completion (used for postmortem generation)."""
+    return_usage: bool = False,
+) -> str | tuple[str, dict]:
+    """Non-streaming completion. If return_usage=True, returns (text, usage_dict)."""
     api_key = await _get_api_key()
     if not api_key:
         raise RuntimeError("Claude API key not configured")
@@ -45,7 +46,15 @@ async def generate_completion(
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
-        return response.content[0].text
+        text = response.content[0].text
+        if return_usage:
+            usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "model": response.model,
+            }
+            return text, usage
+        return text
 
 
 async def stream_completion(

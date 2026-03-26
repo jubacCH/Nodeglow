@@ -55,6 +55,7 @@ interface SettingsData {
   claude_has_key: boolean;
   daily_ai_summary_enabled: string;
   daily_ai_summary_hour: string;
+  daily_ai_summary_channels: string;
   notify_telegram_min_severity: string;
   notify_discord_min_severity: string;
   notify_webhook_min_severity: string;
@@ -102,6 +103,50 @@ function SetupGuide({ steps }: { steps: React.ReactNode[] }) {
         </ol>
       )}
     </div>
+  );
+}
+
+/* ---------- AiUsageCard ---------- */
+
+interface AiUsageBucket {
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  calls: number;
+  month?: string;
+}
+
+function AiUsageCard() {
+  const { data } = useQuery<{ monthly: AiUsageBucket; total: AiUsageBucket }>({
+    queryKey: ['ai-usage'],
+    queryFn: () => get('/settings/ai/usage'),
+  });
+
+  if (!data) return null;
+
+  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+
+  return (
+    <GlassCard className="p-4">
+      <h3 className="text-base font-semibold text-slate-200 mb-3 flex items-center gap-2">
+        <Activity size={16} className="text-violet-400" />
+        AI Token Usage
+      </h3>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">This Month</div>
+          <div className="text-lg font-bold text-[var(--ng-text-primary)]">{fmt(data.monthly.input_tokens + data.monthly.output_tokens)}</div>
+          <div className="text-[11px] text-slate-500">tokens &middot; {data.monthly.calls} calls</div>
+          <div className="text-xs text-emerald-400 mt-1">${data.monthly.cost_usd.toFixed(4)}</div>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">All Time</div>
+          <div className="text-lg font-bold text-[var(--ng-text-primary)]">{fmt(data.total.input_tokens + data.total.output_tokens)}</div>
+          <div className="text-[11px] text-slate-500">tokens &middot; {data.total.calls} calls</div>
+          <div className="text-xs text-emerald-400 mt-1">${data.total.cost_usd.toFixed(4)}</div>
+        </div>
+      </div>
+    </GlassCard>
   );
 }
 
@@ -255,6 +300,7 @@ export default function SettingsPage() {
   const [claudeApiKey, setClaudeApiKey] = useState('');
   const [dailyAiEnabled, setDailyAiEnabled] = useState(false);
   const [dailyAiHour, setDailyAiHour] = useState('8');
+  const [dailyAiChannels, setDailyAiChannels] = useState<Set<string>>(new Set(['telegram', 'discord', 'webhook', 'email']));
   const [aiSaving, setAiSaving] = useState(false);
 
   /* ---- API keys state ---- */
@@ -306,6 +352,7 @@ export default function SettingsPage() {
     setEmailMinSev(s.notify_email_min_severity || 'all');
     setDailyAiEnabled(s.daily_ai_summary_enabled === '1');
     setDailyAiHour(s.daily_ai_summary_hour || '8');
+    setDailyAiChannels(new Set((s.daily_ai_summary_channels || 'telegram,discord,webhook,email').split(',').filter(Boolean)));
   }, []);
 
   useEffect(() => {
@@ -1368,7 +1415,7 @@ export default function SettingsPage() {
               Daily AI Summary
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              Sends a daily AI-generated briefing with incidents, root cause analysis, and resolution suggestions via your configured notification channels.
+              Sends a daily AI-generated briefing with incidents, root cause analysis, and resolution suggestions via your selected notification channels.
             </p>
             <div className="space-y-3">
               <label className="flex items-center gap-2 cursor-pointer">
@@ -1393,6 +1440,27 @@ export default function SettingsPage() {
                   ))}
                 </select>
               </div>
+              <div>
+                <label className="ng-label">Channels</label>
+                <div className="flex flex-wrap gap-3 mt-1">
+                  {(['telegram', 'discord', 'webhook', 'email'] as const).map((ch) => (
+                    <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={dailyAiChannels.has(ch)}
+                        disabled={!dailyAiEnabled}
+                        onChange={(e) => {
+                          const next = new Set(dailyAiChannels);
+                          if (e.target.checked) next.add(ch); else next.delete(ch);
+                          setDailyAiChannels(next);
+                        }}
+                        className="rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50"
+                      />
+                      <span className="text-xs text-[var(--ng-text-secondary)] capitalize">{ch}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
               {!settings?.claude_has_key && (
                 <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
                   Requires a Claude API key (configure above).
@@ -1400,6 +1468,9 @@ export default function SettingsPage() {
               )}
             </div>
           </GlassCard>
+
+          {/* AI Usage Stats */}
+          <AiUsageCard />
 
           <div className="flex justify-end">
             <Button
@@ -1414,6 +1485,7 @@ export default function SettingsPage() {
                   }
                   params.set('daily_ai_summary_enabled', dailyAiEnabled ? 'on' : '0');
                   params.set('daily_ai_summary_hour', dailyAiHour);
+                  params.set('daily_ai_summary_channels', Array.from(dailyAiChannels).join(','));
                   await api('/settings/ai/save', { method: 'POST', body: params });
                   if (claudeApiKey.trim()) setClaudeApiKey('');
                   qc.invalidateQueries({ queryKey: ['settings'] });

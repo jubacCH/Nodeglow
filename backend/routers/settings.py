@@ -5,7 +5,7 @@ import os
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from templating import templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import encrypt_value, get_db, get_setting, set_setting
@@ -121,7 +121,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
         "proxmox_disk_threshold", "syslog_port", "syslog_allowlist_only",
         "digest_enabled", "digest_day", "digest_hour",
-        "daily_ai_summary_enabled", "daily_ai_summary_hour",
+        "daily_ai_summary_enabled", "daily_ai_summary_hour", "daily_ai_summary_channels",
         "geoip_enabled", "geoip_last_updated",
     ]
     result = {}
@@ -137,6 +137,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "syslog_port": "1514",
         "digest_day": "0", "digest_hour": "9",
         "daily_ai_summary_hour": "8",
+        "daily_ai_summary_channels": "telegram,discord,webhook,email",
     }
     for key, default in defaults.items():
         if not result.get(key):
@@ -574,6 +575,7 @@ async def save_ai_settings(
     claude_api_key: str = Form(""),
     daily_ai_summary_enabled: str = Form(""),
     daily_ai_summary_hour: str = Form(""),
+    daily_ai_summary_channels: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     """Save Claude AI settings. Admin only."""
@@ -590,6 +592,8 @@ async def save_ai_settings(
         await set_setting(db, "daily_ai_summary_enabled", "1" if daily_ai_summary_enabled == "on" else "0")
     if daily_ai_summary_hour:
         await set_setting(db, "daily_ai_summary_hour", daily_ai_summary_hour)
+    if daily_ai_summary_channels is not None:
+        await set_setting(db, "daily_ai_summary_channels", daily_ai_summary_channels)
 
     await db.commit()
 
@@ -597,6 +601,57 @@ async def save_ai_settings(
     if "application/json" in accept:
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/settings?saved=1", status_code=303)
+
+
+@router.get("/ai/usage")
+async def ai_usage_stats(request: Request, db: AsyncSession = Depends(get_db)):
+    """Return AI token usage statistics (current month + all-time)."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+
+    from models.ai_usage import AiUsageLog
+    from datetime import datetime
+
+    now = datetime.utcnow()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # Monthly stats
+    monthly = (await db.execute(
+        select(
+            func.coalesce(func.sum(AiUsageLog.input_tokens), 0).label("input_tokens"),
+            func.coalesce(func.sum(AiUsageLog.output_tokens), 0).label("output_tokens"),
+            func.coalesce(func.sum(AiUsageLog.cost_usd), 0).label("cost_usd"),
+            func.count().label("calls"),
+        ).where(AiUsageLog.timestamp >= month_start)
+    )).one()
+
+    # All-time stats
+    total = (await db.execute(
+        select(
+            func.coalesce(func.sum(AiUsageLog.input_tokens), 0).label("input_tokens"),
+            func.coalesce(func.sum(AiUsageLog.output_tokens), 0).label("output_tokens"),
+            func.coalesce(func.sum(AiUsageLog.cost_usd), 0).label("cost_usd"),
+            func.count().label("calls"),
+        )
+    )).one()
+
+    return JSONResponse({
+        "monthly": {
+            "input_tokens": monthly.input_tokens,
+            "output_tokens": monthly.output_tokens,
+            "cost_usd": round(float(monthly.cost_usd), 4),
+            "calls": monthly.calls,
+            "month": now.strftime("%Y-%m"),
+        },
+        "total": {
+            "input_tokens": total.input_tokens,
+            "output_tokens": total.output_tokens,
+            "cost_usd": round(float(total.cost_usd), 4),
+            "calls": total.calls,
+        },
+    })
 
 
 @router.delete("/api-keys/{key_id}")
