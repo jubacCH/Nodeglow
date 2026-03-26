@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings, Activity, Bell, Palette, Key, Database,
   Plus, Trash2, Copy, Send, CheckCircle,
-  XCircle, AlertTriangle, Download, Upload, Sparkles,
+  XCircle, AlertTriangle, Download, Upload, Sparkles, ChevronDown,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -77,6 +77,30 @@ interface NotifLog {
   severity: string;
   status: string;
   error: string | null;
+}
+
+/* ---------- SetupGuide ---------- */
+
+function SetupGuide({ steps }: { steps: React.ReactNode[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 transition-colors"
+      >
+        <ChevronDown size={14} className={`transition-transform ${open ? '' : '-rotate-90'}`} />
+        Setup guide
+      </button>
+      {open && (
+        <ol className="mt-2 ml-1 space-y-1.5 text-xs text-[var(--ng-text-secondary)] list-decimal list-inside">
+          {steps.map((step, i) => (
+            <li key={i} className="leading-relaxed">{step}</li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
 }
 
 /* ---------- Constants ---------- */
@@ -695,6 +719,13 @@ export default function SettingsPage() {
                 {testingChannel === 'telegram' ? 'Sending...' : 'Test'}
               </Button>
             </div>
+            <SetupGuide steps={[
+              <>Open Telegram and search for <strong>@BotFather</strong></>,
+              <>Send <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">/newbot</code> and follow the prompts to name your bot</>,
+              <>BotFather will reply with a <strong>Bot Token</strong> like <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11</code> — paste it below</>,
+              <>Add the bot to your group or channel, then send a message in the chat</>,
+              <>Get your <strong>Chat ID</strong>: visit <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> in your browser — look for <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">&quot;chat&quot;:{'{'}&quot;id&quot;:-100...</code></>,
+            ]} />
             <div className="space-y-3">
               <div>
                 <label className="ng-label">Bot Token</label>
@@ -739,6 +770,13 @@ export default function SettingsPage() {
                 {testingChannel === 'discord' ? 'Sending...' : 'Test'}
               </Button>
             </div>
+            <SetupGuide steps={[
+              <>Open your Discord server and go to <strong>Server Settings</strong> &gt; <strong>Integrations</strong></>,
+              <>Click <strong>Webhooks</strong> &gt; <strong>New Webhook</strong></>,
+              <>Choose a name (e.g. &quot;Nodeglow&quot;) and select the channel for alerts</>,
+              <>Click <strong>Copy Webhook URL</strong> — it looks like <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">https://discord.com/api/webhooks/123.../abc...</code></>,
+              <>Paste the URL below and click <strong>Test</strong> to verify</>,
+            ]} />
             <div className="space-y-3">
               <div>
                 <label className="ng-label">Webhook URL</label>
