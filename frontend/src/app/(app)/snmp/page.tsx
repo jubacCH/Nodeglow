@@ -198,12 +198,24 @@ function MibLibraryTab() {
 
   /* library import */
   const importMut = useMutation({
-    mutationFn: (mib: LibraryMib) => post('/api/snmp/mibs/library/import', { mib_name: mib.name, vendor: mib.vendor }),
-    onSuccess: () => {
-      toast.show('MIB imported', 'success');
-      qc.invalidateQueries({ queryKey: ['snmp-page'] });
+    mutationFn: async (mib: LibraryMib) => {
+      const res = await api('/api/snmp/mibs/library/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mib_name: mib.name, vendor: mib.vendor }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Import failed (${res.status})`);
+      }
+      return res.json();
     },
-    onError: () => toast.show('Import failed', 'error'),
+    onSuccess: (_data, mib) => {
+      toast.show(`${mib.name} imported`, 'success');
+      qc.invalidateQueries({ queryKey: ['snmp-page'] });
+      qc.invalidateQueries({ queryKey: ['snmp-oids'] });
+    },
+    onError: (err: Error) => toast.show(err.message, 'error'),
   });
 
   return (
