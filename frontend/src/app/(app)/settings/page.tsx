@@ -450,7 +450,28 @@ export default function SettingsPage() {
 
   function handleTestChannel(channel: string) {
     setTestingChannel(channel);
-    testNotifMut.mutate(channel);
+    // Auto-save notification settings before testing so the DB has current values
+    const params = new URLSearchParams();
+    params.set('notify_enabled', notifyEnabled ? 'on' : '0');
+    params.set('telegram_bot_token', telegramToken);
+    params.set('telegram_chat_id', telegramChat);
+    params.set('discord_webhook_url', discordWebhook);
+    params.set('webhook_url', webhookUrl);
+    params.set('webhook_secret', webhookSecret);
+    params.set('smtp_host', smtpHost);
+    params.set('smtp_port', smtpPort);
+    params.set('smtp_user', smtpUser);
+    params.set('smtp_password', smtpPassword);
+    params.set('smtp_from', smtpFrom);
+    params.set('smtp_to', smtpTo);
+    params.set('notify_telegram_min_severity', telegramMinSev);
+    params.set('notify_discord_min_severity', discordMinSev);
+    params.set('notify_webhook_min_severity', webhookMinSev);
+    params.set('notify_email_min_severity', emailMinSev);
+    saveNotifMut.mutate(params, {
+      onSuccess: () => testNotifMut.mutate(channel),
+      onError: () => setTestingChannel(null),
+    });
   }
 
   function handleSaveAppearance() {
