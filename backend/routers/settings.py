@@ -121,6 +121,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
         "proxmox_disk_threshold", "syslog_port", "syslog_allowlist_only",
         "digest_enabled", "digest_day", "digest_hour",
+        "daily_ai_summary_enabled", "daily_ai_summary_hour",
         "geoip_enabled", "geoip_last_updated",
     ]
     result = {}
@@ -135,6 +136,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "proxmox_ram_threshold": "85", "proxmox_disk_threshold": "90",
         "syslog_port": "1514",
         "digest_day": "0", "digest_hour": "9",
+        "daily_ai_summary_hour": "8",
     }
     for key, default in defaults.items():
         if not result.get(key):
@@ -570,9 +572,11 @@ async def geoip_download(request: Request, db: AsyncSession = Depends(get_db)):
 async def save_ai_settings(
     request: Request,
     claude_api_key: str = Form(""),
+    daily_ai_summary_enabled: str = Form(""),
+    daily_ai_summary_hour: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save Claude AI API key. Admin only."""
+    """Save Claude AI settings. Admin only."""
     user = getattr(request.state, "current_user", None)
     role = getattr(user, "role", "admin") or "admin"
     if role != "admin":
@@ -580,6 +584,13 @@ async def save_ai_settings(
 
     if claude_api_key.strip():
         await set_setting(db, "claude_api_key", encrypt_value(claude_api_key.strip()))
+
+    # Daily AI summary settings
+    if daily_ai_summary_enabled:
+        await set_setting(db, "daily_ai_summary_enabled", "1" if daily_ai_summary_enabled == "on" else "0")
+    if daily_ai_summary_hour:
+        await set_setting(db, "daily_ai_summary_hour", daily_ai_summary_hour)
+
     await db.commit()
 
     accept = request.headers.get("accept", "")

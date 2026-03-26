@@ -399,6 +399,235 @@ def format_digest_text(digest: dict) -> str:
     return "\n".join(lines)
 
 
+async def build_daily_summary_data(db: AsyncSession) -> dict:
+    """Aggregate last-24h stats for the AI daily summary."""
+    now = datetime.utcnow()
+    yesterday = now - timedelta(hours=24)
+
+    data: dict = {"period_start": yesterday, "period_end": now}
+
+    # ── Incidents (24h) ───────────────────────────────────────────────────
+    incidents_result = await db.execute(
+        select(Incident).where(Incident.created_at >= yesterday)
+        .order_by(Incident.created_at.desc())
+    )
+    all_incidents = incidents_result.scalars().all()
+
+    resolved = [i for i in all_incidents if i.status == "resolved"]
+    mttr_seconds = []
+    for i in resolved:
+        if i.resolved_at and i.created_at:
+            mttr_seconds.append((i.resolved_at - i.created_at).total_seconds())
+
+    data["incidents"] = {
+        "total": len(all_incidents),
+        "open": len([i for i in all_incidents if i.status == "open"]),
+        "resolved": len(resolved),
+        "mttr_min": round(sum(mttr_seconds) / len(mttr_seconds) / 60, 1) if mttr_seconds else None,
+        "items": [
+            {
+                "title": i.title,
+                "severity": i.severity,
+                "status": i.status,
+                "rule": i.rule,
+                "created": i.created_at.strftime("%H:%M") if i.created_at else "?",
+                "resolved": i.resolved_at.strftime("%H:%M") if i.resolved_at else None,
+            }
+            for i in all_incidents[:20]
+        ],
+    }
+
+    # ── Host availability (24h) ───────────────────────────────────────────
+    hosts_result = await db.execute(
+        select(PingHost).where(PingHost.enabled == True)
+    )
+    all_hosts = hosts_result.scalars().all()
+
+    uptime_rows = (await db.execute(
+        select(
+            PingResult.host_id,
+            func.count().label("total"),
+            func.count(case((PingResult.success == True, 1))).label("ok"),
+        )
+        .where(PingResult.timestamp >= yesterday)
+        .group_by(PingResult.host_id)
+    )).all()
+
+    uptime_by_host = {row.host_id: (row.ok, row.total) for row in uptime_rows}
+
+    down_hosts = []
+    for host in all_hosts:
+        ok, total = uptime_by_host.get(host.id, (0, 0))
+        if total == 0:
+            continue
+        uptime_pct = round(ok / total * 100, 2)
+        if uptime_pct < 100:
+            down_hosts.append({
+                "name": host.name or host.hostname,
+                "uptime_pct": uptime_pct,
+                "failures": total - ok,
+            })
+
+    down_hosts.sort(key=lambda x: x["uptime_pct"])
+    data["hosts"] = {
+        "total": len(all_hosts),
+        "down": down_hosts[:10],
+        "avg_uptime": round(
+            sum(
+                (uptime_by_host.get(h.id, (0, 1))[0] / max(uptime_by_host.get(h.id, (0, 1))[1], 1) * 100)
+                for h in all_hosts
+            ) / max(len(all_hosts), 1), 2
+        ),
+    }
+
+    # ── Syslog (24h) ─────────────────────────────────────────────────────
+    syslog_stats = {"total": 0, "errors": 0, "top_templates": []}
+    try:
+        from services.clickhouse_client import query as ch_query, query_scalar as ch_scalar
+        syslog_stats["total"] = int(await ch_scalar(
+            "SELECT count() FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)}",
+            {"t": yesterday},
+        ) or 0)
+        syslog_stats["errors"] = int(await ch_scalar(
+            "SELECT count() FROM syslog_messages WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}",
+            {"t": yesterday},
+        ) or 0)
+
+        top_tpl_rows = await ch_query(
+            "SELECT template_hash, count() AS cnt "
+            "FROM syslog_messages "
+            "WHERE timestamp >= {t:DateTime64(3)} AND template_hash != '' "
+            "GROUP BY template_hash ORDER BY cnt DESC LIMIT 5",
+            {"t": yesterday},
+        )
+        if top_tpl_rows:
+            hashes = [r["template_hash"] for r in top_tpl_rows]
+            tpl_result = await db.execute(
+                select(LogTemplate).where(LogTemplate.template_hash.in_(hashes))
+            )
+            tpl_by_hash = {t.template_hash: t for t in tpl_result.scalars().all()}
+            for r in top_tpl_rows:
+                tpl = tpl_by_hash.get(r["template_hash"])
+                if tpl:
+                    syslog_stats["top_templates"].append({
+                        "template": tpl.template[:120],
+                        "count": r["cnt"],
+                    })
+    except Exception:
+        logger.debug("Syslog stats unavailable for daily summary", exc_info=True)
+
+    data["syslog"] = syslog_stats
+
+    # ── Integration failures (24h) ────────────────────────────────────────
+    configs_result = await db.execute(
+        select(IntegrationConfig).where(IntegrationConfig.enabled == True)
+    )
+    configs = configs_result.scalars().all()
+
+    snap_rows = (await db.execute(
+        select(
+            Snapshot.entity_type,
+            Snapshot.entity_id,
+            func.count().label("total"),
+            func.count(case((Snapshot.ok == True, 1))).label("ok"),
+        )
+        .where(Snapshot.timestamp >= yesterday)
+        .group_by(Snapshot.entity_type, Snapshot.entity_id)
+    )).all()
+
+    snap_stats = {(r.entity_type, r.entity_id): (r.ok, r.total) for r in snap_rows}
+
+    unhealthy_integrations = []
+    for cfg in configs:
+        ok_count, total = snap_stats.get((cfg.type, cfg.id), (0, 0))
+        if total == 0:
+            continue
+        success_rate = round(ok_count / total * 100, 1)
+        if success_rate < 100:
+            unhealthy_integrations.append({
+                "name": cfg.name,
+                "type": cfg.type,
+                "success_rate": success_rate,
+                "failures": total - ok_count,
+            })
+
+    unhealthy_integrations.sort(key=lambda x: x["success_rate"])
+    data["integrations"] = unhealthy_integrations
+
+    # ── SSL expiring soon ─────────────────────────────────────────────────
+    try:
+        ssl_hosts = (await db.execute(
+            select(PingHost).where(
+                PingHost.ssl_expiry_days.isnot(None),
+                PingHost.ssl_expiry_days <= 14,
+            ).order_by(PingHost.ssl_expiry_days.asc())
+        )).scalars().all()
+        data["ssl_expiring"] = [
+            {"name": h.name or h.hostname, "days": h.ssl_expiry_days}
+            for h in ssl_hosts
+        ]
+    except Exception:
+        data["ssl_expiring"] = []
+
+    return data
+
+
+def format_daily_summary_prompt(data: dict) -> str:
+    """Format collected data into a compact prompt for AI analysis."""
+    lines = [
+        f"Period: last 24 hours ({data['period_start'].strftime('%Y-%m-%d %H:%M')} — {data['period_end'].strftime('%Y-%m-%d %H:%M')} UTC)",
+        "",
+    ]
+
+    inc = data.get("incidents", {})
+    lines.append(f"## Incidents: {inc['total']} total, {inc['open']} open, {inc['resolved']} resolved")
+    if inc.get("mttr_min"):
+        lines.append(f"  MTTR: {inc['mttr_min']} min")
+    for item in inc.get("items", []):
+        resolved_str = f" → resolved {item['resolved']}" if item["resolved"] else ""
+        lines.append(f"  - [{item['severity']}] {item['title']} (rule: {item['rule']}, {item['created']}{resolved_str}) [{item['status']}]")
+
+    hosts = data.get("hosts", {})
+    lines.append(f"\n## Hosts: {hosts['total']} monitored, avg uptime {hosts['avg_uptime']}%")
+    for h in hosts.get("down", []):
+        lines.append(f"  - {h['name']}: {h['uptime_pct']}% ({h['failures']} failures)")
+
+    syslog = data.get("syslog", {})
+    lines.append(f"\n## Syslog: {syslog['total']} messages, {syslog['errors']} errors")
+    for t in syslog.get("top_templates", []):
+        lines.append(f"  - [{t['count']}x] {t['template']}")
+
+    integrations = data.get("integrations", [])
+    if integrations:
+        lines.append(f"\n## Unhealthy Integrations:")
+        for i in integrations:
+            lines.append(f"  - {i['name']} ({i['type']}): {i['success_rate']}% success ({i['failures']} failures)")
+
+    ssl = data.get("ssl_expiring", [])
+    if ssl:
+        lines.append(f"\n## SSL Certificates Expiring Soon:")
+        for s in ssl:
+            lines.append(f"  - {s['name']}: {s['days']} days")
+
+    return "\n".join(lines)
+
+
+_DAILY_SUMMARY_SYSTEM_PROMPT = """\
+You are Nodeglow's AI operations assistant. You analyze the last 24 hours of homelab/infrastructure monitoring data and produce a concise daily briefing.
+
+Your report should:
+1. Start with a one-line overall health assessment (good/warning/critical)
+2. Highlight the most important incidents and their likely root causes
+3. For each significant issue, suggest concrete resolution steps
+4. Flag recurring patterns or trends that need attention
+5. Note any upcoming risks (SSL expiry, degrading integrations)
+
+Keep it concise and actionable. Use short bullet points. No fluff.
+If everything is healthy, say so briefly — don't invent problems.
+Write in plain text (no markdown), suitable for Telegram/Discord messages.
+Max ~800 words."""
+
+
 def _esc(s: str) -> str:
     """Escape HTML entities."""
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")

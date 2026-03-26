@@ -53,6 +53,8 @@ interface SettingsData {
   smtp_to: string;
   smtp_has_pw: boolean;
   claude_has_key: boolean;
+  daily_ai_summary_enabled: string;
+  daily_ai_summary_hour: string;
   notify_telegram_min_severity: string;
   notify_discord_min_severity: string;
   notify_webhook_min_severity: string;
@@ -251,6 +253,8 @@ export default function SettingsPage() {
 
   /* ---- AI settings state ---- */
   const [claudeApiKey, setClaudeApiKey] = useState('');
+  const [dailyAiEnabled, setDailyAiEnabled] = useState(false);
+  const [dailyAiHour, setDailyAiHour] = useState('8');
   const [aiSaving, setAiSaving] = useState(false);
 
   /* ---- API keys state ---- */
@@ -300,6 +304,8 @@ export default function SettingsPage() {
     setDiscordMinSev(s.notify_discord_min_severity || 'all');
     setWebhookMinSev(s.notify_webhook_min_severity || 'all');
     setEmailMinSev(s.notify_email_min_severity || 'all');
+    setDailyAiEnabled(s.daily_ai_summary_enabled === '1');
+    setDailyAiHour(s.daily_ai_summary_hour || '8');
   }, []);
 
   useEffect(() => {
@@ -1354,17 +1360,62 @@ export default function SettingsPage() {
               </div>
             </div>
           </GlassCard>
+
+          {/* Daily AI Summary */}
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
+              <Bell size={16} className="text-violet-400" />
+              Daily AI Summary
+            </h3>
+            <p className="text-xs text-slate-400 mb-4">
+              Sends a daily AI-generated briefing with incidents, root cause analysis, and resolution suggestions via your configured notification channels.
+            </p>
+            <div className="space-y-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={dailyAiEnabled}
+                  onChange={(e) => setDailyAiEnabled(e.target.checked)}
+                  className="rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50"
+                />
+                <span className="text-sm text-[var(--ng-text-primary)]">Enable daily AI summary</span>
+              </label>
+              <div>
+                <label className="ng-label">Send at (UTC)</label>
+                <select
+                  value={dailyAiHour}
+                  onChange={(e) => setDailyAiHour(e.target.value)}
+                  className={selectSmCls}
+                  disabled={!dailyAiEnabled}
+                >
+                  {Array.from({ length: 24 }, (_, i) => (
+                    <option key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</option>
+                  ))}
+                </select>
+              </div>
+              {!settings?.claude_has_key && (
+                <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+                  Requires a Claude API key (configure above).
+                </p>
+              )}
+            </div>
+          </GlassCard>
+
           <div className="flex justify-end">
             <Button
               size="sm"
-              disabled={aiSaving || !claudeApiKey.trim()}
+              disabled={aiSaving}
               onClick={async () => {
                 setAiSaving(true);
                 try {
                   const params = new URLSearchParams();
-                  params.set('claude_api_key', claudeApiKey);
+                  if (claudeApiKey.trim()) {
+                    params.set('claude_api_key', claudeApiKey);
+                  }
+                  params.set('daily_ai_summary_enabled', dailyAiEnabled ? 'on' : '0');
+                  params.set('daily_ai_summary_hour', dailyAiHour);
                   await api('/settings/ai/save', { method: 'POST', body: params });
-                  setClaudeApiKey('');
+                  if (claudeApiKey.trim()) setClaudeApiKey('');
                   qc.invalidateQueries({ queryKey: ['settings'] });
                   toast.show('AI settings saved', 'success');
                 } catch {
@@ -1374,7 +1425,7 @@ export default function SettingsPage() {
                 }
               }}
             >
-              {aiSaving ? 'Saving...' : 'Save API Key'}
+              {aiSaving ? 'Saving...' : 'Save AI Settings'}
             </Button>
           </div>
         </div>
