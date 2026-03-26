@@ -36,6 +36,7 @@ interface Mib {
 interface HostConfig {
   id: number;
   host_id: number;
+  host_name?: string;
   hostname: string;
   credential_id: number;
   credential_name?: string;
@@ -659,10 +660,13 @@ function AddHostModal({
    ================================================================ */
 
 function OidBrowserTab() {
+  const toast = useToastStore();
   const [mibFilter, setMibFilter] = useState('');
   const [keyword, setKeyword] = useState('');
   const [appliedMib, setAppliedMib] = useState('');
   const [appliedKeyword, setAppliedKeyword] = useState('');
+  const [selectedConfig, setSelectedConfig] = useState('');
+  const [testResults, setTestResults] = useState<Record<string, string> | null>(null);
 
   const queryParams = new URLSearchParams();
   if (appliedMib) queryParams.set('mib', appliedMib);
@@ -680,14 +684,58 @@ function OidBrowserTab() {
   });
 
   const mibNames = (pageData?.mibs ?? []).map((m) => m.name);
+  const hostConfigs = pageData?.host_configs ?? [];
 
   const doSearch = () => {
     setAppliedMib(mibFilter);
     setAppliedKeyword(keyword);
+    setTestResults(null);
   };
+
+  /* test OIDs against host */
+  const testMut = useMutation({
+    mutationFn: () => {
+      const oidList = (oids ?? []).map((o) => o.oid);
+      return post<{ ok: boolean; results: Record<string, string>; error?: string }>(
+        `/api/snmp/hosts/${selectedConfig}/test-oids`,
+        { oids: oidList },
+      );
+    },
+    onSuccess: (data) => {
+      if (data.results && Object.keys(data.results).length > 0) {
+        setTestResults(data.results);
+        toast.show(`${Object.keys(data.results).length} values returned`, 'success');
+      } else {
+        setTestResults({});
+        toast.show('Host reachable but no values returned', 'warning');
+      }
+    },
+    onError: (err: Error) => {
+      const apiErr = err as ApiError;
+      let msg = 'SNMP test failed';
+      if (apiErr.data) {
+        try { msg = JSON.parse(String(apiErr.data)).error || msg; } catch { /* */ }
+      }
+      toast.show(msg, 'error');
+    },
+  });
+
+  const hasResults = testResults !== null;
+  const colSpan = hasResults ? 5 : 4;
 
   const inputCls =
     'w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500/50';
+
+  /* find value for an OID — exact match or prefix match for walk results */
+  const getValue = (oid: string): string | undefined => {
+    if (!testResults) return undefined;
+    if (testResults[oid] !== undefined) return testResults[oid];
+    // Prefix match for table/walk OIDs
+    const matches = Object.entries(testResults).filter(([k]) => k.startsWith(oid + '.'));
+    if (matches.length === 1) return matches[0][1];
+    if (matches.length > 1) return `${matches.length} values`;
+    return undefined;
+  };
 
   return (
     <GlassCard>
@@ -697,7 +745,7 @@ function OidBrowserTab() {
       </div>
 
       {/* filters */}
-      <div className="px-4 py-3 border-b border-white/[0.06]">
+      <div className="px-4 py-3 border-b border-white/[0.06] space-y-2">
         <div className="flex gap-2">
           <select
             value={mibFilter}
@@ -727,6 +775,38 @@ function OidBrowserTab() {
             Search
           </Button>
         </div>
+
+        {/* test against host */}
+        <div className="flex gap-2 items-center">
+          <select
+            value={selectedConfig}
+            onChange={(e) => { setSelectedConfig(e.target.value); setTestResults(null); }}
+            className={`${inputCls} !bg-[var(--ng-surface)] max-w-[280px]`}
+          >
+            <option value="" className="text-slate-200">Select host to test...</option>
+            {hostConfigs.map((cfg) => (
+              <option key={cfg.id} value={cfg.id} className="text-slate-200">
+                {cfg.host_name ?? cfg.hostname} ({cfg.hostname})
+              </option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            onClick={() => testMut.mutate()}
+            disabled={!selectedConfig || !oids?.length || testMut.isPending}
+          >
+            <Play size={14} className={testMut.isPending ? 'animate-spin' : ''} />
+            {testMut.isPending ? 'Testing...' : 'Test'}
+          </Button>
+          {hasResults && (
+            <button
+              onClick={() => setTestResults(null)}
+              className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              Clear results
+            </button>
+          )}
+        </div>
       </div>
 
       {/* results */}
@@ -738,6 +818,9 @@ function OidBrowserTab() {
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Name</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">MIB</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Syntax</th>
+              {hasResults && (
+                <th className="text-left px-4 py-3 text-xs font-medium text-emerald-400 uppercase tracking-wider">Value</th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -748,26 +831,39 @@ function OidBrowserTab() {
                   <td className="px-4 py-3"><Skeleton className="h-5 w-32" /></td>
                   <td className="px-4 py-3"><Skeleton className="h-5 w-24" /></td>
                   <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
+                  {hasResults && <td className="px-4 py-3"><Skeleton className="h-5 w-32" /></td>}
                 </tr>
               ))}
             {!isLoading && !isFetching && (oids?.length ?? 0) === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
+                <td colSpan={colSpan} className="px-4 py-8 text-center text-sm text-slate-500">
                   No OIDs found. Seed defaults or upload a MIB first.
                 </td>
               </tr>
             )}
             {!isFetching &&
-              oids?.map((oid, i) => (
-                <tr key={`${oid.oid}-${i}`} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-300 select-all">{oid.oid}</td>
-                  <td className="px-4 py-3 text-sm text-slate-200">{oid.name}</td>
-                  <td className="px-4 py-3">
-                    <Badge>{oid.mib}</Badge>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-slate-400">{oid.syntax ?? '—'}</td>
-                </tr>
-              ))}
+              oids?.map((oid, i) => {
+                const val = getValue(oid.oid);
+                return (
+                  <tr key={`${oid.oid}-${i}`} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
+                    <td className="px-4 py-3 font-mono text-xs text-slate-300 select-all">{oid.oid}</td>
+                    <td className="px-4 py-3 text-sm text-slate-200">{oid.name}</td>
+                    <td className="px-4 py-3">
+                      <Badge>{oid.mib}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-400">{oid.syntax ?? '—'}</td>
+                    {hasResults && (
+                      <td className="px-4 py-3 font-mono text-xs max-w-[300px] truncate" title={val ?? ''}>
+                        {val !== undefined ? (
+                          <span className="text-emerald-300">{val}</span>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
       </div>
