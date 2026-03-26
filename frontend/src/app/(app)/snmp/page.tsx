@@ -10,7 +10,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useToastStore } from '@/stores/toast';
-import { get, post, del, patch, api } from '@/lib/api';
+import { get, post, del, patch, ApiError } from '@/lib/api';
 import {
   Upload,
   Trash2,
@@ -198,24 +198,25 @@ function MibLibraryTab() {
 
   /* library import */
   const importMut = useMutation({
-    mutationFn: async (mib: LibraryMib) => {
-      const res = await api('/api/snmp/mibs/library/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mib_name: mib.name, vendor: mib.vendor }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Import failed (${res.status})`);
-      }
-      return res.json();
-    },
+    mutationFn: (mib: LibraryMib) =>
+      post('/api/snmp/mibs/library/import', { mib_name: mib.name, vendor: mib.vendor }),
     onSuccess: (_data, mib) => {
       toast.show(`${mib.name} imported`, 'success');
       qc.invalidateQueries({ queryKey: ['snmp-page'] });
       qc.invalidateQueries({ queryKey: ['snmp-oids'] });
     },
-    onError: (err: Error) => toast.show(err.message, 'error'),
+    onError: (err: Error) => {
+      // ApiError includes the response body in .data
+      const apiErr = err as ApiError;
+      let msg = 'Import failed';
+      if (apiErr.data) {
+        try {
+          const parsed = JSON.parse(String(apiErr.data));
+          msg = parsed.error || msg;
+        } catch { /* use default */ }
+      }
+      toast.show(msg, 'error');
+    },
   });
 
   return (
