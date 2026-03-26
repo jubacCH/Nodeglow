@@ -567,7 +567,7 @@ async def run_weekly_digest():
 
 async def run_daily_ai_summary():
     """Build AI-powered daily summary and send via configured notification channels."""
-    from database import get_setting
+    from database import get_setting, set_setting
     from services.digest import (
         build_daily_summary_data, format_daily_summary_prompt,
         _DAILY_SUMMARY_SYSTEM_PROMPT,
@@ -575,13 +575,25 @@ async def run_daily_ai_summary():
     from services.ai_client import generate_completion
     from notifications import (
         _send_telegram, _send_discord, _log_notification,
-        _send_webhook,
+        _send_webhook, _send_email, _build_html_email,
     )
+    from models.ai_usage import AiUsageLog
 
     async with AsyncSessionLocal() as db:
         enabled = await get_setting(db, "daily_ai_summary_enabled", "0")
         if enabled != "1":
             return
+
+        # ── Duplicate protection: skip if already sent today ──────────────
+        last_sent_str = await get_setting(db, "daily_ai_summary_last_sent", "")
+        if last_sent_str:
+            try:
+                last_sent = datetime.fromisoformat(last_sent_str)
+                if (datetime.utcnow() - last_sent).total_seconds() < 20 * 3600:
+                    logger.info("Daily AI summary skipped: already sent at %s", last_sent_str)
+                    return
+            except ValueError:
+                pass  # corrupted value, proceed
 
         # Check if AI key is configured
         claude_key = await get_setting(db, "claude_api_key", "")
@@ -603,39 +615,69 @@ async def run_daily_ai_summary():
         logger.info("Daily AI summary skipped: no events in last 24h")
         return
 
-    # Generate AI analysis
+    # ── Generate AI analysis (with token tracking) ────────────────────────
     prompt = format_daily_summary_prompt(data)
     try:
-        summary = await generate_completion(
+        summary, usage = await generate_completion(
             _DAILY_SUMMARY_SYSTEM_PROMPT, prompt, max_tokens=1500,
+            return_usage=True,
         )
     except Exception as exc:
         logger.error("Daily AI summary generation failed: %s", exc)
         await _log_notification("ai", "Daily AI Summary", "AI generation failed", "info", "failed", str(exc))
         return
 
-    # Send via all configured channels
+    # ── Log token usage ───────────────────────────────────────────────────
+    try:
+        # Haiku pricing: $1/MTok input, $5/MTok output
+        _COST_PER_INPUT = 1.0 / 1_000_000
+        _COST_PER_OUTPUT = 5.0 / 1_000_000
+        cost = (usage["input_tokens"] * _COST_PER_INPUT
+                + usage["output_tokens"] * _COST_PER_OUTPUT)
+        async with AsyncSessionLocal() as db:
+            db.add(AiUsageLog(
+                feature="daily_summary",
+                model=usage.get("model", "unknown"),
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                cost_usd=round(cost, 6),
+            ))
+            await db.commit()
+        logger.info("Daily AI summary: %d in + %d out tokens ($%.4f)",
+                     usage["input_tokens"], usage["output_tokens"], cost)
+    except Exception as exc:
+        logger.warning("Failed to log AI usage: %s", exc)
+
+    # ── Read channel config + selected channels ───────────────────────────
     title = "Daily AI Summary"
     sent = False
 
     async with AsyncSessionLocal() as db:
-        from database import get_setting
         notify_enabled = await get_setting(db, "notify_enabled", "0")
         if notify_enabled != "1":
             logger.warning("Daily AI summary: notifications disabled")
             return
+
+        # Which channels should receive the summary (default: all)
+        channels_csv = await get_setting(db, "daily_ai_summary_channels", "telegram,discord,webhook,email")
+        selected = {c.strip() for c in channels_csv.split(",") if c.strip()}
 
         tg_token = await get_setting(db, "telegram_bot_token", "")
         tg_chat = await get_setting(db, "telegram_chat_id", "")
         dc_webhook = await get_setting(db, "discord_webhook_url", "")
         wh_url = await get_setting(db, "webhook_url", "")
         wh_secret = await get_setting(db, "webhook_secret", "")
+        smtp_host = await get_setting(db, "smtp_host", "")
+        smtp_user = await get_setting(db, "smtp_user", "")
+        smtp_pw_enc = await get_setting(db, "smtp_password", "")
+        smtp_to = await get_setting(db, "smtp_to", "")
+        smtp_port = int(await get_setting(db, "smtp_port", "587"))
+        smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
 
     # Telegram
-    if tg_token and tg_chat:
+    if "telegram" in selected and tg_token and tg_chat:
         try:
             tg_text = f"<b>🤖 {title}</b>\n\n{summary}"
-            # Telegram has a 4096 char limit
             if len(tg_text) > 4096:
                 tg_text = tg_text[:4090] + "\n[…]"
             await _send_telegram(tg_token, tg_chat, tg_text)
@@ -646,9 +688,8 @@ async def run_daily_ai_summary():
             await _log_notification("telegram", title, summary[:200], "info", "failed", str(exc))
 
     # Discord
-    if dc_webhook:
+    if "discord" in selected and dc_webhook:
         try:
-            # Discord embed description limit is 4096 chars
             desc = summary[:4090] if len(summary) > 4090 else summary
             await _send_discord(dc_webhook, f"🤖 {title}", desc, 0x8B5CF6)
             await _log_notification("discord", title, summary[:200], "info", "sent")
@@ -658,7 +699,7 @@ async def run_daily_ai_summary():
             await _log_notification("discord", title, summary[:200], "info", "failed", str(exc))
 
     # Webhook
-    if wh_url:
+    if "webhook" in selected and wh_url:
         try:
             await _send_webhook(wh_url, wh_secret, title, summary, "info")
             await _log_notification("webhook", title, summary[:200], "info", "sent")
@@ -667,10 +708,34 @@ async def run_daily_ai_summary():
             logger.error("Daily AI summary Webhook failed: %s", exc)
             await _log_notification("webhook", title, summary[:200], "info", "failed", str(exc))
 
+    # Email
+    if "email" in selected and smtp_host and smtp_user and smtp_pw_enc and smtp_to:
+        try:
+            from database import decrypt_value
+            try:
+                smtp_pw = decrypt_value(smtp_pw_enc)
+            except Exception:
+                smtp_pw = smtp_pw_enc
+            html_body = _build_html_email(title, summary, "info")
+            await _send_email(
+                smtp_host, smtp_port, smtp_user, smtp_pw,
+                smtp_from, smtp_to,
+                f"[Nodeglow] {title}", f"{title}\n\n{summary}", html_body,
+            )
+            await _log_notification("email", title, summary[:200], "info", "sent")
+            sent = True
+        except Exception as exc:
+            logger.error("Daily AI summary Email failed: %s", exc)
+            await _log_notification("email", title, summary[:200], "info", "failed", str(exc))
+
+    # ── Mark as sent (duplicate protection) ───────────────────────────────
     if sent:
+        async with AsyncSessionLocal() as db:
+            await set_setting(db, "daily_ai_summary_last_sent", datetime.utcnow().isoformat())
+            await db.commit()
         logger.info("Daily AI summary sent successfully")
     else:
-        logger.warning("Daily AI summary: no notification channel configured")
+        logger.warning("Daily AI summary: no notification channel configured or selected")
 
 
 async def update_geoip():
