@@ -10,7 +10,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useToastStore } from '@/stores/toast';
-import { get, post, del, patch, ApiError } from '@/lib/api';
+import { api, get, post, del, patch, ApiError } from '@/lib/api';
 import {
   Upload,
   Trash2,
