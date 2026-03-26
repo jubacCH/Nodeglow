@@ -41,6 +41,7 @@ export interface HostStatus {
   uptime_h24: number | null;
   uptime_d7: number | null;
   uptime_d30: number | null;
+  last_seen: string | null;
 }
 
 export interface HostDetail extends PingHost {
@@ -102,6 +103,9 @@ export interface IntegrationConfig {
   name: string;
   enabled: boolean;
   created_at: string;
+  status: 'ok' | 'error' | 'no_data';
+  last_check: string | null;
+  error: string | null;
 }
 
 export interface IntegrationSnapshot {

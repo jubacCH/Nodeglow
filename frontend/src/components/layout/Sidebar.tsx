@@ -140,9 +140,38 @@ export function Sidebar() {
     return () => { document.removeEventListener('keydown', handler); clearTimeout(gTimeout); };
   }, [router]);
 
-  const searchResults = search.trim()
-    ? allSearchItems.filter((item) => item.label.toLowerCase().includes(search.toLowerCase()))
-    : [];
+  // Build dynamic search items from dashboard data (hosts + integration instances)
+  const dynamicSearchItems = (() => {
+    const items: { label: string; href: string; category?: string }[] = [];
+    if (dashData) {
+      for (const hs of dashData.host_stats ?? []) {
+        items.push({
+          label: hs.host.name || hs.host.hostname,
+          href: `/hosts/${hs.host.id}`,
+          category: 'Host',
+        });
+      }
+      for (const ih of dashData.integration_health ?? []) {
+        items.push({
+          label: `${ih.name} (${ih.label})`,
+          href: ih.single_instance ? `/integration/${ih.type}` : `/integration/${ih.type}/${ih.config_id}`,
+          category: 'Integration',
+        });
+      }
+    }
+    return items;
+  })();
+
+  const searchResults = (() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const pageResults = allSearchItems
+      .filter((item) => item.label.toLowerCase().includes(q))
+      .map((item) => ({ ...item, category: 'Page' }));
+    const dynResults = dynamicSearchItems
+      .filter((item) => item.label.toLowerCase().includes(q));
+    return [...pageResults, ...dynResults].slice(0, 12);
+  })();
 
   const isAdmin = user?.role === 'admin';
 
@@ -193,17 +222,20 @@ export function Sidebar() {
             />
           </div>
           {searchFocused && searchResults.length > 0 && (
-            <div className="absolute left-3 right-3 mt-1 z-50 rounded-md border shadow-xl overflow-hidden" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border-elevated)' }}>
-              {searchResults.slice(0, 8).map((item) => (
+            <div className="absolute left-3 right-3 mt-1 z-50 rounded-md border shadow-xl overflow-hidden max-h-80 overflow-y-auto" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border-elevated)' }}>
+              {searchResults.map((item) => (
                 <button
-                  key={item.href}
-                  className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.06] transition-colors"
+                  key={item.href + item.label}
+                  className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.06] transition-colors flex items-center justify-between gap-2"
                   onMouseDown={() => {
                     router.push(item.href);
                     setSearch('');
                   }}
                 >
-                  {item.label}
+                  <span className="truncate">{item.label}</span>
+                  {item.category && (
+                    <span className="text-[9px] uppercase tracking-wider text-slate-600 shrink-0">{item.category}</span>
+                  )}
                 </button>
               ))}
             </div>

@@ -10,7 +10,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { Pagination } from '@/components/ui/Pagination';
 import { useHosts } from '@/hooks/queries/useHosts';
 import { useConfirm } from '@/hooks/useConfirm';
-import { formatLatency, uptimeColor } from '@/lib/utils';
+import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
 import { post, patch } from '@/lib/api';
 import { ExportButton } from '@/components/ui/ExportButton';
 import { Plus, Search, X, ArrowUpDown, ArrowUp, ArrowDown, Wrench, Trash2, CheckSquare, Square, Server, Pencil } from 'lucide-react';
@@ -472,6 +472,11 @@ function HostsPageInner() {
                         {host.port_error && host.check_detail && (
                           <span className="text-[10px] text-red-400/80">
                             {Object.entries(host.check_detail).filter(([, ok]) => !ok).map(([k]) => k.toUpperCase()).join(', ')} failed
+                          </span>
+                        )}
+                        {host.online === false && host.last_seen && (
+                          <span className="text-[10px] text-slate-500" title={new Date(host.last_seen).toLocaleString()}>
+                            Last seen {timeAgo(host.last_seen)}
                           </span>
                         )}
                       </div>
