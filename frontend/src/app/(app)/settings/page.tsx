@@ -120,7 +120,7 @@ const inputCls = 'ng-input max-w-sm';
 
 const inputSmCls = 'ng-input w-40';
 
-const selectSmCls = 'w-full max-w-[180px] px-2 py-1.5 rounded-md bg-[var(--ng-surface)] border border-white/[0.06] text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-colors [&>option]:text-slate-200';
+const selectSmCls = 'w-full max-w-[180px] px-2 py-1.5 rounded-md bg-[var(--ng-surface)] border border-white/[0.06] text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-colors [&>option]:text-[var(--ng-text-primary)]';
 
 const SEVERITY_OPTIONS = [
   { value: 'all', label: 'All' },
@@ -558,7 +558,7 @@ export default function SettingsPage() {
                   <select
                     value={timezone}
                     onChange={(e) => setTimezone(e.target.value)}
-                    className="w-full max-w-sm px-3 py-1.5 rounded-md bg-[var(--ng-surface)] border border-white/[0.06] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-colors [&>option]:text-slate-200"
+                    className="w-full max-w-sm px-3 py-1.5 rounded-md bg-[var(--ng-surface)] border border-white/[0.06] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-colors [&>option]:text-[var(--ng-text-primary)]"
                   >
                     {TIMEZONES.map((tz) => (
                       <option key={tz} value={tz}>{tz}</option>
@@ -1502,9 +1502,9 @@ export default function SettingsPage() {
                 value={newKeyRole}
                 onChange={(e) => setNewKeyRole(e.target.value as 'readonly' | 'editor' | 'admin')}
               >
-                <option value="readonly" className="text-slate-200">Read-only</option>
-                <option value="editor" className="text-slate-200">Editor</option>
-                <option value="admin" className="text-slate-200">Admin</option>
+                <option value="readonly" className="text-[var(--ng-text-primary)]">Read-only</option>
+                <option value="editor" className="text-[var(--ng-text-primary)]">Editor</option>
+                <option value="admin" className="text-[var(--ng-text-primary)]">Admin</option>
               </select>
             </div>
             <div className="flex justify-end gap-2 pt-2">

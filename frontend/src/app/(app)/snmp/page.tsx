@@ -574,9 +574,9 @@ function AddHostModal({
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">Host</label>
           <select value={hostId} onChange={(e) => setHostId(e.target.value)} className={`${inputCls} !bg-[var(--ng-surface)]`} required>
-            <option value="" className="text-slate-200">Select a host...</option>
+            <option value="" className="text-[var(--ng-text-primary)]">Select a host...</option>
             {availableHosts.map((h) => (
-              <option key={h.id} value={h.id} className="text-slate-200">
+              <option key={h.id} value={h.id} className="text-[var(--ng-text-primary)]">
                 {h.name} ({h.hostname})
               </option>
             ))}
@@ -592,9 +592,9 @@ function AddHostModal({
             className={`${inputCls} !bg-[var(--ng-surface)]`}
             required
           >
-            <option value="" className="text-slate-200">Select a credential...</option>
+            <option value="" className="text-[var(--ng-text-primary)]">Select a credential...</option>
             {snmpCreds.map((c) => (
-              <option key={c.id} value={c.id} className="text-slate-200">
+              <option key={c.id} value={c.id} className="text-[var(--ng-text-primary)]">
                 {c.name} ({c.type})
               </option>
             ))}
@@ -635,10 +635,10 @@ function AddHostModal({
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">Preset</label>
           <select value={preset} onChange={(e) => setPreset(e.target.value)} className={`${inputCls} !bg-[var(--ng-surface)]`}>
-            <option value="standard" className="text-slate-200">Standard (system + interfaces)</option>
-            <option value="minimal" className="text-slate-200">Minimal (sysDescr only)</option>
-            <option value="full" className="text-slate-200">Full (all common OIDs)</option>
-            <option value="custom" className="text-slate-200">Custom OIDs</option>
+            <option value="standard" className="text-[var(--ng-text-primary)]">Standard (system + interfaces)</option>
+            <option value="minimal" className="text-[var(--ng-text-primary)]">Minimal (sysDescr only)</option>
+            <option value="full" className="text-[var(--ng-text-primary)]">Full (all common OIDs)</option>
+            <option value="custom" className="text-[var(--ng-text-primary)]">Custom OIDs</option>
           </select>
         </div>
 
@@ -789,9 +789,9 @@ function OidBrowserTab() {
             onChange={(e) => setMibFilter(e.target.value)}
             className={`${inputCls} !bg-[var(--ng-surface)] max-w-[200px]`}
           >
-            <option value="" className="text-slate-200">All MIBs</option>
+            <option value="" className="text-[var(--ng-text-primary)]">All MIBs</option>
             {mibNames.map((n) => (
-              <option key={n} value={n} className="text-slate-200">
+              <option key={n} value={n} className="text-[var(--ng-text-primary)]">
                 {n}
               </option>
             ))}
@@ -820,9 +820,9 @@ function OidBrowserTab() {
             onChange={(e) => { setSelectedConfig(e.target.value); setTestResults(null); }}
             className={`${inputCls} !bg-[var(--ng-surface)] max-w-[280px]`}
           >
-            <option value="" className="text-slate-200">Select host to test...</option>
+            <option value="" className="text-[var(--ng-text-primary)]">Select host to test...</option>
             {hostConfigs.map((cfg) => (
-              <option key={cfg.id} value={cfg.id} className="text-slate-200">
+              <option key={cfg.id} value={cfg.id} className="text-[var(--ng-text-primary)]">
                 {cfg.host_name ?? cfg.hostname} ({cfg.hostname})
               </option>
             ))}
