@@ -122,8 +122,72 @@ async def download_mib_from_library(mib_name: str, vendor: str = "") -> str | No
                     except Exception:
                         continue
 
-    logger.warning("Could not download MIB %s from any source (vendor=%s)", mib_name, vendor)
+    logger.info("Raw MIB file not found for %s, trying observium scrape", mib_name)
     return None
+
+
+async def scrape_oids_from_observium(mib_name: str) -> list[dict] | None:
+    """Fallback: scrape OID data from mibs.observium.org HTML page.
+
+    Returns list of {oid, name, syntax, description} or None on failure.
+    """
+    import html as html_mod
+
+    url = f"https://mibs.observium.org/mib/{mib_name}/"
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return None
+            page = resp.text
+    except Exception as e:
+        logger.warning("Observium scrape failed for %s: %s", mib_name, e)
+        return None
+
+    # Extract OID entries from entity-popup data-content attributes
+    pattern = re.compile(
+        r'id="(\w+)"[^>]*class="entity-popup"[^>]*data-content="([^"]+)"',
+    )
+
+    entries = []
+    for m in pattern.finditer(page):
+        name = m.group(1)
+        content = html_mod.unescape(m.group(2))
+
+        # Extract OID
+        oid_m = re.search(r"(1\.3\.6\.1[\d.]+)", content)
+        if not oid_m:
+            continue
+
+        # Extract syntax type (label-primary contains the base type)
+        syntax = ""
+        syntax_m = re.search(r'label-primary">([^<]+)</label>', content)
+        if syntax_m:
+            syntax = syntax_m.group(1).strip()
+
+        # Extract description
+        description = ""
+        desc_m = re.search(
+            r"<strong>Description:</strong>.*?<div[^>]*>(.*?)</div>",
+            content, re.DOTALL,
+        )
+        if desc_m:
+            desc_html = desc_m.group(1)
+            description = re.sub(r"<[^>]+>", " ", desc_html).strip()[:500]
+
+        entries.append({
+            "oid": oid_m.group(1),
+            "name": name,
+            "syntax": syntax,
+            "description": description,
+            "is_table": False,
+        })
+
+    if not entries:
+        return None
+
+    logger.info("Scraped %d OIDs for %s from observium", len(entries), mib_name)
+    return entries
 
 # ── Default OIDs (always available without MIB import) ───────────────────────
 
