@@ -162,66 +162,99 @@ OID_PRESETS = {
 
 # ── MIB Parser ───────────────────────────────────────────────────────────────
 
-# Regex patterns for ASN.1 MIB parsing
 _RE_MODULE = re.compile(r"^(\S+)\s+DEFINITIONS\s*::=\s*BEGIN", re.MULTILINE)
-_RE_OBJECT = re.compile(
+
+# Catch ALL  ::= { parent num } assignments (MODULE-IDENTITY, OBJECT-TYPE,
+# OBJECT-IDENTITY, NOTIFICATION-TYPE, OBJECT IDENTIFIER, etc.)
+_RE_ANY_ASSIGN = re.compile(
+    r"(\w+)\s+(?:OBJECT\s+IDENTIFIER|MODULE-IDENTITY|OBJECT-IDENTITY"
+    r"|OBJECT-TYPE|NOTIFICATION-TYPE|NOTIFICATION-GROUP"
+    r"|MODULE-COMPLIANCE|OBJECT-GROUP|AGENT-CAPABILITIES"
+    r"|TEXTUAL-CONVENTION)"
+    r"\b.*?::=\s*\{\s*(\w[\w-]*)\s+(\d+)\s*\}",
+    re.DOTALL,
+)
+
+# OBJECT-TYPE with SYNTAX (for extracting type info)
+_RE_OBJECT_TYPE = re.compile(
     r"(\w+)\s+OBJECT-TYPE\s+"
-    r"(?:.*?\n)*?"
-    r"\s*SYNTAX\s+([\w\(\)\s\d\.\-]+?)\s*\n"
-    r"(?:.*?\n)*?"
-    r'(?:\s*DESCRIPTION\s*"([^"]*)")?'
-    r"(?:.*?\n)*?"
-    r"\s*::=\s*\{(.+?)\}",
-    re.MULTILINE | re.DOTALL,
+    r"(.*?)"
+    r"::=\s*\{\s*(\w[\w-]*)\s+(\d+)\s*\}",
+    re.DOTALL,
 )
-_RE_OID_ASSIGN = re.compile(
-    r"(\w+)\s+OBJECT\s+IDENTIFIER\s*::=\s*\{(.+?)\}",
-    re.MULTILINE,
-)
+
+_RE_SYNTAX = re.compile(r"SYNTAX\s+([\w\d]+(?:\s*\([^)]*\))?)", re.MULTILINE)
+_RE_DESCRIPTION = re.compile(r'DESCRIPTION\s*"((?:[^"\\]|\\.|"")*)"', re.DOTALL)
+
+# Well-known OID tree roots (RFC standard)
+_KNOWN_ROOTS: dict[str, str] = {
+    "iso": "1",
+    "org": "1.3",
+    "dod": "1.3.6",
+    "internet": "1.3.6.1",
+    "directory": "1.3.6.1.1",
+    "mgmt": "1.3.6.1.2",
+    "mib-2": "1.3.6.1.2.1",
+    "system": "1.3.6.1.2.1.1",
+    "interfaces": "1.3.6.1.2.1.2",
+    "at": "1.3.6.1.2.1.3",
+    "ip": "1.3.6.1.2.1.4",
+    "icmp": "1.3.6.1.2.1.5",
+    "tcp": "1.3.6.1.2.1.6",
+    "udp": "1.3.6.1.2.1.7",
+    "egp": "1.3.6.1.2.1.8",
+    "transmission": "1.3.6.1.2.1.10",
+    "snmp": "1.3.6.1.2.1.11",
+    "host": "1.3.6.1.2.1.25",
+    "hrSystem": "1.3.6.1.2.1.25.1",
+    "hrStorage": "1.3.6.1.2.1.25.2",
+    "hrDevice": "1.3.6.1.2.1.25.3",
+    "ifMIB": "1.3.6.1.2.1.31",
+    "experimental": "1.3.6.1.3",
+    "private": "1.3.6.1.4",
+    "enterprises": "1.3.6.1.4.1",
+    "security": "1.3.6.1.5",
+    "snmpV2": "1.3.6.1.6",
+    "snmpDomains": "1.3.6.1.6.1",
+    "snmpProxys": "1.3.6.1.6.2",
+    "snmpModules": "1.3.6.1.6.3",
+    "snmpMIB": "1.3.6.1.6.3.1",
+    "zeroDotZero": "0.0",
+}
 
 
 def parse_mib_text(mib_text: str) -> tuple[str, list[dict]]:
-    """
-    Parse a MIB file and extract OID definitions.
-    Returns (module_name, list of {oid_fragment, name, syntax, description, parent}).
-    """
-    # Find module name
+    """Parse a MIB file and extract OID definitions."""
     m = _RE_MODULE.search(mib_text)
     module_name = m.group(1) if m else "UNKNOWN"
 
-    # Build parent→child OID tree
-    # First collect simple OID assignments: name OBJECT IDENTIFIER ::= { parent child-number }
+    # Phase 1: Build the OID tree from ALL assignment types
     oid_tree: dict[str, tuple[str, int]] = {}
-    for m in _RE_OID_ASSIGN.finditer(mib_text):
-        name = m.group(1)
-        parts = m.group(2).strip().split()
-        if len(parts) >= 2:
-            parent = parts[0]
+    for m in _RE_ANY_ASSIGN.finditer(mib_text):
+        name, parent, num_str = m.group(1), m.group(2), m.group(3)
+        try:
+            oid_tree[name] = (parent, int(num_str))
+        except ValueError:
+            pass
+
+    # Also catch plain  OBJECT IDENTIFIER ::= { parent num } on one line
+    for m in re.finditer(
+        r"(\w+)\s+OBJECT\s+IDENTIFIER\s*::=\s*\{\s*(\w[\w-]*)\s+(\d+)\s*\}",
+        mib_text,
+    ):
+        name, parent, num_str = m.group(1), m.group(2), m.group(3)
+        if name not in oid_tree:
             try:
-                num = int(parts[-1])
-                oid_tree[name] = (parent, num)
+                oid_tree[name] = (parent, int(num_str))
             except ValueError:
                 pass
 
-    # Known roots
-    known_roots = {
-        "iso": "1",
-        "org": "1.3",
-        "dod": "1.3.6",
-        "internet": "1.3.6.1",
-        "mgmt": "1.3.6.1.2",
-        "mib-2": "1.3.6.1.2.1",
-        "system": "1.3.6.1.2.1.1",
-        "interfaces": "1.3.6.1.2.1.2",
-        "enterprises": "1.3.6.1.4.1",
-        "private": "1.3.6.1.4",
-        "snmpV2": "1.3.6.1.6",
-        "snmpModules": "1.3.6.1.6.3",
-    }
+    # Phase 2: Resolve full numeric OIDs
+    known = dict(_KNOWN_ROOTS)
 
-    def resolve_oid(name: str, seen: set | None = None) -> str | None:
-        if name in known_roots:
-            return known_roots[name]
+    def resolve(name: str, seen: set | None = None) -> str | None:
+        if name in known:
+            return known[name]
         if name not in oid_tree:
             return None
         if seen is None:
@@ -230,45 +263,76 @@ def parse_mib_text(mib_text: str) -> tuple[str, list[dict]]:
             return None
         seen.add(name)
         parent, num = oid_tree[name]
-        parent_oid = resolve_oid(parent, seen)
+        parent_oid = resolve(parent, seen)
         if parent_oid:
             full = f"{parent_oid}.{num}"
-            known_roots[name] = full
+            known[name] = full
             return full
         return None
 
-    # Resolve all tree entries
     for name in list(oid_tree.keys()):
-        resolve_oid(name)
+        resolve(name)
 
-    # Parse OBJECT-TYPE definitions
+    # Phase 3: Extract OBJECT-TYPE entries with syntax/description
     entries = []
-    for m in _RE_OBJECT.finditer(mib_text):
+    seen_oids: set[str] = set()
+
+    for m in _RE_OBJECT_TYPE.finditer(mib_text):
         obj_name = m.group(1)
-        syntax = m.group(2).strip().split()[0] if m.group(2) else ""
-        description = (m.group(3) or "").strip()[:500]
-        assignment = m.group(4).strip()
+        body = m.group(2)
+        parent_name = m.group(3)
+        try:
+            num = int(m.group(4))
+        except ValueError:
+            continue
 
-        # Parse { parent num } assignment
-        parts = assignment.split()
-        if len(parts) >= 2:
-            parent_name = parts[0]
-            try:
-                num = int(parts[-1])
-            except ValueError:
-                continue
+        parent_oid = known.get(parent_name)
+        if not parent_oid:
+            continue
+        full_oid = f"{parent_oid}.{num}"
+        known[obj_name] = full_oid
 
-            parent_oid = known_roots.get(parent_name)
-            if parent_oid:
-                full_oid = f"{parent_oid}.{num}"
-                known_roots[obj_name] = full_oid
-                entries.append({
-                    "oid": full_oid,
-                    "name": obj_name,
-                    "syntax": syntax,
-                    "description": description,
-                    "is_table": "SEQUENCE" in (m.group(2) or ""),
-                })
+        if full_oid in seen_oids:
+            continue
+        seen_oids.add(full_oid)
+
+        # Extract SYNTAX
+        syntax = ""
+        sm = _RE_SYNTAX.search(body)
+        if sm:
+            syntax = sm.group(1).split()[0]
+
+        # Extract DESCRIPTION
+        description = ""
+        dm = _RE_DESCRIPTION.search(body)
+        if dm:
+            description = dm.group(1).replace('""', '"').strip()[:500]
+
+        is_table = bool(sm and "SEQUENCE" in sm.group(1))
+
+        entries.append({
+            "oid": full_oid,
+            "name": obj_name,
+            "syntax": syntax,
+            "description": description,
+            "is_table": is_table,
+        })
+
+    # Phase 4: Also add MODULE-IDENTITY, OBJECT-IDENTITY etc. as browsable entries
+    # (these appear in MIB browsers but aren't polled directly)
+    for name, full_oid in known.items():
+        if name in _KNOWN_ROOTS or full_oid in seen_oids:
+            continue
+        if name not in oid_tree:
+            continue
+        seen_oids.add(full_oid)
+        entries.append({
+            "oid": full_oid,
+            "name": name,
+            "syntax": "",
+            "description": "",
+            "is_table": False,
+        })
 
     return module_name, entries
 
