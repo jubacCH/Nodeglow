@@ -148,12 +148,6 @@ body {
     background: rgba(0, 0, 0, 0.20);
   }
 
-  /* Resize handle */
-  .react-resizable-handle::after {
-    border-right-color: rgba(0, 0, 0, 0.20);
-    border-bottom-color: rgba(0, 0, 0, 0.20);
-  }
-
   /* Ring offset */
   .focus\:ring-offset-1:focus { --tw-ring-offset-color: #E8EEF4; }
 }
@@ -266,54 +260,6 @@ table tbody td {
   animation: glow-pulse 2s ease-in-out infinite;
 }
 
-/* react-grid-layout */
-.react-grid-layout {
-  position: relative;
-}
-.react-grid-item {
-  transition: all 200ms ease;
-  transition-property: left, top, width, height;
-}
-.react-grid-item.cssTransforms {
-  transition-property: transform, width, height;
-}
-.react-grid-item.resizing {
-  z-index: 1;
-  will-change: width, height;
-}
-.react-grid-item.react-draggable-dragging {
-  z-index: 3;
-  will-change: transform;
-  opacity: 0.9;
-}
-.react-grid-placeholder {
-  background: rgba(56, 189, 248, 0.08);
-  border: 1.5px dashed rgba(56, 189, 248, 0.25);
-  border-radius: var(--ng-card-radius);
-}
-.react-resizable-handle {
-  position: absolute;
-  width: 20px;
-  height: 20px;
-  bottom: 0;
-  right: 0;
-  cursor: se-resize;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-.react-grid-item:hover > .react-resizable-handle {
-  opacity: 1;
-}
-.react-resizable-handle::after {
-  content: '';
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid rgba(255, 255, 255, 0.15);
-  border-bottom: 2px solid rgba(255, 255, 255, 0.15);
-}
 
 /* Glow panel markdown theme classes */
 .glow-heading { color: var(--ng-primary); }

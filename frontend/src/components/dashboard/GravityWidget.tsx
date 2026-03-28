@@ -44,14 +44,14 @@ function hostColor(h: HostStat): string {
 
 function orbitRadius(h: HostStat, index: number): number {
   if (h.online === false) {
-    return 4.5 + (index % 5) * 0.25;
+    return 3.5 + (index % 5) * 0.15;
   }
   if (h.host.maintenance) {
-    return 2.2 + (index % 4) * 0.2;
+    return 1.8 + (index % 4) * 0.15;
   }
   const health = hostHealth(h);
-  const base = 1.4 + health * 3.0;
-  const spread = ((index * 7) % 13) / 13 * 0.5;
+  const base = 1.3 + health * 2.0;
+  const spread = ((index * 7) % 13) / 13 * 0.3;
   return base + spread;
 }
 
@@ -82,35 +82,24 @@ function SpaceBackground() {
       const nr = 200 + Math.random() * 300;
       const colors = ['#1e3a5f', '#2d1b4e', '#1a3045', '#261840'];
       const ng = ctx.createRadialGradient(nx, ny, 0, nx, ny, nr);
-      ng.addColorStop(0, colors[n] + '18');
-      ng.addColorStop(0.5, colors[n] + '08');
+      ng.addColorStop(0, colors[n] + '10');
+      ng.addColorStop(0.5, colors[n] + '04');
       ng.addColorStop(1, 'transparent');
       ctx.fillStyle = ng;
       ctx.fillRect(0, 0, 2048, 2048);
     }
 
-    // Stars — varying brightness and size
-    for (let i = 0; i < 1200; i++) {
+    // Stars — subtle, no bright glows
+    for (let i = 0; i < 600; i++) {
       const sx = Math.random() * 2048;
       const sy = Math.random() * 2048;
       const brightness = Math.random();
-      const size = brightness > 0.95 ? 2 : brightness > 0.8 ? 1.2 : 0.6;
+      const size = brightness > 0.9 ? 1.2 : brightness > 0.7 ? 0.8 : 0.5;
 
-      if (brightness > 0.95) {
-        // Bright stars with subtle glow
-        const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, 4);
-        sg.addColorStop(0, `rgba(200, 220, 255, ${0.8 + Math.random() * 0.2})`);
-        sg.addColorStop(0.3, `rgba(180, 200, 240, 0.3)`);
-        sg.addColorStop(1, 'transparent');
-        ctx.fillStyle = sg;
-        ctx.fillRect(sx - 4, sy - 4, 8, 8);
-      }
-
-      // Vary star color slightly (blue-white range)
       const r = 180 + Math.random() * 75;
       const g = 190 + Math.random() * 65;
       const b = 220 + Math.random() * 35;
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.3 + brightness * 0.7})`;
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.2 + brightness * 0.5})`;
       ctx.beginPath();
       ctx.arc(sx, sy, size, 0, Math.PI * 2);
       ctx.fill();
@@ -131,7 +120,7 @@ function SpaceBackground() {
 
 /* ── Twinkling star particles (foreground depth) ── */
 
-function Stars({ count = 300 }: { count?: number }) {
+function Stars({ count = 150 }: { count?: number }) {
   const ref = useRef<THREE.Points>(null);
   const { geometry } = useMemo(() => {
     const geo = new THREE.BufferGeometry();
@@ -163,16 +152,16 @@ function Stars({ count = 300 }: { count?: number }) {
   }, [count]);
 
   useFrame((_state, delta) => {
-    if (ref.current) ref.current.rotation.y += delta * 0.003;
+    if (ref.current) ref.current.rotation.y += delta * 0.0015;
   });
 
   return (
     <points ref={ref} geometry={geometry}>
       <pointsMaterial
-        size={0.02}
+        size={0.015}
         vertexColors
         transparent
-        opacity={0.6}
+        opacity={0.35}
         sizeAttenuation
         depthWrite={false}
       />
@@ -190,7 +179,7 @@ function Earth() {
   ]);
 
   useFrame((_state, delta) => {
-    if (groupRef.current) groupRef.current.rotation.y += delta * 0.06;
+    if (groupRef.current) groupRef.current.rotation.y += delta * 0.03;
   });
 
   return (
@@ -216,34 +205,14 @@ function Earth() {
       </mesh>
       <mesh>
         <sphereGeometry args={[0.95, 32, 32]} />
-        <meshBasicMaterial color="#93C5FD" transparent opacity={0.03} side={THREE.BackSide} />
+        <meshBasicMaterial color="#93C5FD" transparent opacity={0.02} side={THREE.BackSide} />
       </mesh>
       {/* 4th atmosphere — outermost soft bloom */}
       <mesh>
-        <sphereGeometry args={[1.1, 24, 24]} />
-        <meshBasicMaterial color="#60A5FA" transparent opacity={0.015} side={THREE.BackSide} />
+        <sphereGeometry args={[1.05, 24, 24]} />
+        <meshBasicMaterial color="#60A5FA" transparent opacity={0.01} side={THREE.BackSide} />
       </mesh>
     </group>
-  );
-}
-
-/* ── Orbit ring guides ── */
-
-function OrbitRings({ radii }: { radii: number[] }) {
-  return (
-    <>
-      {radii.map((r, i) => (
-        <mesh key={i} rotation={[Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[r - 0.003, r + 0.003, 180]} />
-          <meshBasicMaterial
-            color="#4488cc"
-            transparent
-            opacity={0.06}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      ))}
-    </>
   );
 }
 
@@ -293,7 +262,7 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
     router.push(`/hosts/${host.host.id}`);
   }, [router, host.host.id]);
 
-  const nodeSize = isOffline ? 0.08 : 0.06;
+  const nodeSize = isOffline ? 0.16 : 0.13;
 
   return (
     <group ref={groupRef}>
@@ -387,12 +356,10 @@ function Scene({ hosts }: { hosts: HostStat[] }) {
       const r = orbitRadius(h, i);
       const a = i * golden;
       const inclination = ((i * 2.39996 + i * 0.7) % (Math.PI * 2));
-      const speed = 0.08 + (1 / (r * 0.6)) * 0.12;
+      const speed = 0.04 + (1 / (r * 0.6)) * 0.06;
       return { host: h, radius: r, angle: a, inclination, speed };
     });
   }, [hosts]);
-
-  const ringRadii = useMemo(() => [1.5, 2.2, 3.0, 4.0, 5.0], []);
 
   return (
     <>
@@ -406,7 +373,6 @@ function Scene({ hosts }: { hosts: HostStat[] }) {
 
       <Stars />
       <Earth />
-      <OrbitRings radii={ringRadii} />
 
       {hostOrbits.map((o) => (
         <HostNode
@@ -424,7 +390,7 @@ function Scene({ hosts }: { hosts: HostStat[] }) {
         minDistance={4}
         maxDistance={14}
         autoRotate
-        autoRotateSpeed={0.12}
+        autoRotateSpeed={0.06}
         enableDamping
         dampingFactor={0.05}
         maxPolarAngle={Math.PI * 0.75}
