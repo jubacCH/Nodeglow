@@ -218,6 +218,11 @@ function Earth() {
         <sphereGeometry args={[0.95, 32, 32]} />
         <meshBasicMaterial color="#93C5FD" transparent opacity={0.03} side={THREE.BackSide} />
       </mesh>
+      {/* 4th atmosphere — outermost soft bloom */}
+      <mesh>
+        <sphereGeometry args={[1.1, 24, 24]} />
+        <meshBasicMaterial color="#60A5FA" transparent opacity={0.015} side={THREE.BackSide} />
+      </mesh>
     </group>
   );
 }
@@ -347,7 +352,7 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
       {/* Tooltip */}
       {hovered && (
         <Html distanceFactor={8} style={{ pointerEvents: 'none' }}>
-          <div className="rounded-md border px-3 py-2 text-xs text-slate-100 whitespace-nowrap backdrop-blur-sm shadow-xl" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border)' }}>
+          <div className="rounded-xl px-3 py-2.5 text-xs text-slate-100 whitespace-nowrap shadow-xl" style={{ background: 'var(--ng-card-bg)', border: '1.5px solid var(--ng-card-border)' }}>
             <p className="font-medium text-slate-200">{host.host.name}</p>
             <p className="text-[10px] text-slate-500 font-mono">{host.host.hostname}</p>
             <div className="flex items-center gap-2 mt-1">
@@ -480,35 +485,35 @@ export function GravityWidget({ hosts }: GravityWidgetProps) {
   const maintCount = hosts.filter((h) => h.host.maintenance).length;
 
   return (
-    <GlassCard className="relative overflow-hidden" style={{ minHeight: isMobile ? 200 : 350 }}>
-      {/* HUD overlay */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-3">
-        <span className="flex items-center gap-1.5 text-xs">
+    <GlassCard className="relative overflow-hidden" style={{ minHeight: isMobile ? 200 : 380 }}>
+      {/* HUD overlay — Bento pill badges */}
+      <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+        <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full" style={{ background: 'var(--ng-card-bg)', border: '1.5px solid var(--ng-card-border)' }}>
           <StatusDot status="online" />
           <span className="text-emerald-400 font-medium">{onlineCount}</span>
         </span>
-        <span className="flex items-center gap-1.5 text-xs">
+        <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full" style={{ background: 'var(--ng-card-bg)', border: '1.5px solid var(--ng-card-border)' }}>
           <StatusDot status="offline" />
           <span className="text-red-400 font-medium">{offlineCount}</span>
         </span>
         {maintCount > 0 && (
-          <span className="flex items-center gap-1.5 text-xs">
+          <span className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full" style={{ background: 'var(--ng-card-bg)', border: '1.5px solid var(--ng-card-border)' }}>
             <StatusDot status="maintenance" />
             <span className="text-amber-400 font-medium">{maintCount}</span>
           </span>
         )}
-        <span className="text-xs text-slate-500">{hosts.length} total</span>
+        <span className="text-xs text-slate-500 px-2">{hosts.length} total</span>
       </div>
 
-      <div className="absolute top-3 right-3 z-10 flex gap-3 text-[10px] text-slate-500">
-        <span>Close orbit = healthy</span>
-        <span>Far orbit = degraded</span>
+      <div className="absolute top-4 right-4 z-10 flex gap-2">
+        <span className="text-[10px] text-slate-500 px-2.5 py-1 rounded-full" style={{ background: 'var(--ng-card-bg)', border: '1.5px solid var(--ng-card-border)' }}>Close orbit = healthy</span>
+        <span className="text-[10px] text-slate-500 px-2.5 py-1 rounded-full" style={{ background: 'var(--ng-card-bg)', border: '1.5px solid var(--ng-card-border)' }}>Far orbit = degraded</span>
       </div>
 
       {isMobile ? (
         <MobileGrid hosts={hosts} />
       ) : (
-        <div style={{ height: 350 }}>
+        <div style={{ height: 380 }}>
           <Canvas
             camera={{ position: [0, 3, 8], fov: 45 }}
             gl={{ antialias: true }}

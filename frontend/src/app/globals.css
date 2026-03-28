@@ -14,12 +14,23 @@
   --ng-text-primary: #F1F5F9;
   --ng-text-secondary: #94A3B8;
   --ng-text-muted: #64748B;
-  --ng-glass-bg: rgba(255, 255, 255, 0.04);
-  --ng-glass-border: rgba(255, 255, 255, 0.08);
-  --ng-glass-bg-elevated: rgba(255, 255, 255, 0.06);
-  --ng-glass-border-elevated: rgba(255, 255, 255, 0.10);
   --ng-hover: rgba(255, 255, 255, 0.08);
   --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.03) 0%, transparent 60%);
+
+  /* Bento card tokens */
+  --ng-card-bg: #131820;
+  --ng-card-bg-elevated: #171D2A;
+  --ng-card-border: rgba(255, 255, 255, 0.10);
+  --ng-card-border-hover: rgba(255, 255, 255, 0.16);
+  --ng-card-radius: 16px;
+  --ng-card-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2);
+  --ng-card-shadow-hover: 0 2px 8px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25);
+
+  /* Aliases for backward compat (46+ consumers) */
+  --ng-glass-bg: var(--ng-card-bg);
+  --ng-glass-border: var(--ng-card-border);
+  --ng-glass-bg-elevated: var(--ng-card-bg-elevated);
+  --ng-glass-border-elevated: var(--ng-card-border-hover);
 }
 
 [data-theme="light"] {
@@ -33,12 +44,23 @@
   --ng-text-primary: #0F172A;
   --ng-text-secondary: #334155;
   --ng-text-muted: #64748B;
-  --ng-glass-bg: rgba(241, 247, 253, 0.65);
-  --ng-glass-border: rgba(148, 163, 184, 0.25);
-  --ng-glass-bg-elevated: rgba(244, 249, 255, 0.80);
-  --ng-glass-border-elevated: rgba(148, 163, 184, 0.35);
   --ng-hover: rgba(0, 0, 0, 0.04);
   --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.08) 0%, rgba(139, 92, 246, 0.03) 40%, transparent 70%);
+
+  /* Bento card tokens — light */
+  --ng-card-bg: #FFFFFF;
+  --ng-card-bg-elevated: #FFFFFF;
+  --ng-card-border: rgba(0, 0, 0, 0.08);
+  --ng-card-border-hover: rgba(0, 0, 0, 0.14);
+  --ng-card-radius: 16px;
+  --ng-card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
+  --ng-card-shadow-hover: 0 2px 8px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06);
+
+  /* Aliases */
+  --ng-glass-bg: var(--ng-card-bg);
+  --ng-glass-border: var(--ng-card-border);
+  --ng-glass-bg-elevated: var(--ng-card-bg-elevated);
+  --ng-glass-border-elevated: var(--ng-card-border-hover);
 }
 
 body {
@@ -155,14 +177,20 @@ body {
 /* Glass card styles */
 @layer components {
   .glass-card {
-    background: var(--ng-glass-bg);
-    border-color: var(--ng-glass-border);
-    @apply backdrop-blur-xl border rounded-lg;
+    background: var(--ng-card-bg);
+    border-color: var(--ng-card-border);
+    border-width: 1.5px;
+    border-radius: var(--ng-card-radius);
+    box-shadow: var(--ng-card-shadow);
+    @apply border transition-all;
   }
   .glass-elevated {
-    background: var(--ng-glass-bg-elevated);
-    border-color: var(--ng-glass-border-elevated);
-    @apply backdrop-blur-2xl border shadow-2xl rounded-lg;
+    background: var(--ng-card-bg-elevated);
+    border-color: var(--ng-card-border-hover);
+    border-width: 1.5px;
+    border-radius: var(--ng-card-radius);
+    box-shadow: var(--ng-card-shadow-hover);
+    @apply border transition-all;
   }
   .ng-input {
     @apply w-full px-3.5 py-2.5 text-sm rounded-lg border focus:outline-none focus:ring-2 transition-all;
@@ -212,15 +240,12 @@ table tbody td {
 
 /* Stat card hover */
 .stat-card-hover {
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
-[data-theme="dark"] .stat-card-hover:hover {
-  border-color: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.3);
-}
-[data-theme="light"] .stat-card-hover:hover {
-  border-color: rgba(0, 0, 0, 0.12);
-  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.08);
+.stat-card-hover:hover {
+  border-color: var(--ng-card-border-hover);
+  box-shadow: var(--ng-card-shadow-hover);
+  transform: translateY(-1px);
 }
 
 /* Page transition */
@@ -262,9 +287,9 @@ table tbody td {
   opacity: 0.9;
 }
 .react-grid-placeholder {
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px dashed rgba(56, 189, 248, 0.3);
-  border-radius: 0.5rem;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1.5px dashed rgba(56, 189, 248, 0.25);
+  border-radius: var(--ng-card-radius);
 }
 .react-resizable-handle {
   position: absolute;

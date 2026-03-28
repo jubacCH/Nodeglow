@@ -5,7 +5,7 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
 import { Lock, Unlock } from 'lucide-react';
 
-const STORAGE_KEY = 'ng-dashboard-layout';
+const STORAGE_KEY = 'ng-dashboard-layout-v2';
 
 export interface WidgetDef {
   id: string;
@@ -114,10 +114,10 @@ export function DraggableDashboard({ widgets }: DraggableDashboardProps) {
   // While loading the grid library, just show a simple grid
   if (!RGL) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {widgets.map((w) => (
           <div key={w.id} className={w.defaultLayout.w >= 3 ? 'lg:col-span-3 md:col-span-2' : w.defaultLayout.w >= 2 ? 'lg:col-span-2 md:col-span-2' : ''}>
-            <GlassCard className="p-4">
+            <GlassCard className="p-5">
               {w.render()}
             </GlassCard>
           </div>
@@ -185,25 +185,25 @@ function DraggableInner({
           layouts={layouts}
           breakpoints={{ xl: 1536, lg: 1200, md: 768, sm: 0 }}
           cols={{ xl: 4, lg: 3, md: 2, sm: 1 }}
-          rowHeight={110}
+          rowHeight={120}
           isDraggable={!locked}
           isResizable={!locked}
           onLayoutChange={handleLayoutChange}
           draggableHandle=".drag-handle"
-          margin={[16, 16]}
+          margin={[20, 20]}
           containerPadding={[0, 0]}
         >
           {widgets.map((w) => (
             <div key={w.id}>
               <GlassCard className="h-full overflow-hidden flex flex-col group/widget">
                 {!locked && (
-                  <div className="drag-handle cursor-move px-4 py-1.5 border-b border-white/[0.04] flex items-center opacity-0 group-hover/widget:opacity-100 transition-opacity">
+                  <div className="drag-handle cursor-move px-5 py-2 border-b flex items-center opacity-0 group-hover/widget:opacity-100 transition-opacity" style={{ borderColor: 'var(--ng-card-border)' }}>
                     <span className="text-[10px] text-slate-500 uppercase tracking-wider select-none">
                       ⋮⋮ {w.title ?? w.id}
                     </span>
                   </div>
                 )}
-                <div className="flex-1 overflow-auto p-4">
+                <div className="flex-1 overflow-auto p-5">
                   {w.render()}
                 </div>
               </GlassCard>
