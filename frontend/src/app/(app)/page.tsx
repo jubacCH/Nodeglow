@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
@@ -9,7 +9,6 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { AnimatedCounter } from '@/components/data/AnimatedCounter';
 import { HeatmapGrid } from '@/components/charts/HeatmapGrid';
 import { EChart } from '@/components/charts/EChart';
-import { DraggableDashboard, type WidgetDef } from '@/components/dashboard/DraggableDashboard';
 import { GravityWidget } from '@/components/dashboard/GravityWidget';
 import { useDashboard } from '@/hooks/queries/useDashboard';
 import { useSSE } from '@/hooks/useSSE';
@@ -56,16 +55,42 @@ export default function DashboardPage() {
       )
     : 0;
 
-  const widgets = useMemo<WidgetDef[]>(() => {
-    const w: WidgetDef[] = [];
+  const anomalyCount = (data?.anomalies?.length ?? 0) + (data?.warnings?.length ?? 0);
 
-    // ── Hosts ──
-    w.push({
-      id: 'hosts',
-      title: 'Hosts',
-      defaultLayout: { x: 0, y: 0, w: 1, h: 4, minW: 1, minH: 2 },
-      render: () => (
-        <>
+  return (
+    <div>
+      <PageHeader
+        title="Dashboard"
+        description="Infrastructure overview"
+        actions={data?.nodeglow_uptime ? (
+          <span className="text-xs text-slate-500 flex items-center gap-1.5">
+            <Clock size={12} /> Uptime: {data.nodeglow_uptime}
+          </span>
+        ) : undefined}
+      />
+
+      {/* ── Quick Stats ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} />
+        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} />
+        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} />
+        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" tint="bg-amber-500/10" alert={!!data?.active_incidents} loading={isLoading} />
+        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" tint="bg-violet-500/10" loading={isLoading} />
+        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} />
+      </div>
+
+      {/* ── Gravity Widget (Hero) ── */}
+      {data?.host_stats && (
+        <div className="mb-6">
+          <GravityWidget hosts={data.host_stats} />
+        </div>
+      )}
+
+      {/* ── Command Center Grid ── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+
+        {/* Row 1: Hosts | Incidents | Syslog Rate (2-col) */}
+        <GlassCard className="p-5">
           <WidgetHeader icon={Server} iconColor="text-sky-400" title="Hosts" />
           {isLoading ? (
             <div className="space-y-2">
@@ -88,50 +113,9 @@ export default function DashboardPage() {
               ))}
             </div>
           )}
-        </>
-      ),
-    });
+        </GlassCard>
 
-    // ── Integrations ──
-    w.push({
-      id: 'integrations',
-      title: 'Integrations',
-      defaultLayout: { x: 1, y: 0, w: 1, h: 4, minW: 1, minH: 2 },
-      render: () => (
-        <>
-          <WidgetHeader icon={Zap} iconColor="text-violet-400" title="Integrations" />
-          {isLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
-            </div>
-          ) : (
-            <div className="space-y-0.5 max-h-[340px] overflow-y-auto">
-              {data?.integration_health?.map((int, i) => (
-                <Link
-                  key={i}
-                  href={int.single_instance ? `/integration/${int.type}` : `/integration/${int.type}/${int.config_id}`}
-                  className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
-                >
-                  <StatusDot status={int.ok ? 'online' : int.ok === false ? 'offline' : 'unknown'} />
-                  <span className="flex-1 text-sm truncate" style={{ color: int.color }}>
-                    {int.label}
-                  </span>
-                  <span className="text-xs text-slate-500 truncate max-w-[100px]">{int.name}</span>
-                </Link>
-              ))}
-            </div>
-          )}
-        </>
-      ),
-    });
-
-    // ── Incidents ──
-    w.push({
-      id: 'incidents',
-      title: 'Incidents',
-      defaultLayout: { x: 2, y: 0, w: 1, h: 4, minW: 1, minH: 2 },
-      render: () => (
-        <>
+        <GlassCard className="p-5">
           <WidgetHeader icon={ShieldAlert} iconColor="text-red-400" title="Recent Incidents" />
           {isLoading ? (
             <div className="space-y-2">
@@ -163,17 +147,9 @@ export default function DashboardPage() {
               All clear — no active incidents
             </p>
           )}
-        </>
-      ),
-    });
+        </GlassCard>
 
-    // ── Syslog Rate ──
-    w.push({
-      id: 'syslog-rate',
-      title: 'Syslog Rate',
-      defaultLayout: { x: 0, y: 4, w: 2, h: 3, minW: 1, minH: 2 },
-      render: () => (
-        <>
+        <GlassCard className="p-5 lg:col-span-2">
           <WidgetHeader icon={ArrowUpDown} iconColor="text-sky-400" title="Syslog Rate (24h)" trailing={
             data?.syslog_stats ? (
               <span className="text-xs text-slate-500 font-mono">
@@ -200,67 +176,10 @@ export default function DashboardPage() {
               }}
             />
           )}
-        </>
-      ),
-    });
+        </GlassCard>
 
-    // ── Anomalies & Warnings ──
-    const anomalyCount = (data?.anomalies?.length ?? 0) + (data?.warnings?.length ?? 0);
-    if (anomalyCount > 0 || !data) {
-      w.push({
-        id: 'anomalies',
-        title: 'Anomalies',
-        defaultLayout: { x: 2, y: 4, w: 1, h: 3, minW: 1, minH: 2 },
-        render: () => (
-          <>
-            <WidgetHeader icon={AlertTriangle} iconColor="text-amber-400" title="Anomalies" trailing={
-              anomalyCount > 0 ? (
-                <span className="text-xs font-mono text-amber-400">{anomalyCount}</span>
-              ) : undefined
-            } />
-            {isLoading ? (
-              <Skeleton className="h-[200px] w-full" />
-            ) : anomalyCount === 0 ? (
-              <p className="text-sm text-emerald-400 flex items-center gap-2 py-4 justify-center">
-                No anomalies detected
-              </p>
-            ) : (
-              <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
-                {data?.anomalies?.slice(0, 8).map((a, i) => (
-                  <div key={`a-${i}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-white/[0.02]">
-                    <span className="text-xs text-red-400 font-mono shrink-0">{a.metric}</span>
-                    <span className="flex-1 text-sm text-slate-200 truncate">{a.name}</span>
-                    <span className="text-xs font-mono text-slate-400">
-                      {typeof a.current === 'number' ? (a.metric === 'Latency' ? `${Math.round(a.current)}ms` : a.metric === 'RAM' ? `${a.current}GB` : `${a.current}%`) : ''}
-                    </span>
-                    {a.factor != null && (
-                      <span className="text-[10px] text-amber-400">{a.factor}x</span>
-                    )}
-                  </div>
-                ))}
-                {data?.warnings?.slice(0, 5).map((w, i) => (
-                  <div key={`w-${i}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-white/[0.02]">
-                    <span className="text-xs text-amber-400 font-mono shrink-0">{w.metric}</span>
-                    <span className="flex-1 text-sm text-slate-200 truncate">{w.name}</span>
-                    <span className="text-xs font-mono text-slate-400">
-                      {w.current}% &ge; {w.threshold}%
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        ),
-      });
-    }
-
-    // ── 30-Day Heatmap ──
-    w.push({
-      id: 'heatmap',
-      title: '30-Day Availability',
-      defaultLayout: { x: 0, y: 7, w: 3, h: 3, minW: 2, minH: 2 },
-      render: () => (
-        <>
+        {/* Row 2: 30-Day Heatmap (full-width) */}
+        <GlassCard className="p-5 lg:col-span-4 md:col-span-2">
           <WidgetHeader icon={Activity} iconColor="text-sky-400" title="30-Day Availability" />
           {isLoading ? (
             <Skeleton className="h-40 w-full" />
@@ -269,17 +188,10 @@ export default function DashboardPage() {
           ) : (
             <p className="text-sm text-slate-500">No data</p>
           )}
-        </>
-      ),
-    });
+        </GlassCard>
 
-    // ── Uptime Ranking ──
-    w.push({
-      id: 'uptime',
-      title: 'Uptime Ranking',
-      defaultLayout: { x: 0, y: 10, w: 1, h: 3, minW: 1, minH: 2 },
-      render: () => (
-        <>
+        {/* Row 3: Uptime | Latency | Alert Trends (2-col) */}
+        <GlassCard className="p-5">
           <WidgetHeader icon={Trophy} iconColor="text-amber-400" title="Uptime Ranking" />
           {isLoading ? (
             <Skeleton className="h-[200px] w-full" />
@@ -306,17 +218,9 @@ export default function DashboardPage() {
           ) : (
             <p className="text-sm text-slate-500 text-center py-4">No data</p>
           )}
-        </>
-      ),
-    });
+        </GlassCard>
 
-    // ── Top Latency ──
-    w.push({
-      id: 'top-latency',
-      title: 'Top Latency',
-      defaultLayout: { x: 1, y: 10, w: 1, h: 3, minW: 1, minH: 2 },
-      render: () => (
-        <>
+        <GlassCard className="p-5">
           <WidgetHeader icon={Timer} iconColor="text-rose-400" title="Highest Latency" />
           {isLoading ? (
             <Skeleton className="h-[200px] w-full" />
@@ -340,21 +244,105 @@ export default function DashboardPage() {
           ) : (
             <p className="text-sm text-slate-500 text-center py-4">No data</p>
           )}
-        </>
-      ),
-    });
+        </GlassCard>
 
-    // ── Storage ──
-    if (data?.storage_pools?.length) {
-      w.push({
-        id: 'storage',
-        title: 'Storage',
-        defaultLayout: { x: 2, y: 10, w: 1, h: 3, minW: 1, minH: 2 },
-        render: () => (
-          <>
+        <GlassCard className="p-5 lg:col-span-2">
+          <WidgetHeader icon={TrendingUp} iconColor="text-amber-400" title="Alert Trends (14d)" />
+          {isLoading || !data?.incident_trend ? (
+            <Skeleton className="h-[180px] w-full" />
+          ) : data.incident_trend.every((d) => d.critical === 0 && d.warning === 0 && d.info === 0) ? (
+            <p className="text-sm text-emerald-400 flex items-center gap-2 py-4 justify-center">
+              No incidents in the last 14 days
+            </p>
+          ) : (
+            <EChart
+              height={180}
+              option={{
+                tooltip: { trigger: 'axis' },
+                legend: { show: false },
+                grid: { left: 40, right: 12, top: 8, bottom: 24 },
+                xAxis: { type: 'category', data: data.incident_trend.map((d) => d.date), axisLabel: { fontSize: 10 } },
+                yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 10 } },
+                series: [
+                  { name: 'Critical', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.critical), color: '#F87171' },
+                  { name: 'Warning', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.warning), color: '#FBBF24' },
+                  { name: 'Info', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.info), color: '#38BDF8' },
+                ],
+              }}
+            />
+          )}
+        </GlassCard>
+
+        {/* Row 4: Integrations | Anomalies | Storage (cond.) | Live Syslog */}
+        <GlassCard className="p-5">
+          <WidgetHeader icon={Zap} iconColor="text-violet-400" title="Integrations" />
+          {isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+            </div>
+          ) : (
+            <div className="space-y-0.5 max-h-[340px] overflow-y-auto">
+              {data?.integration_health?.map((int, i) => (
+                <Link
+                  key={i}
+                  href={int.single_instance ? `/integration/${int.type}` : `/integration/${int.type}/${int.config_id}`}
+                  className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
+                >
+                  <StatusDot status={int.ok ? 'online' : int.ok === false ? 'offline' : 'unknown'} />
+                  <span className="flex-1 text-sm truncate" style={{ color: int.color }}>
+                    {int.label}
+                  </span>
+                  <span className="text-xs text-slate-500 truncate max-w-[100px]">{int.name}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </GlassCard>
+
+        <GlassCard className="p-5">
+          <WidgetHeader icon={AlertTriangle} iconColor="text-amber-400" title="Anomalies" trailing={
+            anomalyCount > 0 ? (
+              <span className="text-xs font-mono text-amber-400">{anomalyCount}</span>
+            ) : undefined
+          } />
+          {isLoading ? (
+            <Skeleton className="h-[200px] w-full" />
+          ) : anomalyCount === 0 ? (
+            <p className="text-sm text-emerald-400 flex items-center gap-2 py-4 justify-center">
+              No anomalies detected
+            </p>
+          ) : (
+            <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
+              {data?.anomalies?.slice(0, 8).map((a, i) => (
+                <div key={`a-${i}`} className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02]">
+                  <span className="text-xs text-red-400 font-mono shrink-0">{a.metric}</span>
+                  <span className="flex-1 text-sm text-slate-200 truncate">{a.name}</span>
+                  <span className="text-xs font-mono text-slate-400">
+                    {typeof a.current === 'number' ? (a.metric === 'Latency' ? `${Math.round(a.current)}ms` : a.metric === 'RAM' ? `${a.current}GB` : `${a.current}%`) : ''}
+                  </span>
+                  {a.factor != null && (
+                    <span className="text-[10px] text-amber-400">{a.factor}x</span>
+                  )}
+                </div>
+              ))}
+              {data?.warnings?.slice(0, 5).map((w, i) => (
+                <div key={`w-${i}`} className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/[0.02]">
+                  <span className="text-xs text-amber-400 font-mono shrink-0">{w.metric}</span>
+                  <span className="flex-1 text-sm text-slate-200 truncate">{w.name}</span>
+                  <span className="text-xs font-mono text-slate-400">
+                    {w.current}% &ge; {w.threshold}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </GlassCard>
+
+        {data?.storage_pools?.length ? (
+          <GlassCard className="p-5">
             <WidgetHeader icon={HardDrive} iconColor="text-sky-400" title="Storage" />
             <div className="space-y-3 max-h-[260px] overflow-y-auto">
-              {data!.storage_pools.map((pool, i) => (
+              {data.storage_pools.map((pool, i) => (
                 <div key={i}>
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-1.5">
@@ -385,61 +373,52 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          </>
-        ),
-      });
-    }
+          </GlassCard>
+        ) : (
+          <div className="hidden lg:block" />
+        )}
 
-    // ── Speedtest ──
-    if (data?.speedtest_data) {
-      w.push({
-        id: 'speedtest',
-        title: 'Speedtest',
-        defaultLayout: { x: 0, y: 13, w: 1, h: 2, minW: 1, minH: 2 },
-        render: () => (
-          <>
+        <GlassCard className="p-5">
+          <LiveSyslogWidget />
+        </GlassCard>
+
+        {/* Row 5: Conditional infra widgets */}
+        {data?.speedtest_data && (
+          <GlassCard className="p-5">
             <WidgetHeader icon={Wifi} iconColor="text-blue-400" title="Speedtest" />
             <div className="grid grid-cols-3 gap-3 text-center">
               <div>
-                <p className="text-2xl font-bold text-sky-400">{Math.round(data!.speedtest_data!.download_mbps)}</p>
+                <p className="text-2xl font-bold text-sky-400">{Math.round(data.speedtest_data.download_mbps)}</p>
                 <p className="text-[10px] text-slate-500 uppercase">Down Mbps</p>
               </div>
               <div>
-                <p className="text-2xl font-bold text-violet-400">{Math.round(data!.speedtest_data!.upload_mbps)}</p>
+                <p className="text-2xl font-bold text-violet-400">{Math.round(data.speedtest_data.upload_mbps)}</p>
                 <p className="text-[10px] text-slate-500 uppercase">Up Mbps</p>
               </div>
               <div>
-                <p className="text-2xl font-bold text-emerald-400">{Math.round(data!.speedtest_data!.ping_ms)}</p>
+                <p className="text-2xl font-bold text-emerald-400">{Math.round(data.speedtest_data.ping_ms)}</p>
                 <p className="text-[10px] text-slate-500 uppercase">Ping ms</p>
               </div>
             </div>
             <div className="flex items-center justify-between mt-2">
-              <p className="text-[10px] text-slate-600">{data!.speedtest_data!.server_name}</p>
-              <p className="text-[10px] text-slate-600">{data!.speedtest_data!.timestamp}</p>
+              <p className="text-[10px] text-slate-600">{data.speedtest_data.server_name}</p>
+              <p className="text-[10px] text-slate-600">{data.speedtest_data.timestamp}</p>
             </div>
-          </>
-        ),
-      });
-    }
+          </GlassCard>
+        )}
 
-    // ── UPS ──
-    if (data?.ups_data) {
-      w.push({
-        id: 'ups',
-        title: 'UPS',
-        defaultLayout: { x: 1, y: 13, w: 1, h: 2, minW: 1, minH: 2 },
-        render: () => (
-          <>
+        {data?.ups_data && (
+          <GlassCard className="p-5">
             <WidgetHeader
               icon={BatteryCharging}
-              iconColor={data!.ups_data!.on_battery ? 'text-amber-400' : 'text-emerald-400'}
+              iconColor={data.ups_data.on_battery ? 'text-amber-400' : 'text-emerald-400'}
               title="UPS"
-              trailing={data!.ups_data!.on_battery ? (
+              trailing={data.ups_data.on_battery ? (
                 <Badge variant="severity" severity="warning">On Battery</Badge>
               ) : undefined}
             />
             <div className="space-y-3">
-              {data!.ups_data!.units.map((unit, i) => (
+              {data.ups_data.units.map((unit, i) => (
                 <div key={i} className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-slate-300">{unit.name}</span>
@@ -464,19 +443,11 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          </>
-        ),
-      });
-    }
+          </GlassCard>
+        )}
 
-    // ── SSL Certificates ──
-    if (data?.ssl_certs?.length) {
-      w.push({
-        id: 'ssl',
-        title: 'SSL Certificates',
-        defaultLayout: { x: 2, y: 13, w: 1, h: 2, minW: 1, minH: 2 },
-        render: () => (
-          <>
+        {(data?.ssl_certs?.length ?? 0) > 0 && (
+          <GlassCard className="p-5">
             <WidgetHeader icon={Lock} iconColor="text-emerald-400" title="SSL Certificates" />
             <div className="space-y-1 max-h-[160px] overflow-y-auto">
               {data!.ssl_certs.map((cert) => {
@@ -499,32 +470,24 @@ export default function DashboardPage() {
                 );
               })}
             </div>
-          </>
-        ),
-      });
-    }
+          </GlassCard>
+        )}
 
-    // ── Containers ──
-    if (data?.container_data) {
-      w.push({
-        id: 'containers',
-        title: 'Containers',
-        defaultLayout: { x: 0, y: 15, w: 1, h: 2, minW: 1, minH: 2 },
-        render: () => (
-          <>
+        {data?.container_data && (
+          <GlassCard className="p-5">
             <WidgetHeader icon={Container} iconColor="text-cyan-400" title="Containers" />
             <div className="grid grid-cols-2 gap-3 text-center mb-3">
               <div>
-                <p className="text-2xl font-bold text-emerald-400">{data!.container_data!.running}</p>
+                <p className="text-2xl font-bold text-emerald-400">{data.container_data.running}</p>
                 <p className="text-[10px] text-slate-500 uppercase">Running</p>
               </div>
               <div>
-                <p className="text-2xl font-bold text-slate-400">{data!.container_data!.stopped}</p>
+                <p className="text-2xl font-bold text-slate-400">{data.container_data.stopped}</p>
                 <p className="text-[10px] text-slate-500 uppercase">Stopped</p>
               </div>
             </div>
             <div className="space-y-1 max-h-[100px] overflow-y-auto">
-              {data!.container_data!.environments.map((env, i) => (
+              {data.container_data.environments.map((env, i) => (
                 <div key={i} className="flex items-center gap-2 px-2 py-1">
                   <span className="flex-1 text-xs text-slate-300 truncate">{env.name}</span>
                   <span className="text-xs font-mono text-emerald-400">{env.containers_running}</span>
@@ -535,88 +498,9 @@ export default function DashboardPage() {
                 </div>
               ))}
             </div>
-          </>
-        ),
-      });
-    }
-
-    // ── Alert Trends ──
-    w.push({
-      id: 'alert-trends',
-      title: 'Alert Trends',
-      defaultLayout: { x: 0, y: 17, w: 2, h: 3, minW: 1, minH: 2 },
-      render: () => (
-        <>
-          <WidgetHeader icon={TrendingUp} iconColor="text-amber-400" title="Alert Trends (14d)" />
-          {isLoading || !data?.incident_trend ? (
-            <Skeleton className="h-[180px] w-full" />
-          ) : data.incident_trend.every((d) => d.critical === 0 && d.warning === 0 && d.info === 0) ? (
-            <p className="text-sm text-emerald-400 flex items-center gap-2 py-4 justify-center">
-              No incidents in the last 14 days
-            </p>
-          ) : (
-            <EChart
-              height={180}
-              option={{
-                tooltip: { trigger: 'axis' },
-                legend: { show: false },
-                grid: { left: 40, right: 12, top: 8, bottom: 24 },
-                xAxis: { type: 'category', data: data.incident_trend.map((d) => d.date), axisLabel: { fontSize: 10 } },
-                yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 10 } },
-                series: [
-                  { name: 'Critical', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.critical), color: '#F87171' },
-                  { name: 'Warning', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.warning), color: '#FBBF24' },
-                  { name: 'Info', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.info), color: '#38BDF8' },
-                ],
-              }}
-            />
-          )}
-        </>
-      ),
-    });
-
-    // ── Live Syslog ──
-    w.push({
-      id: 'live-syslog',
-      title: 'Live Syslog',
-      defaultLayout: { x: 2, y: 17, w: 1, h: 3, minW: 1, minH: 2 },
-      render: () => <LiveSyslogWidget />,
-    });
-
-    return w;
-  }, [data, isLoading]);
-
-  return (
-    <div>
-      <PageHeader
-        title="Dashboard"
-        description="Infrastructure overview"
-        actions={data?.nodeglow_uptime ? (
-          <span className="text-xs text-slate-500 flex items-center gap-1.5">
-            <Clock size={12} /> Uptime: {data.nodeglow_uptime}
-          </span>
-        ) : undefined}
-      />
-
-      {/* ── Quick Stats ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} />
-        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} />
-        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} />
-        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" tint="bg-amber-500/10" alert={!!data?.active_incidents} loading={isLoading} />
-        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" tint="bg-violet-500/10" loading={isLoading} />
-        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} />
+          </GlassCard>
+        )}
       </div>
-
-      {/* ── Gravity Globe ── */}
-      {data?.host_stats && (
-        <div className="mb-6">
-          <GravityWidget hosts={data.host_stats} />
-        </div>
-      )}
-
-      {/* ── Draggable Widgets ── */}
-      <DraggableDashboard widgets={widgets} />
     </div>
   );
 }
