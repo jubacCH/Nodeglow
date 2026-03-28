@@ -1,5 +1,6 @@
 """SSL certificate monitoring page and API."""
 import asyncio
+import json
 import logging
 import ssl as _ssl
 from datetime import datetime, timezone
@@ -10,10 +11,71 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import PingHost, get_db
+from models.integration import Snapshot
 from templating import templates
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+
+
+async def _get_integration_certs(db: AsyncSession) -> list[dict]:
+    """Pull SSL certificates from integration snapshots (NPM, Cloudflare, etc.)."""
+    certs: list[dict] = []
+
+    # Get latest successful snapshot per integration type that may have certs
+    result = await db.execute(
+        select(Snapshot)
+        .where(Snapshot.ok == True, Snapshot.entity_type.in_(["npm", "cloudflare"]))
+        .order_by(Snapshot.timestamp.desc())
+    )
+    snapshots = result.scalars().all()
+
+    # Deduplicate: keep only latest per (entity_type, entity_id)
+    seen: set[tuple[str, int]] = set()
+    for snap in snapshots:
+        key = (snap.entity_type, snap.entity_id)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        try:
+            data = json.loads(snap.data_json) if snap.data_json else {}
+        except Exception:
+            continue
+
+        if snap.entity_type == "npm":
+            for cert in data.get("certificates", []):
+                days = cert.get("days_left")
+                domains = cert.get("domains", [])
+                certs.append({
+                    "id": None,
+                    "name": cert.get("nice_name") or (domains[0] if domains else f"Cert #{cert.get('id')}"),
+                    "hostname": ", ".join(domains),
+                    "enabled": True,
+                    "days": days,
+                    "source": "npm",
+                    "source_label": "Nginx Proxy Manager",
+                    "provider": cert.get("provider", ""),
+                })
+
+        elif snap.entity_type == "cloudflare":
+            for zone in data.get("zones", []):
+                ssl_mode = zone.get("ssl_mode", "unknown")
+                if ssl_mode and ssl_mode != "off":
+                    # Cloudflare manages certs automatically — no days_left from API
+                    # but we can report the zone SSL status
+                    certs.append({
+                        "id": None,
+                        "name": zone.get("name", ""),
+                        "hostname": zone.get("name", ""),
+                        "enabled": zone.get("status") == "active",
+                        "days": None,  # Cloudflare auto-renews
+                        "source": "cloudflare",
+                        "source_label": "Cloudflare",
+                        "provider": f"Cloudflare ({ssl_mode})",
+                    })
+
+    return certs
 
 
 async def _get_ssl_info(hostname: str, port: int = 443) -> dict:
@@ -128,7 +190,7 @@ async def _get_ssl_info(hostname: str, port: int = 443) -> dict:
 
 @router.get("/api/ssl/certs")
 async def ssl_certs_json(db: AsyncSession = Depends(get_db)):
-    """JSON endpoint for SSL certificate data."""
+    """JSON endpoint for SSL certificate data (hosts + integrations)."""
     result = await db.execute(
         select(PingHost)
         .where(PingHost.check_type.contains("https"))
@@ -143,7 +205,18 @@ async def ssl_certs_json(db: AsyncSession = Depends(get_db)):
             "hostname": h.hostname,
             "enabled": h.enabled,
             "days": h.ssl_expiry_days,
+            "source": "host",
+            "source_label": "HTTPS Host",
+            "provider": "",
         })
+
+    # Add integration certs
+    try:
+        int_certs = await _get_integration_certs(db)
+        certs.extend(int_certs)
+    except Exception as exc:
+        log.warning("Failed to fetch integration certs: %s", exc)
+
     certs.sort(key=lambda c: c["days"] if c["days"] is not None else 9999)
     expiring_soon = sum(1 for c in certs if c["days"] is not None and c["days"] <= 30)
     return JSONResponse({"certs": certs, "expiring_soon": expiring_soon})

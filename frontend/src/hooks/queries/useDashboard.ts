@@ -110,9 +110,10 @@ export interface UpsUnit {
 }
 
 export interface SslCert {
-  host_id: number;
+  host_id: number | null;
   name: string;
   days: number | null;
+  source?: string;
 }
 
 export interface RecentIncident {
