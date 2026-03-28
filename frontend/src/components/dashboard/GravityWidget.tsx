@@ -50,8 +50,8 @@ function orbitRadius(h: HostStat, index: number): number {
     return 1.8 + (index % 4) * 0.15;
   }
   const health = hostHealth(h);
-  const base = 1.3 + health * 2.0;
-  const spread = ((index * 7) % 13) / 13 * 0.3;
+  const base = 1.4 + health * 2.5;
+  const spread = ((index * 7) % 13) / 13 * 0.8 + ((index * 3) % 7) / 7 * 0.4;
   return base + spread;
 }
 
@@ -229,7 +229,6 @@ interface HostNodeProps {
 function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
   const meshRef = useRef<THREE.Mesh>(null);
-  const ringRef = useRef<THREE.Mesh>(null);
   const [hovered, setHovered] = useState(false);
   const router = useRouter();
   const isOffline = host.online === false && !host.host.maintenance;
@@ -251,18 +250,13 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
       const s = 1 + Math.sin(clock.getElapsedTime() * 2.5) * 0.25;
       meshRef.current.scale.setScalar(s);
     }
-    // Spinning ring for online hosts
-    if (ringRef.current) {
-      ringRef.current.rotation.z += 0.02;
-      ringRef.current.rotation.x = Math.sin(clock.getElapsedTime() * 0.5) * 0.3 + 0.8;
-    }
   });
 
   const handleClick = useCallback(() => {
     router.push(`/hosts/${host.host.id}`);
   }, [router, host.host.id]);
 
-  const nodeSize = isOffline ? 0.16 : 0.13;
+  const nodeSize = isOffline ? 0.12 : 0.10;
 
   return (
     <group ref={groupRef}>
@@ -284,39 +278,25 @@ function HostNode({ host, radius, angle, inclination, speed }: HostNodeProps) {
 
       {/* Inner glow — colored halo */}
       <mesh>
-        <sphereGeometry args={[nodeSize * 2.5, 16, 16]} />
+        <sphereGeometry args={[nodeSize * 2, 16, 16]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={hovered ? 0.35 : isOffline ? 0.15 : 0.08}
+          opacity={hovered ? 0.3 : isOffline ? 0.12 : 0.06}
           depthWrite={false}
         />
       </mesh>
 
-      {/* Outer bloom — softer, larger */}
+      {/* Outer bloom — subtle */}
       <mesh>
-        <sphereGeometry args={[nodeSize * 5, 12, 12]} />
+        <sphereGeometry args={[nodeSize * 3, 12, 12]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={hovered ? 0.12 : 0.03}
+          opacity={hovered ? 0.1 : 0.02}
           depthWrite={false}
         />
       </mesh>
-
-      {/* Orbit ring around node (online hosts only) */}
-      {!isOffline && !host.host.maintenance && (
-        <mesh ref={ringRef}>
-          <ringGeometry args={[nodeSize * 1.8, nodeSize * 2.2, 32]} />
-          <meshBasicMaterial
-            color={color}
-            transparent
-            opacity={hovered ? 0.5 : 0.15}
-            side={THREE.DoubleSide}
-            depthWrite={false}
-          />
-        </mesh>
-      )}
 
       {/* Tooltip */}
       {hovered && (
