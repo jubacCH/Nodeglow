@@ -199,7 +199,20 @@ export default function SslPage() {
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-400">{c.hostname}</td>
                       <td className="px-4 py-3">
-                        <span className="text-xs text-slate-500">{c.provider || c.source_label || c.source || ''}</span>
+                        <div className="flex items-center gap-1.5">
+                          {c.source === 'host' ? (
+                            <span className="text-xs text-slate-500">HTTPS Host</span>
+                          ) : (
+                            <>
+                              <span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] font-medium text-slate-300">
+                                {c.source_label || c.source || ''}
+                              </span>
+                              {c.provider && (
+                                <span className="text-[10px] text-slate-500">{c.provider}</span>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </td>
                       <td className={`px-4 py-3 text-right font-mono ${expiryColor(c.days)}`}>
                         {c.days !== null ? c.days : '—'}
