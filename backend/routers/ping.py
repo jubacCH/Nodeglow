@@ -807,7 +807,7 @@ async def edit_ping_host(
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info&saved=1", status_code=303)
 
 
-@router.post("/{host_id}/delete")
+@router.post("/api/{host_id}/delete")
 async def delete_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
     if host:
