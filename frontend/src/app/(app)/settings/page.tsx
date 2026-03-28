@@ -302,6 +302,7 @@ export default function SettingsPage() {
   const [dailyAiHour, setDailyAiHour] = useState('8');
   const [dailyAiChannels, setDailyAiChannels] = useState<Set<string>>(new Set(['telegram', 'discord', 'webhook', 'email']));
   const [aiSaving, setAiSaving] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
 
   /* ---- API keys state ---- */
   const [createKeyModal, setCreateKeyModal] = useState(false);
@@ -1472,7 +1473,38 @@ export default function SettingsPage() {
           {/* AI Usage Stats */}
           <AiUsageCard />
 
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={aiTesting || !settings?.claude_has_key}
+              onClick={async () => {
+                setAiTesting(true);
+                try {
+                  // Save settings first, then trigger test
+                  const params = new URLSearchParams();
+                  if (claudeApiKey.trim()) {
+                    params.set('claude_api_key', claudeApiKey);
+                  }
+                  params.set('daily_ai_summary_enabled', dailyAiEnabled ? 'on' : '0');
+                  params.set('daily_ai_summary_hour', dailyAiHour);
+                  params.set('daily_ai_summary_channels', Array.from(dailyAiChannels).join(','));
+                  await api('/settings/ai/save', { method: 'POST', body: params });
+                  if (claudeApiKey.trim()) setClaudeApiKey('');
+                  qc.invalidateQueries({ queryKey: ['settings'] });
+
+                  const res = await post<{ ok: boolean; message: string }>('/settings/ai/test-summary');
+                  toast.show(res.message || 'Test summary sent', 'success');
+                } catch {
+                  toast.show('Test summary failed — check server logs', 'error');
+                } finally {
+                  setAiTesting(false);
+                }
+              }}
+            >
+              <Send size={12} />
+              {aiTesting ? 'Generating...' : 'Test Summary'}
+            </Button>
             <Button
               size="sm"
               disabled={aiSaving}

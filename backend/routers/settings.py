@@ -603,6 +603,132 @@ async def save_ai_settings(
     return RedirectResponse(url="/settings?saved=1", status_code=303)
 
 
+@router.post("/ai/test-summary")
+async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get_db)):
+    """Trigger a one-off daily AI summary (ignores schedule + duplicate protection)."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+
+    from services.digest import (
+        build_daily_summary_data, format_daily_summary_prompt,
+        _DAILY_SUMMARY_SYSTEM_PROMPT,
+    )
+    from services.ai_client import generate_completion
+    from notifications import (
+        _send_telegram, _send_discord, _log_notification,
+        _send_webhook, _send_email, _build_html_email,
+    )
+    from database import decrypt_value
+
+    claude_key = await get_setting(db, "claude_api_key", "")
+    if not claude_key:
+        return JSONResponse({"ok": False, "message": "No Claude API key configured"}, status_code=400)
+
+    # Collect data
+    data = await build_daily_summary_data(db)
+
+    # Generate AI analysis
+    prompt = format_daily_summary_prompt(data)
+    try:
+        summary, usage = await generate_completion(
+            _DAILY_SUMMARY_SYSTEM_PROMPT, prompt, max_tokens=1500,
+            return_usage=True,
+        )
+    except Exception as exc:
+        log.error("Test AI summary generation failed: %s", exc)
+        return JSONResponse({"ok": False, "message": f"AI generation failed: {exc}"}, status_code=500)
+
+    # Log token usage
+    try:
+        from models.ai_usage import AiUsageLog
+        _COST_PER_INPUT = 1.0 / 1_000_000
+        _COST_PER_OUTPUT = 5.0 / 1_000_000
+        cost = (usage["input_tokens"] * _COST_PER_INPUT
+                + usage["output_tokens"] * _COST_PER_OUTPUT)
+        db.add(AiUsageLog(
+            feature="daily_summary_test",
+            model=usage.get("model", "unknown"),
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            cost_usd=round(cost, 6),
+        ))
+        await db.commit()
+    except Exception as exc:
+        log.warning("Failed to log AI usage: %s", exc)
+
+    # Send to configured channels
+    title = "Daily AI Summary (Test)"
+    channels_csv = await get_setting(db, "daily_ai_summary_channels", "telegram,discord,webhook,email")
+    selected = {c.strip() for c in channels_csv.split(",") if c.strip()}
+    sent = False
+    errors = []
+
+    tg_token = await get_setting(db, "telegram_bot_token", "")
+    tg_chat = await get_setting(db, "telegram_chat_id", "")
+    dc_webhook = await get_setting(db, "discord_webhook_url", "")
+    wh_url = await get_setting(db, "webhook_url", "")
+    wh_secret = await get_setting(db, "webhook_secret", "")
+    smtp_host = await get_setting(db, "smtp_host", "")
+    smtp_user = await get_setting(db, "smtp_user", "")
+    smtp_pw_enc = await get_setting(db, "smtp_password", "")
+    smtp_to = await get_setting(db, "smtp_to", "")
+    smtp_port = int(await get_setting(db, "smtp_port", "587"))
+    smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
+
+    if "telegram" in selected and tg_token and tg_chat:
+        try:
+            tg_text = f"<b>🤖 {title}</b>\n\n{summary}"
+            if len(tg_text) > 4096:
+                tg_text = tg_text[:4090] + "\n[…]"
+            await _send_telegram(tg_token, tg_chat, tg_text)
+            sent = True
+        except Exception as exc:
+            errors.append(f"Telegram: {exc}")
+
+    if "discord" in selected and dc_webhook:
+        try:
+            desc = summary[:4090] if len(summary) > 4090 else summary
+            await _send_discord(dc_webhook, f"🤖 {title}", desc, 0x8B5CF6)
+            sent = True
+        except Exception as exc:
+            errors.append(f"Discord: {exc}")
+
+    if "webhook" in selected and wh_url:
+        try:
+            await _send_webhook(wh_url, wh_secret, title, summary, "info")
+            sent = True
+        except Exception as exc:
+            errors.append(f"Webhook: {exc}")
+
+    if "email" in selected and smtp_host and smtp_user and smtp_pw_enc and smtp_to:
+        try:
+            try:
+                smtp_pw = decrypt_value(smtp_pw_enc)
+            except Exception:
+                smtp_pw = smtp_pw_enc
+            html_body = _build_html_email(title, summary, "info")
+            await _send_email(
+                smtp_host, smtp_port, smtp_user, smtp_pw,
+                smtp_from, smtp_to,
+                f"[Nodeglow] {title}", f"{title}\n\n{summary}", html_body,
+            )
+            sent = True
+        except Exception as exc:
+            errors.append(f"Email: {exc}")
+
+    if sent:
+        msg = "Test summary sent"
+        if errors:
+            msg += f" (some channels failed: {'; '.join(errors)})"
+        return JSONResponse({"ok": True, "message": msg})
+    elif errors:
+        return JSONResponse({"ok": False, "message": f"All channels failed: {'; '.join(errors)}"}, status_code=500)
+    else:
+        return JSONResponse({"ok": False, "message": "No notification channels configured"}, status_code=400)
+
+
 @router.get("/ai/usage")
 async def ai_usage_stats(request: Request, db: AsyncSession = Depends(get_db)):
     """Return AI token usage statistics (current month + all-time)."""
