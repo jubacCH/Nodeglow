@@ -71,11 +71,13 @@ class NpmAPI:
 # ── Parser ────────────────────────────────────────────────────────────────────
 
 
-def _days_until(iso_str: str | None) -> int | None:
-    if not iso_str:
+def _days_until(date_str: str | None) -> int | None:
+    if not date_str:
         return None
     try:
-        exp = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        # NPM returns "2026-06-24 07:09:37" (no T, no timezone)
+        cleaned = date_str.replace("Z", "").replace("T", " ").strip()
+        exp = datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         return max(0, (exp - datetime.now(timezone.utc)).days)
     except Exception:
         return None
