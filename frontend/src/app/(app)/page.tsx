@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
@@ -18,7 +18,7 @@ import {
   Server, ServerOff, Gauge, ShieldAlert, Zap, Clock,
   ArrowUpDown, HardDrive, Activity, AlertTriangle,
   Container, BatteryCharging, Lock, Trophy, Timer,
-  TrendingUp, Wifi, Radio,
+  TrendingUp, Wifi,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -570,60 +570,35 @@ const SEV_LABELS: Record<number, string> = {
 };
 
 function LiveSyslogWidget() {
-  const [enabled, setEnabled] = useState(false);
-  const { messages, isStreaming, clear } = useSSE<SyslogMessage>({
+  const { messages, isStreaming } = useSSE<SyslogMessage>({
     url: '/syslog/stream',
-    enabled,
-    maxMessages: 100,
+    enabled: true,
+    maxMessages: 50,
   });
 
   return (
     <>
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2.5">
-          <div className="p-1.5 rounded-lg bg-cyan-500/15">
-            <Radio size={16} className="text-cyan-400" />
-          </div>
-          <h3 className="text-sm font-semibold text-slate-200">Live Syslog</h3>
-        </div>
         <div className="flex items-center gap-2">
-          {enabled && messages.length > 0 && (
-            <button
-              onClick={clear}
-              className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-slate-200 transition-colors"
-            >
-              Clear
-            </button>
+          <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider">Live Feed</h3>
+          {isStreaming && (
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
           )}
-          <button
-            onClick={() => setEnabled((v) => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-              enabled
-                ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
-                : 'bg-white/[0.06] text-slate-400 hover:bg-white/[0.10]'
-            }`}
-          >
-            {enabled && isStreaming && (
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-              </span>
-            )}
-            {enabled ? 'Live' : 'Start'}
-          </button>
         </div>
+        <Link href="/syslog" className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors">
+          View all
+        </Link>
       </div>
 
-      {!enabled ? (
-        <p className="text-sm text-slate-500 text-center py-6">
-          Click Start to stream syslog messages
-        </p>
-      ) : messages.length === 0 ? (
-        <p className="text-sm text-slate-500 text-center py-6">
+      {messages.length === 0 ? (
+        <p className="text-xs text-slate-500 text-center py-4">
           Waiting for messages...
         </p>
       ) : (
-        <div className="max-h-[260px] overflow-y-auto space-y-0">
+        <div className="max-h-[200px] overflow-y-auto space-y-0">
           {messages.map((msg, i) => (
             <div
               key={`${msg.timestamp}-${i}`}
