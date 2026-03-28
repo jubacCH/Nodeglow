@@ -176,6 +176,9 @@ export default function DashboardPage() {
               }}
             />
           )}
+          <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--ng-card-border)' }}>
+            <LiveSyslogWidget />
+          </div>
         </GlassCard>
 
         {/* Row 2: 30-Day Heatmap (full-width) */}
@@ -377,10 +380,6 @@ export default function DashboardPage() {
         ) : (
           <div className="hidden lg:block" />
         )}
-
-        <GlassCard className="p-5">
-          <LiveSyslogWidget />
-        </GlassCard>
 
         {/* Row 5: Conditional infra widgets */}
         {data?.speedtest_data && (
