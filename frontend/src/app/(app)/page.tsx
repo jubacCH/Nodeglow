@@ -289,7 +289,7 @@ export default function DashboardPage() {
                   className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                 >
                   <StatusDot status={int.ok ? 'online' : int.ok === false ? 'offline' : 'unknown'} />
-                  <span className="flex-1 text-sm truncate" style={{ color: int.color }}>
+                  <span className="flex-1 text-sm text-slate-200 truncate">
                     {int.label}
                   </span>
                   <span className="text-xs text-slate-500 truncate max-w-[100px]">{int.name}</span>
