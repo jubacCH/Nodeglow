@@ -13,11 +13,14 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 interface SslCert {
-  id: number;
+  id: number | null;
   name: string;
   hostname: string;
   enabled: boolean;
   days: number | null;
+  source?: string;
+  source_label?: string;
+  provider?: string;
 }
 
 interface SslData {
@@ -145,6 +148,7 @@ export default function SslPage() {
                 <th className="w-8 px-2 py-3" />
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Host</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Hostname</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Source</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Expiry</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 uppercase">Status</th>
               </tr>
@@ -156,34 +160,47 @@ export default function SslPage() {
                     <td className="px-2 py-3" />
                     <td className="px-4 py-3"><Skeleton className="h-5 w-32" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-40" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-16 ml-auto" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-20 mx-auto" /></td>
                   </tr>
                 ))}
-              {certs.map((c) => {
+              {certs.map((c, idx) => {
                 const badge = expiryBadge(c.days);
-                const isExpanded = expanded.has(c.id);
+                const isHost = c.source === 'host' && c.id != null;
+                const isExpanded = isHost && expanded.has(c.id!);
+                const uniqueKey = isHost ? `host-${c.id}` : `int-${idx}`;
                 return (
                   <>
                     <tr
-                      key={c.id}
-                      className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer"
-                      onClick={() => toggle(c.id)}
+                      key={uniqueKey}
+                      className={`border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors ${isHost ? 'cursor-pointer' : ''}`}
+                      onClick={isHost ? () => toggle(c.id!) : undefined}
                     >
                       <td className="px-2 py-3 text-slate-500">
-                        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {isHost ? (isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : null}
                       </td>
                       <td className="px-4 py-3">
-                        <Link
-                          href={`/hosts/${c.id}`}
-                          className="flex items-center gap-2 text-slate-200 hover:text-sky-400"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <ShieldCheck size={14} className={expiryColor(c.days)} />
-                          {c.name}
-                        </Link>
+                        {isHost ? (
+                          <Link
+                            href={`/hosts/${c.id}`}
+                            className="flex items-center gap-2 text-slate-200 hover:text-sky-400"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <ShieldCheck size={14} className={expiryColor(c.days)} />
+                            {c.name}
+                          </Link>
+                        ) : (
+                          <span className="flex items-center gap-2 text-slate-200">
+                            <ShieldCheck size={14} className={expiryColor(c.days)} />
+                            {c.name}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-400">{c.hostname}</td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs text-slate-500">{c.provider || c.source_label || c.source || ''}</span>
+                      </td>
                       <td className={`px-4 py-3 text-right font-mono ${expiryColor(c.days)}`}>
                         {c.days !== null ? c.days : '—'}
                       </td>
@@ -195,8 +212,8 @@ export default function SslPage() {
                     </tr>
                     {isExpanded && (
                       <tr key={`detail-${c.id}`} className="border-b border-white/[0.06]">
-                        <td colSpan={5} className="p-0">
-                          <CertDetail hostId={c.id} />
+                        <td colSpan={6} className="p-0">
+                          <CertDetail hostId={c.id!} />
                         </td>
                       </tr>
                     )}
@@ -205,7 +222,7 @@ export default function SslPage() {
               })}
               {!isLoading && certs.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500">
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
                     No HTTPS hosts configured
                   </td>
                 </tr>

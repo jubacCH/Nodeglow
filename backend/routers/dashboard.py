@@ -660,7 +660,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    # ── SSL certificates ──────────────────────────────────────────────────────
+    # ── SSL certificates (hosts + integrations) ─────────────────────────────
     ssl_certs = []
     try:
         https_hosts = [h for h in hosts if "https" in (h.check_type or "")]
@@ -669,7 +669,22 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                 "host_id": h.id,
                 "name": h.name,
                 "days": h.ssl_expiry_days,
+                "source": "host",
             })
+    except Exception:
+        pass
+    try:
+        from routers.ssl_monitor import _get_integration_certs
+        int_certs = await _get_integration_certs(db)
+        for ic in int_certs:
+            ssl_certs.append({
+                "host_id": None,
+                "name": ic["name"],
+                "days": ic["days"],
+                "source": ic.get("source", ""),
+                "provider": ic.get("provider", ""),
+            })
+        ssl_certs.sort(key=lambda c: c["days"] if c["days"] is not None else 9999)
     except Exception:
         pass
 
