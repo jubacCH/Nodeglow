@@ -66,6 +66,7 @@ const integrationTypes = [
   { slug: 'redfish', label: 'Redfish' },
   { slug: 'swisscom', label: 'Swisscom' },
   { slug: 'cloudflare', label: 'Cloudflare' },
+  { slug: 'npm', label: 'Nginx Proxy Manager' },
 ];
 
 // All searchable items for global search

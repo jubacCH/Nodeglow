@@ -25,6 +25,7 @@ import { UpsDetail } from '@/components/integrations/UpsDetail';
 import { RedfishDetail } from '@/components/integrations/RedfishDetail';
 import { SwisscomDetail } from '@/components/integrations/SwisscomDetail';
 import { CloudflareDetail } from '@/components/integrations/CloudflareDetail';
+import { NpmDetail } from '@/components/integrations/NpmDetail';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
@@ -48,6 +49,7 @@ const detailComponents: Record<string, React.ComponentType<{ data: any }>> = {
   redfish: RedfishDetail,
   swisscom: SwisscomDetail,
   cloudflare: CloudflareDetail,
+  npm: NpmDetail,
 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
