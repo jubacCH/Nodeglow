@@ -449,23 +449,39 @@ export default function DashboardPage() {
           <GlassCard className="p-5">
             <WidgetHeader icon={Lock} iconColor="text-emerald-400" title="SSL Certificates" />
             <div className="space-y-1 max-h-[160px] overflow-y-auto">
-              {data!.ssl_certs.map((cert) => {
+              {data!.ssl_certs.map((cert, i) => {
                 const color = cert.days === null ? 'text-slate-500'
                   : cert.days <= 7 ? 'text-red-400'
                   : cert.days <= 30 ? 'text-amber-400'
                   : 'text-emerald-400';
-                return (
-                  <Link
-                    key={cert.host_id}
-                    href={`/hosts/${cert.host_id}`}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full ${cert.days === null ? 'bg-slate-500' : cert.days <= 7 ? 'bg-red-400' : cert.days <= 30 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                const dotColor = cert.days === null ? 'bg-slate-500' : cert.days <= 7 ? 'bg-red-400' : cert.days <= 30 ? 'bg-amber-400' : 'bg-emerald-400';
+                const inner = (
+                  <>
+                    <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
                     <span className="flex-1 text-sm text-slate-200 truncate">{cert.name}</span>
+                    {cert.source && cert.source !== 'host' && (
+                      <span className="text-[10px] text-slate-600">{cert.source}</span>
+                    )}
                     <span className={`text-xs font-mono ${color}`}>
                       {cert.days !== null ? `${cert.days}d` : '?'}
                     </span>
+                  </>
+                );
+                return cert.host_id ? (
+                  <Link
+                    key={`host-${cert.host_id}`}
+                    href={`/hosts/${cert.host_id}`}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
+                  >
+                    {inner}
                   </Link>
+                ) : (
+                  <div
+                    key={`int-${i}`}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+                  >
+                    {inner}
+                  </div>
                 );
               })}
             </div>
