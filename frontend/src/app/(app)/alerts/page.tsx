@@ -9,8 +9,9 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useIncidents } from '@/hooks/queries/useAlerts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post } from '@/lib/api';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Wrench, Clock, ShieldCheck, Bell, Search } from 'lucide-react';
 import { timeAgo } from '@/lib/utils';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -26,9 +27,14 @@ interface MaintenanceHost {
 
 type Tab = 'alerts' | 'incidents' | 'maintenance';
 
-export default function AlertsPage() {
+const VALID_TABS: Tab[] = ['alerts', 'incidents', 'maintenance'];
+
+function AlertsPageInner() {
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get('tab') as Tab | null;
+  const initialTab = tabParam && VALID_TABS.includes(tabParam) ? tabParam : 'alerts';
   useEffect(() => { document.title = 'Alerts | Nodeglow'; }, []);
-  const [activeTab, setActiveTab] = useState<Tab>('alerts');
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [incidentSearch, setIncidentSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -302,5 +308,13 @@ export default function AlertsPage() {
       )}
       {ConfirmDialogElement}
     </div>
+  );
+}
+
+export default function AlertsPage() {
+  return (
+    <Suspense>
+      <AlertsPageInner />
+    </Suspense>
   );
 }

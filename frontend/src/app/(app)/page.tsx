@@ -71,12 +71,12 @@ export default function DashboardPage() {
 
       {/* ── Quick Stats ── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} />
-        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} />
-        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} />
-        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" tint="bg-amber-500/10" alert={!!data?.active_incidents} loading={isLoading} />
-        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" tint="bg-violet-500/10" loading={isLoading} />
-        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} />
+        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} href="/hosts?status=online" />
+        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} href="/hosts?status=offline" />
+        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} href="/hosts" />
+        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" tint="bg-amber-500/10" alert={!!data?.active_incidents} loading={isLoading} href="/alerts?tab=incidents" />
+        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" tint="bg-violet-500/10" loading={isLoading} href="/syslog" />
+        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} href="/hosts" />
       </div>
 
       {/* ── Gravity Widget (Hero) ── */}
@@ -514,6 +514,7 @@ function StatCard({
   loading,
   suffix,
   alert,
+  href,
 }: {
   icon: React.ElementType;
   label: string;
@@ -523,11 +524,13 @@ function StatCard({
   loading: boolean;
   suffix?: string;
   alert?: boolean;
+  href?: string;
 }) {
-  return (
+  const card = (
     <GlassCard className={cn(
       'p-5 flex items-center gap-4 stat-card-hover relative overflow-hidden',
       alert && value ? 'border-red-500/25' : '',
+      href && 'cursor-pointer',
     )}>
       <div className={`absolute top-0 left-0 right-0 h-[2px] ${tint?.replace('/10', '/40') || ''}`} />
       <div className={`p-3 rounded-xl ${tint || 'bg-white/[0.06]'} ${color}`}>
@@ -545,6 +548,8 @@ function StatCard({
       </div>
     </GlassCard>
   );
+  if (href) return <Link href={href}>{card}</Link>;
+  return card;
 }
 
 /* ── Live Syslog Widget ── */
