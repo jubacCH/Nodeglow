@@ -23,6 +23,26 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
+function WidgetHeader({ icon: Icon, iconColor, title, trailing }: {
+  icon: React.ElementType;
+  iconColor: string;
+  title: string;
+  trailing?: React.ReactNode;
+}) {
+  const tintBg = iconColor
+    .replace('text-', 'bg-')
+    .replace('-400', '-500/15');
+  return (
+    <div className="flex items-center gap-2.5 mb-4 pb-3 border-b" style={{ borderColor: 'var(--ng-card-border)' }}>
+      <div className={`p-1.5 rounded-lg ${tintBg}`}>
+        <Icon size={16} className={iconColor} />
+      </div>
+      <h3 className="text-sm font-semibold text-slate-200 flex-1">{title}</h3>
+      {trailing}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   useEffect(() => { document.title = 'Dashboard | Nodeglow'; }, []);
   const { data, isLoading } = useDashboard();
@@ -46,9 +66,7 @@ export default function DashboardPage() {
       defaultLayout: { x: 0, y: 0, w: 1, h: 4, minW: 1, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <Server size={16} className="text-sky-400" /> Hosts
-          </h3>
+          <WidgetHeader icon={Server} iconColor="text-sky-400" title="Hosts" />
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
@@ -59,7 +77,7 @@ export default function DashboardPage() {
                 <Link
                   key={h.host.id}
                   href={`/hosts/${h.host.id}`}
-                  className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-white/[0.04] transition-colors"
+                  className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                 >
                   <StatusDot status={h.host.maintenance ? 'maintenance' : h.online === null ? 'unknown' : h.online === false ? 'offline' : h.host.port_error ? 'error' : 'online'} />
                   <span className="flex-1 text-sm text-slate-200 truncate">{h.host.name}</span>
@@ -81,9 +99,7 @@ export default function DashboardPage() {
       defaultLayout: { x: 1, y: 0, w: 1, h: 4, minW: 1, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <Zap size={16} className="text-violet-400" /> Integrations
-          </h3>
+          <WidgetHeader icon={Zap} iconColor="text-violet-400" title="Integrations" />
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
@@ -94,7 +110,7 @@ export default function DashboardPage() {
                 <Link
                   key={i}
                   href={int.single_instance ? `/integration/${int.type}` : `/integration/${int.type}/${int.config_id}`}
-                  className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-white/[0.04] transition-colors"
+                  className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                 >
                   <StatusDot status={int.ok ? 'online' : int.ok === false ? 'offline' : 'unknown'} />
                   <span className="flex-1 text-sm truncate" style={{ color: int.color }}>
@@ -116,9 +132,7 @@ export default function DashboardPage() {
       defaultLayout: { x: 2, y: 0, w: 1, h: 4, minW: 1, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <ShieldAlert size={16} className="text-red-400" /> Recent Incidents
-          </h3>
+          <WidgetHeader icon={ShieldAlert} iconColor="text-red-400" title="Recent Incidents" />
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
@@ -129,7 +143,7 @@ export default function DashboardPage() {
                 <Link
                   key={inc.id}
                   href={`/incidents/${inc.id}`}
-                  className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-white/[0.04] transition-colors"
+                  className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/[0.04] transition-colors"
                 >
                   <Badge variant="severity" severity={inc.severity as 'critical' | 'warning' | 'info'}>
                     {inc.severity}
@@ -160,14 +174,13 @@ export default function DashboardPage() {
       defaultLayout: { x: 0, y: 4, w: 2, h: 3, minW: 1, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <ArrowUpDown size={16} className="text-sky-400" /> Syslog Rate (24h)
-            {data?.syslog_stats && (
-              <span className="ml-auto text-xs text-slate-500 font-mono">
+          <WidgetHeader icon={ArrowUpDown} iconColor="text-sky-400" title="Syslog Rate (24h)" trailing={
+            data?.syslog_stats ? (
+              <span className="text-xs text-slate-500 font-mono">
                 {data.syslog_stats.total_24h.toLocaleString()} total
               </span>
-            )}
-          </h3>
+            ) : undefined
+          } />
           {isLoading || !data?.syslog_stats?.rate_data ? (
             <Skeleton className="h-[180px] w-full" />
           ) : (
@@ -200,12 +213,11 @@ export default function DashboardPage() {
         defaultLayout: { x: 2, y: 4, w: 1, h: 3, minW: 1, minH: 2 },
         render: () => (
           <>
-            <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <AlertTriangle size={16} className="text-amber-400" /> Anomalies
-              {anomalyCount > 0 && (
-                <span className="ml-auto text-xs font-mono text-amber-400">{anomalyCount}</span>
-              )}
-            </h3>
+            <WidgetHeader icon={AlertTriangle} iconColor="text-amber-400" title="Anomalies" trailing={
+              anomalyCount > 0 ? (
+                <span className="text-xs font-mono text-amber-400">{anomalyCount}</span>
+              ) : undefined
+            } />
             {isLoading ? (
               <Skeleton className="h-[200px] w-full" />
             ) : anomalyCount === 0 ? (
@@ -249,9 +261,7 @@ export default function DashboardPage() {
       defaultLayout: { x: 0, y: 7, w: 3, h: 3, minW: 2, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <Activity size={16} className="text-sky-400" /> 30-Day Availability
-          </h3>
+          <WidgetHeader icon={Activity} iconColor="text-sky-400" title="30-Day Availability" />
           {isLoading ? (
             <Skeleton className="h-40 w-full" />
           ) : data?.heatmap_data ? (
@@ -270,9 +280,7 @@ export default function DashboardPage() {
       defaultLayout: { x: 0, y: 10, w: 1, h: 3, minW: 1, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <Trophy size={16} className="text-amber-400" /> Uptime Ranking
-          </h3>
+          <WidgetHeader icon={Trophy} iconColor="text-amber-400" title="Uptime Ranking" />
           {isLoading ? (
             <Skeleton className="h-[200px] w-full" />
           ) : data?.uptime_ranking?.length ? (
@@ -285,7 +293,7 @@ export default function DashboardPage() {
                   <Link
                     key={h.host_id}
                     href={`/hosts/${h.host_id}`}
-                    className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-white/[0.04] transition-colors relative overflow-hidden"
+                    className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-white/[0.04] transition-colors relative overflow-hidden"
                   >
                     <div className={`absolute inset-0 ${barColor}`} style={{ width: `${pct}%` }} />
                     <span className="relative text-xs text-slate-500 w-4 text-right">{i + 1}</span>
@@ -309,9 +317,7 @@ export default function DashboardPage() {
       defaultLayout: { x: 1, y: 10, w: 1, h: 3, minW: 1, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <Timer size={16} className="text-rose-400" /> Highest Latency
-          </h3>
+          <WidgetHeader icon={Timer} iconColor="text-rose-400" title="Highest Latency" />
           {isLoading ? (
             <Skeleton className="h-[200px] w-full" />
           ) : data?.top_latency?.length ? (
@@ -322,7 +328,7 @@ export default function DashboardPage() {
                   <Link
                     key={h.id}
                     href={`/hosts/${h.id}`}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/[0.04] transition-colors"
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                   >
                     <span className="text-xs text-slate-500 w-4 text-right">{i + 1}</span>
                     <span className="flex-1 text-sm text-slate-200 truncate">{h.name}</span>
@@ -346,9 +352,7 @@ export default function DashboardPage() {
         defaultLayout: { x: 2, y: 10, w: 1, h: 3, minW: 1, minH: 2 },
         render: () => (
           <>
-            <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <HardDrive size={16} className="text-sky-400" /> Storage
-            </h3>
+            <WidgetHeader icon={HardDrive} iconColor="text-sky-400" title="Storage" />
             <div className="space-y-3 max-h-[260px] overflow-y-auto">
               {data!.storage_pools.map((pool, i) => (
                 <div key={i}>
@@ -361,9 +365,9 @@ export default function DashboardPage() {
                       {pool.pct.toFixed(0)}%
                     </span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                  <div className="h-2 rounded-lg bg-white/[0.06] overflow-hidden">
                     <div
-                      className="h-full rounded-full transition-all"
+                      className="h-full rounded-lg transition-all"
                       style={{
                         width: `${Math.min(pool.pct, 100)}%`,
                         background: pool.pct >= 90 ? '#F87171' : pool.pct >= 75 ? '#FBBF24' : '#34D399',
@@ -394,9 +398,7 @@ export default function DashboardPage() {
         defaultLayout: { x: 0, y: 13, w: 1, h: 2, minW: 1, minH: 2 },
         render: () => (
           <>
-            <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <Wifi size={16} className="text-blue-400" /> Speedtest
-            </h3>
+            <WidgetHeader icon={Wifi} iconColor="text-blue-400" title="Speedtest" />
             <div className="grid grid-cols-3 gap-3 text-center">
               <div>
                 <p className="text-2xl font-bold text-sky-400">{Math.round(data!.speedtest_data!.download_mbps)}</p>
@@ -428,13 +430,14 @@ export default function DashboardPage() {
         defaultLayout: { x: 1, y: 13, w: 1, h: 2, minW: 1, minH: 2 },
         render: () => (
           <>
-            <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <BatteryCharging size={16} className={data!.ups_data!.on_battery ? 'text-amber-400' : 'text-emerald-400'} />
-              UPS
-              {data!.ups_data!.on_battery && (
+            <WidgetHeader
+              icon={BatteryCharging}
+              iconColor={data!.ups_data!.on_battery ? 'text-amber-400' : 'text-emerald-400'}
+              title="UPS"
+              trailing={data!.ups_data!.on_battery ? (
                 <Badge variant="severity" severity="warning">On Battery</Badge>
-              )}
-            </h3>
+              ) : undefined}
+            />
             <div className="space-y-3">
               {data!.ups_data!.units.map((unit, i) => (
                 <div key={i} className="space-y-2">
@@ -474,9 +477,7 @@ export default function DashboardPage() {
         defaultLayout: { x: 2, y: 13, w: 1, h: 2, minW: 1, minH: 2 },
         render: () => (
           <>
-            <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <Lock size={16} className="text-emerald-400" /> SSL Certificates
-            </h3>
+            <WidgetHeader icon={Lock} iconColor="text-emerald-400" title="SSL Certificates" />
             <div className="space-y-1 max-h-[160px] overflow-y-auto">
               {data!.ssl_certs.map((cert) => {
                 const color = cert.days === null ? 'text-slate-500'
@@ -487,7 +488,7 @@ export default function DashboardPage() {
                   <Link
                     key={cert.host_id}
                     href={`/hosts/${cert.host_id}`}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/[0.04] transition-colors"
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                   >
                     <span className={`w-1.5 h-1.5 rounded-full ${cert.days === null ? 'bg-slate-500' : cert.days <= 7 ? 'bg-red-400' : cert.days <= 30 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
                     <span className="flex-1 text-sm text-slate-200 truncate">{cert.name}</span>
@@ -511,9 +512,7 @@ export default function DashboardPage() {
         defaultLayout: { x: 0, y: 15, w: 1, h: 2, minW: 1, minH: 2 },
         render: () => (
           <>
-            <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-              <Container size={16} className="text-cyan-400" /> Containers
-            </h3>
+            <WidgetHeader icon={Container} iconColor="text-cyan-400" title="Containers" />
             <div className="grid grid-cols-2 gap-3 text-center mb-3">
               <div>
                 <p className="text-2xl font-bold text-emerald-400">{data!.container_data!.running}</p>
@@ -548,9 +547,7 @@ export default function DashboardPage() {
       defaultLayout: { x: 0, y: 17, w: 2, h: 3, minW: 1, minH: 2 },
       render: () => (
         <>
-          <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <TrendingUp size={16} className="text-amber-400" /> Alert Trends (14d)
-          </h3>
+          <WidgetHeader icon={TrendingUp} iconColor="text-amber-400" title="Alert Trends (14d)" />
           {isLoading || !data?.incident_trend ? (
             <Skeleton className="h-[180px] w-full" />
           ) : data.incident_trend.every((d) => d.critical === 0 && d.warning === 0 && d.info === 0) ? (
@@ -602,7 +599,7 @@ export default function DashboardPage() {
       />
 
       {/* ── Quick Stats ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
         <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} />
         <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} />
         <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} />
@@ -645,14 +642,15 @@ function StatCard({
 }) {
   return (
     <GlassCard className={cn(
-      'p-4 flex items-center gap-4 stat-card-hover',
-      alert && value ? 'border-red-500/20' : '',
+      'p-5 flex items-center gap-4 stat-card-hover relative overflow-hidden',
+      alert && value ? 'border-red-500/25' : '',
     )}>
-      <div className={`p-2.5 rounded-xl ${tint || 'bg-white/[0.06]'} ${color}`}>
-        <Icon size={20} />
+      <div className={`absolute top-0 left-0 right-0 h-[2px] ${tint?.replace('/10', '/40') || ''}`} />
+      <div className={`p-3 rounded-xl ${tint || 'bg-white/[0.06]'} ${color}`}>
+        <Icon size={22} />
       </div>
-      <div>
-        <p className="text-[11px] text-slate-500 uppercase tracking-wider font-medium">{label}</p>
+      <div className="flex-1 min-w-0">
+        <p className="text-[11px] text-slate-500 uppercase tracking-wider font-medium mb-0.5">{label}</p>
         {loading ? (
           <Skeleton className="h-8 w-16 mt-1" />
         ) : (
@@ -694,9 +692,12 @@ function LiveSyslogWidget() {
   return (
     <>
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-medium text-slate-300 flex items-center gap-2">
-          <Radio size={16} className="text-cyan-400" /> Live Syslog
-        </h3>
+        <div className="flex items-center gap-2.5">
+          <div className="p-1.5 rounded-lg bg-cyan-500/15">
+            <Radio size={16} className="text-cyan-400" />
+          </div>
+          <h3 className="text-sm font-semibold text-slate-200">Live Syslog</h3>
+        </div>
         <div className="flex items-center gap-2">
           {enabled && messages.length > 0 && (
             <button
