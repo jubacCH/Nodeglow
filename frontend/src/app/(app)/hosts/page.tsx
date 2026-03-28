@@ -127,7 +127,8 @@ function HostsPageInner() {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [bulkForm, setBulkForm] = useState({ check_type: '', enabled: '', latency_threshold_ms: '' });
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const statusParam = searchParams.get('status') ?? 'all';
+  const [statusFilter, setStatusFilter] = useState<string>(statusParam);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
   const { confirm, ConfirmDialogElement } = useConfirm();
