@@ -1332,18 +1332,19 @@ async def query_syslog(
         extra = f" AND severity <= {int(severity)}"
 
     rows = await ch_query(
-        f"""SELECT timestamp, source_ip, hostname, facility, severity,
+        f"""SELECT timestamp, received_at, source_ip, hostname, facility, severity,
                    app_name, message, host_id, tags, noise_score,
                    extracted_fields, geo_country, geo_city
             FROM syslog_messages
             WHERE {where}{extra}
-            ORDER BY timestamp DESC
+            ORDER BY received_at DESC
             LIMIT {int(limit)}""",
         params,
     )
     return [
         {
-            "timestamp": r["timestamp"].isoformat() if hasattr(r["timestamp"], "isoformat") else str(r["timestamp"]),
+            "timestamp": r["received_at"].isoformat() if hasattr(r["received_at"], "isoformat") else str(r["received_at"]),
+            "original_timestamp": r["timestamp"].isoformat() if hasattr(r["timestamp"], "isoformat") else str(r["timestamp"]),
             "source_ip": r["source_ip"],
             "hostname": r["hostname"],
             "facility": r["facility"],
