@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { formatUptime } from '@/lib/utils';
 import { post } from '@/lib/api';
-import { ScrollText, Copy, Check } from 'lucide-react';
+import { ScrollText, Copy, Check, CheckCircle, XCircle } from 'lucide-react';
 import Link from 'next/link';
 
 interface ProxmoxTotals {
@@ -92,7 +92,10 @@ function guestStatusColor(status: string): string {
 
 interface DeployResult {
   ok: boolean;
-  results: { vmid: number; name: string }[];
+  mode?: 'ssh' | 'script';
+  deployed?: number;
+  failed?: number;
+  results: { vmid: number; name: string; status?: string; detail?: string; error?: string }[];
   manual_script: string | null;
   syslog_target?: string;
   message?: string;
@@ -205,57 +208,86 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
               <h3 className="text-sm font-medium text-slate-300">Log Forwarding</h3>
             </div>
             <Button size="sm" disabled={deploying} onClick={deploySyslog}>
-              {deploying ? 'Loading...' : 'Generate Deploy Script'}
+              {deploying ? 'Deploying...' : 'Deploy to all LXCs'}
             </Button>
           </div>
           <p className="text-xs text-slate-500 mb-3">
-            Generates a script to deploy on your Proxmox node. Configures <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker syslog driver</span> (container logs) on all running LXCs.
+            Configures <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker syslog driver</span> (container logs) on all running LXCs.
+            {' '}Requires SSH key in Proxmox integration config for automatic deploy.
           </p>
 
           {deployResult && (
             <div className="space-y-3">
-              {/* LXC list */}
-              {deployResult.results.length > 0 && (
-                <div className="p-3 rounded-lg bg-sky-500/5 border border-sky-500/20">
-                  <p className="text-xs text-sky-300 mb-2">
-                    {deployResult.results.length} running LXC(s) found
-                    {deployResult.syslog_target && <span className="text-slate-500"> → {deployResult.syslog_target}</span>}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
+              {/* SSH mode: per-LXC results */}
+              {deployResult.mode === 'ssh' && (
+                <>
+                  <div className={`p-3 rounded-lg text-sm ${deployResult.failed === 0 ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300' : 'bg-amber-500/10 border border-amber-500/20 text-amber-300'}`}>
+                    Deployed: {deployResult.deployed} | Failed: {deployResult.failed}
+                    {deployResult.syslog_target && <span className="text-xs text-slate-500 ml-2">→ {deployResult.syslog_target}</span>}
+                  </div>
+                  <div className="space-y-1 max-h-[250px] overflow-y-auto">
                     {deployResult.results.map((r) => (
-                      <span key={r.vmid} className="px-2 py-0.5 rounded bg-white/[0.06] text-[11px] text-slate-300">
-                        CT {r.vmid} <span className="text-slate-500">{r.name}</span>
-                      </span>
+                      <div key={r.vmid} className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-white/[0.02]">
+                        {r.status === 'ok' ? (
+                          <CheckCircle size={12} className="text-emerald-400 shrink-0" />
+                        ) : (
+                          <XCircle size={12} className="text-red-400 shrink-0" />
+                        )}
+                        <span className="text-slate-400 w-12">CT {r.vmid}</span>
+                        <span className="text-slate-200 flex-1">{r.name}</span>
+                        {r.detail && <span className="text-emerald-400/70 text-[10px]">{r.detail}</span>}
+                        {r.error && <span className="text-red-400 text-[10px] truncate max-w-[250px]">{r.error}</span>}
+                      </div>
                     ))}
                   </div>
-                </div>
+                </>
               )}
 
-              {deployResult.message && !deployResult.manual_script && (
+              {/* Script mode: show LXC list + copyable script */}
+              {deployResult.mode === 'script' && (
+                <>
+                  {deployResult.results.length > 0 && (
+                    <div className="p-3 rounded-lg bg-sky-500/5 border border-sky-500/20">
+                      <p className="text-xs text-sky-300 mb-2">
+                        {deployResult.results.length} running LXC(s) — add an SSH key in the Proxmox config to deploy automatically
+                        {deployResult.syslog_target && <span className="text-slate-500"> → {deployResult.syslog_target}</span>}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {deployResult.results.map((r) => (
+                          <span key={r.vmid} className="px-2 py-0.5 rounded bg-white/[0.06] text-[11px] text-slate-300">
+                            CT {r.vmid} <span className="text-slate-500">{r.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {deployResult.manual_script && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs text-slate-400">Paste into Proxmox node shell:</span>
+                        <button
+                          className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
+                          onClick={() => {
+                            navigator.clipboard.writeText(deployResult.manual_script!);
+                            setCopied(true);
+                            setTimeout(() => setCopied(false), 2000);
+                          }}
+                        >
+                          {copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
+                        </button>
+                      </div>
+                      <pre className="text-[11px] text-slate-300 font-mono bg-black/30 rounded-md p-3 overflow-x-auto whitespace-pre">
+                        {deployResult.manual_script}
+                      </pre>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* No mode (message only) */}
+              {!deployResult.mode && deployResult.message && (
                 <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
                   {deployResult.message}
-                </div>
-              )}
-
-              {/* Deploy script */}
-              {deployResult.manual_script && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-slate-400">Paste this into your Proxmox node shell:</span>
-                    <button
-                      className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
-                      onClick={() => {
-                        navigator.clipboard.writeText(deployResult.manual_script!);
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                      }}
-                    >
-                      {copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
-                    </button>
-                  </div>
-                  <pre className="text-[11px] text-slate-300 font-mono bg-black/30 rounded-md p-3 overflow-x-auto whitespace-pre">
-                    {deployResult.manual_script}
-                  </pre>
                 </div>
               )}
             </div>
