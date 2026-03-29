@@ -185,6 +185,8 @@ async def run_ping_checks():
     # Batch-write all results in one transaction
     import json as _json
     now = datetime.utcnow()
+    went_offline: list[str] = []
+    came_online: list[str] = []
     async with AsyncSessionLocal() as db:
         for host, online, port_error, latency, detail in results:
             db.add(PingResult(
@@ -204,24 +206,27 @@ async def run_ping_checks():
             from services.websocket import broadcast_ping_update
             _asyncio.create_task(broadcast_ping_update(host.id, host.name, online, latency))
 
-            # Notify on state change
+            # Collect state changes for batched notification
             prev = prev_success.get(host.id)
             if prev is True and not online:
-                from notifications import notify
-                _asyncio.create_task(notify(
-                    f"Host offline: {host.name}",
-                    f"Host {host.hostname} is no longer reachable.",
-                    "critical"
-                ))
+                went_offline.append(host.name)
             elif prev is False and online:
-                from notifications import notify
-                _asyncio.create_task(notify(
-                    f"Host back online: {host.name}",
-                    f"Host {host.hostname} is reachable again.",
-                    "info"
-                ))
+                came_online.append(host.name)
 
         await db.commit()
+
+    # Send batched notifications (one message per direction)
+    from notifications import notify
+    if went_offline:
+        names = ", ".join(went_offline)
+        title = f"Host offline: {went_offline[0]}" if len(went_offline) == 1 \
+            else f"{len(went_offline)} hosts went offline"
+        _asyncio.create_task(notify(title, names, "critical"))
+    if came_online:
+        names = ", ".join(came_online)
+        title = f"Host back online: {came_online[0]}" if len(came_online) == 1 \
+            else f"{len(came_online)} hosts back online"
+        _asyncio.create_task(notify(title, names, "info"))
 
     logger.debug("Ping check done for %d hosts (concurrent)", len(active_hosts))
 
