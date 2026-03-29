@@ -673,7 +673,33 @@ async def deploy_syslog_to_lxcs(
     )
 
     resources = await api.cluster_resources()
-    lxcs = [r for r in resources if r.get("type") == "lxc" and r.get("status") == "running"]
+
+    # Exclude the Nodeglow LXC itself (syslog receiver can't forward to itself)
+    # Resolve nodeglow_ip to hostname and match against Proxmox LXC names
+    _self_names = set()
+    try:
+        import socket as _socket
+        resolved = _socket.getfqdn(nodeglow_ip)
+        _self_names.add(resolved.lower())
+        # Also try reverse DNS
+        try:
+            rev = _socket.gethostbyaddr(nodeglow_ip)[0]
+            _self_names.add(rev.lower())
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    lxcs = []
+    skipped_self = None
+    for r in resources:
+        if r.get("type") != "lxc" or r.get("status") != "running":
+            continue
+        name = (r.get("name") or "").lower()
+        if name and name in _self_names:
+            skipped_self = r.get("name", f"ct-{r.get('vmid')}")
+            continue
+        lxcs.append(r)
 
     if not lxcs:
         return JSONResponse({"ok": True, "results": [], "deployed": 0, "failed": 0,
@@ -766,6 +792,7 @@ async def deploy_syslog_to_lxcs(
             "results": results,
             "manual_script": None,
             "syslog_target": syslog_target,
+            "skipped_self": skipped_self,
         })
 
     # ── No SSH → generate script ─────────────────────────────────────────
@@ -813,4 +840,5 @@ async def deploy_syslog_to_lxcs(
         "results": results,
         "manual_script": manual_script,
         "syslog_target": syslog_target,
+        "skipped_self": skipped_self,
     })

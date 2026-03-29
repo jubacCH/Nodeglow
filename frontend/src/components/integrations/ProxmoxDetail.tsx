@@ -98,6 +98,7 @@ interface DeployResult {
   results: { vmid: number; name: string; status?: string; detail?: string; error?: string }[];
   manual_script: string | null;
   syslog_target?: string;
+  skipped_self?: string;
   message?: string;
 }
 
@@ -224,6 +225,7 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
                   <div className={`p-3 rounded-lg text-sm ${deployResult.failed === 0 ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300' : 'bg-amber-500/10 border border-amber-500/20 text-amber-300'}`}>
                     Deployed: {deployResult.deployed} | Failed: {deployResult.failed}
                     {deployResult.syslog_target && <span className="text-xs text-slate-500 ml-2">→ {deployResult.syslog_target}</span>}
+                    {deployResult.skipped_self && <span className="text-xs text-slate-500 ml-2">(skipped {deployResult.skipped_self} — Nodeglow host)</span>}
                   </div>
                   <div className="space-y-1 max-h-[250px] overflow-y-auto">
                     {deployResult.results.map((r) => (
