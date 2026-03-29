@@ -5,11 +5,10 @@ import { SyslogLiveTail } from '@/components/syslog/SyslogLiveTail';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useSyslog } from '@/hooks/queries/useSyslog';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { MessageSquare, BarChart3, Brain, ChevronRight, ChevronDown, MapPin } from 'lucide-react';
+import { MessageSquare, BarChart3, Brain, ChevronRight, ChevronDown, ChevronUp, MapPin, ArrowUpDown } from 'lucide-react';
 import { ExportButton } from '@/components/ui/ExportButton';
-// timeAgo not needed — syslog shows absolute time
 
 const SEVERITY_LABELS: Record<number, string> = {
   0: 'Emergency',
@@ -33,21 +32,67 @@ const SEVERITY_COLORS: Record<number, string> = {
   7: 'bg-slate-500 text-white',
 };
 
+type SortKey = 'timestamp' | 'severity' | 'hostname';
+type SortDir = 'asc' | 'desc';
+
+function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
+  if (!active) return <ArrowUpDown size={12} className="text-slate-600" />;
+  return dir === 'asc'
+    ? <ChevronUp size={12} className="text-sky-400" />
+    : <ChevronDown size={12} className="text-sky-400" />;
+}
+
 export default function SyslogPage() {
   useEffect(() => { document.title = 'Syslog | Nodeglow'; }, []);
   const [search, setSearch] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState<string | undefined>(undefined);
+  const [selectedHost, setSelectedHost] = useState<string>('');
   const [liveEnabled, setLiveEnabled] = useState(false);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>('timestamp');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
   const { data: messages, isLoading } = useSyslog({
     severity: selectedSeverity,
     limit: 200,
   });
 
-  const filtered = messages?.filter((m) =>
-    !search || m.message.toLowerCase().includes(search.toLowerCase()) ||
-    m.hostname.toLowerCase().includes(search.toLowerCase())
-  );
+  // Unique hosts for filter dropdown
+  const hosts = useMemo(() => {
+    if (!messages) return [];
+    const s = new Set(messages.map((m) => m.hostname));
+    return Array.from(s).sort();
+  }, [messages]);
+
+  // Filter + sort
+  const filtered = useMemo(() => {
+    if (!messages) return [];
+    let result = messages.filter((m) => {
+      if (search && !m.message.toLowerCase().includes(search.toLowerCase()) &&
+          !m.hostname.toLowerCase().includes(search.toLowerCase())) return false;
+      if (selectedHost && m.hostname !== selectedHost) return false;
+      return true;
+    });
+
+    result = [...result].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'timestamp') cmp = a.timestamp.localeCompare(b.timestamp);
+      else if (sortKey === 'severity') cmp = a.severity - b.severity;
+      else if (sortKey === 'hostname') cmp = a.hostname.localeCompare(b.hostname);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+
+    return result;
+  }, [messages, search, selectedHost, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'severity' ? 'asc' : 'desc');
+    }
+  }
 
   return (
     <div>
@@ -114,15 +159,25 @@ export default function SyslogPage() {
         severity={selectedSeverity}
       />
 
-      {/* Search bar */}
-      <div className="mb-4">
+      {/* Search + Host filter */}
+      <div className="flex gap-3 mb-4">
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search messages or hosts..."
-          className="w-full px-4 py-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500/50"
+          className="flex-1 px-4 py-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500/50"
         />
+        <select
+          value={selectedHost}
+          onChange={(e) => setSelectedHost(e.target.value)}
+          className="px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 min-w-[160px]"
+        >
+          <option value="">All Hosts</option>
+          {hosts.map((h) => (
+            <option key={h} value={h}>{h}</option>
+          ))}
+        </select>
       </div>
 
       {/* Severity filter pills */}
@@ -158,9 +213,15 @@ export default function SyslogPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/[0.06]">
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Timestamp</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Sev</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Host</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-300" onClick={() => toggleSort('timestamp')}>
+                  <span className="flex items-center gap-1">Timestamp <SortIcon active={sortKey === 'timestamp'} dir={sortDir} /></span>
+                </th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-300" onClick={() => toggleSort('severity')}>
+                  <span className="flex items-center gap-1">Sev <SortIcon active={sortKey === 'severity'} dir={sortDir} /></span>
+                </th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-300" onClick={() => toggleSort('hostname')}>
+                  <span className="flex items-center gap-1">Host <SortIcon active={sortKey === 'hostname'} dir={sortDir} /></span>
+                </th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Message</th>
               </tr>
             </thead>
@@ -253,8 +314,8 @@ export default function SyslogPage() {
                       <MessageSquare size={40} className="text-slate-600" />
                       <p className="text-sm font-medium text-slate-300">No syslog messages</p>
                       <p className="text-xs text-slate-500">
-                        {search || selectedSeverity !== undefined
-                          ? 'Try adjusting your search or severity filter.'
+                        {search || selectedSeverity !== undefined || selectedHost
+                          ? 'Try adjusting your search or filters.'
                           : 'Configure a syslog source to start receiving messages.'}
                       </p>
                     </div>
