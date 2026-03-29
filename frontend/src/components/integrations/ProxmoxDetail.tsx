@@ -118,7 +118,7 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
     setDeploying(true);
     setDeployResult(null);
     try {
-      const res = await post<DeployResult>(`/api/v1/integrations/proxmox/${configId}/deploy-syslog`, {});
+      const res = await post<DeployResult>(`/api/v1/integrations/proxmox/${configId}/deploy-agent`, {});
       setDeployResult(res);
     } catch {
       setDeployResult({ ok: false, results: [], manual_script: null, message: 'Request failed' });
@@ -206,16 +206,15 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <ScrollText size={16} className="text-sky-400" />
-              <h3 className="text-sm font-medium text-slate-300">Log Forwarding</h3>
+              <h3 className="text-sm font-medium text-slate-300">Agent Deployment</h3>
             </div>
             <Button size="sm" disabled={deploying} onClick={deploySyslog}>
-              {deploying ? 'Deploying...' : 'Deploy to all LXCs'}
+              {deploying ? 'Installing...' : 'Install Agent on all LXCs'}
             </Button>
           </div>
           <p className="text-xs text-slate-500 mb-3">
-            Configures <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker → journald</span> (container logs) on all running LXCs.
-            Docker has no network dependency — logs flow locally via journald to rsyslog.
-            {' '}Add SSH key in Proxmox config for automatic deploy.
+            Installs the Nodeglow agent on all running LXCs. The agent collects <span className="text-slate-400">system metrics</span>, <span className="text-slate-400">system logs</span>, and <span className="text-slate-400">Docker container logs</span> — auto-enrolls and auto-updates.
+            {' '}Add SSH key in Proxmox config for automatic install.
           </p>
 
           {deployResult && (
@@ -252,7 +251,7 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
                   {deployResult.results.length > 0 && (
                     <div className="p-3 rounded-lg bg-sky-500/5 border border-sky-500/20">
                       <p className="text-xs text-sky-300 mb-2">
-                        {deployResult.results.length} running LXC(s) — add an SSH key in the Proxmox config to deploy automatically
+                        {deployResult.results.length} running LXC(s) — add SSH key in Proxmox config to install automatically
                         {deployResult.syslog_target && <span className="text-slate-500"> → {deployResult.syslog_target}</span>}
                       </p>
                       <div className="flex flex-wrap gap-2">

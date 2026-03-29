@@ -624,16 +624,16 @@ async def api_list_integrations(db: AsyncSession = Depends(get_db)):
 # ── Proxmox: Deploy Syslog Config ───────────────────────────────────────────
 
 
-@router.post("/api/v1/integrations/proxmox/{config_id}/deploy-syslog")
-async def deploy_syslog_to_lxcs(
+@router.post("/api/v1/integrations/proxmox/{config_id}/deploy-agent")
+async def deploy_agent_to_lxcs(
     config_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Deploy rsyslog + Docker syslog config to all running LXCs.
+    """Deploy Nodeglow agent to all running LXCs via SSH → pct exec.
 
-    If SSH credentials are configured, executes directly via SSH → pct exec.
-    Otherwise returns a ready-to-paste shell script.
+    The agent auto-enrolls, collects system metrics, system logs (journalctl),
+    and Docker container logs — then reports everything to Nodeglow.
     """
     import asyncio
     import socket
@@ -649,7 +649,6 @@ async def deploy_syslog_to_lxcs(
         return JSONResponse({"error": "Proxmox config not found"}, status_code=404)
 
     config_dict = int_svc.decrypt_config(cfg.config_json)
-    syslog_port = await get_setting(db, "syslog_port", "1514")
 
     # Detect Nodeglow's internal IP
     nodeglow_ip = await get_setting(db, "nodeglow_ip", "")
@@ -663,7 +662,7 @@ async def deploy_syslog_to_lxcs(
         except Exception:
             nodeglow_ip = "10.10.30.52"
 
-    syslog_target = f"{nodeglow_ip}:{syslog_port}"
+    nodeglow_url = f"http://{nodeglow_ip}:8000"
 
     api = ProxmoxAPI(
         host=config_dict["host"],
@@ -674,16 +673,13 @@ async def deploy_syslog_to_lxcs(
 
     resources = await api.cluster_resources()
 
-    # Exclude the Nodeglow LXC itself (syslog receiver can't forward to itself)
-    # Resolve nodeglow_ip to hostname and match against Proxmox LXC names
+    # Exclude the Nodeglow LXC itself
     _self_names = set()
     try:
-        import socket as _socket
-        resolved = _socket.getfqdn(nodeglow_ip)
+        resolved = socket.getfqdn(nodeglow_ip)
         _self_names.add(resolved.lower())
-        # Also try reverse DNS
         try:
-            rev = _socket.gethostbyaddr(nodeglow_ip)[0]
+            rev = socket.gethostbyaddr(nodeglow_ip)[0]
             _self_names.add(rev.lower())
         except Exception:
             pass
@@ -704,26 +700,10 @@ async def deploy_syslog_to_lxcs(
     if not lxcs:
         return JSONResponse({"ok": True, "results": [], "deployed": 0, "failed": 0,
                              "message": "No running LXCs found",
-                             "manual_script": None, "syslog_target": syslog_target})
+                             "manual_script": None, "nodeglow_url": nodeglow_url})
 
-    # Docker → journald (local, no network dependency) → rsyslog forwards to Nodeglow
-    daemon_json = '{"log-driver":"journald","log-opts":{"tag":"{{.Name}}"}}'
-
-    # Per-LXC deploy command (run inside the LXC via pct exec)
-    def _lxc_cmd(vmid: int) -> str:
-        return (
-            f'pct exec {vmid} -- bash -c "'
-            f'mkdir -p /etc/rsyslog.d && '
-            f'echo \\"*.* @@{syslog_target}\\" > /etc/rsyslog.d/99-nodeglow.conf && '
-            f'(systemctl restart rsyslog 2>/dev/null || service rsyslog restart 2>/dev/null || true) && '
-            f'if command -v docker >/dev/null 2>&1; then '
-            f'mkdir -p /etc/docker && '
-            f"echo \\'{daemon_json}\\' > /etc/docker/daemon.json && "
-            f'(systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true) && '
-            f'echo docker+rsyslog; '
-            f'else echo rsyslog-only; fi'
-            f'"'
-        )
+    # Install command: download + run install script from Nodeglow
+    install_cmd = f"curl -sSL {nodeglow_url}/install/linux 2>/dev/null | bash"
 
     ssh_key = config_dict.get("ssh_private_key", "").strip()
     ssh_user = config_dict.get("ssh_user", "root").strip() or "root"
@@ -735,7 +715,6 @@ async def deploy_syslog_to_lxcs(
         deployed = 0
         failed = 0
 
-        # Write key to temp file
         key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
         key_file.write(ssh_key if ssh_key.endswith("\n") else ssh_key + "\n")
         key_file.close()
@@ -745,7 +724,7 @@ async def deploy_syslog_to_lxcs(
             for lxc in lxcs:
                 vmid = lxc.get("vmid")
                 name = lxc.get("name", f"ct-{vmid}")
-                cmd = _lxc_cmd(vmid)
+                cmd = f'pct exec {vmid} -- bash -c "{install_cmd}"'
 
                 try:
                     proc = await asyncio.create_subprocess_exec(
@@ -758,20 +737,20 @@ async def deploy_syslog_to_lxcs(
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+                    output = stdout.decode().strip()
                     if proc.returncode == 0:
-                        output = stdout.decode().strip()
                         results.append({"vmid": vmid, "name": name, "status": "ok",
-                                        "detail": output})
+                                        "detail": output[-200:] if len(output) > 200 else output})
                         deployed += 1
                     else:
-                        err = stderr.decode().strip() or f"exit code {proc.returncode}"
+                        err = stderr.decode().strip() or output or f"exit code {proc.returncode}"
                         results.append({"vmid": vmid, "name": name, "status": "failed",
-                                        "error": err})
+                                        "error": err[-200:]})
                         failed += 1
                 except asyncio.TimeoutError:
                     results.append({"vmid": vmid, "name": name, "status": "failed",
-                                    "error": "Timeout (30s)"})
+                                    "error": "Timeout (60s)"})
                     failed += 1
                 except Exception as exc:
                     results.append({"vmid": vmid, "name": name, "status": "failed",
@@ -787,7 +766,7 @@ async def deploy_syslog_to_lxcs(
             "failed": failed,
             "results": results,
             "manual_script": None,
-            "syslog_target": syslog_target,
+            "nodeglow_url": nodeglow_url,
             "skipped_self": skipped_self,
         })
 
@@ -800,32 +779,15 @@ async def deploy_syslog_to_lxcs(
 
     manual_script = (
         f'# Run on your Proxmox node shell\n'
-        f'# Configures rsyslog (system logs) + Docker journald driver (container logs)\n'
-        f'SYSLOG_TARGET="{syslog_target}"\n'
+        f'# Installs Nodeglow agent on all running LXCs\n'
+        f'NODEGLOW="{nodeglow_url}"\n'
         f'\n'
         f'for VMID in {vmids}; do\n'
-        f'  echo "=== Deploying to CT $VMID ==="\n'
-        f'\n'
-        f'  # System logs → Nodeglow\n'
-        f'  pct exec $VMID -- bash -c "\\\n'
-        f'    mkdir -p /etc/rsyslog.d && \\\n'
-        f'    echo \\"*.* @@$SYSLOG_TARGET\\" > /etc/rsyslog.d/99-nodeglow.conf && \\\n'
-        f'    (systemctl restart rsyslog 2>/dev/null || service rsyslog restart 2>/dev/null || true)"\n'
-        f'\n'
-        f'  # Docker → journald → rsyslog → Nodeglow (if Docker installed)\n'
-        f'  pct exec $VMID -- bash -c "\\\n'
-        f'    if command -v docker >/dev/null 2>&1; then \\\n'
-        f'      mkdir -p /etc/docker && \\\n'
-        f"      echo '{daemon_json}' > /etc/docker/daemon.json && \\\n"
-        f'      (systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true) && \\\n'
-        f'      echo \\"  Docker configured\\"; \\\n'
-        f'    else \\\n'
-        f'      echo \\"  No Docker — skipped\\"; \\\n'
-        f'    fi"\n'
-        f'\n'
+        f'  echo "=== Installing agent on CT $VMID ==="\n'
+        f'  pct exec $VMID -- bash -c "curl -sSL $NODEGLOW/install/linux | bash"\n'
         f'  echo "  Done"\n'
         f'done\n'
-        f'echo "\\nAll done! Logs should appear in Nodeglow Syslog within seconds."'
+        f'echo "\\nAll done! Agents will auto-enroll and appear in Nodeglow within 30 seconds."'
     )
 
     return JSONResponse({
@@ -835,6 +797,6 @@ async def deploy_syslog_to_lxcs(
         "failed": 0,
         "results": results,
         "manual_script": manual_script,
-        "syslog_target": syslog_target,
+        "nodeglow_url": nodeglow_url,
         "skipped_self": skipped_self,
     })
