@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { formatUptime } from '@/lib/utils';
 import { post } from '@/lib/api';
-import { ScrollText, CheckCircle, XCircle, Copy, Check } from 'lucide-react';
+import { ScrollText, Copy, Check } from 'lucide-react';
 import Link from 'next/link';
 
 interface ProxmoxTotals {
@@ -92,10 +92,8 @@ function guestStatusColor(status: string): string {
 
 interface DeployResult {
   ok: boolean;
-  deployed: number;
-  failed: number;
-  results: { vmid: number; name: string; status: string; error?: string }[];
-  manual_script?: string;
+  results: { vmid: number; name: string }[];
+  manual_script: string | null;
   syslog_target?: string;
   message?: string;
 }
@@ -119,7 +117,7 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
       const res = await post<DeployResult>(`/api/v1/integrations/proxmox/${configId}/deploy-syslog`, {});
       setDeployResult(res);
     } catch {
-      setDeployResult({ ok: false, deployed: 0, failed: 0, results: [], manual_script: undefined, message: 'Request failed' });
+      setDeployResult({ ok: false, results: [], manual_script: null, message: 'Request failed' });
     } finally {
       setDeploying(false);
     }
@@ -204,50 +202,46 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <ScrollText size={16} className="text-sky-400" />
-              <h3 className="text-sm font-medium text-slate-300">Syslog Forwarding</h3>
+              <h3 className="text-sm font-medium text-slate-300">Log Forwarding</h3>
             </div>
             <Button size="sm" disabled={deploying} onClick={deploySyslog}>
-              {deploying ? 'Deploying...' : 'Deploy to all LXCs'}
+              {deploying ? 'Loading...' : 'Generate Deploy Script'}
             </Button>
           </div>
           <p className="text-xs text-slate-500 mb-3">
-            Deploys to all running LXCs: <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker daemon config</span> (container logs).
-            Docker is restarted to apply — running containers will briefly restart.
+            Generates a script to deploy on your Proxmox node. Configures <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker syslog driver</span> (container logs) on all running LXCs.
           </p>
 
           {deployResult && (
             <div className="space-y-3">
-              {/* Summary */}
-              <div className={`p-3 rounded-lg text-sm ${deployResult.failed === 0 && deployResult.deployed > 0 ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300' : deployResult.deployed > 0 ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300' : 'bg-red-500/10 border border-red-500/20 text-red-300'}`}>
-                {deployResult.message || `Deployed: ${deployResult.deployed} | Failed: ${deployResult.failed}`}
-                {deployResult.syslog_target && (
-                  <span className="text-xs text-slate-500 ml-2">→ {deployResult.syslog_target}</span>
-                )}
-              </div>
-
-              {/* Per-LXC results */}
+              {/* LXC list */}
               {deployResult.results.length > 0 && (
-                <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                  {deployResult.results.map((r) => (
-                    <div key={r.vmid} className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-white/[0.02]">
-                      {r.status === 'ok' ? (
-                        <CheckCircle size={12} className="text-emerald-400 shrink-0" />
-                      ) : (
-                        <XCircle size={12} className="text-red-400 shrink-0" />
-                      )}
-                      <span className="text-slate-400 w-12">CT {r.vmid}</span>
-                      <span className="text-slate-200 flex-1">{r.name}</span>
-                      {r.error && <span className="text-red-400 text-[10px] truncate max-w-[200px]">{r.error}</span>}
-                    </div>
-                  ))}
+                <div className="p-3 rounded-lg bg-sky-500/5 border border-sky-500/20">
+                  <p className="text-xs text-sky-300 mb-2">
+                    {deployResult.results.length} running LXC(s) found
+                    {deployResult.syslog_target && <span className="text-slate-500"> → {deployResult.syslog_target}</span>}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {deployResult.results.map((r) => (
+                      <span key={r.vmid} className="px-2 py-0.5 rounded bg-white/[0.06] text-[11px] text-slate-300">
+                        CT {r.vmid} <span className="text-slate-500">{r.name}</span>
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {/* Manual script fallback */}
+              {deployResult.message && !deployResult.manual_script && (
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
+                  {deployResult.message}
+                </div>
+              )}
+
+              {/* Deploy script */}
               {deployResult.manual_script && (
-                <div className="mt-3">
+                <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-slate-400">Manual fallback — run on Proxmox node:</span>
+                    <span className="text-xs text-slate-400">Paste this into your Proxmox node shell:</span>
                     <button
                       className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
                       onClick={() => {
