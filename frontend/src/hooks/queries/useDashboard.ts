@@ -76,9 +76,12 @@ export interface StoragePool {
 }
 
 export interface ContainerData {
-  environments: ContainerEnv[];
   running: number;
   stopped: number;
+  updates_available?: number;
+  containers: ContainerInfo[];
+  // Legacy Portainer format (backwards compat)
+  environments?: ContainerEnv[];
 }
 
 export interface ContainerEnv {
@@ -90,8 +93,17 @@ export interface ContainerEnv {
 
 export interface ContainerInfo {
   name: string;
-  status: string;
   image: string;
+  state?: string;
+  status?: string;
+  host?: string;
+  source?: string;
+  cpu_pct?: number;
+  mem_pct?: number;
+  mem_mb?: number;
+  health?: string;
+  restart_count?: number;
+  update_available?: boolean;
 }
 
 export interface UpsData {
