@@ -619,3 +619,104 @@ async def api_list_integrations(db: AsyncSession = Depends(get_db)):
         }
         for name, cls in sorted(registry.items(), key=lambda x: x[1].display_name)
     ])
+
+
+# ── Proxmox: Deploy Syslog Config ───────────────────────────────────────────
+
+
+@router.post("/api/v1/integrations/proxmox/{config_id}/deploy-syslog")
+async def deploy_syslog_to_lxcs(
+    config_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Deploy rsyslog forwarding config to all running LXCs via Proxmox API.
+
+    Uses POST /nodes/{node}/lxc/{vmid}/exec (Proxmox 8+).
+    Falls back to providing a manual script if exec is unavailable.
+    """
+    from database import get_setting
+    from integrations.proxmox import ProxmoxAPI
+    import services.integration as int_svc
+
+    cfg = await db.get(IntegrationConfig, config_id)
+    if not cfg or cfg.type != "proxmox":
+        return JSONResponse({"error": "Proxmox config not found"}, status_code=404)
+
+    config_dict = int_svc.decrypt_config(cfg.config_json)
+    syslog_port = await get_setting(db, "syslog_port", "1514")
+
+    # Get Nodeglow IP from the request (the LXC needs to reach us)
+    nodeglow_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if not nodeglow_ip:
+        nodeglow_ip = request.client.host if request.client else "10.10.30.52"
+
+    api = ProxmoxAPI(
+        host=config_dict["host"],
+        token_id=config_dict["token_id"],
+        token_secret=config_dict["token_secret"],
+        verify_ssl=config_dict.get("verify_ssl", False),
+    )
+
+    # Get all running LXCs
+    resources = await api.cluster_resources()
+    lxcs = [
+        r for r in resources
+        if r.get("type") == "lxc" and r.get("status") == "running"
+    ]
+
+    if not lxcs:
+        return JSONResponse({"ok": True, "deployed": 0, "failed": 0, "results": [],
+                             "message": "No running LXCs found"})
+
+    rsyslog_conf = f"*.* @@{nodeglow_ip}:{syslog_port}"
+    # Commands to deploy: write config file, restart rsyslog
+    deploy_cmds = [
+        f'mkdir -p /etc/rsyslog.d',
+        f'echo "{rsyslog_conf}" > /etc/rsyslog.d/99-nodeglow.conf',
+        f'systemctl restart rsyslog 2>/dev/null || service rsyslog restart 2>/dev/null || true',
+    ]
+    deploy_script = " && ".join(deploy_cmds)
+
+    results = []
+    deployed = 0
+    failed = 0
+
+    for lxc in lxcs:
+        vmid = lxc.get("vmid")
+        node = lxc.get("node")
+        name = lxc.get("name", f"ct-{vmid}")
+
+        try:
+            # Proxmox 8+ exec endpoint
+            await api.post(f"/nodes/{node}/lxc/{vmid}/exec", {
+                "command": ["bash", "-c", deploy_script],
+            })
+            results.append({"vmid": vmid, "name": name, "status": "ok"})
+            deployed += 1
+        except Exception as exc:
+            err = str(exc)
+            # If 501/403/500 → exec not supported or no permission
+            results.append({"vmid": vmid, "name": name, "status": "failed", "error": err})
+            failed += 1
+
+    # Generate manual fallback script if any failed
+    manual_script = None
+    if failed > 0:
+        vmids = " ".join(str(r["vmid"]) for r in results if r["status"] == "failed")
+        manual_script = (
+            f'# Run on your Proxmox node shell:\n'
+            f'for VMID in {vmids}; do\n'
+            f'  pct exec $VMID -- bash -c \'{deploy_script}\'\n'
+            f'  echo "Deployed to $VMID"\n'
+            f'done'
+        )
+
+    return JSONResponse({
+        "ok": True,
+        "deployed": deployed,
+        "failed": failed,
+        "results": results,
+        "manual_script": manual_script,
+        "syslog_target": f"{nodeglow_ip}:{syslog_port}",
+    })

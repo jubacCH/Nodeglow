@@ -31,7 +31,7 @@ import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-const detailComponents: Record<string, React.ComponentType<{ data: any }>> = {
+const detailComponents: Record<string, React.ComponentType<{ data: any; configId?: number }>> = {
   proxmox: ProxmoxDetail,
   unifi: UnifiDetail,
   pihole: PiholeDetail,
@@ -120,7 +120,7 @@ export default function IntegrationDetailPage() {
           </div>
         </GlassCard>
       ) : snapshot?.data_json && DetailComponent ? (
-        <DetailComponent data={snapshot.data_json} />
+        <DetailComponent data={snapshot.data_json} configId={id} />
       ) : snapshot?.data_json ? (
         <GlassCard className="p-4">
           <h3 className="text-sm font-medium text-slate-300 mb-3">Snapshot Data</h3>
