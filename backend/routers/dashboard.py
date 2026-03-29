@@ -21,6 +21,63 @@ from services import health as health_svc
 
 router = APIRouter()
 
+
+async def _predict_agent_disks(db, days_back: int = 14) -> dict[str, dict]:
+    """Predict disk-full for agent disks using historical AgentSnapshot data."""
+    from models.agent import Agent, AgentSnapshot as ASnap
+    from datetime import timedelta
+    from services.predictions import _linear_predict
+
+    since = datetime.utcnow() - timedelta(days=days_back)
+    predictions: dict[str, dict] = {}
+
+    result = await db.execute(select(Agent).where(Agent.enabled == True))
+    agents = result.scalars().all()
+
+    for agent in agents:
+        snap_result = await db.execute(
+            select(ASnap)
+            .where(ASnap.agent_id == agent.id, ASnap.timestamp >= since)
+            .order_by(ASnap.timestamp.asc())
+        )
+        snapshots = snap_result.scalars().all()
+        if len(snapshots) < 3:
+            continue
+
+        # Build time-series per mount: {mount: [(epoch, pct), ...]}
+        mount_series: dict[str, list[tuple[float, float]]] = {}
+        for snap in snapshots:
+            if not snap.data_json:
+                continue
+            try:
+                data = json.loads(snap.data_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            ts = snap.timestamp.timestamp()
+            for disk in data.get("disks", []):
+                mount = disk.get("mount", "/")
+                pct = disk.get("pct")
+                total = disk.get("total_gb", 0)
+                if pct is not None and total > 0.5:
+                    mount_series.setdefault(mount, []).append((ts, float(pct)))
+
+        for mount, series in mount_series.items():
+            if len(series) < 3:
+                continue
+            pred = _linear_predict(series)
+            if pred is None:
+                continue
+            key = f"agent-{agent.id}:{mount}"
+            predictions[key] = {
+                "current_pct": pred["current"],
+                "trend_pct_per_day": pred["slope_per_day"],
+                "days_until_full": pred["days_until_full"],
+                "confidence": pred["r_squared"],
+            }
+
+    return predictions
+
+
 # ── Default dashboard widget layout (gridstack 12-col, cellHeight=40px) ──────
 VALID_WIDGET_IDS = {
     "integrations", "syslog", "gravity", "offline", "hosts", "proxmox", "top10",
@@ -571,8 +628,10 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    # ── Storage pools (TrueNAS/Synology/UNAS) ────────────────────────────────
+    # ── Storage pools (all sources) ─────────────────────────────────────────
     storage_pools = []
+
+    # Integration pools: TrueNAS, Synology, UNAS
     try:
         for stype in ("truenas", "synology", "unas"):
             type_snaps = all_snaps_cache.get(stype, {})
@@ -596,13 +655,86 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    # Proxmox node disks
+    try:
+        px_snaps = all_snaps_cache.get("proxmox", {})
+        px_configs = [c for c in all_configs if c.type == "proxmox"]
+        for cfg in px_configs:
+            snap = px_snaps.get(cfg.id)
+            if not snap or not snap.ok or not snap.data_json:
+                continue
+            sd = json.loads(snap.data_json)
+            for node in sd.get("nodes", []):
+                total = node.get("disk_total_gb", 0)
+                if total <= 0:
+                    continue
+                storage_pools.append({
+                    "name": node.get("name", "?"),
+                    "source": f"Proxmox: {cfg.name}",
+                    "healthy": node.get("online", True),
+                    "pct": node.get("disk_pct", 0),
+                    "used_gb": node.get("disk_used_gb", 0),
+                    "total_gb": total,
+                    "_pred_key": f"px-{cfg.id}:{node.get('name', '?')}",
+                })
+    except Exception:
+        pass
+
+    # Agent disks (from latest AgentSnapshot per agent)
+    try:
+        from models.agent import Agent, AgentSnapshot as ASnap
+        from sqlalchemy import func as sa_func
+        # Subquery: latest snapshot per agent
+        latest_sub = (
+            select(ASnap.agent_id, sa_func.max(ASnap.timestamp).label("max_ts"))
+            .group_by(ASnap.agent_id)
+            .subquery()
+        )
+        snap_rows = await db.execute(
+            select(ASnap, Agent.hostname)
+            .join(latest_sub, (ASnap.agent_id == latest_sub.c.agent_id) & (ASnap.timestamp == latest_sub.c.max_ts))
+            .join(Agent, Agent.id == ASnap.agent_id)
+            .where(Agent.enabled == True)
+        )
+        for asnap, hostname in snap_rows:
+            if not asnap.data_json:
+                continue
+            try:
+                adata = json.loads(asnap.data_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for disk in adata.get("disks", []):
+                total = disk.get("total_gb", 0)
+                if total <= 0.5:
+                    continue  # skip tiny mounts (tmpfs etc.)
+                mount = disk.get("mount", "/")
+                storage_pools.append({
+                    "name": f"{hostname}:{mount}",
+                    "source": f"Agent: {hostname}",
+                    "healthy": True,
+                    "pct": disk.get("pct", 0),
+                    "used_gb": disk.get("used_gb", 0),
+                    "total_gb": total,
+                    "_pred_key": f"agent-{asnap.agent_id}:{mount}",
+                })
+    except Exception:
+        pass
+
+    # Sort: fullest first
+    storage_pools.sort(key=lambda p: p.get("pct", 0), reverse=True)
+
     # ── Disk-full predictions ──────────────────────────────────────────────
     disk_predictions = {}
     try:
         disk_predictions = await pred_svc.predict_disk_full(db)
+
+        # Also compute predictions for agent disks
+        agent_predictions = await _predict_agent_disks(db)
+        disk_predictions.update(agent_predictions)
+
         for pool in storage_pools:
             pred = disk_predictions.get(pool.get("_pred_key"))
-            if pred and pred["confidence"] >= 0.3:
+            if pred and pred.get("confidence", 0) >= 0.3:
                 pool["days_until_full"] = pred["days_until_full"]
                 pool["trend_pct_per_day"] = pred["trend_pct_per_day"]
     except Exception:
