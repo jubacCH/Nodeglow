@@ -1343,8 +1343,8 @@ async def query_syslog(
     )
     return [
         {
-            "timestamp": r["received_at"].isoformat() if hasattr(r["received_at"], "isoformat") else str(r["received_at"]),
-            "original_timestamp": r["timestamp"].isoformat() if hasattr(r["timestamp"], "isoformat") else str(r["timestamp"]),
+            "timestamp": (r["received_at"].isoformat() + "Z") if hasattr(r["received_at"], "isoformat") else str(r["received_at"]),
+            "original_timestamp": (r["timestamp"].isoformat() + "Z") if hasattr(r["timestamp"], "isoformat") else str(r["timestamp"]),
             "source_ip": r["source_ip"],
             "hostname": r["hostname"],
             "facility": r["facility"],
