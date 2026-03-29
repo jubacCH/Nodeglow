@@ -34,6 +34,8 @@ async def list_users_api(request: Request, db: AsyncSession = Depends(get_db)):
             "id": u.id,
             "username": u.username,
             "role": u.role or "admin",
+            "auth_source": getattr(u, "auth_source", "local") or "local",
+            "display_name": getattr(u, "display_name", None),
             "created_at": u.created_at.isoformat() if u.created_at else None,
         }
         for u in users

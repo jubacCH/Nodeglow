@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Settings, Activity, Bell, Palette, Key, Database,
+  Settings, Activity, Bell, Palette, Key, Database, Shield,
   Plus, Trash2, Copy, Send, CheckCircle,
   XCircle, AlertTriangle, Download, Upload, Sparkles, ChevronDown,
 } from 'lucide-react';
@@ -20,7 +20,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 
 /* ---------- Types ---------- */
 
-type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'ai' | 'backup';
+type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'ai' | 'auth' | 'backup';
 
 interface SettingsData {
   site_name: string;
@@ -60,6 +60,19 @@ interface SettingsData {
   notify_discord_min_severity: string;
   notify_webhook_min_severity: string;
   notify_email_min_severity: string;
+  // LDAP
+  ldap_enabled: string;
+  ldap_server: string;
+  ldap_bind_dn: string;
+  ldap_has_bind_pw: boolean;
+  ldap_base_dn: string;
+  ldap_user_filter: string;
+  ldap_display_attr: string;
+  ldap_group_attr: string;
+  ldap_admin_group: string;
+  ldap_editor_group: string;
+  ldap_use_ssl: string;
+  ldap_start_tls: string;
 }
 
 interface ApiKeyEntry {
@@ -184,6 +197,7 @@ const TAB_ICONS: Record<Tab, typeof Settings> = {
   appearance: Palette,
   api: Key,
   ai: Sparkles,
+  auth: Shield,
   backup: Database,
 };
 
@@ -304,6 +318,23 @@ export default function SettingsPage() {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
 
+  /* ---- LDAP state ---- */
+  const [ldapEnabled, setLdapEnabled] = useState(false);
+  const [ldapServer, setLdapServer] = useState('');
+  const [ldapBindDn, setLdapBindDn] = useState('');
+  const [ldapBindPassword, setLdapBindPassword] = useState('');
+  const [ldapBaseDn, setLdapBaseDn] = useState('');
+  const [ldapUserFilter, setLdapUserFilter] = useState('(&(objectClass=person)(sAMAccountName={username}))');
+  const [ldapDisplayAttr, setLdapDisplayAttr] = useState('displayName');
+  const [ldapGroupAttr, setLdapGroupAttr] = useState('memberOf');
+  const [ldapAdminGroup, setLdapAdminGroup] = useState('');
+  const [ldapEditorGroup, setLdapEditorGroup] = useState('');
+  const [ldapUseSsl, setLdapUseSsl] = useState(false);
+  const [ldapStartTls, setLdapStartTls] = useState(false);
+  const [ldapSaving, setLdapSaving] = useState(false);
+  const [ldapTesting, setLdapTesting] = useState(false);
+  const [ldapTestResult, setLdapTestResult] = useState<{ ok: boolean; error?: string; users_found?: number } | null>(null);
+
   /* ---- API keys state ---- */
   const [createKeyModal, setCreateKeyModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
@@ -354,6 +385,19 @@ export default function SettingsPage() {
     setDailyAiEnabled(s.daily_ai_summary_enabled === '1');
     setDailyAiHour(s.daily_ai_summary_hour || '8');
     setDailyAiChannels(new Set((s.daily_ai_summary_channels || 'telegram,discord,webhook,email').split(',').filter(Boolean)));
+    // LDAP
+    setLdapEnabled(s.ldap_enabled === '1');
+    setLdapServer(s.ldap_server || '');
+    setLdapBindDn(s.ldap_bind_dn || '');
+    setLdapBindPassword('');
+    setLdapBaseDn(s.ldap_base_dn || '');
+    setLdapUserFilter(s.ldap_user_filter || '(&(objectClass=person)(sAMAccountName={username}))');
+    setLdapDisplayAttr(s.ldap_display_attr || 'displayName');
+    setLdapGroupAttr(s.ldap_group_attr || 'memberOf');
+    setLdapAdminGroup(s.ldap_admin_group || '');
+    setLdapEditorGroup(s.ldap_editor_group || '');
+    setLdapUseSsl(s.ldap_use_ssl === '1');
+    setLdapStartTls(s.ldap_start_tls === '1');
   }, []);
 
   useEffect(() => {
@@ -591,6 +635,7 @@ export default function SettingsPage() {
     { key: 'appearance', label: 'Appearance' },
     { key: 'api', label: 'API' },
     { key: 'ai', label: 'AI' },
+    { key: 'auth', label: 'Authentication' },
     { key: 'backup', label: 'Backup' },
   ];
 
@@ -1532,6 +1577,200 @@ export default function SettingsPage() {
               {aiSaving ? 'Saving...' : 'Save AI Settings'}
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* ==================== AUTH TAB ==================== */}
+      {activeTab === 'auth' && (
+        <div className="space-y-4">
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
+              <Shield size={18} className="text-violet-400" /> LDAP / Active Directory
+            </h3>
+            <div className="space-y-4">
+              {/* Enable toggle */}
+              <label className="flex items-center gap-3 cursor-pointer">
+                <div
+                  className={`w-10 h-5 rounded-full transition-colors relative ${ldapEnabled ? 'bg-violet-500' : 'bg-slate-700'}`}
+                  onClick={() => setLdapEnabled(!ldapEnabled)}
+                >
+                  <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${ldapEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </div>
+                <span className="text-sm text-slate-200">Enable LDAP Authentication</span>
+              </label>
+
+              {ldapEnabled && (
+                <>
+                  {/* Connection */}
+                  <div className="border-t border-white/[0.06] pt-4">
+                    <h4 className="text-xs font-medium text-slate-400 uppercase mb-3">Connection</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Server URL</label>
+                        <input className="ng-input" placeholder="ldap://dc01.example.com:389" value={ldapServer} onChange={e => setLdapServer(e.target.value)} />
+                        <p className="text-[10px] text-slate-600 mt-1">ldap:// or ldaps:// with optional port</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Base DN</label>
+                        <input className="ng-input" placeholder="dc=example,dc=com" value={ldapBaseDn} onChange={e => setLdapBaseDn(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Bind DN</label>
+                        <input className="ng-input" placeholder="cn=admin,dc=example,dc=com" value={ldapBindDn} onChange={e => setLdapBindDn(e.target.value)} />
+                        <p className="text-[10px] text-slate-600 mt-1">Service account for user lookups</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Bind Password</label>
+                        <input type="password" className="ng-input" placeholder={settings?.ldap_has_bind_pw ? '••••••••' : ''} value={ldapBindPassword} onChange={e => setLdapBindPassword(e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 mt-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" className="ng-checkbox" checked={ldapUseSsl} onChange={e => setLdapUseSsl(e.target.checked)} />
+                        <span className="text-xs text-slate-300">SSL (ldaps://)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" className="ng-checkbox" checked={ldapStartTls} onChange={e => setLdapStartTls(e.target.checked)} />
+                        <span className="text-xs text-slate-300">StartTLS</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* User Search */}
+                  <div className="border-t border-white/[0.06] pt-4">
+                    <h4 className="text-xs font-medium text-slate-400 uppercase mb-3">User Search</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="md:col-span-2">
+                        <label className="block text-xs text-slate-400 mb-1">User Filter</label>
+                        <input className="ng-input font-mono text-xs" value={ldapUserFilter} onChange={e => setLdapUserFilter(e.target.value)} />
+                        <p className="text-[10px] text-slate-600 mt-1">{'Use {username} as placeholder. AD: (&(objectClass=person)(sAMAccountName={username})) | OpenLDAP: (&(objectClass=inetOrgPerson)(uid={username}))'}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Display Name Attribute</label>
+                        <input className="ng-input" value={ldapDisplayAttr} onChange={e => setLdapDisplayAttr(e.target.value)} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Role Mapping */}
+                  <div className="border-t border-white/[0.06] pt-4">
+                    <h4 className="text-xs font-medium text-slate-400 uppercase mb-3">Role Mapping (optional)</h4>
+                    <p className="text-[10px] text-slate-500 mb-3">Map LDAP groups to Nodeglow roles. Users without a matching group get &quot;readonly&quot;.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Group Attribute</label>
+                        <input className="ng-input" value={ldapGroupAttr} onChange={e => setLdapGroupAttr(e.target.value)} />
+                      </div>
+                      <div />
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Admin Group (CN)</label>
+                        <input className="ng-input" placeholder="CN=Nodeglow-Admins,OU=Groups,DC=..." value={ldapAdminGroup} onChange={e => setLdapAdminGroup(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Editor Group (CN)</label>
+                        <input className="ng-input" placeholder="CN=Nodeglow-Editors,OU=Groups,DC=..." value={ldapEditorGroup} onChange={e => setLdapEditorGroup(e.target.value)} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="border-t border-white/[0.06] pt-4 flex items-center gap-3">
+                    <Button
+                      disabled={ldapSaving}
+                      onClick={async () => {
+                        setLdapSaving(true);
+                        try {
+                          const fd = new FormData();
+                          fd.append('ldap_enabled', ldapEnabled ? '1' : '0');
+                          fd.append('ldap_server', ldapServer);
+                          fd.append('ldap_bind_dn', ldapBindDn);
+                          fd.append('ldap_bind_password', ldapBindPassword);
+                          fd.append('ldap_base_dn', ldapBaseDn);
+                          fd.append('ldap_user_filter', ldapUserFilter);
+                          fd.append('ldap_display_attr', ldapDisplayAttr);
+                          fd.append('ldap_group_attr', ldapGroupAttr);
+                          fd.append('ldap_admin_group', ldapAdminGroup);
+                          fd.append('ldap_editor_group', ldapEditorGroup);
+                          fd.append('ldap_use_ssl', ldapUseSsl ? '1' : '0');
+                          fd.append('ldap_start_tls', ldapStartTls ? '1' : '0');
+                          await api('/settings/ldap/save', { method: 'POST', body: fd });
+                          toast.show('LDAP settings saved', 'success');
+                          qc.invalidateQueries({ queryKey: ['settings'] });
+                        } catch {
+                          toast.show('Failed to save LDAP settings', 'error');
+                        } finally {
+                          setLdapSaving(false);
+                        }
+                      }}
+                    >
+                      {ldapSaving ? 'Saving...' : 'Save LDAP Settings'}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={ldapTesting || !ldapServer}
+                      onClick={async () => {
+                        setLdapTesting(true);
+                        setLdapTestResult(null);
+                        try {
+                          // Save first, then test
+                          const fd = new FormData();
+                          fd.append('ldap_enabled', '1');
+                          fd.append('ldap_server', ldapServer);
+                          fd.append('ldap_bind_dn', ldapBindDn);
+                          fd.append('ldap_bind_password', ldapBindPassword);
+                          fd.append('ldap_base_dn', ldapBaseDn);
+                          fd.append('ldap_user_filter', ldapUserFilter);
+                          fd.append('ldap_display_attr', ldapDisplayAttr);
+                          fd.append('ldap_group_attr', ldapGroupAttr);
+                          fd.append('ldap_admin_group', ldapAdminGroup);
+                          fd.append('ldap_editor_group', ldapEditorGroup);
+                          fd.append('ldap_use_ssl', ldapUseSsl ? '1' : '0');
+                          fd.append('ldap_start_tls', ldapStartTls ? '1' : '0');
+                          await api('/settings/ldap/save', { method: 'POST', body: fd });
+                          const res = await post<{ ok: boolean; error?: string; users_found?: number }>('/settings/ldap/test', {});
+                          setLdapTestResult(res);
+                        } catch {
+                          setLdapTestResult({ ok: false, error: 'Request failed' });
+                        } finally {
+                          setLdapTesting(false);
+                        }
+                      }}
+                    >
+                      {ldapTesting ? 'Testing...' : 'Test Connection'}
+                    </Button>
+                  </div>
+
+                  {/* Test result */}
+                  {ldapTestResult && (
+                    <div className={`p-3 rounded-lg text-sm ${ldapTestResult.ok ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300' : 'bg-red-500/10 border border-red-500/20 text-red-300'}`}>
+                      {ldapTestResult.ok ? (
+                        <div className="flex items-center gap-2">
+                          <CheckCircle size={16} />
+                          <span>Connection successful — {ldapTestResult.users_found} user(s) found matching filter</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <XCircle size={16} />
+                          <span>{ldapTestResult.error}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200 mb-3">How it works</h3>
+            <ul className="text-xs text-slate-400 space-y-1.5 list-disc list-inside">
+              <li>When LDAP is enabled, users are authenticated against your LDAP/AD server first</li>
+              <li>Local accounts (including the initial admin) still work as fallback</li>
+              <li>LDAP users are auto-created on first login — no manual provisioning needed</li>
+              <li>Roles are mapped from LDAP groups on each login (admin → editor → readonly)</li>
+              <li>If no group mapping is configured, LDAP users get the &quot;readonly&quot; role</li>
+            </ul>
+          </GlassCard>
         </div>
       )}
 
