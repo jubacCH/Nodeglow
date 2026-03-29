@@ -213,8 +213,9 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
             </Button>
           </div>
           <p className="text-xs text-slate-500 mb-3">
-            Configures <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker syslog driver</span> (container logs) on all running LXCs.
-            {' '}Requires SSH key in Proxmox integration config for automatic deploy.
+            Configures <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker → journald</span> (container logs) on all running LXCs.
+            Docker has no network dependency — logs flow locally via journald to rsyslog.
+            {' '}Add SSH key in Proxmox config for automatic deploy.
           </p>
 
           {deployResult && (
