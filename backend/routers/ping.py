@@ -189,6 +189,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
             "id": host.id,
             "name": host.name,
             "hostname": host.hostname,
+            "ip_address": getattr(host, "ip_address", None),
             "check_type": host.check_type or "icmp",
             "maintenance": host.maintenance or False,
             "enabled": host.enabled,

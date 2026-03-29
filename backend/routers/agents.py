@@ -85,17 +85,27 @@ async def agent_enroll(request: Request):
         agent = Agent(name=hostname, hostname=hostname, token=token_hash, platform=plat, arch=arch)
         db.add(agent)
 
-        # Auto-create PingHost using client IP (more reliable for ICMP)
-        ping_hostname = client_ip or hostname
+        # Auto-create PingHost — try reverse DNS for FQDN, store IP separately
+        agent_ip = client_ip or ""
+        fqdn = hostname
+        if agent_ip:
+            try:
+                import socket as _socket
+                rev = _socket.gethostbyaddr(agent_ip)[0]
+                if rev and "." in rev:
+                    fqdn = rev
+            except Exception:
+                pass
         ping_result = await db.execute(
             select(PingHost).where(
-                sa_func.lower(PingHost.hostname).in_([hostname.lower(), ping_hostname.lower()])
+                sa_func.lower(PingHost.hostname).in_([hostname.lower(), fqdn.lower(), agent_ip.lower()])
             )
         )
         if not ping_result.scalars().first():
             db.add(PingHost(
                 name=hostname,
-                hostname=ping_hostname,
+                hostname=fqdn,
+                ip_address=agent_ip or None,
                 check_type="icmp",
                 source="agent",
                 source_detail=f"auto-enrolled agent ({hostname})",

@@ -286,6 +286,16 @@ async def import_unifi_devices(ctrl_name: str, data: dict, db) -> dict:
             skipped += 1
             continue
 
+        # Try reverse DNS to get FQDN for the hostname field
+        fqdn = name
+        try:
+            import socket as _socket
+            rev = _socket.gethostbyaddr(ip)[0]
+            if rev and "." in rev and not rev.startswith(ip):
+                fqdn = rev
+        except Exception:
+            pass
+
         existing = by_ip.get(ip) or by_mac.get(mac)
         if existing:
             changed = False
@@ -301,12 +311,20 @@ async def import_unifi_devices(ctrl_name: str, data: dict, db) -> dict:
                 logger.info("UniFi rename: %s → %s", existing.name, name)
                 existing.name = name
                 changed = True
+            # Store IP separately, use FQDN as hostname
+            if not getattr(existing, "ip_address", None) or existing.ip_address != ip:
+                existing.ip_address = ip
+                changed = True
+            if fqdn != name and existing.hostname == ip and fqdn != ip:
+                existing.hostname = fqdn
+                changed = True
             if changed:
                 dirty = True
             merged += 1
         else:
             new_host = PingHost(
-                name=name, hostname=ip, check_type="icmp",
+                name=name, hostname=fqdn if fqdn != name else ip,
+                ip_address=ip, check_type="icmp",
                 enabled=d.get("state", 0) == 1, source="unifi",
                 source_detail=ctrl_name, mac_address=mac or None,
             )
