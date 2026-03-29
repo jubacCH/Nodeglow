@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Storage integration types (all use standardized "storage_pools" key)
 _STORAGE_TYPES = {"truenas", "unas", "synology"}
+# Types with node-level disk metrics
+_NODE_DISK_TYPES = {"proxmox"}
 
 
 async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, dict]:
@@ -26,11 +28,12 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
     """
     since = datetime.utcnow() - timedelta(days=days_back)
 
-    # Get all storage configs
+    # Get all storage + node-disk configs
+    all_types = list(_STORAGE_TYPES | _NODE_DISK_TYPES)
     result = await db.execute(
         select(IntegrationConfig).where(
             IntegrationConfig.enabled == True,
-            IntegrationConfig.type.in_(list(_STORAGE_TYPES)),
+            IntegrationConfig.type.in_(all_types),
         )
     )
     configs = result.scalars().all()
@@ -74,6 +77,13 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
                 pct = pool.get("pct")
                 if pct is not None:
                     pool_series.setdefault(name, []).append((ts, float(pct)))
+            # Proxmox node disks
+            if cfg.type in _NODE_DISK_TYPES:
+                for node in data.get("nodes", []):
+                    name = node.get("name", "?")
+                    pct = node.get("disk_pct")
+                    if pct is not None and node.get("disk_total_gb", 0) > 0:
+                        pool_series.setdefault(name, []).append((ts, float(pct)))
 
         # Linear regression per pool
         for pool_name, series in pool_series.items():
@@ -84,7 +94,8 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
             if pred is None:
                 continue
 
-            key = f"{cfg.id}:{pool_name}"
+            prefix = "px-" if cfg.type in _NODE_DISK_TYPES else ""
+            key = f"{prefix}{cfg.id}:{pool_name}"
             predictions[key] = {
                 "config_id": cfg.id,
                 "config_name": cfg.name,
