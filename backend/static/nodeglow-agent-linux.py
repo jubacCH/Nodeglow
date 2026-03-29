@@ -28,7 +28,7 @@ import time
 import urllib.error
 import urllib.request
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 USER_AGENT = f"NodeglowAgent/{__version__} ({platform.system()}; {platform.machine()})"
 
@@ -273,6 +273,86 @@ def get_docker_containers():
     except Exception:
         pass
     return containers
+
+
+# ── Docker log collector ────────────────────────────────────────────────────
+
+_docker_log_since: dict = {}  # container_name -> last_timestamp
+
+
+def get_docker_logs(max_lines=100):
+    """Collect recent logs from all running Docker containers."""
+    global _docker_log_since
+    logs = []
+
+    try:
+        out = subprocess.check_output(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            stderr=subprocess.DEVNULL, text=True, timeout=5,
+        )
+        containers = [c.strip() for c in out.strip().splitlines() if c.strip()]
+    except Exception:
+        return logs
+
+    for cname in containers:
+        since = _docker_log_since.get(cname, "60s")
+        try:
+            result = subprocess.run(
+                ["docker", "logs", "--since", since, "--timestamps", "--tail", str(max_lines), cname],
+                capture_output=True, text=True, timeout=10,
+            )
+            # Docker logs can come on both stdout and stderr
+            output = (result.stdout or "") + (result.stderr or "")
+            newest_ts = None
+            for line in output.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                # Docker timestamp format: 2026-03-29T17:45:23.123456789Z <message>
+                ts = None
+                msg = line
+                if len(line) > 30 and line[0:4].isdigit() and "T" in line[:11]:
+                    space = line.find(" ", 20)
+                    if space > 0:
+                        ts = line[:space].rstrip("Z")[:19] + "Z"  # trim nanoseconds
+                        msg = line[space + 1:]
+                    else:
+                        ts = line[:30].rstrip("Z")[:19] + "Z"
+
+                if not ts:
+                    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+                # Detect severity from message content
+                severity = 6  # info
+                msg_lower = msg.lower()
+                if any(w in msg_lower for w in ("error", "fatal", "panic", "exception", "traceback")):
+                    severity = 3  # error
+                elif any(w in msg_lower for w in ("warn", "warning")):
+                    severity = 4  # warning
+                elif any(w in msg_lower for w in ("debug", "trace")):
+                    severity = 7  # debug
+
+                logs.append({
+                    "timestamp": ts,
+                    "severity": severity,
+                    "app_name": f"docker/{cname}",
+                    "message": msg[:1000],
+                    "facility": 16,  # local0
+                })
+                newest_ts = ts
+
+            if newest_ts:
+                _docker_log_since[cname] = newest_ts
+        except Exception:
+            pass
+
+    # Clean up entries for stopped containers
+    active = set(containers)
+    for old in list(_docker_log_since.keys()):
+        if old not in active:
+            del _docker_log_since[old]
+
+    return logs
 
 
 # ── Log collector ───────────────────────────────────────────────────────────
@@ -772,6 +852,11 @@ def main():
                 last_log_send = now
                 try:
                     logs = get_recent_logs()
+
+                    # Docker container logs
+                    docker_logs = get_docker_logs()
+                    if docker_logs:
+                        logs.extend(docker_logs)
 
                     # Tail custom log files
                     if server_log_file_paths:
