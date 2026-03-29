@@ -630,7 +630,11 @@ async def deploy_syslog_to_lxcs(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Deploy rsyslog forwarding config to all running LXCs via Proxmox API.
+    """Deploy rsyslog + Docker syslog config to all running LXCs.
+
+    Deploys two things per LXC:
+      1. /etc/rsyslog.d/99-nodeglow.conf  → system logs (sshd, cron, kernel)
+      2. /etc/docker/daemon.json          → all Docker container logs
 
     Uses POST /nodes/{node}/lxc/{vmid}/exec (Proxmox 8+).
     Falls back to providing a manual script if exec is unavailable.
@@ -651,6 +655,8 @@ async def deploy_syslog_to_lxcs(
     if not nodeglow_ip:
         nodeglow_ip = request.client.host if request.client else "10.10.30.52"
 
+    syslog_target = f"{nodeglow_ip}:{syslog_port}"
+
     api = ProxmoxAPI(
         host=config_dict["host"],
         token_id=config_dict["token_id"],
@@ -669,14 +675,28 @@ async def deploy_syslog_to_lxcs(
         return JSONResponse({"ok": True, "deployed": 0, "failed": 0, "results": [],
                              "message": "No running LXCs found"})
 
-    rsyslog_conf = f"*.* @@{nodeglow_ip}:{syslog_port}"
-    # Commands to deploy: write config file, restart rsyslog
-    deploy_cmds = [
-        f'mkdir -p /etc/rsyslog.d',
-        f'echo "{rsyslog_conf}" > /etc/rsyslog.d/99-nodeglow.conf',
-        f'systemctl restart rsyslog 2>/dev/null || service rsyslog restart 2>/dev/null || true',
-    ]
-    deploy_script = " && ".join(deploy_cmds)
+    # Build deploy script: rsyslog + Docker daemon config
+    rsyslog_line = f"*.* @@{syslog_target}"
+    daemon_json = (
+        '{"log-driver":"syslog",'
+        f'"log-opts":{{"syslog-address":"tcp://{syslog_target}",'
+        '"tag":"{{.Name}}","syslog-format":"rfc5424"}}'
+        '}'
+    )
+
+    deploy_script = (
+        # 1. rsyslog forwarding
+        f'mkdir -p /etc/rsyslog.d && '
+        f'echo "{rsyslog_line}" > /etc/rsyslog.d/99-nodeglow.conf && '
+        f'(systemctl restart rsyslog 2>/dev/null || service rsyslog restart 2>/dev/null || true) && '
+        # 2. Docker syslog driver (only if Docker is installed)
+        f'if command -v docker >/dev/null 2>&1; then '
+        f"mkdir -p /etc/docker && "
+        f"echo '{daemon_json}' > /etc/docker/daemon.json && "
+        f'(systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true) && '
+        f'echo "docker+rsyslog"; '
+        f'else echo "rsyslog-only"; fi'
+    )
 
     results = []
     deployed = 0
@@ -688,7 +708,6 @@ async def deploy_syslog_to_lxcs(
         name = lxc.get("name", f"ct-{vmid}")
 
         try:
-            # Proxmox 8+ exec endpoint
             await api.post(f"/nodes/{node}/lxc/{vmid}/exec", {
                 "command": ["bash", "-c", deploy_script],
             })
@@ -696,7 +715,6 @@ async def deploy_syslog_to_lxcs(
             deployed += 1
         except Exception as exc:
             err = str(exc)
-            # If 501/403/500 → exec not supported or no permission
             results.append({"vmid": vmid, "name": name, "status": "failed", "error": err})
             failed += 1
 
@@ -704,11 +722,30 @@ async def deploy_syslog_to_lxcs(
     manual_script = None
     if failed > 0:
         vmids = " ".join(str(r["vmid"]) for r in results if r["status"] == "failed")
+        # Readable multi-line script for manual execution
         manual_script = (
             f'# Run on your Proxmox node shell:\n'
+            f'SYSLOG_TARGET="{syslog_target}"\n'
+            f'\n'
             f'for VMID in {vmids}; do\n'
-            f'  pct exec $VMID -- bash -c \'{deploy_script}\'\n'
-            f'  echo "Deployed to $VMID"\n'
+            f'  echo "=== Deploying to CT $VMID ==="\n'
+            f'\n'
+            f'  # System logs (rsyslog)\n'
+            f'  pct exec $VMID -- bash -c "\\\n'
+            f'    mkdir -p /etc/rsyslog.d && \\\n'
+            f'    echo \\"*.* @@$SYSLOG_TARGET\\" > /etc/rsyslog.d/99-nodeglow.conf && \\\n'
+            f'    systemctl restart rsyslog 2>/dev/null || true"\n'
+            f'\n'
+            f'  # Docker container logs (if Docker is installed)\n'
+            f'  pct exec $VMID -- bash -c "\\\n'
+            f'    if command -v docker >/dev/null 2>&1; then \\\n'
+            f'      mkdir -p /etc/docker && \\\n'
+            f"      echo '{daemon_json}' > /etc/docker/daemon.json && \\\n"
+            f'      systemctl restart docker 2>/dev/null || true && \\\n'
+            f'      echo \\"Docker configured\\"; \\\n'
+            f'    else echo \\"No Docker\\"; fi"\n'
+            f'\n'
+            f'  echo "Done CT $VMID"\n'
             f'done'
         )
 
@@ -718,5 +755,5 @@ async def deploy_syslog_to_lxcs(
         "failed": failed,
         "results": results,
         "manual_script": manual_script,
-        "syslog_target": f"{nodeglow_ip}:{syslog_port}",
+        "syslog_target": syslog_target,
     })

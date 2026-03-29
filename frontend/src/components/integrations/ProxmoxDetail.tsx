@@ -211,7 +211,8 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
             </Button>
           </div>
           <p className="text-xs text-slate-500 mb-3">
-            Pushes rsyslog config to all running LXCs so their logs are forwarded to Nodeglow.
+            Deploys to all running LXCs: <span className="text-slate-400">rsyslog</span> (system logs) + <span className="text-slate-400">Docker daemon config</span> (container logs).
+            Docker is restarted to apply — running containers will briefly restart.
           </p>
 
           {deployResult && (
