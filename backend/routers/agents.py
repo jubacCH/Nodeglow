@@ -564,8 +564,17 @@ fi
 echo "  Enrolled successfully."
 
 echo "  [3/5] Downloading agent..."
-curl -sSL "$SERVER/agents/download/linux" -o "$INSTALL_DIR/nodeglow-agent"
-chmod +x "$INSTALL_DIR/nodeglow-agent"
+curl -sSL "$SERVER/agents/download/linux" -o "$INSTALL_DIR/nodeglow-agent.tmp"
+# Detect if binary or Python script
+if head -c 2 "$INSTALL_DIR/nodeglow-agent.tmp" | grep -q '#!'; then
+  mv "$INSTALL_DIR/nodeglow-agent.tmp" "$INSTALL_DIR/nodeglow-agent.py"
+  chmod +x "$INSTALL_DIR/nodeglow-agent.py"
+  AGENT_EXEC="python3 /opt/nodeglow/nodeglow-agent.py"
+else
+  mv "$INSTALL_DIR/nodeglow-agent.tmp" "$INSTALL_DIR/nodeglow-agent"
+  chmod +x "$INSTALL_DIR/nodeglow-agent"
+  AGENT_EXEC="/opt/nodeglow/nodeglow-agent"
+fi
 
 echo "  [4/5] Writing configuration..."
 cat > "$CONFIG_FILE" << CONF
@@ -577,7 +586,7 @@ cat > "$CONFIG_FILE" << CONF
 CONF
 
 echo "  [5/5] Creating systemd service..."
-cat > /etc/systemd/system/${{SERVICE_NAME}}.service << 'UNIT'
+cat > /etc/systemd/system/${{SERVICE_NAME}}.service << UNIT
 [Unit]
 Description=Nodeglow Monitoring Agent
 After=network-online.target
@@ -586,7 +595,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/nodeglow
-ExecStart=/opt/nodeglow/nodeglow-agent
+ExecStart=$AGENT_EXEC
 Restart=always
 RestartSec=10
 
