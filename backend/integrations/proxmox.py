@@ -28,6 +28,13 @@ class ProxmoxAPI:
             resp.raise_for_status()
             return resp.json().get("data", [])
 
+    async def post(self, path: str, data: dict | None = None) -> dict:
+        url = f"{self.base}/api2/json{path}"
+        async with httpx.AsyncClient(verify=self._verify_ssl, timeout=30.0) as client:
+            resp = await client.post(url, headers=self._headers, data=data or {})
+            resp.raise_for_status()
+            return resp.json().get("data", {})
+
     async def cluster_status(self) -> list[dict]:
         return await self.get("/cluster/status")
 

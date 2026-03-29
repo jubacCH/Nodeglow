@@ -1,9 +1,13 @@
 'use client';
 
+import { useState } from 'react';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { formatUptime } from '@/lib/utils';
+import { post } from '@/lib/api';
+import { ScrollText, CheckCircle, XCircle, Copy, Check } from 'lucide-react';
 import Link from 'next/link';
 
 interface ProxmoxTotals {
@@ -86,12 +90,40 @@ function guestStatusColor(status: string): string {
   return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
 }
 
-export function ProxmoxDetail({ data }: { data: ProxmoxData }) {
+interface DeployResult {
+  ok: boolean;
+  deployed: number;
+  failed: number;
+  results: { vmid: number; name: string; status: string; error?: string }[];
+  manual_script?: string;
+  syslog_target?: string;
+  message?: string;
+}
+
+export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?: number }) {
   const { totals, nodes, vms, containers } = data;
   const allGuests = [
     ...(vms ?? []).map((v) => ({ ...v, guestType: 'VM' as const })),
     ...(containers ?? []).map((c) => ({ ...c, guestType: 'LXC' as const })),
   ];
+
+  const [deploying, setDeploying] = useState(false);
+  const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function deploySyslog() {
+    if (!configId) return;
+    setDeploying(true);
+    setDeployResult(null);
+    try {
+      const res = await post<DeployResult>(`/api/v1/integrations/proxmox/${configId}/deploy-syslog`, {});
+      setDeployResult(res);
+    } catch {
+      setDeployResult({ ok: false, deployed: 0, failed: 0, results: [], manual_script: undefined, message: 'Request failed' });
+    } finally {
+      setDeploying(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -163,6 +195,76 @@ export function ProxmoxDetail({ data }: { data: ProxmoxData }) {
               </tbody>
             </table>
           </div>
+        </GlassCard>
+      )}
+
+      {/* Deploy Syslog */}
+      {configId && (
+        <GlassCard className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <ScrollText size={16} className="text-sky-400" />
+              <h3 className="text-sm font-medium text-slate-300">Syslog Forwarding</h3>
+            </div>
+            <Button size="sm" disabled={deploying} onClick={deploySyslog}>
+              {deploying ? 'Deploying...' : 'Deploy to all LXCs'}
+            </Button>
+          </div>
+          <p className="text-xs text-slate-500 mb-3">
+            Pushes rsyslog config to all running LXCs so their logs are forwarded to Nodeglow.
+          </p>
+
+          {deployResult && (
+            <div className="space-y-3">
+              {/* Summary */}
+              <div className={`p-3 rounded-lg text-sm ${deployResult.failed === 0 && deployResult.deployed > 0 ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300' : deployResult.deployed > 0 ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300' : 'bg-red-500/10 border border-red-500/20 text-red-300'}`}>
+                {deployResult.message || `Deployed: ${deployResult.deployed} | Failed: ${deployResult.failed}`}
+                {deployResult.syslog_target && (
+                  <span className="text-xs text-slate-500 ml-2">→ {deployResult.syslog_target}</span>
+                )}
+              </div>
+
+              {/* Per-LXC results */}
+              {deployResult.results.length > 0 && (
+                <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                  {deployResult.results.map((r) => (
+                    <div key={r.vmid} className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-white/[0.02]">
+                      {r.status === 'ok' ? (
+                        <CheckCircle size={12} className="text-emerald-400 shrink-0" />
+                      ) : (
+                        <XCircle size={12} className="text-red-400 shrink-0" />
+                      )}
+                      <span className="text-slate-400 w-12">CT {r.vmid}</span>
+                      <span className="text-slate-200 flex-1">{r.name}</span>
+                      {r.error && <span className="text-red-400 text-[10px] truncate max-w-[200px]">{r.error}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Manual script fallback */}
+              {deployResult.manual_script && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-slate-400">Manual fallback — run on Proxmox node:</span>
+                    <button
+                      className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
+                      onClick={() => {
+                        navigator.clipboard.writeText(deployResult.manual_script!);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                    >
+                      {copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
+                    </button>
+                  </div>
+                  <pre className="text-[11px] text-slate-300 font-mono bg-black/30 rounded-md p-3 overflow-x-auto whitespace-pre">
+                    {deployResult.manual_script}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
         </GlassCard>
       )}
     </div>
