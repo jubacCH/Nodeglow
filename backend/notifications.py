@@ -73,8 +73,16 @@ async def _send_telegram(bot_token: str, chat_id: str, text: str) -> None:
 async def _send_discord(webhook_url: str, title: str, message: str, color: int = 0xe74c3c) -> None:
     payload = {"embeds": [{"title": title, "description": message, "color": color}]}
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(webhook_url, json=payload)
-        resp.raise_for_status()
+        for attempt in range(4):  # initial + 3 retries
+            resp = await client.post(webhook_url, json=payload)
+            if resp.status_code == 429:
+                retry_after = resp.json().get("retry_after", 1.0 * (2 ** attempt))
+                logger.warning("Discord 429 – retrying in %.1fs (attempt %d)", retry_after, attempt + 1)
+                await asyncio.sleep(min(retry_after, 10))
+                continue
+            resp.raise_for_status()
+            return
+        resp.raise_for_status()  # final attempt failed – raise
 
 
 async def _send_webhook(url: str, secret: str, title: str, message: str,
