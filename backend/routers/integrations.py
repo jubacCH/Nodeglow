@@ -650,20 +650,6 @@ async def deploy_agent_to_lxcs(
 
     config_dict = int_svc.decrypt_config(cfg.config_json)
 
-    # Detect Nodeglow's internal IP
-    nodeglow_ip = await get_setting(db, "nodeglow_ip", "")
-    if not nodeglow_ip:
-        try:
-            proxmox_host = config_dict["host"].split("://")[-1].split(":")[0].split("/")[0]
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect((proxmox_host, 8006))
-            nodeglow_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            nodeglow_ip = "10.10.30.52"
-
-    nodeglow_url = f"http://{nodeglow_ip}:8000"
-
     api = ProxmoxAPI(
         host=config_dict["host"],
         token_id=config_dict["token_id"],
@@ -672,6 +658,30 @@ async def deploy_agent_to_lxcs(
     )
 
     resources = await api.cluster_resources()
+
+    # Detect Nodeglow's LXC IP — find the PingHost for this Nodeglow instance
+    # (Docker-internal IPs like 172.18.x.x are NOT reachable from LXCs)
+    from models.ping import PingHost
+    nodeglow_ip = await get_setting(db, "nodeglow_ip", "")
+    if not nodeglow_ip:
+        # Find by source_detail matching this Proxmox config, hostname containing "monitoring" or "nodeglow"
+        ph_result = await db.execute(
+            sa_select(PingHost).where(
+                PingHost.source == "proxmox",
+                PingHost.hostname.ilike("%monitoring%"),
+            )
+        )
+        ph = ph_result.scalar_one_or_none()
+        if ph:
+            # Resolve hostname to IP
+            try:
+                nodeglow_ip = socket.gethostbyname(ph.hostname)
+            except Exception:
+                nodeglow_ip = ph.hostname
+        if not nodeglow_ip:
+            nodeglow_ip = "10.10.30.52"
+
+    nodeglow_url = f"http://{nodeglow_ip}:8000"
 
     # Exclude the Nodeglow LXC itself
     _self_names = set()
