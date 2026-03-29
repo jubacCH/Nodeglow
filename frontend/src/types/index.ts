@@ -30,6 +30,7 @@ export interface HostStatus {
   id: number;
   name: string;
   hostname: string;
+  ip_address?: string | null;
   online: boolean | null;
   latency_ms: number | null;
   check_type: string;

@@ -456,7 +456,10 @@ function HostsPageInner() {
                       <p className="font-medium text-slate-200">{host.name}</p>
                       <div className="flex items-center gap-1">
                         <p className="text-xs text-slate-500 font-mono">{host.hostname}</p>
-                        <CopyButton text={host.hostname} size={12} />
+                        {host.ip_address && host.ip_address !== host.hostname && (
+                          <span className="text-[10px] text-slate-600 font-mono">({host.ip_address})</span>
+                        )}
+                        <CopyButton text={host.ip_address || host.hostname} size={12} />
                       </div>
                     </Link>
                   </td>
