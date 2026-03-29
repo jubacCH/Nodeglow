@@ -21,6 +21,7 @@ class PingHost(Base):
     ssl_expiry_days      = Column(Integer, nullable=True)
     port_error           = Column(Boolean, default=False)
     check_detail         = Column(Text, nullable=True)
+    ip_address           = Column(String, nullable=True)
     source               = Column(String, default="manual", index=True) # manual | phpipam | proxmox | unifi
     source_detail        = Column(String, nullable=True)
     mac_address          = Column(String, nullable=True)

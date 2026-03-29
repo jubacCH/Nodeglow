@@ -110,9 +110,12 @@ async def get_ssl_expiry_days(hostname: str, port: int = 443) -> int | None:
 async def _check_single(host: "PingHost", ct: str) -> tuple[bool, float | None]:
     """Run a single check type for the given host."""
     ct = ct.lower()
+    # Prefer ip_address for network checks, fall back to hostname
+    target = getattr(host, "ip_address", None) or host.hostname
     if ct == "icmp":
-        return await ping_host(host.hostname)
+        return await ping_host(target)
     if ct in ("http", "https"):
+        # Use hostname (FQDN) for HTTP/HTTPS — SSL certs need the domain name
         hostname = host.hostname
         if hostname.startswith("http://") or hostname.startswith("https://"):
             url = hostname
@@ -126,8 +129,8 @@ async def _check_single(host: "PingHost", ct: str) -> tuple[bool, float | None]:
             port = int(ct.split(":")[1])
         else:
             port = host.port or 80
-        return await check_tcp(host.hostname, port)
-    return await ping_host(host.hostname)
+        return await check_tcp(target, port)
+    return await ping_host(target)
 
 
 async def check_host(host: "PingHost") -> tuple[bool, bool, float | None, dict]:
