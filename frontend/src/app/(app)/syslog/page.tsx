@@ -9,7 +9,7 @@ import { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { MessageSquare, BarChart3, Brain, ChevronRight, ChevronDown, MapPin } from 'lucide-react';
 import { ExportButton } from '@/components/ui/ExportButton';
-import { timeAgo } from '@/lib/utils';
+// timeAgo not needed — syslog shows absolute time
 
 const SEVERITY_LABELS: Record<number, string> = {
   0: 'Emergency',
@@ -191,7 +191,7 @@ export default function SyslogPage() {
                             ? <ChevronDown size={12} className="text-slate-500 flex-shrink-0" />
                             : <ChevronRight size={12} className="text-slate-500 flex-shrink-0" />
                           )}
-                          {timeAgo(msg.timestamp)}
+                          {new Date(msg.timestamp).toLocaleTimeString()}
                         </span>
                       </td>
                       <td className="px-4 py-3">
