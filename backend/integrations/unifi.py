@@ -296,6 +296,11 @@ async def import_unifi_devices(ctrl_name: str, data: dict, db) -> dict:
             if mac and not existing.mac_address:
                 existing.mac_address = mac
                 changed = True
+            # Update name if it changed in UniFi
+            if name and existing.source == "unifi" and existing.name != name:
+                logger.info("UniFi rename: %s → %s", existing.name, name)
+                existing.name = name
+                changed = True
             if changed:
                 dirty = True
             merged += 1
