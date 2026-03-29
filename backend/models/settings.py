@@ -26,6 +26,8 @@ class User(Base):
     username = Column(String(64), unique=True, nullable=False)
     password_hash = Column(String(128), nullable=False)
     role = Column(String(16), default="admin")   # admin | editor | readonly
+    auth_source = Column(String(16), default="local")  # local | ldap
+    display_name = Column(String(128), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

@@ -146,6 +146,20 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
     result["smtp_has_pw"] = bool(await get_setting(db, "smtp_password", ""))
     result["claude_has_key"] = bool(await get_setting(db, "claude_api_key", ""))
     result["geoip_has_key"] = bool(await get_setting(db, "geoip_license_key", ""))
+    # LDAP settings
+    ldap_keys = [
+        "ldap_enabled", "ldap_server", "ldap_bind_dn", "ldap_base_dn",
+        "ldap_user_filter", "ldap_display_attr", "ldap_group_attr",
+        "ldap_admin_group", "ldap_editor_group", "ldap_use_ssl", "ldap_start_tls",
+    ]
+    ldap_defaults = {
+        "ldap_user_filter": "(&(objectClass=person)(sAMAccountName={username}))",
+        "ldap_display_attr": "displayName",
+        "ldap_group_attr": "memberOf",
+    }
+    for key in ldap_keys:
+        result[key] = await get_setting(db, key, ldap_defaults.get(key, ""))
+    result["ldap_has_bind_pw"] = bool(await get_setting(db, "ldap_bind_password", ""))
     return JSONResponse(result)
 
 
@@ -788,3 +802,70 @@ async def delete_api_key(key_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(key)
     await db.commit()
     return JSONResponse({"ok": True})
+
+
+# ── LDAP Settings ────────────────────────────────────────────────────────────
+
+@router.post("/ldap/save")
+async def save_ldap_settings(
+    request: Request,
+    ldap_enabled:      str = Form("0"),
+    ldap_server:       str = Form(""),
+    ldap_bind_dn:      str = Form(""),
+    ldap_bind_password: str = Form(""),
+    ldap_base_dn:      str = Form(""),
+    ldap_user_filter:  str = Form(""),
+    ldap_display_attr: str = Form("displayName"),
+    ldap_group_attr:   str = Form("memberOf"),
+    ldap_admin_group:  str = Form(""),
+    ldap_editor_group: str = Form(""),
+    ldap_use_ssl:      str = Form("0"),
+    ldap_start_tls:    str = Form("0"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save LDAP configuration. Admin only."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+
+    await set_setting(db, "ldap_enabled", "1" if ldap_enabled in ("1", "true") else "0")
+    await set_setting(db, "ldap_server", ldap_server.strip())
+    await set_setting(db, "ldap_bind_dn", ldap_bind_dn.strip())
+    if ldap_bind_password.strip():
+        await set_setting(db, "ldap_bind_password", encrypt_value(ldap_bind_password.strip()))
+    await set_setting(db, "ldap_base_dn", ldap_base_dn.strip())
+    await set_setting(db, "ldap_user_filter", ldap_user_filter.strip() or
+                      "(&(objectClass=person)(sAMAccountName={username}))")
+    await set_setting(db, "ldap_display_attr", ldap_display_attr.strip() or "displayName")
+    await set_setting(db, "ldap_group_attr", ldap_group_attr.strip() or "memberOf")
+    await set_setting(db, "ldap_admin_group", ldap_admin_group.strip())
+    await set_setting(db, "ldap_editor_group", ldap_editor_group.strip())
+    await set_setting(db, "ldap_use_ssl", "1" if ldap_use_ssl in ("1", "true") else "0")
+    await set_setting(db, "ldap_start_tls", "1" if ldap_start_tls in ("1", "true") else "0")
+    await db.commit()
+
+    await log_action(db, request, "settings.update", "setting", target_name="ldap")
+    await db.commit()
+    return JSONResponse({"ok": True})
+
+
+@router.post("/ldap/test")
+async def test_ldap(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Test LDAP connection with currently saved settings. Admin only."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+
+    from routers.auth import _get_ldap_config
+    from services.ldap_auth import test_ldap_connection
+    ldap_cfg = await _get_ldap_config(db)
+    if not ldap_cfg or not ldap_cfg.server:
+        return JSONResponse({"ok": False, "error": "LDAP not configured or not enabled"})
+
+    result = await test_ldap_connection(ldap_cfg)
+    return JSONResponse(result)

@@ -17,6 +17,8 @@ interface UserInfo {
   id: number;
   username: string;
   role: string;
+  auth_source: string;
+  display_name: string | null;
   created_at: string;
 }
 
@@ -146,7 +148,17 @@ export default function UsersPage() {
               {users?.map((u) => {
                 return (
                   <tr key={u.id} className="border-b border-white/[0.06] hover:bg-white/[0.06]">
-                    <td className="px-4 py-3 text-slate-200 font-medium">{u.username}</td>
+                    <td className="px-4 py-3 text-slate-200 font-medium">
+                      <span className="flex items-center gap-2">
+                        {u.display_name || u.username}
+                        {u.auth_source === 'ldap' && (
+                          <span className="px-1.5 py-0.5 rounded bg-violet-500/15 text-[10px] font-medium text-violet-400">LDAP</span>
+                        )}
+                      </span>
+                      {u.display_name && u.display_name !== u.username && (
+                        <span className="text-[10px] text-slate-500">{u.username}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <select
                         value={u.role}
