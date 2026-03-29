@@ -115,7 +115,7 @@ def _where_clauses(
     - field:key=value  — search extracted_fields Map column
     - country:XX       — filter by geo_country
     """
-    clauses = ["timestamp >= {since:DateTime64(3)}"]
+    clauses = ["received_at >= {since:DateTime64(3)}"]
     params: dict = {"since": since}
 
     if sev is not None:
