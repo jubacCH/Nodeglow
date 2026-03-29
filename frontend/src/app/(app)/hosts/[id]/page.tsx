@@ -82,6 +82,19 @@ interface AgentMetrics {
   } | null;
 }
 
+interface DockerContainer {
+  name: string;
+  image: string;
+  state?: string;
+  status?: string;
+  cpu_pct?: number;
+  mem_pct?: number;
+  mem_mb?: number;
+  health?: string;
+  restart_count?: number;
+  update_available?: boolean;
+}
+
 const sevLabels: Record<number, string> = {
   0: 'Emergency', 1: 'Alert', 2: 'Critical', 3: 'Error',
   4: 'Warning', 5: 'Notice', 6: 'Info', 7: 'Debug',
@@ -417,6 +430,72 @@ export default function HostDetailPage() {
                   />
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Docker Containers (from Agent) */}
+          {agent?.extra?.docker_containers && (agent.extra.docker_containers as DockerContainer[]).length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-slate-300 mb-3">
+                Docker Containers
+                <span className="ml-2 text-xs text-slate-500 font-normal">
+                  {(agent.extra.docker_containers as DockerContainer[]).filter((c: DockerContainer) => c.state === 'running').length} running
+                </span>
+              </h3>
+              <GlassCard>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-white/[0.06] text-xs text-slate-500">
+                        <th className="text-left px-4 py-2">Container</th>
+                        <th className="text-left px-4 py-2">Image</th>
+                        <th className="text-left px-4 py-2">Status</th>
+                        <th className="text-right px-4 py-2">CPU</th>
+                        <th className="text-right px-4 py-2">Memory</th>
+                        <th className="text-center px-4 py-2">Health</th>
+                        <th className="text-center px-4 py-2">Restarts</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(agent.extra.docker_containers as DockerContainer[]).map((ct: DockerContainer) => {
+                        const stateColor = ct.state === 'running' ? 'text-emerald-400'
+                          : ct.state === 'exited' ? 'text-red-400' : 'text-amber-400';
+                        return (
+                          <tr key={ct.name} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
+                            <td className="px-4 py-2 font-medium text-slate-200">
+                              <span className="flex items-center gap-2">
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ct.state === 'running' ? 'bg-emerald-500' : ct.state === 'exited' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                                {ct.name}
+                                {ct.update_available && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-[10px] text-amber-400">update</span>
+                                )}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 text-xs text-slate-400 font-mono truncate max-w-[200px]">{ct.image}</td>
+                            <td className={`px-4 py-2 text-xs ${stateColor}`}>{ct.status || ct.state}</td>
+                            <td className="px-4 py-2 text-xs text-right font-mono text-slate-300">
+                              {ct.cpu_pct != null ? `${ct.cpu_pct.toFixed(1)}%` : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-xs text-right font-mono text-slate-300">
+                              {ct.mem_mb != null ? (ct.mem_mb >= 1024 ? `${(ct.mem_mb / 1024).toFixed(1)} GB` : `${Math.round(ct.mem_mb)} MB`) : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-center">
+                              {ct.health === 'healthy' && <span className="text-emerald-400 text-xs">healthy</span>}
+                              {ct.health === 'unhealthy' && <span className="text-red-400 text-xs">unhealthy</span>}
+                              {!ct.health && <span className="text-slate-600 text-xs">—</span>}
+                            </td>
+                            <td className="px-4 py-2 text-center">
+                              {(ct.restart_count ?? 0) > 0
+                                ? <span className="text-amber-400 text-xs">{ct.restart_count}</span>
+                                : <span className="text-slate-600 text-xs">0</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </GlassCard>
             </div>
           )}
 
