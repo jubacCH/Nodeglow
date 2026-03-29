@@ -349,6 +349,11 @@ class ProxmoxIntegration(BaseIntegration):
                     field_type="password", encrypted=True),
         ConfigField(key="verify_ssl", label="Verify SSL",
                     field_type="checkbox", required=False, default=False),
+        ConfigField(key="ssh_user", label="SSH User (for deploy)",
+                    placeholder="root", required=False, default="root"),
+        ConfigField(key="ssh_private_key", label="SSH Private Key",
+                    field_type="password", encrypted=True, required=False,
+                    placeholder="Paste private key for pct exec on Proxmox node"),
     ]
 
     def _api(self) -> ProxmoxAPI:

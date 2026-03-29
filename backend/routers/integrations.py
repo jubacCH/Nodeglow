@@ -630,13 +630,15 @@ async def deploy_syslog_to_lxcs(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate a deploy script for rsyslog + Docker syslog on all running LXCs.
+    """Deploy rsyslog + Docker syslog config to all running LXCs.
 
-    Returns a ready-to-paste shell script that configures:
-      1. /etc/rsyslog.d/99-nodeglow.conf  → system logs (sshd, cron, kernel)
-      2. /etc/docker/daemon.json          → all Docker container logs
+    If SSH credentials are configured, executes directly via SSH → pct exec.
+    Otherwise returns a ready-to-paste shell script.
     """
+    import asyncio
     import socket
+    import tempfile
+    import os
     from database import get_setting
     from integrations.proxmox import ProxmoxAPI
     from models.integration import IntegrationConfig
@@ -649,11 +651,10 @@ async def deploy_syslog_to_lxcs(
     config_dict = int_svc.decrypt_config(cfg.config_json)
     syslog_port = await get_setting(db, "syslog_port", "1514")
 
-    # Detect Nodeglow's internal IP (not the user's browser IP)
+    # Detect Nodeglow's internal IP
     nodeglow_ip = await get_setting(db, "nodeglow_ip", "")
     if not nodeglow_ip:
         try:
-            # Connect to Proxmox host to determine which local IP we use
             proxmox_host = config_dict["host"].split("://")[-1].split(":")[0].split("/")[0]
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect((proxmox_host, 8006))
@@ -671,15 +672,11 @@ async def deploy_syslog_to_lxcs(
         verify_ssl=config_dict.get("verify_ssl", False),
     )
 
-    # Get all running LXCs
     resources = await api.cluster_resources()
-    lxcs = [
-        r for r in resources
-        if r.get("type") == "lxc" and r.get("status") == "running"
-    ]
+    lxcs = [r for r in resources if r.get("type") == "lxc" and r.get("status") == "running"]
 
     if not lxcs:
-        return JSONResponse({"ok": True, "results": [],
+        return JSONResponse({"ok": True, "results": [], "deployed": 0, "failed": 0,
                              "message": "No running LXCs found",
                              "manual_script": None, "syslog_target": syslog_target})
 
@@ -690,6 +687,88 @@ async def deploy_syslog_to_lxcs(
         '}'
     )
 
+    # Per-LXC deploy command (run inside the LXC via pct exec)
+    def _lxc_cmd(vmid: int) -> str:
+        return (
+            f'pct exec {vmid} -- bash -c "'
+            f'mkdir -p /etc/rsyslog.d && '
+            f'echo \\"*.* @@{syslog_target}\\" > /etc/rsyslog.d/99-nodeglow.conf && '
+            f'(systemctl restart rsyslog 2>/dev/null || service rsyslog restart 2>/dev/null || true) && '
+            f'if command -v docker >/dev/null 2>&1; then '
+            f'mkdir -p /etc/docker && '
+            f"echo \\'{daemon_json}\\' > /etc/docker/daemon.json && "
+            f'(systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true) && '
+            f'echo docker+rsyslog; '
+            f'else echo rsyslog-only; fi'
+            f'"'
+        )
+
+    ssh_key = config_dict.get("ssh_private_key", "").strip()
+    ssh_user = config_dict.get("ssh_user", "root").strip() or "root"
+    proxmox_host = config_dict["host"].split("://")[-1].split(":")[0].split("/")[0]
+
+    # ── SSH deploy (automatic) ───────────────────────────────────────────
+    if ssh_key:
+        results = []
+        deployed = 0
+        failed = 0
+
+        # Write key to temp file
+        key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
+        key_file.write(ssh_key if ssh_key.endswith("\n") else ssh_key + "\n")
+        key_file.close()
+        os.chmod(key_file.name, 0o600)
+
+        try:
+            for lxc in lxcs:
+                vmid = lxc.get("vmid")
+                name = lxc.get("name", f"ct-{vmid}")
+                cmd = _lxc_cmd(vmid)
+
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "ssh", "-i", key_file.name,
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "ConnectTimeout=10",
+                        "-o", "IdentitiesOnly=yes",
+                        f"{ssh_user}@{proxmox_host}",
+                        cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    if proc.returncode == 0:
+                        output = stdout.decode().strip()
+                        results.append({"vmid": vmid, "name": name, "status": "ok",
+                                        "detail": output})
+                        deployed += 1
+                    else:
+                        err = stderr.decode().strip() or f"exit code {proc.returncode}"
+                        results.append({"vmid": vmid, "name": name, "status": "failed",
+                                        "error": err})
+                        failed += 1
+                except asyncio.TimeoutError:
+                    results.append({"vmid": vmid, "name": name, "status": "failed",
+                                    "error": "Timeout (30s)"})
+                    failed += 1
+                except Exception as exc:
+                    results.append({"vmid": vmid, "name": name, "status": "failed",
+                                    "error": str(exc)})
+                    failed += 1
+        finally:
+            os.unlink(key_file.name)
+
+        return JSONResponse({
+            "ok": True,
+            "mode": "ssh",
+            "deployed": deployed,
+            "failed": failed,
+            "results": results,
+            "manual_script": None,
+            "syslog_target": syslog_target,
+        })
+
+    # ── No SSH → generate script ─────────────────────────────────────────
     vmids = " ".join(str(lxc.get("vmid")) for lxc in lxcs)
     results = [
         {"vmid": lxc.get("vmid"), "name": lxc.get("name", f"ct-{lxc.get('vmid')}")}
@@ -728,6 +807,9 @@ async def deploy_syslog_to_lxcs(
 
     return JSONResponse({
         "ok": True,
+        "mode": "script",
+        "deployed": 0,
+        "failed": 0,
         "results": results,
         "manual_script": manual_script,
         "syslog_target": syslog_target,
