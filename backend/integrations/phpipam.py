@@ -119,7 +119,9 @@ async def sync_phpipam_hosts(db: "AsyncSession", config: dict) -> dict:
             if ip in existing:
                 host = existing[ip]
                 changed = False
-                if host.name == host.hostname and name != ip:
+                # Update name if it changed in phpIPAM (only for phpipam-sourced or unnamed hosts)
+                if name != ip and host.name != name[:128] and host.source in ("phpipam", "manual"):
+                    logger.info("phpIPAM rename: %s → %s (%s)", host.name, name[:128], ip)
                     host.name = name[:128]
                     changed = True
                 if host.source == "manual":

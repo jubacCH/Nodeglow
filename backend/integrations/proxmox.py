@@ -243,7 +243,13 @@ async def import_proxmox_hosts(cluster_name: str, data: dict, db) -> dict:
     from sqlalchemy import select
 
     existing_q = await db.execute(select(PingHost))
-    existing: dict[str, PingHost] = {h.hostname: h for h in existing_q.scalars().all()}
+    existing_all: list[PingHost] = existing_q.scalars().all()
+    by_hostname: dict[str, PingHost] = {h.hostname: h for h in existing_all}
+    # Index proxmox-sourced hosts by source_detail for stable VMID matching
+    by_source_key: dict[str, PingHost] = {}
+    for h in existing_all:
+        if h.source == "proxmox" and h.source_detail and ":" in h.source_detail:
+            by_source_key[h.source_detail] = h
 
     # Import nodes (physical hosts) + VMs + LXCs
     all_entries = []
@@ -265,26 +271,46 @@ async def import_proxmox_hosts(cluster_name: str, data: dict, db) -> dict:
             skipped += 1
             continue
 
-        if hostname in existing:
-            host = existing[hostname]
+        # Build stable source key: "cluster:vmid" for VMs/LXCs, "cluster:node:name" for nodes
+        vmid = g.get("id")
+        if vmid and not g.get("_is_node"):
+            source_key = f"{cluster_name}:{vmid}"
+        else:
+            source_key = f"{cluster_name}:node:{hostname}"
+
+        # Match by stable source_key first, fall back to hostname
+        host = by_source_key.get(source_key) or by_hostname.get(hostname)
+
+        if host:
             changed = False
             if host.source == "manual":
                 host.source = "proxmox"
-                host.source_detail = cluster_name
+                changed = True
+            # Update name if it changed in Proxmox
+            if host.source == "proxmox" and host.name != hostname:
+                logger.info("Proxmox rename: %s → %s", host.name, hostname)
+                host.name = hostname
+                host.hostname = hostname
+                changed = True
+            # Store stable source_key for future matching
+            if host.source_detail != source_key:
+                host.source_detail = source_key
                 changed = True
             if changed:
                 dirty = True
             merged += 1
         else:
-            db.add(PingHost(
-                name=g["name"],
+            new_host = PingHost(
+                name=hostname,
                 hostname=hostname,
                 check_type="icmp",
                 enabled=g.get("running", False),
                 source="proxmox",
-                source_detail=cluster_name,
-            ))
-            existing[hostname] = True  # type: ignore[assignment]
+                source_detail=source_key,
+            )
+            db.add(new_host)
+            by_hostname[hostname] = new_host
+            by_source_key[source_key] = new_host
             added += 1
             dirty = True
 
