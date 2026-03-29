@@ -641,6 +641,7 @@ async def deploy_syslog_to_lxcs(
     """
     from database import get_setting
     from integrations.proxmox import ProxmoxAPI
+    from models.integration import IntegrationConfig
     import services.integration as int_svc
 
     cfg = await db.get(IntegrationConfig, config_id)

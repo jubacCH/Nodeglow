@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from datetime import datetime, timezone
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
