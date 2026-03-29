@@ -740,25 +740,89 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    # ── Containers (Portainer) ────────────────────────────────────────────────
+    # ── Containers (Portainer + Agent Docker data) ─────────────────────────────
     container_data = None
+    all_containers = []  # unified list across all sources
     try:
+        # Portainer containers
         port_configs = [c for c in all_configs if c.type == "portainer"]
         if port_configs:
             port_snaps = all_snaps_cache.get("portainer", {})
-            envs = []
-            total_running = total_stopped = 0
             for cfg in port_configs:
                 snap = port_snaps.get(cfg.id)
                 if not snap or not snap.ok or not snap.data_json:
                     continue
                 pd = json.loads(snap.data_json)
                 for env in pd.get("environments", []):
-                    envs.append(env)
-                    total_running += env.get("containers_running", 0)
-                    total_stopped += env.get("containers_stopped", 0)
-            if envs:
-                container_data = {"environments": envs, "running": total_running, "stopped": total_stopped}
+                    for ct in env.get("containers", []):
+                        all_containers.append({
+                            "name": ct.get("name", "?"),
+                            "image": ct.get("image", "?"),
+                            "state": ct.get("state", "unknown"),
+                            "host": env.get("name", cfg.name),
+                            "source": "portainer",
+                        })
+
+        # Agent Docker containers (from latest snapshots, already queried above)
+        try:
+            from models.agent import Agent, AgentSnapshot as ASnap
+            from sqlalchemy import func as sa_func
+            a_latest = (
+                select(ASnap.agent_id, sa_func.max(ASnap.timestamp).label("max_ts"))
+                .group_by(ASnap.agent_id).subquery()
+            )
+            a_rows = await db.execute(
+                select(ASnap, Agent.hostname)
+                .join(a_latest, (ASnap.agent_id == a_latest.c.agent_id) & (ASnap.timestamp == a_latest.c.max_ts))
+                .join(Agent, Agent.id == ASnap.agent_id)
+                .where(Agent.enabled == True)
+            )
+            for asnap, hostname in a_rows:
+                if not asnap.data_json:
+                    continue
+                try:
+                    ad = json.loads(asnap.data_json)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                for ct in ad.get("docker_containers", []):
+                    all_containers.append({
+                        "name": ct.get("name", "?"),
+                        "image": ct.get("image", "?"),
+                        "state": ct.get("state", "running" if "Up" in ct.get("status", "") else "exited"),
+                        "host": hostname,
+                        "source": "agent",
+                        "cpu_pct": ct.get("cpu_pct"),
+                        "mem_pct": ct.get("mem_pct"),
+                        "mem_mb": ct.get("mem_mb"),
+                        "health": ct.get("health"),
+                        "restart_count": ct.get("restart_count", 0),
+                        "update_available": ct.get("update_available", False),
+                    })
+        except Exception:
+            pass
+
+        # Deduplicate: if same container name + host from both sources, prefer agent (richer data)
+        seen = set()
+        deduped = []
+        # Agent first (richer data)
+        for c in sorted(all_containers, key=lambda x: 0 if x.get("source") == "agent" else 1):
+            key = (c.get("host", ""), c.get("name", ""))
+            if key not in seen:
+                seen.add(key)
+                deduped.append(c)
+        all_containers = deduped
+
+        total_running = sum(1 for c in all_containers if c.get("state") == "running")
+        total_stopped = len(all_containers) - total_running
+        updates_available = sum(1 for c in all_containers if c.get("update_available"))
+
+        if all_containers:
+            container_data = {
+                "running": total_running,
+                "stopped": total_stopped,
+                "updates_available": updates_available,
+                "containers": all_containers,
+            }
     except Exception:
         pass
 

@@ -28,7 +28,7 @@ import time
 import urllib.error
 import urllib.request
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 USER_AGENT = f"NodeglowAgent/{__version__} ({platform.system()}; {platform.machine()})"
 
@@ -259,19 +259,138 @@ def get_top_processes(n=10):
 
 
 def get_docker_containers():
-    """List running Docker containers if docker is available."""
+    """Collect Docker container info: status, health, resource usage, image digest."""
     containers = []
     try:
+        # Get all containers (running + stopped) with extended info
+        fmt = "{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.State}}\t{{.ID}}"
         out = subprocess.check_output(
-            ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"],
+            ["docker", "ps", "-a", "--format", fmt],
             stderr=subprocess.DEVNULL, text=True, timeout=5,
         )
         for line in out.strip().splitlines():
             parts = line.split("\t")
-            if len(parts) >= 3:
-                containers.append({"name": parts[0], "status": parts[1], "image": parts[2]})
+            if len(parts) < 5:
+                continue
+            containers.append({
+                "name": parts[0], "status": parts[1], "image": parts[2],
+                "state": parts[3], "id": parts[4][:12],
+            })
+    except Exception:
+        return containers
+
+    if not containers:
+        return containers
+
+    # Get resource stats for running containers
+    try:
+        fmt = "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}"
+        out = subprocess.check_output(
+            ["docker", "stats", "--no-stream", "--format", fmt],
+            stderr=subprocess.DEVNULL, text=True, timeout=10,
+        )
+        stats_map = {}
+        for line in out.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 4:
+                name = parts[0].lstrip("/")
+                try:
+                    cpu = float(parts[1].rstrip("%"))
+                except (ValueError, IndexError):
+                    cpu = 0.0
+                try:
+                    mem_pct = float(parts[3].rstrip("%"))
+                except (ValueError, IndexError):
+                    mem_pct = 0.0
+                # Parse mem usage "123.4MiB / 1GiB"
+                mem_mb = 0.0
+                try:
+                    used_part = parts[2].split("/")[0].strip()
+                    if "GiB" in used_part:
+                        mem_mb = float(used_part.replace("GiB", "").strip()) * 1024
+                    elif "MiB" in used_part:
+                        mem_mb = float(used_part.replace("MiB", "").strip())
+                    elif "KiB" in used_part:
+                        mem_mb = float(used_part.replace("KiB", "").strip()) / 1024
+                except (ValueError, IndexError):
+                    pass
+                stats_map[name] = {"cpu_pct": cpu, "mem_pct": mem_pct, "mem_mb": round(mem_mb, 1)}
+        for c in containers:
+            s = stats_map.get(c["name"])
+            if s:
+                c.update(s)
     except Exception:
         pass
+
+    # Get health status + restart count via docker inspect
+    try:
+        ids = " ".join(c["id"] for c in containers)
+        fmt = "{{.Name}}\t{{.RestartCount}}\t{{.State.Health.Status}}\t{{.Image}}"
+        out = subprocess.check_output(
+            ["docker", "inspect", "--format", fmt] + [c["id"] for c in containers],
+            stderr=subprocess.DEVNULL, text=True, timeout=10,
+        )
+        inspect_map = {}
+        for line in out.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 4:
+                name = parts[0].lstrip("/")
+                restarts = 0
+                try:
+                    restarts = int(parts[1])
+                except ValueError:
+                    pass
+                health = parts[2] if parts[2] and parts[2] != "<no value>" else None
+                image_hash = parts[3][:19] if parts[3] else None
+                inspect_map[name] = {
+                    "restart_count": restarts,
+                    "health": health,
+                    "image_hash": image_hash,
+                }
+        for c in containers:
+            info = inspect_map.get(c["name"])
+            if info:
+                c.update(info)
+    except Exception:
+        pass
+
+    # Check for available image updates (compare local vs registry digest)
+    try:
+        # Get local image digests
+        fmt = "{{.Repository}}:{{.Tag}}\t{{.ID}}"
+        out = subprocess.check_output(
+            ["docker", "image", "ls", "--format", fmt, "--no-trunc"],
+            stderr=subprocess.DEVNULL, text=True, timeout=5,
+        )
+        local_digests = {}
+        for line in out.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                local_digests[parts[0]] = parts[1]
+
+        # Try pulling latest manifests (non-destructive, metadata only)
+        for c in containers:
+            img = c.get("image", "")
+            if not img or img.startswith("sha256:"):
+                continue
+            local_id = local_digests.get(img) or local_digests.get(img + ":latest")
+            if not local_id:
+                continue
+            try:
+                result = subprocess.run(
+                    ["docker", "manifest", "inspect", img],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    import hashlib as _hl
+                    remote_digest = _hl.sha256(result.stdout.encode()).hexdigest()[:16]
+                    local_short = local_id.replace("sha256:", "")[:16]
+                    c["update_available"] = remote_digest != local_short
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     return containers
 
 

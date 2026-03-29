@@ -490,8 +490,14 @@ export default function DashboardPage() {
 
         {data?.container_data && (
           <GlassCard className="p-5">
-            <WidgetHeader icon={Container} iconColor="text-cyan-400" title="Containers" />
-            <div className="grid grid-cols-2 gap-3 text-center mb-3">
+            <WidgetHeader icon={Container} iconColor="text-cyan-400" title="Containers"
+              trailing={data.container_data.updates_available ? (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-[10px] font-medium text-amber-400">
+                  {data.container_data.updates_available} update{data.container_data.updates_available > 1 ? 's' : ''}
+                </span>
+              ) : undefined}
+            />
+            <div className="grid grid-cols-3 gap-3 text-center mb-3">
               <div>
                 <p className="text-2xl font-bold text-emerald-400">{data.container_data.running}</p>
                 <p className="text-[10px] text-slate-500 uppercase">Running</p>
@@ -500,18 +506,44 @@ export default function DashboardPage() {
                 <p className="text-2xl font-bold text-slate-400">{data.container_data.stopped}</p>
                 <p className="text-[10px] text-slate-500 uppercase">Stopped</p>
               </div>
+              <div>
+                <p className="text-2xl font-bold text-slate-200">{data.container_data.containers?.length ?? 0}</p>
+                <p className="text-[10px] text-slate-500 uppercase">Total</p>
+              </div>
             </div>
-            <div className="space-y-1 max-h-[100px] overflow-y-auto">
-              {data.container_data.environments.map((env, i) => (
-                <div key={i} className="flex items-center gap-2 px-2 py-1">
-                  <span className="flex-1 text-xs text-slate-300 truncate">{env.name}</span>
-                  <span className="text-xs font-mono text-emerald-400">{env.containers_running}</span>
-                  <span className="text-[10px] text-slate-600">/</span>
-                  <span className="text-xs font-mono text-slate-500">
-                    {env.containers_running + env.containers_stopped}
-                  </span>
-                </div>
-              ))}
+            <div className="space-y-0.5 max-h-[200px] overflow-y-auto">
+              {(data.container_data.containers ?? []).map((ct, i) => {
+                const stateColor = ct.state === 'running' ? 'bg-emerald-500'
+                  : ct.state === 'exited' ? 'bg-red-500' : 'bg-amber-500';
+                const healthIcon = ct.health === 'healthy' ? '✓'
+                  : ct.health === 'unhealthy' ? '✗' : null;
+                return (
+                  <div key={`${ct.host}-${ct.name}-${i}`} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-white/[0.03]">
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${stateColor}`} />
+                    <span className="flex-1 text-xs text-slate-200 truncate">{ct.name}</span>
+                    {healthIcon && (
+                      <span className={`text-[10px] ${ct.health === 'healthy' ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {healthIcon}
+                      </span>
+                    )}
+                    {ct.cpu_pct != null && ct.cpu_pct > 0 && (
+                      <span className="text-[10px] font-mono text-sky-400 w-10 text-right">{ct.cpu_pct.toFixed(1)}%</span>
+                    )}
+                    {ct.mem_mb != null && ct.mem_mb > 0 && (
+                      <span className="text-[10px] font-mono text-violet-400 w-14 text-right">
+                        {ct.mem_mb >= 1024 ? `${(ct.mem_mb / 1024).toFixed(1)}G` : `${Math.round(ct.mem_mb)}M`}
+                      </span>
+                    )}
+                    {(ct.restart_count ?? 0) > 0 && (
+                      <span className="text-[10px] text-amber-400">↻{ct.restart_count}</span>
+                    )}
+                    {ct.update_available && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Update available" />
+                    )}
+                    <span className="text-[10px] text-slate-600 truncate max-w-[60px]">{ct.host}</span>
+                  </div>
+                );
+              })}
             </div>
           </GlassCard>
         )}
