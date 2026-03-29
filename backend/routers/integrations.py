@@ -706,12 +706,8 @@ async def deploy_syslog_to_lxcs(
                              "message": "No running LXCs found",
                              "manual_script": None, "syslog_target": syslog_target})
 
-    daemon_json = (
-        '{"log-driver":"syslog",'
-        f'"log-opts":{{"syslog-address":"tcp://{syslog_target}",'
-        '"tag":"{{.Name}}","syslog-format":"rfc5424"}}'
-        '}'
-    )
+    # Docker → journald (local, no network dependency) → rsyslog forwards to Nodeglow
+    daemon_json = '{"log-driver":"journald","log-opts":{"tag":"{{.Name}}"}}'
 
     # Per-LXC deploy command (run inside the LXC via pct exec)
     def _lxc_cmd(vmid: int) -> str:
@@ -804,7 +800,7 @@ async def deploy_syslog_to_lxcs(
 
     manual_script = (
         f'# Run on your Proxmox node shell\n'
-        f'# Configures rsyslog (system logs) + Docker syslog driver (container logs)\n'
+        f'# Configures rsyslog (system logs) + Docker journald driver (container logs)\n'
         f'SYSLOG_TARGET="{syslog_target}"\n'
         f'\n'
         f'for VMID in {vmids}; do\n'
@@ -816,7 +812,7 @@ async def deploy_syslog_to_lxcs(
         f'    echo \\"*.* @@$SYSLOG_TARGET\\" > /etc/rsyslog.d/99-nodeglow.conf && \\\n'
         f'    (systemctl restart rsyslog 2>/dev/null || service rsyslog restart 2>/dev/null || true)"\n'
         f'\n'
-        f'  # Docker container logs → Nodeglow (if Docker installed)\n'
+        f'  # Docker → journald → rsyslog → Nodeglow (if Docker installed)\n'
         f'  pct exec $VMID -- bash -c "\\\n'
         f'    if command -v docker >/dev/null 2>&1; then \\\n'
         f'      mkdir -p /etc/docker && \\\n'
