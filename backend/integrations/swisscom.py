@@ -68,6 +68,7 @@ class InternetBoxAPI:
 
     async def fetch_all(self) -> dict:
         """Collect all data from the Internet-Box."""
+        # verify=False: Internet-Box uses self-signed cert on local network
         async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
             self._context = await self._login(client)
 
@@ -186,6 +187,7 @@ class InternetBoxAPI:
     async def health_check(self) -> bool:
         """Quick login test."""
         try:
+            # verify=False: Internet-Box uses self-signed cert on local network
             async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
                 await self._login(client)
                 return True

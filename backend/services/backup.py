@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 # Tables to export (in dependency order — parents before children)
-EXPORT_TABLES = [
+EXPORT_TABLES: list[str] = [
     "settings",
     "users",
     "ping_hosts",
@@ -35,6 +35,15 @@ EXPORT_TABLES = [
     "audit_logs",
 ]
 
+_ALLOWED_TABLES = frozenset(EXPORT_TABLES)
+
+
+def _safe_table(name: str) -> str:
+    """Validate table name against whitelist and return quoted identifier."""
+    if name not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table: {name}")
+    return f'"{name}"'
+
 
 async def export_backup(db: AsyncSession) -> dict:
     """Export all PostgreSQL tables as a JSON dict."""
@@ -49,7 +58,7 @@ async def export_backup(db: AsyncSession) -> dict:
 
     for table_name in EXPORT_TABLES:
         try:
-            result = await db.execute(text(f"SELECT * FROM {table_name}"))
+            result = await db.execute(text(f"SELECT * FROM {_safe_table(table_name)}"))
             rows = result.mappings().all()
             backup["tables"][table_name] = [
                 {k: _serialize(v) for k, v in dict(row).items()}
@@ -67,7 +76,7 @@ async def get_backup_info(db: AsyncSession) -> dict:
     tables = {}
     for table_name in EXPORT_TABLES:
         try:
-            result = await db.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+            result = await db.execute(text(f"SELECT COUNT(*) FROM {_safe_table(table_name)}"))
             count = result.scalar()
             tables[table_name] = count
         except Exception:
@@ -105,7 +114,7 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
         # Truncate in reverse order (children first)
         for table_name in reversed(EXPORT_TABLES):
             if table_name in tables_data:
-                await db.execute(text(f"TRUNCATE TABLE {table_name} CASCADE"))
+                await db.execute(text(f"TRUNCATE TABLE {_safe_table(table_name)} CASCADE"))
 
         # Get valid column names for each table from the DB schema
         _valid_columns: dict[str, set[str]] = {}
@@ -139,21 +148,22 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
                 logger.warning("Ignoring unknown columns in %s: %s", table_name, rejected)
 
             placeholders = ", ".join(f":{c}" for c in cols)
-            col_names = ", ".join(cols)
+            col_names = ", ".join(f'"{c}"' for c in cols)
 
             for row in rows:
                 # Only include validated columns
                 safe_row = {c: row.get(c) for c in cols}
                 await db.execute(
-                    text(f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})"),
+                    text(f"INSERT INTO {_safe_table(table_name)} ({col_names}) VALUES ({placeholders})"),
                     safe_row,
                 )
 
             # Reset sequence
             try:
+                safe = _safe_table(table_name)
                 await db.execute(text(
                     f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), "
-                    f"COALESCE((SELECT MAX(id) FROM {table_name}), 1))"
+                    f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
                 ))
             except Exception:
                 pass

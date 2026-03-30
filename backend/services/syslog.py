@@ -18,10 +18,15 @@ log = logging.getLogger("nodeglow.syslog")
 
 # ── Per-IP rate limiter for syslog ingestion ────────────────────────────────
 
+_MAX_MSG_SIZE = 64 * 1024       # 64 KB max syslog message
+_MAX_TCP_CONNECTIONS = 100      # max concurrent TCP connections
 _SYSLOG_RATE_WINDOW = 10        # seconds
 _SYSLOG_RATE_MAX = 500          # max messages per IP per window
+_GLOBAL_RATE_MAX = 10_000       # max total messages per window across all IPs
 _ip_msg_counts: dict[str, list] = {}  # ip -> [count, window_start]
 _rate_dropped: dict[str, int] = {}    # ip -> dropped count (for periodic logging)
+_global_msg_count: list = [0, 0.0]    # [count, window_start]
+_tcp_connection_count: int = 0        # active TCP connections
 
 
 def _syslog_rate_ok(source_ip: str) -> bool:
@@ -41,6 +46,18 @@ def _syslog_rate_ok(source_ip: str) -> bool:
         _rate_dropped[source_ip] = _rate_dropped.get(source_ip, 0) + 1
         return False
     return True
+
+
+def _global_rate_ok() -> bool:
+    """Check global rate limit across all IPs."""
+    import time
+    now = time.monotonic()
+    if now - _global_msg_count[1] >= _SYSLOG_RATE_WINDOW:
+        _global_msg_count[0] = 1
+        _global_msg_count[1] = now
+        return True
+    _global_msg_count[0] += 1
+    return _global_msg_count[0] <= _GLOBAL_RATE_MAX
 
 
 # ── RFC 3164 (BSD syslog) parser ────────────────────────────────────────────
@@ -367,6 +384,7 @@ def unsubscribe(q: asyncio.Queue):
 _buffer: list[dict] = []
 _buffer_lock = asyncio.Lock()
 _BUFFER_SIZE = 100
+_BUFFER_MAX = 50_000  # hard cap — drop oldest if exceeded
 _FLUSH_INTERVAL = 2.0  # seconds
 
 
@@ -400,6 +418,11 @@ async def _enqueue(parsed: dict):
             pass
     async with _buffer_lock:
         _buffer.append(parsed)
+        # Drop oldest entries if buffer exceeds hard cap
+        if len(_buffer) > _BUFFER_MAX:
+            dropped = len(_buffer) - _BUFFER_MAX
+            _buffer = _buffer[dropped:]
+            log.warning("Syslog buffer overflow: dropped %d oldest messages", dropped)
         if len(_buffer) >= _BUFFER_SIZE:
             await _flush_buffer()
 
@@ -446,10 +469,14 @@ async def _flush_loop():
 
 class SyslogUDPProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple):
+        if len(data) > _MAX_MSG_SIZE:
+            return  # drop oversized message
         source_ip = addr[0]
         if not _is_allowed_source(source_ip):
             return
         if not _syslog_rate_ok(source_ip):
+            return
+        if not _global_rate_ok():
             return
         try:
             raw = data.decode("utf-8", errors="replace")
@@ -470,20 +497,33 @@ class SyslogTCPHandler:
         self.writer = writer
 
     async def handle(self):
+        global _tcp_connection_count
         addr = self.writer.get_extra_info("peername")
         source_ip = addr[0] if addr else "0.0.0.0"
         if not _is_allowed_source(source_ip):
             self.writer.close()
             return
+        if _tcp_connection_count >= _MAX_TCP_CONNECTIONS:
+            log.warning("Syslog TCP connection limit reached (%d), rejecting %s",
+                        _MAX_TCP_CONNECTIONS, source_ip)
+            self.writer.close()
+            return
+        _tcp_connection_count += 1
         try:
             while True:
-                line = await asyncio.wait_for(self.reader.readline(), timeout=300)
+                line = await asyncio.wait_for(
+                    self.reader.readline(), timeout=60
+                )
                 if not line:
                     break
+                if len(line) > _MAX_MSG_SIZE:
+                    continue  # drop oversized message
                 raw = line.decode("utf-8", errors="replace").strip()
                 if not raw:
                     continue
                 if not _syslog_rate_ok(source_ip):
+                    continue
+                if not _global_rate_ok():
                     continue
                 parsed = parse_syslog(raw, source_ip)
                 if not parsed:
@@ -493,6 +533,7 @@ class SyslogTCPHandler:
         except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
             pass
         finally:
+            _tcp_connection_count -= 1
             self.writer.close()
 
 

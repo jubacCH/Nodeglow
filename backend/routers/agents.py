@@ -8,7 +8,13 @@ import logging
 import secrets
 
 def _hash_agent_token(token: str) -> str:
-    """SHA-256 hash an agent token for secure storage."""
+    """HMAC-SHA256 hash an agent token for secure storage."""
+    from config import SECRET_KEY
+    return hmac.new(SECRET_KEY.encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
+def _hash_agent_token_legacy(token: str) -> str:
+    """Legacy plain SHA256 — for migration from pre-HMAC tokens."""
     return hashlib.sha256(token.encode()).hexdigest()
 from datetime import datetime
 from pathlib import Path
@@ -41,7 +47,7 @@ async def _get_enrollment_key() -> str:
 # ── API: Agent self-enrollment ────────────────────────────────────────────────
 
 @router.post("/api/agent/enroll")
-@rate_limit(max_requests=30, window_seconds=60)
+@rate_limit(max_requests=5, window_seconds=60)
 async def agent_enroll(request: Request):
     """Agent self-registers using the enrollment key. Returns a token."""
     try:
@@ -56,6 +62,12 @@ async def agent_enroll(request: Request):
 
     if not enroll_key or not hostname:
         return JSONResponse({"error": "enrollment_key and hostname required"}, status_code=400)
+
+    import re
+    if len(hostname) > 253 or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]*$', hostname):
+        return JSONResponse({"error": "Invalid hostname"}, status_code=400)
+
+    logger.info("Agent enrollment attempt: hostname=%s, ip=%s", hostname, request.client.host if request.client else "unknown")
 
     expected_key = await _get_enrollment_key()
     if not hmac.compare_digest(enroll_key, expected_key):
@@ -77,6 +89,7 @@ async def agent_enroll(request: Request):
             existing.arch = arch or existing.arch
             existing.last_seen = datetime.utcnow()
             await db.commit()
+            logger.info("Agent re-enrolled successfully: hostname=%s, id=%d", hostname, existing.id)
             return {"ok": True, "token": raw_token, "agent_id": existing.id}
 
         # Create new agent
@@ -140,7 +153,14 @@ async def agent_report(request: Request):
         result = await db.execute(select(Agent).where(Agent.token == token_hash, Agent.enabled == True))
         agent = result.scalar_one_or_none()
         if not agent:
-            return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
+            # Fallback: try legacy plain SHA256 hash and migrate if found
+            legacy_hash = _hash_agent_token_legacy(token)
+            result = await db.execute(select(Agent).where(Agent.token == legacy_hash, Agent.enabled == True))
+            agent = result.scalar_one_or_none()
+            if agent:
+                agent.token = token_hash  # migrate to HMAC
+            else:
+                return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
 
         # Update agent metadata
         agent.last_seen = datetime.utcnow()
@@ -228,7 +248,15 @@ async def agent_logs(request: Request):
         result = await db.execute(select(Agent).where(Agent.token == token_hash, Agent.enabled == True))
         agent = result.scalar_one_or_none()
         if not agent:
-            return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
+            # Fallback: try legacy plain SHA256 hash and migrate if found
+            legacy_hash = _hash_agent_token_legacy(token)
+            result = await db.execute(select(Agent).where(Agent.token == legacy_hash, Agent.enabled == True))
+            agent = result.scalar_one_or_none()
+            if agent:
+                agent.token = token_hash  # migrate to HMAC
+                await db.commit()
+            else:
+                return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
 
     hostname = body.get("hostname", agent.hostname or "unknown")
     logs = body.get("logs", [])
@@ -374,7 +402,7 @@ async def agent_add(request: Request):
     token = secrets.token_hex(24)  # 48 char hex token
 
     async with AsyncSessionLocal() as db:
-        agent = Agent(name=name, token=token)
+        agent = Agent(name=name, token=_hash_agent_token(token))
         db.add(agent)
         await db.commit()
         await db.refresh(agent)
@@ -387,6 +415,10 @@ async def agent_add(request: Request):
 
 @router.post("/agents/{agent_id}/delete")
 async def agent_delete(request: Request, agent_id: int):
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
     async with AsyncSessionLocal() as db:
         # Get agent hostname to clean up PingHost
         result = await db.execute(select(Agent).where(Agent.id == agent_id))
@@ -416,10 +448,14 @@ async def agent_delete(request: Request, agent_id: int):
 
 @router.post("/agents/{agent_id}/regenerate-token")
 async def agent_regenerate_token(request: Request, agent_id: int):
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
     new_token = secrets.token_hex(24)
     async with AsyncSessionLocal() as db:
         await db.execute(
-            update(Agent).where(Agent.id == agent_id).values(token=new_token)
+            update(Agent).where(Agent.id == agent_id).values(token=_hash_agent_token(new_token))
         )
         await db.commit()
     return RedirectResponse(f"/agents/{agent_id}", status_code=302)
@@ -429,6 +465,10 @@ async def agent_regenerate_token(request: Request, agent_id: int):
 
 @router.post("/agents/{agent_id}/settings")
 async def agent_save_settings(request: Request, agent_id: int):
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role not in ("admin", "editor"):
+        return JSONResponse({"error": "Editor or admin access required"}, status_code=403)
     form = await request.form()
     # Build log_levels from checkbox values: level_1, level_2, level_3, level_4, level_5
     levels = []
@@ -479,6 +519,10 @@ async def agent_save_settings(request: Request, agent_id: int):
 @router.post("/agents/settings")
 async def agent_global_settings(request: Request):
     """Save global agent settings (server URL, enrollment key)."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
     form = await request.form()
     url = form.get("agent_server_url", "").strip().rstrip("/")
     async with AsyncSessionLocal() as db:

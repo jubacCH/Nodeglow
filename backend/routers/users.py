@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db
 from models.settings import Session as UserSession, _hash_token
+from ratelimit import rate_limit
+from utils.password import validate_password
 
 router = APIRouter(prefix="/users")
 api_router = APIRouter()
@@ -54,6 +56,9 @@ async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
     role = body.get("role", "readonly")
     if not username or not password:
         return JSONResponse({"error": "Username and password required"}, status_code=400)
+    pw_error = validate_password(password)
+    if pw_error:
+        return JSONResponse({"error": pw_error}, status_code=400)
     if role not in VALID_ROLES:
         role = "readonly"
     existing = (await db.execute(select(User).where(User.username == username))).scalar_one_or_none()
@@ -87,6 +92,7 @@ async def delete_user_api(user_id: int, request: Request, db: AsyncSession = Dep
 
 
 @api_router.patch("/api/users/{user_id}")
+@rate_limit(max_requests=5, window_seconds=300)
 async def update_user_api(user_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     """Update user role or password (admin only, JSON API)."""
     current = getattr(request.state, "current_user", None)
@@ -106,6 +112,9 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
                 return JSONResponse({"error": "Cannot demote the last admin"}, status_code=400)
         user.role = new_role
     if "password" in body and body["password"]:
+        pw_error = validate_password(body["password"])
+        if pw_error:
+            return JSONResponse({"error": pw_error}, status_code=400)
         user.password_hash = bcrypt.hashpw(body["password"].encode(), bcrypt.gensalt(rounds=12)).decode()
         await db.execute(sa_delete(UserSession).where(UserSession.user_id == user_id))
     await db.commit()
@@ -113,6 +122,7 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
 
 
 @router.post("/me/password")
+@rate_limit(max_requests=5, window_seconds=300)
 async def change_own_password(
     request: Request,
     password: str = Form(...),
@@ -123,6 +133,9 @@ async def change_own_password(
     if not user:
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url="/login", status_code=303)
+    pw_error = validate_password(password)
+    if pw_error:
+        return JSONResponse({"error": pw_error}, status_code=400)
     db_user = await db.get(User, user.id)
     if db_user:
         db_user.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
@@ -170,6 +183,9 @@ async def add_user(
 ):
     if _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
+    pw_error = validate_password(password)
+    if pw_error:
+        return JSONResponse({"error": pw_error}, status_code=400)
     if role not in VALID_ROLES:
         role = "readonly"
     existing = (await db.execute(select(User).where(User.username == username.strip()))).scalar_one_or_none()
@@ -205,6 +221,7 @@ async def update_role(
 
 
 @router.post("/{user_id}/password")
+@rate_limit(max_requests=5, window_seconds=300)
 async def reset_password(
     request: Request,
     user_id: int,
@@ -213,6 +230,9 @@ async def reset_password(
 ):
     if _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
+    pw_error = validate_password(password)
+    if pw_error:
+        return JSONResponse({"error": pw_error}, status_code=400)
     user = await db.get(User, user_id)
     if not user:
         return RedirectResponse(url="/users", status_code=303)

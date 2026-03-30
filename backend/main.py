@@ -70,8 +70,8 @@ if _cors_origins:
         CORSMiddleware,
         allow_origins=[o.strip() for o in _cors_origins.split(",")],
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-CSRF-Token"],
     )
 
 
@@ -231,8 +231,11 @@ async def inject_globals(request: Request, call_next):
 
     is_api = request.url.path.startswith("/api/")
 
-    # CSRF protection for state-changing methods (skip for API — frontend sends x-csrf-token header)
-    if request.method in ("POST", "PUT", "DELETE", "PATCH") and not is_api:
+    # CSRF protection for state-changing methods
+    # Skip for: API-key-authenticated requests, /api/v1/ (has own API key auth layer)
+    has_api_key = bool(request.headers.get("X-API-Key") or request.query_params.get("api_key"))
+    is_api_v1 = request.url.path.startswith("/api/v1/")
+    if request.method in ("POST", "PUT", "DELETE", "PATCH") and not has_api_key and not is_api_v1:
         from csrf import validate_csrf, csrf_error_response
         content_type = request.headers.get("content-type", "")
         form_data = None
@@ -278,6 +281,10 @@ async def inject_globals(request: Request, call_next):
     else:
         request.state.current_user = None
 
+    # CSP nonce for inline scripts
+    import secrets as _secrets
+    request.state.csp_nonce = _secrets.token_urlsafe(16)
+
     response = await call_next(request)
 
     # Security headers
@@ -286,15 +293,20 @@ async def inject_globals(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["X-XSS-Protection"] = "1; mode=block"
+    nonce = getattr(request.state, "csp_nonce", "")
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        f"script-src 'self' 'nonce-{nonce}' https://cdn.tailwindcss.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
         "connect-src 'self' ws: wss:; "
         "font-src 'self' data:; "
         "frame-ancestors 'none'"
     )
+
+    # HSTS — only if the request came over HTTPS (or via HTTPS proxy)
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
     return response
 
