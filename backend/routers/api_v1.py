@@ -26,6 +26,7 @@ from models.base import get_db
 from models.incident import Incident, IncidentEvent
 from models.integration import IntegrationConfig, Snapshot
 from services.clickhouse_client import query as ch_query, _where_clauses as ch_where
+from ratelimit import rate_limit
 from services import ping as ping_svc
 from services import snapshot as snap_svc
 from services.audit import log_action
@@ -1538,6 +1539,7 @@ async def backup_info(
 
 
 @router.get("/backup", summary="Download full database backup as JSON")
+@rate_limit(max_requests=3, window_seconds=60)
 async def download_backup(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -1554,6 +1556,7 @@ async def download_backup(
 
 
 @router.post("/backup/restore", summary="Restore database from backup JSON")
+@rate_limit(max_requests=3, window_seconds=60)
 async def restore_backup(
     request: Request,
     db: AsyncSession = Depends(get_db),

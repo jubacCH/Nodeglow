@@ -6,7 +6,7 @@ from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db
-from models.settings import Session as UserSession, _hash_token
+from models.settings import Session as UserSession, _hash_token, _hash_token_legacy
 from ratelimit import rate_limit
 from utils.password import validate_password
 
@@ -142,10 +142,13 @@ async def change_own_password(
         # Invalidate all other sessions (keep current one via new login)
         current_token = request.cookies.get("nodeglow_session")
         if current_token:
+            current_hmac = _hash_token(current_token)
+            current_legacy = _hash_token_legacy(current_token)
             await db.execute(
                 sa_delete(UserSession).where(
                     UserSession.user_id == user.id,
-                    UserSession.token != _hash_token(current_token),
+                    UserSession.token != current_hmac,
+                    UserSession.token != current_legacy,
                 )
             )
         await db.commit()

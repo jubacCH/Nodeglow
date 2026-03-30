@@ -27,6 +27,7 @@ from integrations import get_registry, get_integration
 from integrations._base import BaseIntegration
 from database import PingHost
 from models.base import get_db
+from ratelimit import rate_limit
 from services import integration as int_svc
 from services import snapshot as snap_svc
 
@@ -310,6 +311,7 @@ async def api_config_fields(integration_type: str):
 
 
 @router.post("/api/integration/{integration_type}/create")
+@rate_limit(max_requests=10, window_seconds=60)
 async def api_create_instance(
     request: Request,
     integration_type: str,
@@ -351,6 +353,7 @@ async def api_create_instance(
 
 
 @router.patch("/api/integration/{integration_type}/{config_id}")
+@rate_limit(max_requests=10, window_seconds=60)
 async def api_edit_instance(
     request: Request,
     integration_type: str,
@@ -402,6 +405,7 @@ async def api_edit_instance(
 
 
 @router.delete("/api/integration/{integration_type}/{config_id}")
+@rate_limit(max_requests=10, window_seconds=60)
 async def api_delete_instance(
     request: Request,
     integration_type: str,
@@ -421,6 +425,7 @@ async def api_delete_instance(
 
 
 @router.post("/integration/{integration_type}/add")
+@rate_limit(max_requests=10, window_seconds=60)
 async def add_instance(
     request: Request,
     integration_type: str,
@@ -454,6 +459,7 @@ async def add_instance(
 
 
 @router.post("/integration/{integration_type}/{config_id}/edit")
+@rate_limit(max_requests=10, window_seconds=60)
 async def edit_instance(
     request: Request,
     integration_type: str,
@@ -488,6 +494,7 @@ async def edit_instance(
 
 
 @router.post("/integration/{integration_type}/{config_id}/delete")
+@rate_limit(max_requests=10, window_seconds=60)
 async def delete_instance(
     request: Request,
     integration_type: str,
@@ -654,7 +661,7 @@ async def deploy_agent_to_lxcs(
         host=config_dict["host"],
         token_id=config_dict["token_id"],
         token_secret=config_dict["token_secret"],
-        verify_ssl=config_dict.get("verify_ssl", False),
+        verify_ssl=config_dict.get("verify_ssl", True),
     )
 
     resources = await api.cluster_resources()

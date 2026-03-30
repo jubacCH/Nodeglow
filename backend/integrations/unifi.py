@@ -15,7 +15,7 @@ class UnifiAPI:
     """Async client for the UniFi Controller REST API."""
 
     def __init__(self, host: str, username: str, password: str,
-                 site: str = "default", verify_ssl: bool = False, is_udm: bool = False):
+                 site: str = "default", verify_ssl: bool = True, is_udm: bool = False):
         self.base = host.rstrip("/")
         self.username = username
         self.password = password
@@ -360,7 +360,7 @@ class UnifiIntegration(BaseIntegration):
         ConfigField(key="is_udm", label="UniFi OS (UDM/UDR)", field_type="checkbox",
                     required=False, default=False),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox",
-                    required=False, default=False),
+                    required=False, default=True),
     ]
 
     def _api(self) -> UnifiAPI:
@@ -369,7 +369,7 @@ class UnifiIntegration(BaseIntegration):
             username=self.config["username"],
             password=self.config["password"],
             site=self.config.get("site", "default") or "default",
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
             is_udm=self.config.get("is_udm", False),
         )
 

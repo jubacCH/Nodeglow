@@ -11,7 +11,7 @@ from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigFi
 
 class SynologyAPI:
     def __init__(self, host: str, port: int = 5001, username: str = "",
-                 password: str = "", verify_ssl: bool = False):
+                 password: str = "", verify_ssl: bool = True):
         if not host.startswith("http://") and not host.startswith("https://"):
             scheme = "https" if port == 5001 else "http"
             host = f"{scheme}://{host}"
@@ -191,7 +191,7 @@ class SynologyIntegration(BaseIntegration):
         ConfigField(key="username", label="Username", placeholder="admin"),
         ConfigField(key="password", label="Password", field_type="password", encrypted=True),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox",
-                    required=False, default=False),
+                    required=False, default=True),
     ]
 
     def _api(self) -> SynologyAPI:
@@ -200,7 +200,7 @@ class SynologyIntegration(BaseIntegration):
             port=int(self.config.get("port", 5001) or 5001),
             username=self.config["username"],
             password=self.config["password"],
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:

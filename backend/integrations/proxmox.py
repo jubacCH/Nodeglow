@@ -19,7 +19,7 @@ from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigFi
 class ProxmoxAPI:
     """Thin async client for the Proxmox REST API."""
 
-    def __init__(self, host: str, token_id: str, token_secret: str, verify_ssl: bool = False):
+    def __init__(self, host: str, token_id: str, token_secret: str, verify_ssl: bool = True):
         self.base = host.rstrip("/")
         self._headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
         self._verify_ssl = verify_ssl
@@ -348,7 +348,7 @@ class ProxmoxIntegration(BaseIntegration):
         ConfigField(key="token_secret", label="Token Secret",
                     field_type="password", encrypted=True),
         ConfigField(key="verify_ssl", label="Verify SSL",
-                    field_type="checkbox", required=False, default=False),
+                    field_type="checkbox", required=False, default=True),
         ConfigField(key="ssh_user", label="SSH User (for deploy)",
                     placeholder="root", required=False, default="root"),
         ConfigField(key="ssh_private_key", label="SSH Private Key",
@@ -361,7 +361,7 @@ class ProxmoxIntegration(BaseIntegration):
             host=self.config["host"],
             token_id=self.config["token_id"],
             token_secret=self.config["token_secret"],
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:
