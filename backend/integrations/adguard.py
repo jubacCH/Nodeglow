@@ -13,7 +13,7 @@ from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 class AdguardAPI:
     def __init__(self, host: str, username: str | None = None,
-                 password: str | None = None, verify_ssl: bool = False):
+                 password: str | None = None, verify_ssl: bool = True):
         self.base = host.rstrip("/")
         self.username = username
         self.password = password
@@ -107,7 +107,7 @@ class AdguardIntegration(BaseIntegration):
         ConfigField(key="password", label="Password", field_type="password",
                     encrypted=True, required=False),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox",
-                    required=False, default=False),
+                    required=False, default=True),
     ]
 
     def _api(self) -> AdguardAPI:
@@ -115,7 +115,7 @@ class AdguardIntegration(BaseIntegration):
             host=self.config["host"],
             username=self.config.get("username"),
             password=self.config.get("password"),
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:

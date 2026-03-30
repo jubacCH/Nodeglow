@@ -12,7 +12,7 @@ from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 
 class OPNsenseAPI:
-    def __init__(self, host: str, api_key: str, api_secret: str, verify_ssl: bool = False):
+    def __init__(self, host: str, api_key: str, api_secret: str, verify_ssl: bool = True):
         if not host.startswith("http://") and not host.startswith("https://"):
             host = f"https://{host}"
         self.base = host.rstrip("/")
@@ -61,7 +61,7 @@ class OPNsenseAPI:
 
 
 class PfsenseAPI:
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = True):
         if not host.startswith("http://") and not host.startswith("https://"):
             host = f"https://{host}"
         self.base = host.rstrip("/")
@@ -228,7 +228,7 @@ class FirewallIntegration(BaseIntegration):
         ConfigField(key="api_secret", label="API Secret / Password",
                     field_type="password", encrypted=True),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox",
-                    required=False, default=False),
+                    required=False, default=True),
     ]
 
     def _opnsense_api(self) -> OPNsenseAPI:
@@ -236,7 +236,7 @@ class FirewallIntegration(BaseIntegration):
             host=self.config["host"],
             api_key=self.config["api_key"],
             api_secret=self.config["api_secret"],
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     def _pfsense_api(self) -> PfsenseAPI:
@@ -244,7 +244,7 @@ class FirewallIntegration(BaseIntegration):
             host=self.config["host"],
             username=self.config["api_key"],
             password=self.config["api_secret"],
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:

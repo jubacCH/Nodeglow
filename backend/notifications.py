@@ -9,6 +9,7 @@ Features:
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import smtplib
@@ -17,10 +18,43 @@ import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape as html_escape
+from urllib.parse import urlparse
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _is_safe_url(url: str) -> bool:
+    """Validate URL is not targeting internal/private resources (SSRF protection).
+
+    NOTE: Private IPs (10.x, 192.168.x, 172.16.x) are intentionally allowed
+    because this is a homelab monitoring tool where webhooks to local services
+    are legitimate use cases.
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return False
+        # Block cloud metadata endpoints
+        if hostname == "169.254.169.254":
+            return False
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_loopback or ip.is_link_local:
+                return False
+        except ValueError:
+            pass  # domain name, not IP — ok
+        return True
+    except Exception:
+        return False
+
 
 # ── Rate Limiting ─────────────────────────────────────────────────────────────
 # In-memory cooldown: same title won't fire again within cooldown window
@@ -71,6 +105,9 @@ async def _send_telegram(bot_token: str, chat_id: str, text: str) -> None:
 
 
 async def _send_discord(webhook_url: str, title: str, message: str, color: int = 0xe74c3c) -> None:
+    if not _is_safe_url(webhook_url):
+        logger.warning("Blocked webhook to unsafe URL: %s", webhook_url)
+        return
     payload = {"embeds": [{"title": title, "description": message, "color": color}]}
     async with httpx.AsyncClient(timeout=10) as client:
         for attempt in range(4):  # initial + 3 retries
@@ -87,6 +124,9 @@ async def _send_discord(webhook_url: str, title: str, message: str, color: int =
 
 async def _send_webhook(url: str, secret: str, title: str, message: str,
                         severity: str = "critical") -> None:
+    if not _is_safe_url(url):
+        logger.warning("Blocked webhook to unsafe URL: %s", url)
+        return
     payload = {"title": title, "message": message, "severity": severity,
                "timestamp": int(time.time()), "source": "nodeglow"}
     body = json.dumps(payload, separators=(",", ":"))
@@ -101,6 +141,8 @@ async def _send_webhook(url: str, secret: str, title: str, message: str,
 
 def _build_html_email(title: str, message: str, severity: str) -> str:
     """Build a styled HTML email body."""
+    title = html_escape(title)
+    message = html_escape(message)
     colors = {
         "critical": ("#FB7185", "#1a0a0e"),
         "warning":  ("#FBBF24", "#1a1408"),
@@ -215,7 +257,8 @@ async def notify(title: str, message: str, severity: str = "critical",
     color = {"critical": 0xe74c3c, "warning": 0xf39c12, "info": 0x2ecc71}.get(severity, 0x2ecc71)
 
     if tg_token and tg_chat and _severity_passes(severity, min_sev_telegram):
-        channels_list.append(("telegram", _send_telegram(tg_token, tg_chat, f"<b>{title}</b>\n{message}")))
+        tg_text = f"<b>{html_escape(title)}</b>\n{html_escape(message)}"
+        channels_list.append(("telegram", _send_telegram(tg_token, tg_chat, tg_text)))
     if dc_webhook and _severity_passes(severity, min_sev_discord):
         channels_list.append(("discord", _send_discord(dc_webhook, title, message, color)))
     if wh_url and _severity_passes(severity, min_sev_webhook):

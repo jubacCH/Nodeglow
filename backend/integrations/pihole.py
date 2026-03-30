@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 
 class PiholeAPI:
-    def __init__(self, host: str, api_key: str | None = None, verify_ssl: bool = False):
+    def __init__(self, host: str, api_key: str | None = None, verify_ssl: bool = True):
         self.base = host.rstrip("/")
         self.api_key = api_key
         self.verify_ssl = verify_ssl
@@ -268,14 +268,14 @@ class PiholeIntegration(BaseIntegration):
         ConfigField(key="api_key", label="API Key / Password", field_type="password",
                     encrypted=True, required=False),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox",
-                    required=False, default=False),
+                    required=False, default=True),
     ]
 
     def _api(self) -> PiholeAPI:
         return PiholeAPI(
             host=self.config["host"],
             api_key=self.config.get("api_key"),
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:

@@ -1,5 +1,6 @@
 """Settings, User, and Session models."""
 import hashlib
+import hmac
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
@@ -9,7 +10,13 @@ from models.base import Base, decrypt_value, encrypt_value
 
 
 def _hash_token(token: str) -> str:
-    """SHA-256 hash a token for secure storage."""
+    """HMAC-SHA256 hash a session token for secure storage."""
+    from config import SECRET_KEY
+    return hmac.new(SECRET_KEY.encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
+def _hash_token_legacy(token: str) -> str:
+    """Legacy plain SHA256 for migration of existing sessions."""
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -44,14 +51,25 @@ async def get_current_user(request, db: AsyncSession):
     token = request.cookies.get("nodeglow_session")
     if not token:
         return None
-    token_hash = _hash_token(token)
     now = datetime.utcnow()
+    # Try HMAC hash first
+    token_hash = _hash_token(token)
     result = await db.execute(
         select(Session).where(Session.token == token_hash, Session.expires_at > now)
     )
     session = result.scalar_one_or_none()
     if not session:
-        return None
+        # Fall back to legacy plain SHA256 and migrate if found
+        legacy_hash = _hash_token_legacy(token)
+        result = await db.execute(
+            select(Session).where(Session.token == legacy_hash, Session.expires_at > now)
+        )
+        session = result.scalar_one_or_none()
+        if not session:
+            return None
+        # Migrate legacy hash to HMAC
+        session.token = token_hash
+        await db.commit()
     result = await db.execute(select(User).where(User.id == session.user_id))
     return result.scalar_one_or_none()
 

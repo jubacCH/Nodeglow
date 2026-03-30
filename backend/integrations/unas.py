@@ -20,7 +20,7 @@ _RAID_TYPE_LABELS: dict[str, str] = {
 
 
 class UnasAPI:
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = True):
         self.base = host.rstrip("/")
         self.username = username
         self.password = password
@@ -179,7 +179,7 @@ class UnasIntegration(BaseIntegration):
         ConfigField(key="username", label="Username", placeholder="admin"),
         ConfigField(key="password", label="Password", field_type="password", encrypted=True),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox",
-                    required=False, default=False),
+                    required=False, default=True),
     ]
 
     def _api(self) -> UnasAPI:
@@ -187,7 +187,7 @@ class UnasIntegration(BaseIntegration):
             host=self.config["host"],
             username=self.config["username"],
             password=self.config["password"],
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:

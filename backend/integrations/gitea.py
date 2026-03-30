@@ -10,7 +10,7 @@ from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 
 class GiteaAPI:
-    def __init__(self, host: str, token: str | None = None, verify_ssl: bool = False):
+    def __init__(self, host: str, token: str | None = None, verify_ssl: bool = True):
         self.base = host.rstrip("/")
         self.token = token
         self.verify_ssl = verify_ssl
@@ -119,14 +119,14 @@ class GiteaIntegration(BaseIntegration):
         ConfigField(key="token", label="API Token", field_type="password",
                     encrypted=True, required=False),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox",
-                    required=False, default=False),
+                    required=False, default=True),
     ]
 
     def _api(self) -> GiteaAPI:
         return GiteaAPI(
             host=self.config["host"],
             token=self.config.get("token"),
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:

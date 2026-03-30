@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
+# NOTE: Runs as root — required for Docker socket access and git operations.
+# The sidecar is not exposed to external traffic (internal network only).
+
 WORKDIR /app
 COPY update-server.py .
 
