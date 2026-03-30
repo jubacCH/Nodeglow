@@ -26,6 +26,11 @@ async def complete_setup(
 ):
     if not password.strip():
         return RedirectResponse(url="/setup?error=password_required", status_code=303)
+    from utils.password import validate_password
+    pw_error = validate_password(password)
+    if pw_error:
+        from urllib.parse import quote
+        return RedirectResponse(url=f"/setup?error={quote(pw_error)}", status_code=303)
     if await is_setup_complete(db):
         return RedirectResponse(url="/", status_code=303)
 

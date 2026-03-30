@@ -6,8 +6,8 @@
   <title>Setup – NODEGLOW</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/nodeglow.css">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}" src="https://cdn.tailwindcss.com"></script>
+  <script nonce="{{ request.state.csp_nonce }}">
     tailwind.config = {
       theme: {
         extend: {

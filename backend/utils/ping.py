@@ -45,10 +45,10 @@ async def ping_host(hostname: str, timeout: float = 2.0) -> tuple[bool, float | 
 
 # ── HTTP / HTTPS ───────────────────────────────────────────────────────────────
 
-async def check_http(url: str, timeout: float = 5.0) -> tuple[bool, float | None]:
+async def check_http(url: str, timeout: float = 5.0, verify_ssl: bool = True) -> tuple[bool, float | None]:
     """HTTP(S) GET check. Returns (success, latency_ms). Success = 2xx/3xx."""
     try:
-        async with httpx.AsyncClient(verify=False, timeout=timeout,
+        async with httpx.AsyncClient(verify=verify_ssl, timeout=timeout,
                                      follow_redirects=True) as client:
             start = time.perf_counter()
             resp = await client.get(url)
@@ -122,7 +122,8 @@ async def _check_single(host: "PingHost", ct: str) -> tuple[bool, float | None]:
         else:
             scheme = "https" if ct == "https" else "http"
             url = f"{scheme}://{hostname}"
-        return await check_http(url)
+        # verify_ssl=False for monitoring: internal hosts often use self-signed certs
+        return await check_http(url, verify_ssl=False)
     # TCP — supports both "tcp" (uses host.port) and "tcp:PORT" format
     if ct == "tcp" or ct.startswith("tcp:"):
         if ":" in ct:

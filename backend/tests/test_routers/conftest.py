@@ -108,11 +108,14 @@ async def client():
         from main import app
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            # Seed CSRF token: visit login page to get the cookie, then use it for all requests
-            resp = await ac.get("/login")
-            csrf_token = ac.cookies.get("ng_csrf", "")
-            if csrf_token:
-                ac.headers["x-csrf-token"] = csrf_token
+            # Generate a valid CSRF token for tests
+            import hashlib as _hl, hmac as _hm, secrets as _sec
+            _sk = os.environ.get("SECRET_KEY", "test-secret-key-for-pytest")
+            _raw = _sec.token_hex(16)
+            _sig = _hm.new(_sk.encode(), _raw.encode(), _hl.sha256).hexdigest()[:16]
+            _csrf = f"{_raw}.{_sig}"
+            ac.cookies.set("ng_csrf", _csrf)
+            ac.headers["x-csrf-token"] = _csrf
             yield ac
 
     await engine.dispose()

@@ -1058,19 +1058,18 @@ def install_task(server, token, interval):
         f.write(f'"{python_path}" "{script_path}"\n')
 
     # Register scheduled task
-    cmd = (
-        f'schtasks /create /tn "{task_name}" /tr "{bat_path}" '
-        f'/sc onlogon /rl highest /f'
-    )
-    ret = os.system(cmd)
+    ret = subprocess.run(
+        ["schtasks", "/create", "/tn", task_name, "/tr", bat_path,
+         "/sc", "onlogon", "/rl", "highest", "/f"],
+    ).returncode
     if ret == 0:
         log.info("Installed scheduled task: %s", task_name)
         log.info("  Script: %s", bat_path)
         log.info("  To start now: schtasks /run /tn \"%s\"", task_name)
         log.info("  To remove:    schtasks /delete /tn \"%s\" /f", task_name)
 
-        # Also start it now
-        os.system(f'start "" "{bat_path}"')
+        # Also start it now (DETACHED_PROCESS = 0x00000008)
+        subprocess.Popen([bat_path], creationflags=0x00000008)
         log.info("  Agent started.")
     else:
         log.error("Failed to create scheduled task (run as Administrator)")
@@ -1183,21 +1182,24 @@ def check_and_update(server):
                     new_path = own_path + ".new"
                     shutil.move(tmp_path, new_path)
                     # Task will move .new over the original after we exit
-                    swap_cmd = f'cmd /c timeout /t 2 /nobreak >nul & move /Y "{new_path}" "{own_path}" & "{own_path}"'
-                    subprocess.Popen(swap_cmd, shell=True, creationflags=0x00000208)
+                    swap_bat = os.path.join(tempfile.gettempdir(), "nodeglow_swap.bat")
+                    with open(swap_bat, "w") as bf:
+                        bf.write(f'@echo off\ntimeout /t 2 /nobreak >nul\nmove /Y "{new_path}" "{own_path}"\n"{own_path}"\n')
+                    subprocess.Popen([swap_bat], creationflags=0x00000208)
                     sys.exit(0)
 
                 # Create a one-shot scheduled task that starts in 5 seconds
-                schtasks_cmd = (
-                    f'schtasks /create /tn "{task_name}" /tr "\"{own_path}\"" '
-                    f'/sc once /st 00:00 /f /rl highest'
+                subprocess.run(
+                    ["schtasks", "/create", "/tn", task_name, "/tr", f'"{own_path}"',
+                     "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"],
                 )
-                os.system(schtasks_cmd)
                 # Run it immediately
-                os.system(f'schtasks /run /tn "{task_name}"')
+                subprocess.run(["schtasks", "/run", "/tn", task_name])
                 # Schedule cleanup (delete the task after 30s)
-                cleanup_cmd = f'cmd /c timeout /t 30 /nobreak >nul & schtasks /delete /tn "{task_name}" /f'
-                subprocess.Popen(cleanup_cmd, shell=True, creationflags=0x00000208)
+                cleanup_bat = os.path.join(tempfile.gettempdir(), "nodeglow_cleanup.bat")
+                with open(cleanup_bat, "w") as bf:
+                    bf.write(f'@echo off\ntimeout /t 30 /nobreak >nul\nschtasks /delete /tn "{task_name}" /f\n')
+                subprocess.Popen([cleanup_bat], creationflags=0x00000208)
             else:
                 # Script mode: just replace the file and re-exec
                 shutil.move(tmp_path, own_path)
