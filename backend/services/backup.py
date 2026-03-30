@@ -161,10 +161,13 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
             # Reset sequence
             try:
                 safe = _safe_table(table_name)
-                await db.execute(text(
-                    f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), "
-                    f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
-                ))
+                await db.execute(
+                    text(
+                        f"SELECT setval(pg_get_serial_sequence(:tn, 'id'), "
+                        f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
+                    ),
+                    {"tn": table_name},
+                )
             except Exception:
                 pass
 

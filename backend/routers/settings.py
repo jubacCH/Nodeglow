@@ -11,10 +11,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import encrypt_value, get_db, get_setting, set_setting
 from models.api_key import ApiKey
 from models.integration import IntegrationConfig
+from ratelimit import rate_limit
 from services.audit import log_action
 
 router = APIRouter(prefix="/settings")
 log = logging.getLogger(__name__)
+
+
+def _require_admin(request: Request):
+    """Return a 403 JSONResponse if the current user is not an admin, else None."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", "admin") or "admin"
+    if role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    return None
 
 
 @router.get("", response_class=HTMLResponse)
@@ -164,6 +174,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/save")
+@rate_limit(max_requests=10, window_seconds=60)
 async def save_settings(
     request: Request,
     site_name:          str = Form("NODEGLOW"),
@@ -182,6 +193,8 @@ async def save_settings(
     syslog_allowlist_only: str = Form("0"),
     db: AsyncSession = Depends(get_db),
 ):
+    if err := _require_admin(request):
+        return err
     await set_setting(db, "site_name", site_name.strip())
 
     try:
@@ -287,7 +300,9 @@ async def save_settings(
 # ── phpIPAM ───────────────────────────────────────────────────────────────────
 
 @router.post("/phpipam/save")
+@rate_limit(max_requests=10, window_seconds=60)
 async def save_phpipam(
+    request: Request,
     phpipam_url:        str = Form(""),
     phpipam_app_id:     str = Form(""),
     phpipam_username:   str = Form(""),
@@ -296,6 +311,8 @@ async def save_phpipam(
     phpipam_sync_hours: str = Form("0"),
     db: AsyncSession = Depends(get_db),
 ):
+    if err := _require_admin(request):
+        return err
     await set_setting(db, "phpipam_url", phpipam_url.strip().rstrip("/"))
     await set_setting(db, "phpipam_app_id", phpipam_app_id.strip())
     await set_setting(db, "phpipam_username", phpipam_username.strip())
@@ -338,8 +355,11 @@ async def save_phpipam(
 
 
 @router.post("/phpipam/sync")
-async def manual_phpipam_sync(db: AsyncSession = Depends(get_db)):
+@rate_limit(max_requests=10, window_seconds=60)
+async def manual_phpipam_sync(request: Request, db: AsyncSession = Depends(get_db)):
     """Trigger a manual phpIPAM host import. Returns JSON result."""
+    if err := _require_admin(request):
+        return err
     from integrations.phpipam import sync_phpipam_hosts
     from services import integration as _int_svc
     cfgs = (await db.execute(
@@ -362,6 +382,7 @@ async def notifications_settings(request: Request, db: AsyncSession = Depends(ge
 
 
 @router.post("/notifications/save")
+@rate_limit(max_requests=10, window_seconds=60)
 async def save_notifications(
     request: Request,
     notify_enabled:      str = Form("0"),
@@ -382,6 +403,8 @@ async def save_notifications(
     notify_email_min_severity:    str = Form("all"),
     db: AsyncSession = Depends(get_db),
 ):
+    if err := _require_admin(request):
+        return err
     await set_setting(db, "notify_enabled", "1" if notify_enabled == "on" else "0")
     await set_setting(db, "telegram_bot_token", telegram_bot_token.strip())
     await set_setting(db, "telegram_chat_id", telegram_chat_id.strip())
@@ -414,10 +437,13 @@ async def save_notifications(
 
 
 @router.post("/digest/save")
+@rate_limit(max_requests=10, window_seconds=60)
 async def save_digest_settings(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    if err := _require_admin(request):
+        return err
     body = await request.json()
     digest_enabled = "1" if body.get("digest_enabled") else "0"
     digest_day = str(max(0, min(6, int(body.get("digest_day", 0)))))
@@ -440,7 +466,10 @@ async def save_digest_settings(
 
 
 @router.post("/notifications/test")
+@rate_limit(max_requests=10, window_seconds=60)
 async def test_notification(request: Request, db: AsyncSession = Depends(get_db)):
+    if err := _require_admin(request):
+        return err
     # Accept both JSON and form data
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
@@ -527,7 +556,10 @@ async def api_keys_list(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/api-keys/create")
+@rate_limit(max_requests=10, window_seconds=60)
 async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
+    if err := _require_admin(request):
+        return err
     body = await request.json()
     name = (body.get("name") or "").strip()
     role = body.get("role", "readonly")
@@ -553,6 +585,7 @@ async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/geoip/download")
+@rate_limit(max_requests=10, window_seconds=60)
 async def geoip_download(request: Request, db: AsyncSession = Depends(get_db)):
     """Trigger a manual GeoLite2-City database download. Admin only."""
     user = getattr(request.state, "current_user", None)
@@ -584,6 +617,7 @@ async def geoip_download(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/ai/save")
+@rate_limit(max_requests=10, window_seconds=60)
 async def save_ai_settings(
     request: Request,
     claude_api_key: str = Form(""),
@@ -618,6 +652,7 @@ async def save_ai_settings(
 
 
 @router.post("/ai/test-summary")
+@rate_limit(max_requests=3, window_seconds=60)
 async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get_db)):
     """Trigger a one-off daily AI summary (ignores schedule + duplicate protection)."""
     user = getattr(request.state, "current_user", None)
@@ -795,7 +830,10 @@ async def ai_usage_stats(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/api-keys/{key_id}")
-async def delete_api_key(key_id: int, db: AsyncSession = Depends(get_db)):
+@rate_limit(max_requests=10, window_seconds=60)
+async def delete_api_key(key_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    if err := _require_admin(request):
+        return err
     key = await db.get(ApiKey, key_id)
     if not key:
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -807,6 +845,7 @@ async def delete_api_key(key_id: int, db: AsyncSession = Depends(get_db)):
 # ── LDAP Settings ────────────────────────────────────────────────────────────
 
 @router.post("/ldap/save")
+@rate_limit(max_requests=10, window_seconds=60)
 async def save_ldap_settings(
     request: Request,
     ldap_enabled:      str = Form("0"),
@@ -851,6 +890,7 @@ async def save_ldap_settings(
 
 
 @router.post("/ldap/test")
+@rate_limit(max_requests=10, window_seconds=60)
 async def test_ldap(
     request: Request,
     db: AsyncSession = Depends(get_db),

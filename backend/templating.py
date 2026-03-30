@@ -2,6 +2,7 @@
 
 import contextvars
 from datetime import datetime, timezone as _tz
+from html import escape as html_escape
 
 from fastapi.templating import Jinja2Templates
 
@@ -49,13 +50,13 @@ templates.env.filters["localtime"] = localtime
 def _csrf_input(request):
     """Return an HTML hidden input with the CSRF token."""
     token = getattr(getattr(request, "state", None), "csrf_token", "")
-    return f'<input type="hidden" name="csrf_token" value="{token}">'
+    return f'<input type="hidden" name="csrf_token" value="{html_escape(token)}">'
 
 
 def _csrf_meta(request):
     """Return a meta tag with the CSRF token (for JS fetch calls)."""
     token = getattr(getattr(request, "state", None), "csrf_token", "")
-    return f'<meta name="csrf-token" content="{token}">'
+    return f'<meta name="csrf-token" content="{html_escape(token)}">'
 
 
 templates.env.globals["csrf_input"] = _csrf_input

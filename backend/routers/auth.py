@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Session, User, get_db, get_current_user
-from models.settings import _hash_token, get_setting, set_setting
+from models.settings import _hash_token, _hash_token_legacy, get_setting, set_setting
 from ratelimit import rate_limit
 from services.audit import log_action
 
@@ -219,6 +219,9 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
     token = request.cookies.get("nodeglow_session")
     if token:
         session = await db.get(Session, _hash_token(token))
+        if not session:
+            # Fall back to legacy plain SHA256
+            session = await db.get(Session, _hash_token_legacy(token))
         if session:
             await db.delete(session)
             await log_action(db, request, "auth.logout")

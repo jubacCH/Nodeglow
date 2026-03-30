@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 
 class NpmAPI:
-    def __init__(self, host: str, email: str, password: str, verify_ssl: bool = False):
+    def __init__(self, host: str, email: str, password: str, verify_ssl: bool = True):
         self.base = host.rstrip("/")
         self.email = email
         self.password = password
@@ -252,7 +252,7 @@ class NpmIntegration(BaseIntegration):
             label="Verify SSL",
             field_type="checkbox",
             required=False,
-            default=False,
+            default=True,
         ),
     ]
 
@@ -261,7 +261,7 @@ class NpmIntegration(BaseIntegration):
             host=self.config["host"],
             email=self.config["email"],
             password=self.config["password"],
-            verify_ssl=self.config.get("verify_ssl", False),
+            verify_ssl=self.config.get("verify_ssl", True),
         )
 
     async def collect(self) -> CollectorResult:

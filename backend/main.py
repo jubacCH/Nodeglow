@@ -273,8 +273,8 @@ async def inject_globals(request: Request, call_next):
         request.state.current_user = user
         role = getattr(user, "role", "admin") or "admin"
         if is_api:
-            if (request.url.path.startswith("/api/settings") or request.url.path.startswith("/api/users")) \
-                    and role != "admin":
+            if request.url.path.startswith("/api/users") \
+                    and role != "admin" and request.method in ("POST", "PUT", "DELETE", "PATCH"):
                 return _JSON({"error": "Admin access required"}, status_code=403)
             if role == "readonly" and request.method in ("POST", "PUT", "DELETE", "PATCH"):
                 return _JSON({"error": "Read-only access"}, status_code=403)
@@ -316,7 +316,7 @@ async def inject_globals(request: Request, call_next):
 async def ws_live(websocket: WebSocket):
     # Authenticate via session cookie before accepting
     from database import AsyncSessionLocal as _ASL
-    from models.settings import Session as _Sess, User as _User, _hash_token as _ht
+    from models.settings import Session as _Sess, User as _User, _hash_token as _ht, _hash_token_legacy as _ht_legacy
     from sqlalchemy import select as _sel
     from datetime import datetime as _dt
     token = websocket.cookies.get("nodeglow_session")
@@ -327,6 +327,15 @@ async def ws_live(websocket: WebSocket):
         session = (await _db.execute(
             _sel(_Sess).where(_Sess.token == _ht(token), _Sess.expires_at > _dt.utcnow())
         )).scalar_one_or_none()
+        if not session:
+            # Fall back to legacy plain SHA256
+            session = (await _db.execute(
+                _sel(_Sess).where(_Sess.token == _ht_legacy(token), _Sess.expires_at > _dt.utcnow())
+            )).scalar_one_or_none()
+            if session:
+                # Migrate legacy hash to HMAC
+                session.token = _ht(token)
+                await _db.commit()
         if not session:
             await websocket.close(code=4401, reason="Unauthorized")
             return
