@@ -805,9 +805,9 @@ def install_systemd(server, token, interval):
     with open(unit_path, "w") as f:
         f.write(unit)
 
-    os.system("systemctl daemon-reload")
-    os.system("systemctl enable nodeglow-agent")
-    os.system("systemctl start nodeglow-agent")
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "enable", "nodeglow-agent"], check=True)
+    subprocess.run(["systemctl", "start", "nodeglow-agent"], check=True)
     log.info("Installed and started nodeglow-agent.service")
     log.info("  Config: %s", unit_path)
     log.info("  Status: systemctl status nodeglow-agent")

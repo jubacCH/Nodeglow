@@ -1,7 +1,8 @@
+import json
 import logging
+import os
 import secrets
 import time
-from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
@@ -12,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Session, User, get_db, get_current_user
-from models.settings import _hash_token, get_setting
+from models.settings import _hash_token, get_setting, set_setting
 from ratelimit import rate_limit
 from services.audit import log_action
 
@@ -20,12 +21,42 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SESSION_DAYS = 30
+SESSION_DAYS = 7
 
-# Account lockout: track failed attempts per username
-_failed_attempts: dict[str, list[float]] = defaultdict(list)
+# Account lockout configuration
 _LOCKOUT_ATTEMPTS = 5
 _LOCKOUT_WINDOW = 900  # 15 minutes
+
+
+async def _get_failed_attempts(db: AsyncSession, username: str) -> list[float]:
+    """Get failed login timestamps from DB."""
+    raw = await get_setting(db, f"_lockout:{username}", "[]")
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+async def _record_failed_attempt(db: AsyncSession, username: str):
+    """Record a failed login attempt in the DB."""
+    now = time.time()
+    attempts = await _get_failed_attempts(db, username)
+    attempts = [t for t in attempts if t > now - _LOCKOUT_WINDOW]
+    attempts.append(now)
+    await set_setting(db, f"_lockout:{username}", json.dumps(attempts))
+
+
+async def _clear_failed_attempts(db: AsyncSession, username: str):
+    """Clear failed login attempts for a user."""
+    await set_setting(db, f"_lockout:{username}", "[]")
+
+
+async def _is_locked_out(db: AsyncSession, username: str) -> bool:
+    """Check if a user account is locked out."""
+    now = time.time()
+    attempts = await _get_failed_attempts(db, username)
+    recent = [t for t in attempts if t > now - _LOCKOUT_WINDOW]
+    return len(recent) >= _LOCKOUT_ATTEMPTS
 
 
 class LoginRequest(BaseModel):
@@ -115,10 +146,12 @@ def _create_session_response(user, token: str, request):
         "ok": True,
         "user": {"id": user.id, "username": user.username, "role": user.role},
     })
+    force_secure = os.environ.get("SECURE_COOKIES", "").lower() in ("1", "true", "yes")
     is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
         "nodeglow_session", token,
-        max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax", secure=is_https,
+        max_age=SESSION_DAYS * 86400, httponly=True, samesite="strict",
+        secure=force_secure or is_https,
     )
     return response
 
@@ -130,17 +163,14 @@ async def login(
     body: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    # Account lockout check
-    now = time.monotonic()
-    attempts = _failed_attempts[body.username]
-    _failed_attempts[body.username] = attempts = [t for t in attempts if t > now - _LOCKOUT_WINDOW]
-    if len(attempts) >= _LOCKOUT_ATTEMPTS:
+    # Account lockout check (DB-persisted, survives restarts)
+    if await _is_locked_out(db, body.username):
         return JSONResponse({"error": "Account temporarily locked. Try again later."}, status_code=429)
 
     # Try LDAP first (if enabled)
     ldap_user, _ = await _try_ldap_login(db, body.username, body.password)
     if ldap_user:
-        _failed_attempts.pop(body.username, None)
+        await _clear_failed_attempts(db, body.username)
         token = secrets.token_hex(32)
         db.add(Session(token=_hash_token(token), user_id=ldap_user.id,
                        expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS)))
@@ -155,18 +185,18 @@ async def login(
 
     # Skip local auth for LDAP-only users (no valid local password)
     if user and user.auth_source == "ldap":
-        _failed_attempts[body.username].append(now)
+        await _record_failed_attempt(db, body.username)
         return JSONResponse({"error": "LDAP authentication failed"}, status_code=401)
 
     _dummy_hash = b"$2b$12$000000000000000000000uGHEjmFMntPDYjXJPBT3V44YS5gL0nS"
     stored_hash = user.password_hash.encode() if user else _dummy_hash
     pw_ok = bcrypt.checkpw(body.password.encode(), stored_hash)
     if not user or not pw_ok:
-        _failed_attempts[body.username].append(now)
+        await _record_failed_attempt(db, body.username)
         return JSONResponse({"error": "Invalid username or password"}, status_code=401)
 
     # Clear failed attempts on success
-    _failed_attempts.pop(body.username, None)
+    await _clear_failed_attempts(db, body.username)
     token = secrets.token_hex(32)
     db.add(Session(token=_hash_token(token), user_id=user.id,
                    expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS)))

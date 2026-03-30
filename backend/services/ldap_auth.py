@@ -10,6 +10,7 @@ from ldap3 import (
 from ldap3.core.exceptions import (
     LDAPBindError, LDAPSocketOpenError, LDAPException,
 )
+from ldap3.utils.conv import escape_filter_chars
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def _ldap_authenticate(config: LdapConfig, username: str, password: str) -> Ldap
             return None
 
     # Step 2: Search for the user
-    search_filter = config.user_filter.replace("{username}", username)
+    search_filter = config.user_filter.replace("{username}", escape_filter_chars(username))
     attrs = ["dn", config.display_attr]
     if config.group_attr:
         attrs.append(config.group_attr)
@@ -159,6 +160,7 @@ def _test_connection(config: LdapConfig) -> dict:
         return {"ok": False, "error": str(exc)}
 
     # Count users matching filter
+    # Intentional wildcard — used to count all matching users during connection test
     test_filter = config.user_filter.replace("{username}", "*")
     try:
         conn.search(config.base_dn, test_filter, SUBTREE,

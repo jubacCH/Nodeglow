@@ -30,6 +30,7 @@ from services import ping as ping_svc
 from services import snapshot as snap_svc
 from services.audit import log_action
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["API v1"])
 
 
@@ -64,6 +65,7 @@ async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) 
                 hmac_hash = _hash_key(key)
                 if api_key.key_hash != hmac_hash:
                     api_key.key_hash = hmac_hash
+                    logger.warning("Migrated legacy SHA256 API key '%s' to HMAC. Consider rotating this key.", api_key.name)
                 api_key.last_used = datetime.utcnow()
                 await db.commit()
                 return api_key
