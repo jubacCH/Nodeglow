@@ -19,7 +19,13 @@ export const useWsStore = create<WsState>((set, getState) => ({
   lastAgentMetrics: new Map(),
 
   connect: () => {
-    if (ws && ws.readyState <= WebSocket.OPEN) return;
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+
+    // Clear any pending reconnect timer to avoid duplicate connections
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${location.host}/ws/live`);
@@ -50,6 +56,7 @@ export const useWsStore = create<WsState>((set, getState) => ({
       set({ isConnected: false });
       ws = null;
       reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
         backoff = Math.min(backoff * 2, 30000);
         getState().connect();
       }, backoff);
@@ -59,7 +66,10 @@ export const useWsStore = create<WsState>((set, getState) => ({
   },
 
   disconnect: () => {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     ws?.close();
     ws = null;
     set({ isConnected: false });

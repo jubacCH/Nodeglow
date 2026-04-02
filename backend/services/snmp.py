@@ -33,6 +33,7 @@ MIB_DOWNLOAD_URLS = [
 # Simple in-memory cache for search results
 _search_cache: dict[str, tuple[float, list]] = {}
 _SEARCH_CACHE_TTL = 300  # 5 minutes
+_SEARCH_CACHE_MAX = 500  # max cached queries
 
 
 async def search_mib_library(query: str) -> list[dict]:
@@ -67,6 +68,14 @@ async def search_mib_library(query: str) -> list[dict]:
             "oid_count": item.get("oid_count", 0),
         })
 
+    # Evict stale entries if cache grows too large
+    if len(_search_cache) > _SEARCH_CACHE_MAX:
+        stale = [k for k, (ts, _) in _search_cache.items() if now - ts >= _SEARCH_CACHE_TTL]
+        for k in stale:
+            del _search_cache[k]
+        # If still too large after TTL eviction, clear entirely
+        if len(_search_cache) > _SEARCH_CACHE_MAX:
+            _search_cache.clear()
     _search_cache[cache_key] = (now, results)
     return results
 
