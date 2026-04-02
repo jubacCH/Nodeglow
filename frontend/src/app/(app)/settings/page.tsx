@@ -41,6 +41,7 @@ interface SettingsData {
   digest_day: string;
   digest_hour: string;
   notify_enabled: string;
+  notify_grace_minutes: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
   discord_webhook_url: string;
@@ -284,6 +285,7 @@ export default function SettingsPage() {
 
   /* ---- Notifications state ---- */
   const [notifyEnabled, setNotifyEnabled] = useState(false);
+  const [graceMinutes, setGraceMinutes] = useState('5');
   const [telegramToken, setTelegramToken] = useState('');
   const [telegramChat, setTelegramChat] = useState('');
   const [discordWebhook, setDiscordWebhook] = useState('');
@@ -355,6 +357,7 @@ export default function SettingsPage() {
     setLatencyThreshold(s.latency_threshold_ms);
     setProxmoxInterval(s.proxmox_interval);
     setNotifyEnabled(s.notify_enabled === '1');
+    setGraceMinutes(s.notify_grace_minutes || '5');
     setTelegramToken(s.telegram_bot_token);
     setTelegramChat(s.telegram_chat_id);
     setDiscordWebhook(s.discord_webhook_url);
@@ -528,6 +531,7 @@ export default function SettingsPage() {
   function handleSaveNotifications() {
     const params = new URLSearchParams();
     params.set('notify_enabled', notifyEnabled ? 'on' : '0');
+    params.set('notify_grace_minutes', graceMinutes);
     params.set('telegram_bot_token', telegramToken);
     params.set('telegram_chat_id', telegramChat);
     params.set('discord_webhook_url', discordWebhook);
@@ -551,6 +555,7 @@ export default function SettingsPage() {
     // Auto-save notification settings before testing so the DB has current values
     const params = new URLSearchParams();
     params.set('notify_enabled', notifyEnabled ? 'on' : '0');
+    params.set('notify_grace_minutes', graceMinutes);
     params.set('telegram_bot_token', telegramToken);
     params.set('telegram_chat_id', telegramChat);
     params.set('discord_webhook_url', discordWebhook);
@@ -822,6 +827,27 @@ export default function SettingsPage() {
                   }`}
                 />
               </button>
+            </div>
+          </GlassCard>
+
+          {/* Grace Period */}
+          <GlassCard className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-semibold text-slate-200">Alert Grace Period</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Wait this many minutes before sending an offline alert. Prevents notifications for brief outages.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="60"
+                  value={graceMinutes}
+                  onChange={(e) => setGraceMinutes(e.target.value)}
+                  className="w-20 rounded-md bg-white/[0.06] border border-white/[0.08] px-3 py-1.5 text-sm text-slate-200 text-right"
+                />
+                <span className="text-sm text-slate-400">min</span>
+              </div>
             </div>
           </GlassCard>
 
