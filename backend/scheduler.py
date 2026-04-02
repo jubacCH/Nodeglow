@@ -104,6 +104,11 @@ async def run_integration_checks():
 # ── Ping checks ──────────────────────────────────────────────────────────────
 
 
+# Grace period tracker: host_id -> first_seen_offline timestamp
+_offline_since: dict[int, datetime] = {}
+_grace_notified: set[int] = set()  # host_ids already notified after grace
+
+
 async def run_ping_checks():
     """Ping all enabled hosts concurrently and store results."""
     import asyncio as _asyncio
@@ -206,14 +211,37 @@ async def run_ping_checks():
             from services.websocket import broadcast_ping_update
             _asyncio.create_task(broadcast_ping_update(host.id, host.name, online, latency))
 
-            # Collect state changes for batched notification
-            prev = prev_success.get(host.id)
-            if prev is True and not online:
-                went_offline.append(host.name)
-            elif prev is False and online:
-                came_online.append(host.name)
+            # Track state changes for grace-period notification
+            if not online:
+                if host.id not in _offline_since:
+                    _offline_since[host.id] = now
+            else:
+                # Host is back online — clear grace tracking
+                was_tracked = host.id in _offline_since
+                was_notified = host.id in _grace_notified
+                _offline_since.pop(host.id, None)
+                _grace_notified.discard(host.id)
+                prev = prev_success.get(host.id)
+                if prev is False and online and was_notified:
+                    came_online.append(host.name)
 
         await db.commit()
+
+    # Grace period: only notify after host has been offline for N minutes
+    from models.settings import get_setting
+    async with AsyncSessionLocal() as db:
+        grace_str = await get_setting(db, "notify_grace_minutes", "5")
+    try:
+        grace_minutes = max(0, int(grace_str))
+    except (ValueError, TypeError):
+        grace_minutes = 5
+
+    for host, online, port_error, latency, detail in results:
+        if not online and host.id in _offline_since and host.id not in _grace_notified:
+            elapsed = (now - _offline_since[host.id]).total_seconds() / 60
+            if elapsed >= grace_minutes:
+                went_offline.append(host.name)
+                _grace_notified.add(host.id)
 
     # Send batched notifications (one message per direction)
     from notifications import notify

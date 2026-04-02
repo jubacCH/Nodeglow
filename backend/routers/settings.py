@@ -121,7 +121,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     keys = [
         "site_name", "timezone", "ping_interval", "latency_threshold_ms",
-        "proxmox_interval", "notify_enabled",
+        "proxmox_interval", "notify_enabled", "notify_grace_minutes",
         "telegram_bot_token", "telegram_chat_id",
         "discord_webhook_url", "webhook_url", "webhook_secret",
         "smtp_host", "smtp_port", "smtp_user", "smtp_from", "smtp_to",
@@ -145,6 +145,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "anomaly_threshold": "2.0", "proxmox_cpu_threshold": "85",
         "proxmox_ram_threshold": "85", "proxmox_disk_threshold": "90",
         "syslog_port": "1514",
+        "notify_grace_minutes": "5",
         "digest_day": "0", "digest_hour": "9",
         "daily_ai_summary_hour": "8",
         "daily_ai_summary_channels": "telegram,discord,webhook,email",
@@ -386,6 +387,7 @@ async def notifications_settings(request: Request, db: AsyncSession = Depends(ge
 async def save_notifications(
     request: Request,
     notify_enabled:      str = Form("0"),
+    notify_grace_minutes: str = Form("5"),
     telegram_bot_token:  str = Form(""),
     telegram_chat_id:    str = Form(""),
     discord_webhook_url: str = Form(""),
@@ -406,6 +408,11 @@ async def save_notifications(
     if err := _require_admin(request):
         return err
     await set_setting(db, "notify_enabled", "1" if notify_enabled == "on" else "0")
+    try:
+        grace_val = str(max(0, int(notify_grace_minutes.strip() or "5")))
+    except (ValueError, TypeError):
+        grace_val = "5"
+    await set_setting(db, "notify_grace_minutes", grace_val)
     await set_setting(db, "telegram_bot_token", telegram_bot_token.strip())
     await set_setting(db, "telegram_chat_id", telegram_chat_id.strip())
     await set_setting(db, "discord_webhook_url", discord_webhook_url.strip())
