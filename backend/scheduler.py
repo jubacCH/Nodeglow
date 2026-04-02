@@ -838,16 +838,17 @@ async def resolve_host_dns():
 
             if is_ip:
                 # Scanner/manual hosts with IP as hostname: try rDNS
-                if h.source in ("scanner", "manual") and h.name == hostname:
+                if h.source in ("scanner", "manual"):
                     # Check if this IP already belongs to a non-scanner host → merge
-                    if hostname in ip_to_host and ip_to_host[hostname].id != h.id:
+                    check_ip = h.ip_address or hostname
+                    if check_ip in ip_to_host and ip_to_host[check_ip].id != h.id:
                         logger.info("DNS merge: removing duplicate scanner host %s (covered by %s)",
-                                    hostname, ip_to_host[hostname].name)
+                                    h.name, ip_to_host[check_ip].name)
                         to_delete.append(h.id)
                         changed = True
                         continue
 
-                    # Try reverse DNS to get a proper name
+                    # Try reverse DNS to get a proper name (only if name is still the raw IP)
                     try:
                         rdns_result = await asyncio.wait_for(
                             loop.run_in_executor(None, socket.gethostbyaddr, hostname),
@@ -889,7 +890,7 @@ async def resolve_host_dns():
                 dead_host = await db.get(PingHost, dead_id)
                 if not dead_host:
                     continue
-                survivor = ip_to_host.get(dead_host.hostname or dead_host.ip_address)
+                survivor = ip_to_host.get(dead_host.ip_address or dead_host.hostname)
                 if survivor:
                     # Reassign ping results to survivor
                     await db.execute(
