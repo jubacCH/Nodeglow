@@ -389,6 +389,7 @@ _FLUSH_INTERVAL = 2.0  # seconds
 
 
 async def _enqueue(parsed: dict):
+    global _buffer
     # Run through intelligence pipeline (template extraction + tagging)
     try:
         from services.log_intelligence import process_message
