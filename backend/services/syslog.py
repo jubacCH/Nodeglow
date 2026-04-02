@@ -27,6 +27,10 @@ _ip_msg_counts: dict[str, list] = {}  # ip -> [count, window_start]
 _rate_dropped: dict[str, int] = {}    # ip -> dropped count (for periodic logging)
 _global_msg_count: list = [0, 0.0]    # [count, window_start]
 _tcp_connection_count: int = 0        # active TCP connections
+_tcp_count_lock = asyncio.Lock()
+
+
+_RATE_CACHE_MAX = 10_000  # max tracked IPs before cleanup
 
 
 def _syslog_rate_ok(source_ip: str) -> bool:
@@ -40,6 +44,12 @@ def _syslog_rate_ok(source_ip: str) -> bool:
         dropped = _rate_dropped.pop(source_ip, 0)
         if dropped:
             log.warning("Syslog rate limit: dropped %d messages from %s in last window", dropped, source_ip)
+        # Evict stale entries to prevent unbounded growth
+        if len(_ip_msg_counts) > _RATE_CACHE_MAX:
+            stale = [ip for ip, v in _ip_msg_counts.items() if now - v[1] >= _SYSLOG_RATE_WINDOW * 6]
+            for ip in stale:
+                del _ip_msg_counts[ip]
+                _rate_dropped.pop(ip, None)
         return True
     entry[0] += 1
     if entry[0] > _SYSLOG_RATE_MAX:
@@ -309,6 +319,7 @@ async def _refresh_host_cache():
 # Reverse DNS cache for unknown source IPs
 _rdns_cache: dict[str, Optional[str]] = {}
 _RDNS_CACHE_TTL = 300  # 5 minutes
+_RDNS_CACHE_MAX = 5_000  # max cached entries
 _rdns_cache_ts: float = 0.0
 
 
@@ -343,6 +354,9 @@ async def _rdns_resolve_loop():
         now = time.time()
         if now - _rdns_cache_ts < _RDNS_CACHE_TTL:
             continue
+        # Evict entire cache periodically to prevent unbounded growth
+        if len(_rdns_cache) > _RDNS_CACHE_MAX:
+            _rdns_cache.clear()
         _rdns_cache_ts = now
         # Collect unique source IPs from recent buffer entries that had no host_id
         ips_to_resolve = set()
@@ -400,7 +414,7 @@ async def _enqueue(parsed: dict):
         parsed["is_new_template"] = enrichment["is_new_template"]
         parsed["extracted_fields"] = enrichment.get("extracted_fields", {})
     except Exception:
-        pass  # intelligence is optional, never block ingestion
+        log.debug("Log intelligence enrichment failed", exc_info=True)
 
     # GeoIP enrichment (resolve external IPs in message to country/city)
     try:
@@ -409,7 +423,7 @@ async def _enqueue(parsed: dict):
         parsed["geo_country"] = geo["geo_country"]
         parsed["geo_city"] = geo["geo_city"]
     except Exception:
-        pass  # intelligence is optional, never block ingestion
+        log.debug("GeoIP enrichment failed", exc_info=True)
 
     # Broadcast to live tail subscribers
     for q in _subscribers[:]:
@@ -504,12 +518,13 @@ class SyslogTCPHandler:
         if not _is_allowed_source(source_ip):
             self.writer.close()
             return
-        if _tcp_connection_count >= _MAX_TCP_CONNECTIONS:
-            log.warning("Syslog TCP connection limit reached (%d), rejecting %s",
-                        _MAX_TCP_CONNECTIONS, source_ip)
-            self.writer.close()
-            return
-        _tcp_connection_count += 1
+        async with _tcp_count_lock:
+            if _tcp_connection_count >= _MAX_TCP_CONNECTIONS:
+                log.warning("Syslog TCP connection limit reached (%d), rejecting %s",
+                            _MAX_TCP_CONNECTIONS, source_ip)
+                self.writer.close()
+                return
+            _tcp_connection_count += 1
         try:
             while True:
                 line = await asyncio.wait_for(
@@ -534,7 +549,8 @@ class SyslogTCPHandler:
         except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
             pass
         finally:
-            _tcp_connection_count -= 1
+            async with _tcp_count_lock:
+                _tcp_connection_count -= 1
             self.writer.close()
 
 

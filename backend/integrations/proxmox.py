@@ -47,13 +47,15 @@ class ProxmoxAPI:
     async def vm_config(self, node: str, vmid: int) -> dict:
         try:
             return await self.get(f"/nodes/{node}/qemu/{vmid}/config")
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to fetch VM config node=%s vmid=%d: %s", node, vmid, exc)
             return {}
 
     async def lxc_config(self, node: str, ctid: int) -> dict:
         try:
             return await self.get(f"/nodes/{node}/lxc/{ctid}/config")
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to fetch LXC config node=%s ctid=%d: %s", node, ctid, exc)
             return {}
 
     async def fetch_guest_macs(self, guests: list[dict]) -> dict[int, str]:
@@ -84,7 +86,8 @@ class ProxmoxAPI:
         """Fetch recent cluster-wide tasks."""
         try:
             return await self.get("/cluster/tasks")
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to fetch cluster tasks: %s", exc)
             return []
 
     async def health_check(self) -> bool:

@@ -4,6 +4,7 @@ Ping/HTTP/TCP/SSL utilities for host monitoring.
 from __future__ import annotations
 
 import asyncio
+import re
 import ssl
 import subprocess
 import time
@@ -97,7 +98,9 @@ async def get_ssl_expiry_days(hostname: str, port: int = 443) -> int | None:
         line = stdout.decode().strip()
         date_str = line.split("=", 1)[1].strip()
         from datetime import timezone
-        expiry = datetime.strptime(date_str, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+        # Strip timezone name (e.g. "GMT", "UTC") — OpenSSL always outputs UTC
+        clean_date = re.sub(r'\s+\w+$', '', date_str)
+        expiry = datetime.strptime(clean_date, "%b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc)
         delta = expiry - datetime.now(timezone.utc)
         return max(0, delta.days)
     except (ssl.SSLError, OSError, asyncio.TimeoutError,
