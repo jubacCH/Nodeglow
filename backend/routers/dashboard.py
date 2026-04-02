@@ -625,6 +625,31 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                         "download_mbps": hd.get("download_mbps", 0),
                         "upload_mbps": hd.get("upload_mbps", 0),
                     })
+
+        # Fallback: extract speedtest data from UniFi integration snapshots
+        if not speedtest_data:
+            unifi_configs = [c for c in all_configs if c.type == "unifi"]
+            for ucfg in unifi_configs:
+                u_snap = all_snaps_cache.get("unifi", {}).get(ucfg.id)
+                if not u_snap or not u_snap.ok or not u_snap.data_json:
+                    continue
+                u_d = json.loads(u_snap.data_json)
+                st_latest = u_d.get("speedtest_latest")
+                if st_latest:
+                    speedtest_data = {
+                        "download_mbps": st_latest.get("download_mbps", 0),
+                        "upload_mbps": st_latest.get("upload_mbps", 0),
+                        "ping_ms": st_latest.get("latency_ms", 0),
+                        "server_name": "UniFi Gateway",
+                        "timestamp": st_latest.get("timestamp", ""),
+                    }
+                    # Use embedded speedtest history from the UniFi snapshot
+                    for st_entry in u_d.get("speedtest", []):
+                        speedtest_history.append({
+                            "download_mbps": st_entry.get("download_mbps", 0),
+                            "upload_mbps": st_entry.get("upload_mbps", 0),
+                        })
+                    break
     except Exception:
         pass
 
