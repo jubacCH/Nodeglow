@@ -802,6 +802,108 @@ async def update_geoip():
         logger.error("GeoIP update failed: %s", result.get("message", "unknown error"))
 
 
+async def resolve_host_dns():
+    """Resolve DNS for hosts: rDNS for IP-only hosts, forward DNS for hostname-only hosts.
+    Also merges duplicate scanner hosts into existing Proxmox/UniFi/agent hosts."""
+    import asyncio
+    import ipaddress
+    import socket
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(PingHost))
+        hosts = result.scalars().all()
+
+        # Build IP → host index (prefer non-scanner sources)
+        ip_to_host: dict[str, PingHost] = {}
+        for h in hosts:
+            if h.ip_address and h.source != "scanner":
+                ip_to_host[h.ip_address] = h
+
+        loop = asyncio.get_running_loop()
+        changed = False
+        to_delete: list[int] = []
+
+        for h in hosts:
+            hostname = (h.hostname or "").strip()
+            if not hostname:
+                continue
+
+            # Check if hostname is an IP address
+            is_ip = False
+            try:
+                ipaddress.ip_address(hostname)
+                is_ip = True
+            except ValueError:
+                pass
+
+            if is_ip:
+                # Scanner/manual hosts with IP as hostname: try rDNS
+                if h.source in ("scanner", "manual") and h.name == hostname:
+                    # Check if this IP already belongs to a non-scanner host → merge
+                    if hostname in ip_to_host and ip_to_host[hostname].id != h.id:
+                        logger.info("DNS merge: removing duplicate scanner host %s (covered by %s)",
+                                    hostname, ip_to_host[hostname].name)
+                        to_delete.append(h.id)
+                        changed = True
+                        continue
+
+                    # Try reverse DNS to get a proper name
+                    try:
+                        rdns_result = await asyncio.wait_for(
+                            loop.run_in_executor(None, socket.gethostbyaddr, hostname),
+                            timeout=3.0
+                        )
+                        fqdn = rdns_result[0]
+                        short = fqdn.split(".")[0] if "." in fqdn else fqdn
+                        if short and short != hostname:
+                            h.name = short
+                            changed = True
+                            logger.info("DNS resolve: %s → %s", hostname, short)
+                    except (socket.herror, socket.gaierror, asyncio.TimeoutError, OSError):
+                        pass
+
+                # Ensure ip_address is set for IP-based hosts
+                if not h.ip_address:
+                    h.ip_address = hostname
+                    changed = True
+
+            else:
+                # Hostname-based hosts (e.g. Proxmox): resolve forward DNS to set ip_address
+                if not h.ip_address:
+                    try:
+                        ip = await asyncio.wait_for(
+                            loop.run_in_executor(None, socket.gethostbyname, hostname),
+                            timeout=3.0
+                        )
+                        h.ip_address = ip
+                        changed = True
+                        logger.info("DNS resolve: %s → %s", hostname, ip)
+                    except (socket.herror, socket.gaierror, asyncio.TimeoutError, OSError):
+                        pass
+
+        # Delete merged duplicates (move ping results first)
+        if to_delete:
+            from sqlalchemy import update
+            for dead_id in to_delete:
+                # Find the surviving host by IP
+                dead_host = await db.get(PingHost, dead_id)
+                if not dead_host:
+                    continue
+                survivor = ip_to_host.get(dead_host.hostname or dead_host.ip_address)
+                if survivor:
+                    # Reassign ping results to survivor
+                    await db.execute(
+                        update(PingResult)
+                        .where(PingResult.host_id == dead_id)
+                        .values(host_id=survivor.id)
+                    )
+                await db.execute(delete(PingHost).where(PingHost.id == dead_id))
+
+        if changed or to_delete:
+            await db.commit()
+            logger.info("DNS resolution job: updated hosts, deleted %d duplicates", len(to_delete))
+
+
 async def run_alert_rules():
     """Evaluate all user-defined alert rules."""
     from services.rules import evaluate_rules
@@ -843,6 +945,10 @@ async def start_scheduler():
                       id="disk_space", replace_existing=True)
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
                       id="ch_cleanup", replace_existing=True)
+
+    # DNS resolution + host dedup (every 30 minutes)
+    scheduler.add_job(resolve_host_dns, "interval", minutes=30,
+                      id="dns_resolve", replace_existing=True)
 
     # GeoIP database update (Tuesdays at 03:00 — MaxMind updates weekly on Tuesdays)
     scheduler.add_job(update_geoip, "cron",
