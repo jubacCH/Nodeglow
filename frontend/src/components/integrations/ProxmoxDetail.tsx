@@ -48,11 +48,22 @@ interface ProxmoxGuest {
   uptime_s: number;
 }
 
+interface BackupFile {
+  volid?: string;
+  vmid?: number;
+  size?: number;
+  ctime?: number;
+  content?: string;
+  notes?: string;
+}
+
 interface ProxmoxData {
   totals: ProxmoxTotals;
   nodes: ProxmoxNode[];
   vms: ProxmoxGuest[];
   containers: ProxmoxGuest[];
+  backups?: Record<string, BackupFile[]>;
+  tasks?: Array<{ type?: string; status?: string; starttime?: number; node?: string; id?: string }>;
 }
 
 function barColor(pct: number): string {
@@ -102,12 +113,52 @@ interface DeployResult {
   message?: string;
 }
 
+function formatSize(bytes: number | undefined | null): string {
+  if (!bytes) return '—';
+  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`;
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${bytes} B`;
+}
+
+function timeAgo(epoch: number | undefined | null): string {
+  if (!epoch) return '—';
+  const diff = Date.now() / 1000 - epoch;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  const days = Math.floor(diff / 86400);
+  return `${days}d ago`;
+}
+
+function backupAge(epoch: number | undefined | null): { text: string; severity: 'ok' | 'warn' | 'old' } {
+  if (!epoch) return { text: 'Never', severity: 'old' };
+  const hours = (Date.now() / 1000 - epoch) / 3600;
+  if (hours < 36) return { text: timeAgo(epoch), severity: 'ok' };
+  if (hours < 72) return { text: timeAgo(epoch), severity: 'warn' };
+  return { text: timeAgo(epoch), severity: 'old' };
+}
+
 export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?: number }) {
   const { totals, nodes, vms, containers } = data;
   const allGuests = [
     ...(vms ?? []).map((v) => ({ ...v, guestType: 'VM' as const })),
     ...(containers ?? []).map((c) => ({ ...c, guestType: 'LXC' as const })),
   ];
+
+  // Build backup lookup: vmid -> latest backup info
+  const backupsByVmid: Record<number, { ctime: number; size: number; storage: string }> = {};
+  if (data.backups) {
+    for (const [storage, files] of Object.entries(data.backups)) {
+      for (const f of files ?? []) {
+        if (f.vmid && f.ctime) {
+          const existing = backupsByVmid[f.vmid];
+          if (!existing || f.ctime > existing.ctime) {
+            backupsByVmid[f.vmid] = { ctime: f.ctime, size: f.size ?? 0, storage };
+          }
+        }
+      }
+    }
+  }
 
   const [deploying, setDeploying] = useState(false);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
@@ -172,6 +223,7 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
                   <th className="px-4 py-2 text-left">Name</th>
                   <th className="px-4 py-2 text-left">Status</th>
                   <th className="px-4 py-2 text-left">Node</th>
+                  <th className="px-4 py-2 text-left">Last Backup</th>
                   <th className="px-4 py-2 text-right">Uptime</th>
                 </tr>
               </thead>
@@ -189,6 +241,20 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
                       </span>
                     </td>
                     <td className="px-4 py-2 text-slate-400">{g.node}</td>
+                    <td className="px-4 py-2">
+                      {(() => {
+                        const bk = g.id ? backupsByVmid[g.id] : undefined;
+                        if (!bk) return <span className="text-xs text-slate-600">No backup</span>;
+                        const age = backupAge(bk.ctime);
+                        const color = age.severity === 'ok' ? 'text-emerald-400' : age.severity === 'warn' ? 'text-amber-400' : 'text-red-400';
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-xs ${color}`}>{age.text}</span>
+                            <span className="text-[10px] text-slate-500">{formatSize(bk.size)}</span>
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-2 text-right text-slate-400">
                       {g.uptime_s > 0 ? formatUptime(g.uptime_s) : '—'}
                     </td>

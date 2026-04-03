@@ -12,7 +12,7 @@ import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
   Bot, Scan, Radio, ShieldCheck, KeyRound, ChevronDown,
   Settings, Users, Activity, BookOpen, Search, LogOut, Plus,
-  ClipboardList, Sun, Moon, Network, Shield, Sparkles, HardDrive, ArrowUpDown,
+  ClipboardList, Sun, Moon, Network, Shield, Sparkles, ArrowUpDown,
 } from 'lucide-react';
 
 interface NavItem {
@@ -36,7 +36,6 @@ const mainNav: NavItem[] = [
   { label: 'SSL', href: '/ssl', icon: ShieldCheck, iconColor: 'text-green-400', countKey: 'ssl' },
   { label: 'Credentials', href: '/credentials', icon: KeyRound, iconColor: 'text-yellow-400', countKey: 'credentials' },
   { label: 'Tasks', href: '/tasks', icon: ClipboardList, iconColor: 'text-rose-400', countKey: 'tasks' },
-  { label: 'Backups', href: '/backups', icon: HardDrive, iconColor: 'text-orange-300' },
   { label: 'Topology', href: '/topology', icon: Network, iconColor: 'text-purple-400' },
   { label: 'Bandwidth', href: '/bandwidth', icon: ArrowUpDown, iconColor: 'text-pink-400' },
 ];
