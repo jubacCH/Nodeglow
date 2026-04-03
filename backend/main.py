@@ -26,6 +26,8 @@ from routers import (
     api_v1,
     rules as rules_router,
     digest as digest_router,
+    bandwidth as bandwidth_router,
+    backups as backups_router,
 )
 
 
@@ -375,3 +377,5 @@ app.include_router(update.router)
 app.include_router(api_v1.router)
 app.include_router(rules_router.router)
 app.include_router(digest_router.router)
+app.include_router(bandwidth_router.router)
+app.include_router(backups_router.router)

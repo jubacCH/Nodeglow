@@ -73,6 +73,25 @@ async def run_integration_checks():
                             db, integration_type, cfg.id,
                             ok=True, data=result.data,
                         )
+                        # Extract bandwidth data from supported integration types
+                        try:
+                            from services.bandwidth import (
+                                extract_proxmox_bandwidth,
+                                extract_unifi_bandwidth,
+                            )
+                            if integration_type == "proxmox":
+                                await extract_proxmox_bandwidth(
+                                    db, cfg.id, result.data,
+                                )
+                            elif integration_type == "unifi":
+                                await extract_unifi_bandwidth(
+                                    db, cfg.id, result.data,
+                                )
+                        except Exception as bw_exc:
+                            logger.warning(
+                                "Bandwidth extraction failed [%s/%s]: %s",
+                                integration_type, cfg.name, bw_exc,
+                            )
                         # Run post-snapshot hook (e.g., auto-import hosts)
                         try:
                             await instance.on_snapshot(result.data, config_dict, db)
@@ -319,6 +338,9 @@ async def cleanup_old_results():
         from models.snmp import SnmpResult
         snmp_cutoff = datetime.utcnow() - timedelta(days=7)
         await db.execute(delete(SnmpResult).where(SnmpResult.timestamp < snmp_cutoff))
+        # Bandwidth samples: keep 7 days
+        from services.bandwidth import cleanup_old_bandwidth
+        await cleanup_old_bandwidth(db, days=7)
         await db.commit()
 
     logger.info("Cleanup done (ping: %dd, integrations: %dd, syslog: %d msgs)", ping_ret, int_ret, total_deleted)
@@ -914,6 +936,23 @@ async def run_alert_rules():
             logger.info("Alert rules: %d rule(s) triggered", triggered)
 
 
+async def run_backup_compliance():
+    """Check all backup jobs for compliance (overdue/failed) and log issues."""
+    from services.backup_monitor import check_backup_compliance
+    async with AsyncSessionLocal() as db:
+        issues = await check_backup_compliance(db)
+        if issues:
+            logger.warning("Backup compliance: %d issue(s) found", len(issues))
+            for issue in issues:
+                logger.warning(
+                    "  Backup %s [%s]: %s (target=%s)",
+                    issue.get("job_name", "?"),
+                    issue.get("source_type", "?"),
+                    issue.get("issue", "?"),
+                    issue.get("target_name", "?"),
+                )
+
+
 async def start_scheduler():
     """Read intervals from DB, then register and start all jobs."""
     from database import get_setting
@@ -944,6 +983,8 @@ async def start_scheduler():
                       id="port_discovery", replace_existing=True)
     scheduler.add_job(check_disk_space, "interval", minutes=30,
                       id="disk_space", replace_existing=True)
+    scheduler.add_job(run_backup_compliance, "interval", hours=1,
+                      id="backup_compliance", replace_existing=True)
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
                       id="ch_cleanup", replace_existing=True)
 

@@ -37,6 +37,8 @@ from models.alert_rule import AlertRule
 from models.discovered_port import DiscoveredPort
 from models.audit import AuditLog
 from models.ai_usage import AiUsageLog
+from models.bandwidth import BandwidthSample
+from models.backup import BackupJob, BackupHistory
 
 
 async def init_db():
@@ -70,5 +72,7 @@ __all__ = [
     "DiscoveredPort",
     "AuditLog",
     "AiUsageLog",
+    "BandwidthSample",
+    "BackupJob", "BackupHistory",
     "init_db",
 ]

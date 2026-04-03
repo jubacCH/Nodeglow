@@ -90,6 +90,65 @@ class ProxmoxAPI:
             logger.debug("Failed to fetch cluster tasks: %s", exc)
             return []
 
+    async def node_storages(self, node: str) -> list[dict]:
+        """Fetch storage list for a node."""
+        try:
+            return await self.get(f"/nodes/{node}/storage")
+        except Exception as exc:
+            logger.debug("Failed to fetch storages for node %s: %s", node, exc)
+            return []
+
+    async def storage_backup_content(self, node: str, storage: str) -> list[dict]:
+        """Fetch backup files from a specific storage on a node."""
+        try:
+            return await self.get(f"/nodes/{node}/storage/{storage}/content?content=backup")
+        except Exception as exc:
+            logger.debug("Failed to fetch backup content %s/%s: %s", node, storage, exc)
+            return []
+
+    async def fetch_backup_data(self, resources: list[dict]) -> dict[str, list[dict]]:
+        """
+        For each node, find backup-capable storages and fetch their backup file list.
+        Returns {storage_name: [backup_file_entries]}.
+        """
+        nodes = [r.get("node") or r.get("name") for r in resources if r.get("type") == "node"]
+        if not nodes:
+            return {}
+
+        # Fetch storages from the first available node (storage list is cluster-wide)
+        storages = []
+        for node in nodes:
+            storages = await self.node_storages(node)
+            if storages:
+                break
+
+        # Find backup-capable storages (content includes "backup")
+        backup_storages: list[str] = []
+        for s in storages:
+            content = s.get("content", "")
+            if "backup" in content:
+                backup_storages.append(s.get("storage", ""))
+
+        if not backup_storages:
+            return {}
+
+        # Fetch backup content from each storage on each node
+        all_backups: dict[str, list[dict]] = {}
+        seen_volids: set[str] = set()
+
+        async def _fetch(node: str, storage: str):
+            files = await self.storage_backup_content(node, storage)
+            for f in files:
+                volid = f.get("volid", "")
+                if volid and volid not in seen_volids:
+                    seen_volids.add(volid)
+                    all_backups.setdefault(storage, []).append(f)
+
+        tasks = [_fetch(node, storage) for node in nodes for storage in backup_storages]
+        await asyncio.gather(*tasks)
+
+        return all_backups
+
     async def health_check(self) -> bool:
         try:
             await self.cluster_status()
@@ -376,6 +435,15 @@ class ProxmoxIntegration(BaseIntegration):
                 api.cluster_tasks(),
             )
             data = parse_cluster_data(resources, status, tasks)
+
+            # Fetch backup storage content (additive — does not replace existing data)
+            try:
+                backup_data = await api.fetch_backup_data(resources)
+                data["backups"] = backup_data
+            except Exception as bk_exc:
+                logger.warning("Failed to fetch backup data: %s", bk_exc)
+                data["backups"] = {}
+
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
@@ -403,9 +471,32 @@ class ProxmoxIntegration(BaseIntegration):
         return await self._api().health_check()
 
     async def on_snapshot(self, data: dict, config: dict, db) -> None:
-        """Auto-import VMs/LXCs as ping hosts after each successful collect."""
+        """Auto-import VMs/LXCs as ping hosts and sync backup data after each successful collect."""
         cluster_name = data.get("cluster_name", config.get("host", "Proxmox"))
         await import_proxmox_hosts(cluster_name, data, db)
+
+        # Sync backup jobs from collected data
+        try:
+            from services.backup_monitor import sync_proxmox_backups
+            # Find config_id from the DB using the host URL
+            from models.integration import IntegrationConfig
+            from sqlalchemy import select
+            result = await db.execute(
+                select(IntegrationConfig.id).where(
+                    IntegrationConfig.type == "proxmox",
+                    IntegrationConfig.enabled == True,
+                )
+            )
+            for row in result.all():
+                from services.integration import decrypt_config
+                cfg = await db.get(IntegrationConfig, row.id)
+                if cfg:
+                    cfg_dict = decrypt_config(cfg.config_json)
+                    if cfg_dict.get("host") == config.get("host"):
+                        await sync_proxmox_backups(db, row.id, data)
+                        break
+        except Exception as exc:
+            logger.warning("Backup sync in on_snapshot failed: %s", exc)
 
     def get_detail_context(self, data: dict, config: dict) -> dict:
         """Provide parsed data for the Proxmox detail template."""
@@ -421,4 +512,5 @@ class ProxmoxIntegration(BaseIntegration):
             "quorum_ok": data.get("quorum_ok", True),
             "cluster_name": data.get("cluster_name", ""),
             "tasks": data.get("tasks", []),
+            "backups": data.get("backups", {}),
         }
