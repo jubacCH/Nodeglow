@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { useQuery } from '@tanstack/react-query';
-import { get } from '@/lib/api';
+import { get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useEffect, useState } from 'react';
 import {
@@ -164,6 +164,7 @@ export default function SystemStatusPage() {
   useEffect(() => { document.title = 'System Status | Nodeglow'; }, []);
   const toast = useToastStore((s) => s.show);
   const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{
     update_available: boolean;
     local: { commit?: string; version?: string };
@@ -189,6 +190,23 @@ export default function SystemStatusPage() {
       toast('Failed to check for updates', 'error');
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function applyUpdate() {
+    if (!confirm('Update now? The application will restart.')) return;
+    setUpdating(true);
+    try {
+      const result = await post<{ ok: boolean; message?: string; error?: string }>('/api/update/apply');
+      if (result.ok) {
+        toast(result.message || 'Update started — restarting...', 'success');
+      } else {
+        toast(result.error || 'Update failed', 'error');
+      }
+    } catch {
+      toast('Failed to apply update', 'error');
+    } finally {
+      setUpdating(false);
     }
   }
 
@@ -573,10 +591,18 @@ export default function SystemStatusPage() {
             <Download size={16} className="text-violet-400" />
             <h3 className="text-sm font-medium text-slate-300">Software Updates</h3>
           </div>
-          <Button size="sm" variant="ghost" onClick={checkUpdate} disabled={checking}>
-            <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
-            {checking ? 'Checking...' : 'Check Now'}
-          </Button>
+          <div className="flex gap-2">
+            {updateInfo?.update_available && (
+              <Button size="sm" variant="primary" onClick={applyUpdate} disabled={updating}>
+                <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                {updating ? 'Updating...' : 'Update Now'}
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={checkUpdate} disabled={checking}>
+              <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
+              {checking ? 'Checking...' : 'Check Now'}
+            </Button>
+          </div>
         </div>
         {updateInfo ? (
           <div>
