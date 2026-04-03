@@ -197,6 +197,13 @@ async def agent_report(request: Request):
         )
         db.add(snap)
 
+        # Extract bandwidth samples from agent network data
+        try:
+            from services.bandwidth import extract_agent_bandwidth
+            await extract_agent_bandwidth(db, agent.id, body, datetime.utcnow())
+        except Exception as bw_exc:
+            logger.warning("Bandwidth extraction failed for agent %d: %s", agent.id, bw_exc)
+
         # Consume pending command (deliver once, then clear)
         command = agent.pending_command
         if command:
