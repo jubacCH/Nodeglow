@@ -109,13 +109,15 @@ DEFAULT_LAYOUT = [
 @router.get("/api/dashboard")
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
-    import time as _time; _t0 = _time.time()
+    import time as _time; _t0 = _time.time(); _checkpoints = []
+    def _cp(label): _checkpoints.append((label, (_time.time()-_t0)*1000))
     if not await is_setup_complete(db):
         return RedirectResponse(url="/setup")
 
     now = datetime.utcnow()
     window_24h = now - timedelta(hours=24)
 
+    _cp("init")
     # ── Global thresholds (read once, used throughout) ─────────────────────────
     global_latency_threshold = await get_setting(db, "latency_threshold_ms", "")
     global_latency_ms = int(global_latency_threshold) if global_latency_threshold.strip() else None
@@ -123,6 +125,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     px_ram_pct_threshold = int(await get_setting(db, "proxmox_ram_threshold", "85"))
     px_disk_threshold    = int(await get_setting(db, "proxmox_disk_threshold", "90"))
 
+    _cp("ping")
     # ── Ping hosts (batch queries instead of N+1) ───────────────────────────
     hosts_result = await db.execute(select(PingHost).where(PingHost.enabled == True))
     hosts = hosts_result.scalars().all()
@@ -227,6 +230,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     online_count  = sum(1 for s in active_stats if s["online"])
     offline_count = sum(1 for s in active_stats if s["online"] is False)
 
+    _cp("top10")
     # ── Top 10 Ping ───────────────────────────────────────────────────────────
     with_latency = [s for s in active_stats if s["avg_latency"] is not None]
     top_latency  = sorted(with_latency, key=lambda s: s["avg_latency"], reverse=True)[:10]
@@ -239,6 +243,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     all_configs = all_configs_result.scalars().all()
     all_snaps_cache = await snap_svc.get_latest_batch_all(db)
 
+    _cp("proxmox")
     # ── Proxmox clusters ──────────────────────────────────────────────────────
     px_configs = [c for c in all_configs if c.type == "proxmox"]
 
@@ -409,6 +414,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         if "." in short_host:
             ping_host_map.setdefault(short_host.split(".")[0].lower(), h.id)
 
+    _cp("topology")
     # ── Build topology tree ──────────────────────────────────────────────────
     topology: dict[int, int | None] = {}
     host_by_id = {h.id: h for h in all_ph}
@@ -484,6 +490,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                     if topology.get(ap_id) is None:
                         topology[ap_id] = parent_for_ap
 
+    _cp("int_health")
     # ── Integration health ──────────────────────────────────────────────────
     integration_health = []
     non_px_configs = [c for c in all_configs if c.type != "proxmox"]
@@ -503,6 +510,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             "cached_at": snap.timestamp if snap else None,
         })
 
+    _cp("health_scores")
     # ── Integration health scores ─────────────────────────────────────────
     try:
         int_health_scores = await health_svc.compute_integration_health(db)
@@ -522,6 +530,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         .limit(5)
     )).scalars().all()
 
+    _cp("syslog")
     # ── Syslog stats (last 24h) ──────────────────────────────────────────────
     from models.syslog import SEVERITY_LABELS
     from services.clickhouse_client import query as ch_query, query_scalar as ch_scalar
@@ -766,6 +775,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    _cp("containers")
     # ── Containers (Portainer + Agent Docker data) ─────────────────────────────
     container_data = None
     all_containers = []  # unified list across all sources
@@ -852,6 +862,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    _cp("ups")
     # ── UPS / NUT ─────────────────────────────────────────────────────────────
     ups_data = None
     try:
@@ -882,6 +893,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    _cp("ssl")
     # ── SSL certificates (hosts + integrations) ─────────────────────────────
     ssl_certs = []
     try:
@@ -1040,6 +1052,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    _cp("gravity")
     # ── Compute health scores (gravity well) with ALL metrics ──────────────
     guest_metrics_by_host: dict[int, dict] = {}
     for g in all_guests:
@@ -1246,7 +1259,14 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "nodeglow_uptime": nodeglow_uptime,
     }
 
-    import logging; logging.getLogger("uvicorn").warning(f"DASHBOARD_API took {(_time.time()-_t0)*1000:.0f}ms")
+    _cp("done")
+    import logging; _log = logging.getLogger("uvicorn")
+    parts = []
+    prev = 0
+    for l, t in _checkpoints:
+        parts.append(f"{l}:+{t-prev:.0f}")
+        prev = t
+    _log.warning(f"DASHBOARD_API {_checkpoints[-1][1]:.0f}ms total | {' | '.join(parts)}")
     return JSONResponse(ctx, headers={"Cache-Control": "no-cache"})
 
 
