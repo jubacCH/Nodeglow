@@ -9,7 +9,8 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ArrowDownToLine, ArrowUpFromLine, Network, Trophy } from 'lucide-react';
-import type { EChartsOption } from 'echarts';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type EChartsOption = any;
 
 const EChart = dynamic(
   () => import('@/components/charts/EChart').then((m) => ({ default: m.EChart })),
