@@ -94,6 +94,11 @@ interface SystemStatus {
     last_check: string;
     error: string | null;
   }>;
+  dashboard_perf: {
+    total_ms: number;
+    sections: Array<{ name: string; ms: number }>;
+    timestamp: string;
+  } | null;
   operational: {
     ping_stats: {
       checks_1h?: number;
@@ -603,6 +608,40 @@ export default function SystemStatusPage() {
           <p className="text-sm text-slate-500">Click &quot;Check Now&quot; to check for updates</p>
         )}
       </GlassCard>
+
+      {/* Dashboard API Performance */}
+      {status?.dashboard_perf?.sections && (
+        <GlassCard className="p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Activity size={16} className="text-emerald-400" />
+            <h3 className="text-sm font-semibold text-slate-200">Dashboard API Performance</h3>
+          </div>
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-2xl font-bold text-white">{status.dashboard_perf.total_ms}ms</span>
+            <Badge variant="severity" severity={status.dashboard_perf.total_ms < 1000 ? 'info' : status.dashboard_perf.total_ms < 3000 ? 'warning' : 'critical'}>
+              {status.dashboard_perf.total_ms < 1000 ? 'Fast' : status.dashboard_perf.total_ms < 3000 ? 'Slow' : 'Very Slow'}
+            </Badge>
+            {status.dashboard_perf.timestamp && (
+              <span className="text-xs text-slate-500 ml-auto">Last: {new Date(status.dashboard_perf.timestamp + 'Z').toLocaleTimeString('de-CH')}</span>
+            )}
+          </div>
+          <div className="space-y-1">
+            {status.dashboard_perf.sections.filter(s => s.name !== 'init' && s.name !== 'done').map((s) => {
+              const pct = status.dashboard_perf!.total_ms > 0 ? (s.ms / status.dashboard_perf!.total_ms) * 100 : 0;
+              const color = s.ms < 50 ? 'bg-emerald-500' : s.ms < 200 ? 'bg-sky-500' : s.ms < 1000 ? 'bg-amber-500' : 'bg-red-500';
+              return (
+                <div key={s.name} className="flex items-center gap-2 text-xs">
+                  <span className="w-32 text-slate-400 truncate">{s.name}</span>
+                  <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                    <div className={`h-full ${color} rounded-full`} style={{ width: `${Math.max(1, pct)}%` }} />
+                  </div>
+                  <span className="w-16 text-right text-slate-500 tabular-nums">{s.ms}ms</span>
+                </div>
+              );
+            })}
+          </div>
+        </GlassCard>
+      )}
     </div>
   );
 }
