@@ -7,9 +7,20 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { AnimatedCounter } from '@/components/data/AnimatedCounter';
-import { HeatmapGrid } from '@/components/charts/HeatmapGrid';
-import { EChart } from '@/components/charts/EChart';
-import { GravityWidget } from '@/components/dashboard/GravityWidget';
+import dynamic from 'next/dynamic';
+
+const HeatmapGrid = dynamic(
+  () => import('@/components/charts/HeatmapGrid').then(m => ({ default: m.HeatmapGrid })),
+  { loading: () => <Skeleton className="h-40 w-full" />, ssr: false }
+);
+const EChart = dynamic(
+  () => import('@/components/charts/EChart').then(m => ({ default: m.EChart })),
+  { loading: () => <Skeleton className="h-[180px] w-full" />, ssr: false }
+);
+const GravityWidget = dynamic(
+  () => import('@/components/dashboard/GravityWidget').then(m => ({ default: m.GravityWidget })),
+  { loading: () => <div className="h-[380px] bg-slate-500/10 rounded-lg animate-pulse" />, ssr: false }
+);
 import { useDashboard } from '@/hooks/queries/useDashboard';
 import { useSSE } from '@/hooks/useSSE';
 import type { SyslogMessage } from '@/types';
