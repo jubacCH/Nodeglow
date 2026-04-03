@@ -690,6 +690,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    _cp("disks")
     # Proxmox node disks
     try:
         px_snaps = all_snaps_cache.get("proxmox", {})
