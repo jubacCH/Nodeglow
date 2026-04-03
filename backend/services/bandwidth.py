@@ -421,6 +421,36 @@ async def get_bandwidth_summary(db: AsyncSession) -> dict:
         by_source[key]["tx_rate_bps"] += s.tx_rate_bps or 0
         by_source[key]["interface_count"] += 1
 
+    # Resolve names for display
+    agent_names: dict[str, str] = {}
+    config_names: dict[str, str] = {}
+    try:
+        from models.agent import Agent
+        agents = (await db.execute(select(Agent.id, Agent.hostname))).all()
+        agent_names = {str(a.id): a.hostname for a in agents}
+    except Exception:
+        pass
+    try:
+        from models.integration import IntegrationConfig
+        configs = (await db.execute(
+            select(IntegrationConfig.id, IntegrationConfig.name, IntegrationConfig.type)
+        )).all()
+        config_names = {str(c.id): c.name for c in configs}
+    except Exception:
+        pass
+
+    def _label(s: BandwidthSample) -> str:
+        if s.source_type == "agent":
+            return agent_names.get(s.source_id, s.source_id)
+        return config_names.get(s.source_id, s.source_id)
+
+    def _iface_label(s: BandwidthSample) -> str:
+        name = s.interface_name
+        # Clean up "device/..." prefix for UniFi
+        if name.startswith("device/"):
+            name = name[7:]
+        return name
+
     return {
         "total_rx_bps": total_rx_bps,
         "total_tx_bps": total_tx_bps,
@@ -429,7 +459,8 @@ async def get_bandwidth_summary(db: AsyncSession) -> dict:
             {
                 "source_type": s.source_type,
                 "source_id": s.source_id,
-                "interface_name": s.interface_name,
+                "source_name": _label(s),
+                "interface_name": _iface_label(s),
                 "rx_rate_bps": s.rx_rate_bps or 0,
                 "tx_rate_bps": s.tx_rate_bps or 0,
                 "timestamp": s.timestamp.isoformat(),
@@ -441,12 +472,14 @@ async def get_bandwidth_summary(db: AsyncSession) -> dict:
 
 
 async def get_bandwidth_interfaces(db: AsyncSession) -> list[dict]:
-    """List all known interfaces with their latest rates."""
-    # Get latest sample per (source_type, source_id, interface_name)
+    """List all known interfaces with their latest rates (last hour only)."""
+    cutoff = datetime.utcnow() - timedelta(hours=1)
+
     sub = (
         select(
             func.max(BandwidthSample.id).label("max_id"),
         )
+        .where(BandwidthSample.timestamp >= cutoff)
         .group_by(
             BandwidthSample.source_type,
             BandwidthSample.source_id,
@@ -460,18 +493,53 @@ async def get_bandwidth_interfaces(db: AsyncSession) -> list[dict]:
     )
     latest = result.scalars().all()
 
+    # Resolve agent hostnames
+    agent_names: dict[str, str] = {}
+    try:
+        from models.agent import Agent
+        agents = (await db.execute(select(Agent.id, Agent.hostname))).all()
+        agent_names = {str(a.id): a.hostname for a in agents}
+    except Exception:
+        pass
+
+    # Resolve integration config names
+    config_names: dict[str, str] = {}
+    try:
+        from models.integration import IntegrationConfig
+        configs = (await db.execute(
+            select(IntegrationConfig.id, IntegrationConfig.name, IntegrationConfig.type)
+        )).all()
+        config_names = {str(c.id): f"{c.type}/{c.name}" for c in configs}
+    except Exception:
+        pass
+
+    def _display_name(s: BandwidthSample) -> str:
+        if s.source_type == "agent":
+            host = agent_names.get(s.source_id, s.source_id)
+            iface = s.interface_name.replace("total", "all")
+            return f"{host} ({iface})"
+        elif s.source_type in ("unifi", "proxmox"):
+            src = config_names.get(s.source_id, s.source_type)
+            return f"{src} / {s.interface_name}"
+        return f"{s.source_type}/{s.interface_name}"
+
     return [
         {
             "source_type": s.source_type,
             "source_id": s.source_id,
             "interface_name": s.interface_name,
+            "display_name": _display_name(s),
             "rx_rate_bps": s.rx_rate_bps or 0,
             "tx_rate_bps": s.tx_rate_bps or 0,
             "rx_bytes": s.rx_bytes or 0,
             "tx_bytes": s.tx_bytes or 0,
             "last_seen": s.timestamp.isoformat(),
         }
-        for s in sorted(latest, key=lambda s: s.interface_name)
+        for s in sorted(
+            latest,
+            key=lambda s: (s.rx_rate_bps or 0) + (s.tx_rate_bps or 0),
+            reverse=True,
+        )
     ]
 
 

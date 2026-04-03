@@ -54,9 +54,11 @@ const HOUR_OPTIONS = [
 interface BandwidthSummary {
   total_rx_bps?: number;
   total_tx_bps?: number;
+  total_interfaces?: number;
   top_talkers?: Array<{
     source_type?: string;
     source_id?: string;
+    source_name?: string;
     interface_name?: string;
     rx_rate_bps?: number;
     tx_rate_bps?: number;
@@ -72,6 +74,7 @@ interface BandwidthInterface {
   source_type?: string;
   source_id?: string;
   interface_name?: string;
+  display_name?: string;
   rx_rate_bps?: number;
   tx_rate_bps?: number;
   last_seen?: string;
@@ -167,7 +170,7 @@ export default function BandwidthPage() {
       xAxis: { type: 'value', name: 'Mbps' },
       yAxis: {
         type: 'category', inverse: true,
-        data: talkers.map((t) => `${t.source_type ?? ''}/${t.interface_name ?? ''}`),
+        data: talkers.map((t) => t.source_name ? `${t.source_name} / ${t.interface_name ?? ''}` : (t.interface_name ?? '')),
         axisLabel: { width: 120, overflow: 'truncate' },
       },
       series: [
@@ -223,8 +226,8 @@ export default function BandwidthPage() {
               <Network size={20} className="text-violet-400" />
             </div>
             <div>
-              {ifLoading ? <Skeleton className="h-7 w-16" /> : (
-                <p className="text-xl font-semibold text-slate-100">{sortedInterfaces.length}</p>
+              {summaryLoading ? <Skeleton className="h-7 w-16" /> : (
+                <p className="text-xl font-semibold text-slate-100">{summary?.total_interfaces ?? sortedInterfaces.length}</p>
               )}
               <p className="text-xs text-slate-400 mt-0.5">Interfaces</p>
             </div>
@@ -243,7 +246,7 @@ export default function BandwidthPage() {
                     {topTalker ? formatBps((topTalker.rx_rate_bps ?? 0) + (topTalker.tx_rate_bps ?? 0)) : '—'}
                   </p>
                   <p className="text-xs text-slate-400 mt-0.5 truncate max-w-[160px]">
-                    {topTalker ? `${topTalker.source_type}/${topTalker.interface_name}` : 'Top Talker'}
+                    {topTalker ? (topTalker.source_name ? `${topTalker.source_name} / ${topTalker.interface_name}` : topTalker.interface_name) : 'Top Talker'}
                   </p>
                 </>
               )}
@@ -291,7 +294,6 @@ export default function BandwidthPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/[0.06]">
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Source</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Interface</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Download</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Upload</th>
@@ -301,8 +303,7 @@ export default function BandwidthPage() {
               <tbody>
                 {ifLoading && Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="border-b border-white/[0.06]">
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-24" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-5 w-40" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-20 ml-auto" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-20 ml-auto" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-16 ml-auto" /></td>
@@ -317,10 +318,9 @@ export default function BandwidthPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <StatusDot status={isActive ? 'online' : 'offline'} />
-                          <span className="text-slate-300 text-xs">{iface.source_type ?? '—'}</span>
+                          <span className="text-slate-300 text-xs">{iface.display_name ?? `${iface.source_type}/${iface.interface_name}`}</span>
                         </div>
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-300">{iface.interface_name ?? '—'}</td>
                       <td className={`px-4 py-3 text-right font-mono text-xs ${rateColor(iface.rx_rate_bps)}`}>
                         {formatBps(iface.rx_rate_bps)}
                       </td>
@@ -333,7 +333,7 @@ export default function BandwidthPage() {
                 })}
                 {!ifLoading && sortedInterfaces.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500">
+                    <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
                       No interfaces reporting yet
                     </td>
                   </tr>
