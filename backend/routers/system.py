@@ -19,6 +19,12 @@ from database import get_db
 router = APIRouter()
 
 
+def _get_dashboard_perf() -> dict:
+    """Get last dashboard API performance data."""
+    from routers.dashboard import _last_perf
+    return _last_perf
+
+
 def _collect_system_info() -> dict:
     """Collect all psutil + OS data in one shot (runs in thread executor)."""
     start_ts = float(os.environ.get("NODEGLOW_START_TIME", "0"))
@@ -499,6 +505,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "log_intelligence": log_intelligence,
         },
         "disk_forecast": disk_forecast,
+        "dashboard_perf": _get_dashboard_perf(),
         "logs": log_lines,
     }
 

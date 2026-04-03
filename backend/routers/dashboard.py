@@ -1,6 +1,10 @@
 import json
+import time as _perf_time
 from collections import defaultdict
 from datetime import datetime, timedelta
+
+# Stores last dashboard API timing for /system/status display
+_last_perf: dict = {}
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -1272,12 +1276,19 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 
     _cp("done")
     import logging; _log = logging.getLogger("uvicorn")
-    parts = []
+    sections = []
     prev = 0
-    for l, t in _checkpoints:
-        parts.append(f"{l}:+{t-prev:.0f}")
+    for label, t in _checkpoints:
+        sections.append({"name": label, "ms": round(t - prev)})
         prev = t
-    _log.warning(f"DASHBOARD_API {_checkpoints[-1][1]:.0f}ms total | {' | '.join(parts)}")
+    total_ms = round(_checkpoints[-1][1])
+    _log.warning(f"DASHBOARD_API {total_ms}ms total | {' | '.join(f'{s['name']}:+{s['ms']}' for s in sections)}")
+    global _last_perf
+    _last_perf = {
+        "total_ms": total_ms,
+        "sections": sections,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
     return JSONResponse(ctx, headers={"Cache-Control": "no-cache"})
 
 
