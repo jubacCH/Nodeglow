@@ -208,6 +208,32 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
         </div>
       </div>
 
+      {/* Backup summary */}
+      {Object.keys(backupsByVmid).length > 0 && (
+        <GlassCard className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle size={16} className="text-emerald-400" />
+            <h3 className="text-sm font-medium text-slate-300">Backup Status</h3>
+            <span className="text-xs text-slate-500">{Object.keys(backupsByVmid).length} VMs/LXCs with backups</span>
+          </div>
+          <div className="flex gap-3 text-xs">
+            {(() => {
+              const now = Date.now() / 1000;
+              const fresh = Object.values(backupsByVmid).filter(b => (now - b.ctime) < 36 * 3600).length;
+              const aging = Object.values(backupsByVmid).filter(b => (now - b.ctime) >= 36 * 3600 && (now - b.ctime) < 72 * 3600).length;
+              const old = Object.values(backupsByVmid).filter(b => (now - b.ctime) >= 72 * 3600).length;
+              return (
+                <>
+                  {fresh > 0 && <span className="text-emerald-400">{fresh} current</span>}
+                  {aging > 0 && <span className="text-amber-400">{aging} aging</span>}
+                  {old > 0 && <span className="text-red-400">{old} outdated</span>}
+                </>
+              );
+            })()}
+          </div>
+        </GlassCard>
+      )}
+
       {/* VMs + Containers table */}
       {allGuests.length > 0 && (
         <GlassCard className="overflow-hidden">
