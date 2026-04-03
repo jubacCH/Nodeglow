@@ -163,15 +163,39 @@ export default function BandwidthPage() {
   const topTalkersOption = useMemo((): any => {
     const talkers = summary?.top_talkers?.slice(0, 10) ?? [];
     if (talkers.length === 0) return {};
+    const labels = talkers.map((t) => {
+      let name = t.interface_name ?? '';
+      // Clean up device/ prefix and MAC addresses
+      name = name.replace(/^device\//, '');
+      // If it's a MAC-like string, prefer source_name
+      if (/^[0-9A-Fa-f]{12}/.test(name) && t.source_name) {
+        name = t.source_name;
+      }
+      // Truncate long names
+      if (name.length > 25) name = name.slice(0, 22) + '...';
+      return name;
+    });
+
     return {
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['Download', 'Upload'] },
-      grid: { left: 140, right: 20, top: 30, bottom: 20 },
-      xAxis: { type: 'value', name: 'Mbps' },
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: unknown) => {
+          const items = params as Array<{ seriesName: string; value: number; name: string; color: string }>;
+          if (!Array.isArray(items) || !items.length) return '';
+          const lines = items.map(i => `<span style="color:${i.color}">\u25CF</span> ${i.seriesName}: <b>${i.value.toFixed(1)} Mbps</b>`);
+          return `${items[0].name}<br/>${lines.join('<br/>')}`;
+        },
+      },
+      legend: { data: ['Download', 'Upload'], top: 0, right: 0 },
+      grid: { left: 180, right: 30, top: 30, bottom: 10 },
+      xAxis: {
+        type: 'value',
+        axisLabel: { formatter: (v: number) => v >= 1000 ? `${(v/1000).toFixed(1)}G` : `${v}M` },
+      },
       yAxis: {
         type: 'category', inverse: true,
-        data: talkers.map((t) => t.source_name ? `${t.source_name} / ${t.interface_name ?? ''}` : (t.interface_name ?? '')),
-        axisLabel: { width: 120, overflow: 'truncate' },
+        data: labels,
+        axisLabel: { width: 160, overflow: 'break', fontSize: 11 },
       },
       series: [
         {
@@ -347,9 +371,9 @@ export default function BandwidthPage() {
         <GlassCard className="p-4">
           <h3 className="text-sm font-semibold text-slate-200 mb-4">Top Talkers</h3>
           {summary?.top_talkers && summary.top_talkers.length > 0 ? (
-            <EChart option={topTalkersOption} height={360} />
+            <EChart option={topTalkersOption} height={400} />
           ) : (
-            <div className="flex items-center justify-center h-[360px] text-sm text-slate-500">
+            <div className="flex items-center justify-center h-[400px] text-sm text-slate-500">
               No data available
             </div>
           )}
