@@ -187,7 +187,7 @@ export default function BandwidthPage() {
         },
       },
       legend: { data: ['Download', 'Upload'], top: 0, right: 0 },
-      grid: { left: 180, right: 30, top: 30, bottom: 10 },
+      grid: { left: 10, right: 30, top: 30, bottom: 10, containLabel: true },
       xAxis: {
         type: 'value',
         axisLabel: { formatter: (v: number) => v >= 1000 ? `${(v/1000).toFixed(1)}G` : `${v}M` },
