@@ -109,6 +109,7 @@ DEFAULT_LAYOUT = [
 @router.get("/api/dashboard")
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
+    import time as _time; _t0 = _time.time()
     if not await is_setup_complete(db):
         return RedirectResponse(url="/setup")
 
@@ -1245,6 +1246,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "nodeglow_uptime": nodeglow_uptime,
     }
 
+    import logging; logging.getLogger("uvicorn").warning(f"DASHBOARD_API took {(_time.time()-_t0)*1000:.0f}ms")
     return JSONResponse(ctx, headers={"Cache-Control": "no-cache"})
 
 
