@@ -719,24 +719,25 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     # Agent disks (from latest AgentSnapshot per agent)
     try:
         from models.agent import Agent, AgentSnapshot as ASnap
-        from sqlalchemy import func as sa_func
-        # Subquery: latest snapshot per agent
-        latest_sub = (
-            select(ASnap.agent_id, sa_func.max(ASnap.timestamp).label("max_ts"))
-            .group_by(ASnap.agent_id)
-            .subquery()
-        )
+        from sqlalchemy import text as sa_text2
         snap_rows = await db.execute(
-            select(ASnap, Agent.hostname)
-            .join(latest_sub, (ASnap.agent_id == latest_sub.c.agent_id) & (ASnap.timestamp == latest_sub.c.max_ts))
-            .join(Agent, Agent.id == ASnap.agent_id)
-            .where(Agent.enabled == True)
+            sa_text2("""
+                SELECT ls.data_json, a.hostname, a.id as agent_id
+                FROM agents a
+                CROSS JOIN LATERAL (
+                    SELECT s.data_json FROM agent_snapshots s
+                    WHERE s.agent_id = a.id
+                    ORDER BY s.timestamp DESC LIMIT 1
+                ) ls
+                WHERE a.enabled = true
+            """)
         )
-        for asnap, hostname in snap_rows:
-            if not asnap.data_json:
+        for row in snap_rows:
+            data_json, hostname = row[0], row[1]
+            if not data_json:
                 continue
             try:
-                adata = json.loads(asnap.data_json)
+                adata = json.loads(data_json)
             except (json.JSONDecodeError, TypeError):
                 continue
             for disk in adata.get("disks", []):
@@ -751,7 +752,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                     "pct": disk.get("pct", 0),
                     "used_gb": disk.get("used_gb", 0),
                     "total_gb": total,
-                    "_pred_key": f"agent-{asnap.agent_id}:{mount}",
+                    "_pred_key": f"agent-{row[2]}:{mount}",
                 })
     except Exception:
         pass
