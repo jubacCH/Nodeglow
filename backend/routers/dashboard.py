@@ -805,10 +805,14 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             from sqlalchemy import text as sa_text
             a_rows = await db.execute(
                 sa_text("""
-                    SELECT DISTINCT ON (s.agent_id) s.data_json, a.hostname
-                    FROM agent_snapshots s
-                    JOIN agents a ON a.id = s.agent_id AND a.enabled = true
-                    ORDER BY s.agent_id, s.timestamp DESC
+                    SELECT ls.data_json, a.hostname
+                    FROM agents a
+                    CROSS JOIN LATERAL (
+                        SELECT s.data_json FROM agent_snapshots s
+                        WHERE s.agent_id = a.id
+                        ORDER BY s.timestamp DESC LIMIT 1
+                    ) ls
+                    WHERE a.enabled = true
                 """)
             )
             for row in a_rows:
