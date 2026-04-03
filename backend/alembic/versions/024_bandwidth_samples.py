@@ -1,10 +1,10 @@
 """Add bandwidth_samples table for traffic monitoring.
 
-Revision ID: 023
-Revises: 022
+Revision ID: 024
+Revises: 023
 """
-revision = "023"
-down_revision = "022"
+revision = "024"
+down_revision = "023"
 
 from alembic import op
 import sqlalchemy as sa
