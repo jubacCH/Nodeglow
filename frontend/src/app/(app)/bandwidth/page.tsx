@@ -12,8 +12,8 @@ import { ArrowDownToLine, ArrowUpFromLine, Network, Trophy } from 'lucide-react'
 import type { EChartsOption } from 'echarts';
 
 const EChart = dynamic(
-  () => import('@/components/charts/EChart').then((m) => m.EChart),
-  { ssr: false },
+  () => import('@/components/charts/EChart').then((m) => ({ default: m.EChart })),
+  { ssr: false, loading: () => <Skeleton className="h-[300px] w-full" /> },
 );
 
 // --- Types ---
