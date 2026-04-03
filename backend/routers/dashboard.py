@@ -760,14 +760,18 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     # Sort: fullest first
     storage_pools.sort(key=lambda p: p.get("pct", 0), reverse=True)
 
-    # ── Disk-full predictions ──────────────────────────────────────────────
+    # ── Disk-full predictions (cached for 5 minutes) ────────────────────────
     disk_predictions = {}
     try:
-        disk_predictions = await pred_svc.predict_disk_full(db)
-
-        # Also compute predictions for agent disks
-        agent_predictions = await _predict_agent_disks(db)
-        disk_predictions.update(agent_predictions)
+        import time as _cache_time
+        _PRED_CACHE = getattr(pred_svc, '_disk_pred_cache', None)
+        _PRED_CACHE_TS = getattr(pred_svc, '_disk_pred_cache_ts', 0)
+        if _PRED_CACHE is not None and (_cache_time.time() - _PRED_CACHE_TS) < 300:
+            disk_predictions = _PRED_CACHE
+        else:
+            disk_predictions = await pred_svc.predict_disk_full(db)
+            pred_svc._disk_pred_cache = disk_predictions
+            pred_svc._disk_pred_cache_ts = _cache_time.time()
 
         for pool in storage_pools:
             pred = disk_predictions.get(pool.get("_pred_key"))
