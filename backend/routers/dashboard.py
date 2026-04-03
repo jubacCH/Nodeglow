@@ -799,6 +799,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                             "source": "portainer",
                         })
 
+        _cp("containers_portainer_done")
         # Agent Docker containers (from latest snapshots, already queried above)
         try:
             from models.agent import Agent, AgentSnapshot as ASnap
@@ -815,6 +816,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                     WHERE a.enabled = true
                 """)
             )
+            _cp("containers_query_done")
             for row in a_rows:
                 data_json, hostname = row[0], row[1]
                 if not data_json:
@@ -839,7 +841,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                     })
         except Exception:
             pass
-
+        _cp("containers_parse_done")
         # Deduplicate: if same container name + host from both sources, prefer agent (richer data)
         seen = set()
         deduped = []
