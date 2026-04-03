@@ -802,22 +802,21 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         # Agent Docker containers (from latest snapshots, already queried above)
         try:
             from models.agent import Agent, AgentSnapshot as ASnap
-            from sqlalchemy import func as sa_func
-            a_latest = (
-                select(ASnap.agent_id, sa_func.max(ASnap.timestamp).label("max_ts"))
-                .group_by(ASnap.agent_id).subquery()
-            )
+            from sqlalchemy import text as sa_text
             a_rows = await db.execute(
-                select(ASnap, Agent.hostname)
-                .join(a_latest, (ASnap.agent_id == a_latest.c.agent_id) & (ASnap.timestamp == a_latest.c.max_ts))
-                .join(Agent, Agent.id == ASnap.agent_id)
-                .where(Agent.enabled == True)
+                sa_text("""
+                    SELECT DISTINCT ON (s.agent_id) s.data_json, a.hostname
+                    FROM agent_snapshots s
+                    JOIN agents a ON a.id = s.agent_id AND a.enabled = true
+                    ORDER BY s.agent_id, s.timestamp DESC
+                """)
             )
-            for asnap, hostname in a_rows:
-                if not asnap.data_json:
+            for row in a_rows:
+                data_json, hostname = row[0], row[1]
+                if not data_json:
                     continue
                 try:
-                    ad = json.loads(asnap.data_json)
+                    ad = json.loads(data_json)
                 except (json.JSONDecodeError, TypeError):
                     continue
                 for ct in ad.get("docker_containers", []):
