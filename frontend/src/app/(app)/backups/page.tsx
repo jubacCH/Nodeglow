@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
@@ -295,9 +296,8 @@ export default function BackupsPage() {
               {jobs.map((job) => {
                 const isExpanded = expanded.has(job.id);
                 return (
-                  <>
+                  <React.Fragment key={job.id}>
                     <tr
-                      key={job.id}
                       className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer"
                       onClick={() => toggle(job.id)}
                     >
@@ -353,7 +353,7 @@ export default function BackupsPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </React.Fragment>
                 );
               })}
               {!isLoading && jobs.length === 0 && (
@@ -374,11 +374,12 @@ export default function BackupsPage() {
 /* ─── Inline history detail ─── */
 
 function JobHistory({ jobId }: { jobId: number }) {
-  const { data, isLoading } = useQuery<HistoryEntry[]>({
+  const { data: raw, isLoading } = useQuery<{ entries: HistoryEntry[] }>({
     queryKey: ['backup-history', jobId],
     queryFn: () => get(`/api/backups/${jobId}/history`),
     staleTime: 5 * 60_000,
   });
+  const data = raw?.entries;
 
   if (isLoading) {
     return (
