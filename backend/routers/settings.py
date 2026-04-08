@@ -133,6 +133,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "digest_enabled", "digest_day", "digest_hour",
         "daily_ai_summary_enabled", "daily_ai_summary_hour", "daily_ai_summary_channels",
         "geoip_enabled", "geoip_last_updated",
+        "correlation_min_failures", "correlation_min_cycles",
     ]
     result = {}
     for key in keys:
@@ -146,6 +147,8 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "proxmox_ram_threshold": "85", "proxmox_disk_threshold": "90",
         "syslog_port": "1514",
         "notify_grace_minutes": "5",
+        "correlation_min_failures": "3",
+        "correlation_min_cycles": "2",
         "digest_day": "0", "digest_hour": "9",
         "daily_ai_summary_hour": "8",
         "daily_ai_summary_channels": "telegram,discord,webhook,email",
@@ -388,6 +391,8 @@ async def save_notifications(
     request: Request,
     notify_enabled:      str = Form("0"),
     notify_grace_minutes: str = Form("5"),
+    correlation_min_failures: str = Form("3"),
+    correlation_min_cycles:   str = Form("2"),
     telegram_bot_token:  str = Form(""),
     telegram_chat_id:    str = Form(""),
     discord_webhook_url: str = Form(""),
@@ -413,6 +418,19 @@ async def save_notifications(
     except (ValueError, TypeError):
         grace_val = "5"
     await set_setting(db, "notify_grace_minutes", grace_val)
+
+    # Correlation thresholds
+    try:
+        min_fail = str(max(1, min(10, int(correlation_min_failures.strip() or "3"))))
+    except (ValueError, TypeError):
+        min_fail = "3"
+    await set_setting(db, "correlation_min_failures", min_fail)
+    try:
+        min_cyc = str(max(1, min(10, int(correlation_min_cycles.strip() or "2"))))
+    except (ValueError, TypeError):
+        min_cyc = "2"
+    await set_setting(db, "correlation_min_cycles", min_cyc)
+
     await set_setting(db, "telegram_bot_token", telegram_bot_token.strip())
     await set_setting(db, "telegram_chat_id", telegram_chat_id.strip())
     await set_setting(db, "discord_webhook_url", discord_webhook_url.strip())

@@ -42,6 +42,8 @@ interface SettingsData {
   digest_hour: string;
   notify_enabled: string;
   notify_grace_minutes: string;
+  correlation_min_failures: string;
+  correlation_min_cycles: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
   discord_webhook_url: string;
@@ -286,6 +288,8 @@ export default function SettingsPage() {
   /* ---- Notifications state ---- */
   const [notifyEnabled, setNotifyEnabled] = useState(false);
   const [graceMinutes, setGraceMinutes] = useState('5');
+  const [corrMinFailures, setCorrMinFailures] = useState('3');
+  const [corrMinCycles, setCorrMinCycles] = useState('2');
   const [telegramToken, setTelegramToken] = useState('');
   const [telegramChat, setTelegramChat] = useState('');
   const [discordWebhook, setDiscordWebhook] = useState('');
@@ -358,6 +362,8 @@ export default function SettingsPage() {
     setProxmoxInterval(s.proxmox_interval);
     setNotifyEnabled(s.notify_enabled === '1');
     setGraceMinutes(s.notify_grace_minutes || '5');
+    setCorrMinFailures(s.correlation_min_failures || '3');
+    setCorrMinCycles(s.correlation_min_cycles || '2');
     setTelegramToken(s.telegram_bot_token);
     setTelegramChat(s.telegram_chat_id);
     setDiscordWebhook(s.discord_webhook_url);
@@ -532,6 +538,8 @@ export default function SettingsPage() {
     const params = new URLSearchParams();
     params.set('notify_enabled', notifyEnabled ? 'on' : '0');
     params.set('notify_grace_minutes', graceMinutes);
+    params.set('correlation_min_failures', corrMinFailures);
+    params.set('correlation_min_cycles', corrMinCycles);
     params.set('telegram_bot_token', telegramToken);
     params.set('telegram_chat_id', telegramChat);
     params.set('discord_webhook_url', discordWebhook);
@@ -556,6 +564,8 @@ export default function SettingsPage() {
     const params = new URLSearchParams();
     params.set('notify_enabled', notifyEnabled ? 'on' : '0');
     params.set('notify_grace_minutes', graceMinutes);
+    params.set('correlation_min_failures', corrMinFailures);
+    params.set('correlation_min_cycles', corrMinCycles);
     params.set('telegram_bot_token', telegramToken);
     params.set('telegram_chat_id', telegramChat);
     params.set('discord_webhook_url', discordWebhook);
@@ -847,6 +857,48 @@ export default function SettingsPage() {
                   className="w-20 rounded-md bg-white/[0.06] border border-white/[0.08] px-3 py-1.5 text-sm text-slate-200 text-right"
                 />
                 <span className="text-sm text-slate-400">min</span>
+              </div>
+            </div>
+          </GlassCard>
+
+          {/* Correlation Thresholds */}
+          <GlassCard className="p-4 space-y-4">
+            <div>
+              <h3 className="text-base font-semibold text-slate-200">Incident Thresholds</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Require problems to persist before creating incidents. Prevents false alarms from transient issues.</p>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-slate-300">Min. consecutive ping failures</p>
+                <p className="text-xs text-slate-500">Host must fail this many pings in a row to be considered offline</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={corrMinFailures}
+                  onChange={(e) => setCorrMinFailures(e.target.value)}
+                  className="w-20 rounded-md bg-white/[0.06] border border-white/[0.08] px-3 py-1.5 text-sm text-slate-200 text-right"
+                />
+                <span className="text-sm text-slate-400">pings</span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-slate-300">Min. consecutive correlation cycles</p>
+                <p className="text-xs text-slate-500">Condition must match this many 60s cycles before an incident is created</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={corrMinCycles}
+                  onChange={(e) => setCorrMinCycles(e.target.value)}
+                  className="w-20 rounded-md bg-white/[0.06] border border-white/[0.08] px-3 py-1.5 text-sm text-slate-200 text-right"
+                />
+                <span className="text-sm text-slate-400">cycles</span>
               </div>
             </div>
           </GlassCard>
