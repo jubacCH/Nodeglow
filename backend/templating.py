@@ -49,13 +49,13 @@ templates.env.filters["localtime"] = localtime
 
 def _csrf_input(request):
     """Return an HTML hidden input with the CSRF token."""
-    token = getattr(getattr(request, "state", None), "csrf_token", "")
+    token = getattr(getattr(request, "state", None), "_csrf_token", "")
     return f'<input type="hidden" name="csrf_token" value="{html_escape(token)}">'
 
 
 def _csrf_meta(request):
     """Return a meta tag with the CSRF token (for JS fetch calls)."""
-    token = getattr(getattr(request, "state", None), "csrf_token", "")
+    token = getattr(getattr(request, "state", None), "_csrf_token", "")
     return f'<meta name="csrf-token" content="{html_escape(token)}">'
 
 

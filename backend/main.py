@@ -233,12 +233,15 @@ async def inject_globals(request: Request, call_next):
 
     is_api = request.url.path.startswith("/api/")
 
+    # Generate CSRF token for this request (sets cookie on first visit)
+    from csrf import generate_csrf_token, set_csrf_cookie, validate_csrf, csrf_error_response
+    generate_csrf_token(request)
+
     # CSRF protection for state-changing methods
     # Skip for: API-key-authenticated requests, /api/v1/ (has own API key auth layer)
     has_api_key = bool(request.headers.get("X-API-Key") or request.query_params.get("api_key"))
     is_api_v1 = request.url.path.startswith("/api/v1/")
     if request.method in ("POST", "PUT", "DELETE", "PATCH") and not has_api_key and not is_api_v1:
-        from csrf import validate_csrf, csrf_error_response
         content_type = request.headers.get("content-type", "")
         form_data = None
         if "form" in content_type:
@@ -288,6 +291,9 @@ async def inject_globals(request: Request, call_next):
     request.state.csp_nonce = _secrets.token_urlsafe(16)
 
     response = await call_next(request)
+
+    # Set CSRF cookie if newly generated
+    set_csrf_cookie(request, response)
 
     # Security headers
     response.headers["X-Frame-Options"] = "DENY"
