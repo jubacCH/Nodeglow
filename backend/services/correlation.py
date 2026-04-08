@@ -31,10 +31,37 @@ from services.topology import build_topology, filter_upstream_failures
 
 log = logging.getLogger("nodeglow.correlation")
 
+# ── Consecutive-failure state (in-memory, resets on restart) ────────────────
+# Key = (rule_name, host_ids_hash), value = consecutive cycle count
+_rule_hit_counts: dict[tuple[str, str], int] = {}
+# Tracks which keys were seen in the current correlation cycle
+_current_cycle_hits: set[tuple[str, str]] = set()
+
 
 def _host_ids_hash(host_ids: list[int]) -> str:
     """Deterministic hash of sorted host IDs for dedup."""
     return hashlib.sha256(",".join(str(i) for i in sorted(host_ids)).encode()).hexdigest()[:16]
+
+
+def _track_rule_hit(rule: str, host_ids: list[int], min_cycles: int) -> bool:
+    """Track consecutive correlation cycles where a rule matches.
+
+    Returns True if the rule has matched for >= min_cycles consecutive runs.
+    Counters for combos not seen in a cycle are reset automatically via
+    _prune_stale_hits() at end of each correlation run.
+    """
+    key = (rule, _host_ids_hash(host_ids))
+    _current_cycle_hits.add(key)
+    _rule_hit_counts[key] = _rule_hit_counts.get(key, 0) + 1
+    return _rule_hit_counts[key] >= min_cycles
+
+
+def _prune_stale_hits():
+    """Remove hit counters for combos that didn't match this cycle."""
+    stale = [k for k in _rule_hit_counts if k not in _current_cycle_hits]
+    for k in stale:
+        del _rule_hit_counts[k]
+    _current_cycle_hits.clear()
 
 
 async def _find_or_create_incident(
@@ -94,25 +121,37 @@ async def _find_or_create_incident(
     return incident
 
 
-async def _get_offline_hosts(db) -> list[PingHost]:
-    """Get hosts that are currently offline (latest result = fail, not in maintenance)."""
-    # Subquery: latest PingResult per host
-    sub = (
-        select(PingResult.host_id, func.max(PingResult.id).label("max_id"))
-        .group_by(PingResult.host_id)
-        .subquery()
+async def _get_offline_hosts(db, min_failures: int = 3) -> list[PingHost]:
+    """Get hosts that are offline: last *min_failures* consecutive pings all failed.
+
+    This prevents transient single-ping failures from triggering incidents.
+    """
+    from sqlalchemy import literal_column
+    from sqlalchemy.orm import aliased
+
+    # Get all enabled, non-maintenance hosts
+    hosts_q = await db.execute(
+        select(PingHost).where(PingHost.enabled == True, PingHost.maintenance == False)
     )
-    results = await db.execute(
-        select(PingHost, PingResult)
-        .join(sub, PingHost.id == sub.c.host_id)
-        .join(PingResult, PingResult.id == sub.c.max_id)
-        .where(
-            PingHost.enabled == True,
-            PingHost.maintenance == False,
-            PingResult.success == False,
-        )
-    )
-    return [row[0] for row in results.all()]
+    hosts = hosts_q.scalars().all()
+    if not hosts:
+        return []
+
+    offline = []
+    for host in hosts:
+        # Fetch the last N results for this host, newest first
+        recent = (await db.execute(
+            select(PingResult.success)
+            .where(PingResult.host_id == host.id)
+            .order_by(PingResult.id.desc())
+            .limit(min_failures)
+        )).scalars().all()
+
+        # Need at least min_failures results, ALL must be failures
+        if len(recent) >= min_failures and all(not s for s in recent):
+            offline.append(host)
+
+    return offline
 
 
 # ── Topology cache (refreshed once per correlation run) ────────────────────
@@ -137,10 +176,10 @@ async def _get_topology(db) -> dict[int, int | None]:
 
 # ── Rule 1: Host Down + Syslog Errors ───────────────────────────────────────
 
-async def _rule_host_down_syslog(db):
+async def _rule_host_down_syslog(db, min_failures: int = 3, min_cycles: int = 2):
     """Host offline AND syslog severity <= 3 from same host in 5min window.
     Skips hosts whose upstream parent is also offline (topology cascading)."""
-    offline_hosts = await _get_offline_hosts(db)
+    offline_hosts = await _get_offline_hosts(db, min_failures)
     if not offline_hosts:
         return
 
@@ -162,6 +201,8 @@ async def _rule_host_down_syslog(db):
         ) or 0)
 
         if syslog_count > 0:
+            if not _track_rule_hit("host_down_syslog", [host.id], min_cycles):
+                continue
             await _find_or_create_incident(
                 db,
                 rule="host_down_syslog",
@@ -192,6 +233,8 @@ async def _rule_host_down_syslog(db):
             names += f" (+{len(cascade_hosts) - 5} more)"
         upstream_label = ", ".join(parent_names) if parent_names else "upstream device"
 
+        if not _track_rule_hit("upstream_failure", list(cascaded_ids), min_cycles):
+            return
         await _find_or_create_incident(
             db,
             rule="upstream_failure",
@@ -205,10 +248,10 @@ async def _rule_host_down_syslog(db):
 
 # ── Rule 2: Multi-Host Down ─────────────────────────────────────────────────
 
-async def _rule_multi_host_down(db):
+async def _rule_multi_host_down(db, min_failures: int = 3, min_cycles: int = 2):
     """3+ hosts offline simultaneously → likely network problem.
     Excludes hosts already explained by upstream failure."""
-    offline_hosts = await _get_offline_hosts(db)
+    offline_hosts = await _get_offline_hosts(db, min_failures)
     if len(offline_hosts) < 3:
         return
 
@@ -235,6 +278,8 @@ async def _rule_multi_host_down(db):
     for subnet, hosts in subnets.items():
         if len(hosts) >= 3:
             host_ids = [h.id for h in hosts]
+            if not _track_rule_hit("multi_host_down", host_ids, min_cycles):
+                continue
             names = ", ".join(h.name for h in hosts[:5])
             if len(hosts) > 5:
                 names += f" (+{len(hosts) - 5} more)"
@@ -254,6 +299,8 @@ async def _rule_multi_host_down(db):
     if remaining >= 3:
         uncovered = [h for s, hosts in subnets.items() if len(hosts) < 3 for h in hosts]
         host_ids = [h.id for h in uncovered]
+        if not _track_rule_hit("multi_host_down", host_ids, min_cycles):
+            return
         names = ", ".join(h.name for h in uncovered[:5])
         if len(uncovered) > 5:
             names += f" (+{len(uncovered) - 5} more)"
@@ -270,11 +317,11 @@ async def _rule_multi_host_down(db):
 
 # ── Rule 3: Integration + Host ──────────────────────────────────────────────
 
-async def _rule_integration_host(db):
+async def _rule_integration_host(db, min_failures: int = 3, min_cycles: int = 2):
     """Integration unreachable AND the host running it is also offline."""
     from services import snapshot as snap_svc
 
-    offline_hosts = await _get_offline_hosts(db)
+    offline_hosts = await _get_offline_hosts(db, min_failures)
     if not offline_hosts:
         return
 
@@ -302,6 +349,8 @@ async def _rule_integration_host(db):
 
         if cfg_host and cfg_host in offline_hostnames:
             ping_host = offline_by_hostname[cfg_host]
+            if not _track_rule_hit("integration_host", [ping_host.id], min_cycles):
+                continue
             await _find_or_create_incident(
                 db,
                 rule="integration_host",
@@ -315,7 +364,7 @@ async def _rule_integration_host(db):
 
 # ── Rule 6: Port Error ─────────────────────────────────────────────────────
 
-async def _rule_port_error(db):
+async def _rule_port_error(db, min_cycles: int = 2):
     """Host is online (ICMP OK) but a service check (HTTP/HTTPS/TCP) failed."""
     results = await db.execute(
         select(PingHost).where(
@@ -339,6 +388,8 @@ async def _rule_port_error(db):
                 pass
 
         failed_label = ", ".join(failed_checks) if failed_checks else "service check"
+        if not _track_rule_hit("port_error", [host.id], min_cycles):
+            continue
         await _find_or_create_incident(
             db,
             rule="port_error",
@@ -352,7 +403,7 @@ async def _rule_port_error(db):
 
 # ── Rule 4: Syslog Spike ────────────────────────────────────────────────────
 
-async def _rule_syslog_spike(db):
+async def _rule_syslog_spike(db, min_cycles: int = 2):
     """Syslog error rate 5x above 1h baseline."""
     now = datetime.utcnow()
     window_5m = now - timedelta(minutes=5)
@@ -377,6 +428,8 @@ async def _rule_syslog_spike(db):
     baseline_5m = max(1, hourly_errors / 12)
 
     if recent_errors >= baseline_5m * 5:
+        if not _track_rule_hit("syslog_spike", [0], min_cycles):
+            return
         await _find_or_create_incident(
             db,
             rule="syslog_spike",
@@ -390,7 +443,7 @@ async def _rule_syslog_spike(db):
 
 # ── Rule 5: Log Anomaly ────────────────────────────────────────────────
 
-async def _rule_log_anomaly(db):
+async def _rule_log_anomaly(db, min_cycles: int = 2):
     """Detect per-host log volume anomalies vs. learned baselines."""
     now = datetime.utcnow()
     hour = now.hour
@@ -432,6 +485,14 @@ async def _rule_log_anomaly(db):
         threshold = bl.avg_rate + 3 * max(bl.std_rate, bl.avg_rate * 0.3)
 
         if current_rate > threshold and count >= 20:
+            # Determine host_ids early for hit tracking
+            _host_ids_for_track = [0]
+            if bl.host_key.startswith("host:"):
+                _p = bl.host_key.split(":", 1)
+                if len(_p) > 1 and _p[1].isdigit():
+                    _host_ids_for_track = [int(_p[1])]
+            if not _track_rule_hit("log_anomaly", _host_ids_for_track, min_cycles):
+                continue
             host_label = bl.host_key
             if bl.host_key.startswith("host:"):
                 _parts = bl.host_key.split(":", 1)
@@ -461,7 +522,7 @@ async def _rule_log_anomaly(db):
 
 # ── Rule 7: Fleet-Wide Issue ───────────────────────────────────────────────
 
-async def _rule_fleet_wide(db):
+async def _rule_fleet_wide(db, min_cycles: int = 2):
     """Detect same template appearing on 3+ hosts simultaneously."""
     from services.log_intelligence import detect_fleet_patterns
     from models.log_template import LogTemplate
@@ -481,6 +542,8 @@ async def _rule_fleet_wide(db):
         tpl_text = (tpl or th)[:80]
 
         severity = "critical" if host_count > 5 else "warning"
+        if not _track_rule_hit("fleet_wide_issue", [0], min_cycles):
+            continue
         await _find_or_create_incident(
             db,
             rule="fleet_wide_issue",
@@ -495,7 +558,7 @@ async def _rule_fleet_wide(db):
 
 # ── Rule 8: Severity Trend ────────────────────────────────────────────────
 
-async def _rule_severity_trend(db):
+async def _rule_severity_trend(db, min_cycles: int = 2):
     """Rising error templates create warning incidents."""
     from models.log_template import LogTemplate
 
@@ -509,6 +572,8 @@ async def _rule_severity_trend(db):
     )).scalars().all()
 
     for tpl in rising:
+        if not _track_rule_hit("severity_trend", [0], min_cycles):
+            continue
         await _find_or_create_incident(
             db,
             rule="severity_trend",
@@ -522,13 +587,15 @@ async def _rule_severity_trend(db):
 
 # ── Rule 9: Content Anomaly ──────────────────────────────────────────────
 
-async def _rule_content_anomaly(db):
+async def _rule_content_anomaly(db, min_cycles: int = 2):
     """Detect new templates on stable hosts and severity upgrades."""
     from services.log_intelligence import detect_content_anomalies
 
     anomalies = await detect_content_anomalies(db)
     for anomaly in anomalies:
         if anomaly["type"] == "template_diversity_spike":
+            if not _track_rule_hit("content_anomaly_diversity", [0], min_cycles):
+                continue
             await _find_or_create_incident(
                 db,
                 rule="content_anomaly",
@@ -540,6 +607,8 @@ async def _rule_content_anomaly(db):
                         f"(baseline: {anomaly['baseline']})",
             )
         elif anomaly["type"] == "severity_upgrade":
+            if not _track_rule_hit("content_anomaly_severity", [0], min_cycles):
+                continue
             await _find_or_create_incident(
                 db,
                 rule="content_anomaly",
@@ -676,17 +745,30 @@ async def run_correlation():
     """Run all correlation rules. Called every 60s by scheduler."""
     async with AsyncSessionLocal() as db:
         try:
-            await _rule_host_down_syslog(db)
-            await _rule_multi_host_down(db)
-            await _rule_integration_host(db)
-            await _rule_port_error(db)
-            await _rule_syslog_spike(db)
-            await _rule_log_anomaly(db)
-            await _rule_fleet_wide(db)
-            await _rule_severity_trend(db)
-            await _rule_content_anomaly(db)
+            # Load consecutive-failure settings
+            from models.settings import get_setting
+            try:
+                min_failures = max(1, int(await get_setting(db, "correlation_min_failures", "3")))
+            except (ValueError, TypeError):
+                min_failures = 3
+            try:
+                min_cycles = max(1, int(await get_setting(db, "correlation_min_cycles", "2")))
+            except (ValueError, TypeError):
+                min_cycles = 2
+
+            await _rule_host_down_syslog(db, min_failures, min_cycles)
+            await _rule_multi_host_down(db, min_failures, min_cycles)
+            await _rule_integration_host(db, min_failures, min_cycles)
+            await _rule_port_error(db, min_cycles)
+            await _rule_syslog_spike(db, min_cycles)
+            await _rule_log_anomaly(db, min_cycles)
+            await _rule_fleet_wide(db, min_cycles)
+            await _rule_severity_trend(db, min_cycles)
+            await _rule_content_anomaly(db, min_cycles)
             await _auto_resolve(db)
+            _prune_stale_hits()
             await db.commit()
         except Exception as e:
             log.error("Correlation engine error: %s", e, exc_info=True)
+            _current_cycle_hits.clear()
             await db.rollback()
