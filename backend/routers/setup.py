@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from templating import templates
 import bcrypt
 from sqlalchemy import func, select
@@ -8,6 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import User, get_db, is_setup_complete, set_setting
 
 router = APIRouter(prefix="/setup")
+
+
+@router.get("/status")
+async def setup_status(db: AsyncSession = Depends(get_db)):
+    return JSONResponse({"setup_complete": await is_setup_complete(db)})
 
 
 @router.get("", response_class=HTMLResponse)
