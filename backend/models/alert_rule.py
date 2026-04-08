@@ -27,8 +27,9 @@ class AlertRule(Base):
     notify_channels = Column(String(256), nullable=True)  # comma-separated: "telegram,discord,email,webhook" (null = all)
     message_template = Column(Text, nullable=True)      # custom message (supports {value}, {field}, {source})
 
-    # Cooldown
+    # Cooldown & persistence
     cooldown_minutes = Column(Integer, nullable=False, default=5)
+    required_consecutive = Column(Integer, nullable=False, default=2)  # fire after N consecutive matches
     last_triggered_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

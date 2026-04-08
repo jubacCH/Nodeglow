@@ -33,6 +33,7 @@ async def rules_list(db: AsyncSession = Depends(get_db)):
             "notify_channels": r.notify_channels,
             "message_template": r.message_template,
             "cooldown_minutes": r.cooldown_minutes,
+            "required_consecutive": r.required_consecutive,
             "last_triggered_at": str(r.last_triggered) if r.last_triggered else None,
             "trigger_count": getattr(r, "trigger_count", 0),
         }
@@ -64,6 +65,7 @@ async def add_rule(request: Request, db: AsyncSession = Depends(get_db)):
         notify_channels=notify_channels,
         message_template=str(form.get("message_template", "")).strip() or None,
         cooldown_minutes=int(form.get("cooldown_minutes", 5)),
+        required_consecutive=int(form.get("required_consecutive", 2)),
         enabled=True,
     )
     db.add(rule)
@@ -109,6 +111,7 @@ async def edit_rule(request: Request, rule_id: int, db: AsyncSession = Depends(g
     rule.notify_channels = ",".join(channels) if channels else None
     rule.message_template = str(form.get("message_template", "")).strip() or None
     rule.cooldown_minutes = int(form.get("cooldown_minutes", 5))
+    rule.required_consecutive = int(form.get("required_consecutive", 2))
     await db.commit()
     return RedirectResponse(url="/rules?saved=1", status_code=303)
 

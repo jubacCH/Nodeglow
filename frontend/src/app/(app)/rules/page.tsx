@@ -64,6 +64,7 @@ interface RuleFormState {
   threshold: string;
   severity: string;
   cooldown_minutes: string;
+  required_consecutive: string;
   notify_channels: string;
   message_template: string;
 }
@@ -77,6 +78,7 @@ const DEFAULT_FORM: RuleFormState = {
   threshold: '',
   severity: 'warning',
   cooldown_minutes: '5',
+  required_consecutive: '2',
   notify_channels: '',
   message_template: '',
 };
@@ -91,6 +93,7 @@ function ruleToForm(rule: AlertRule): RuleFormState {
     threshold: rule.threshold ?? '',
     severity: rule.severity,
     cooldown_minutes: String(rule.cooldown_minutes),
+    required_consecutive: String(rule.required_consecutive ?? 2),
     notify_channels: rule.notify_channels ?? '',
     message_template: rule.message_template ?? '',
   };
@@ -221,6 +224,7 @@ export default function RulesPage() {
       body.set('threshold', form.threshold);
       body.set('severity', form.severity);
       body.set('cooldown_minutes', form.cooldown_minutes || '5');
+      body.set('required_consecutive', form.required_consecutive || '2');
       if (form.notify_channels.trim()) body.set('notify_channels', form.notify_channels.trim());
       if (form.message_template.trim()) body.set('message_template', form.message_template.trim());
 
@@ -475,6 +479,17 @@ export default function RulesPage() {
                 min={1}
                 value={form.cooldown_minutes}
                 onChange={(e) => updateForm('cooldown_minutes', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Required consecutive matches</label>
+              <input
+                type="number"
+                className={inputClass}
+                min={1}
+                max={10}
+                value={form.required_consecutive}
+                onChange={(e) => updateForm('required_consecutive', e.target.value)}
               />
             </div>
           </div>

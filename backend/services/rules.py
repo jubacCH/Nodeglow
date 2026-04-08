@@ -16,6 +16,10 @@ from models.integration import IntegrationConfig, Snapshot
 
 logger = logging.getLogger(__name__)
 
+# ── Consecutive-match state for alert rules (in-memory) ─────────────────────
+# Key = rule.id, value = consecutive evaluation cycles the condition was true
+_consecutive_matches: dict[int, int] = {}
+
 # ── Operators ────────────────────────────────────────────────────────────────
 
 OPERATORS = {
@@ -120,6 +124,7 @@ async def evaluate_rules(db: AsyncSession) -> int:
 
     triggered = 0
     now = datetime.utcnow()
+    seen_rule_ids: set[int] = set()
 
     for rule in rules:
         try:
@@ -129,22 +134,34 @@ async def evaluate_rules(db: AsyncSession) -> int:
                 if now < cooldown_end:
                     continue
 
+            min_consecutive = max(1, rule.required_consecutive or 2)
+            matched = False
+
             # Syslog rules use a special evaluation path
             if rule.source_type == "syslog":
                 match_count = await _evaluate_syslog_rule(rule, now)
                 if match_count > 0:
-                    triggered += 1
-                    await _fire_syslog_rule(db, rule, match_count, now)
+                    matched = True
+                    seen_rule_ids.add(rule.id)
+                    _consecutive_matches[rule.id] = _consecutive_matches.get(rule.id, 0) + 1
+                    if _consecutive_matches[rule.id] >= min_consecutive:
+                        triggered += 1
+                        await _fire_syslog_rule(db, rule, match_count, now)
+                        _consecutive_matches[rule.id] = 0
+                if not matched:
+                    _consecutive_matches.pop(rule.id, None)
                 continue
 
             # Get data based on source type
             data = await _get_source_data(db, rule)
             if data is None:
+                _consecutive_matches.pop(rule.id, None)
                 continue
 
             # Extract field value
             value = extract_field(data, rule.field_path)
             if value is None:
+                _consecutive_matches.pop(rule.id, None)
                 continue
 
             # Apply operator
@@ -153,8 +170,14 @@ async def evaluate_rules(db: AsyncSession) -> int:
                 continue
 
             if op_fn[1](value, rule.threshold):
-                triggered += 1
-                await _fire_rule(db, rule, value, now)
+                seen_rule_ids.add(rule.id)
+                _consecutive_matches[rule.id] = _consecutive_matches.get(rule.id, 0) + 1
+                if _consecutive_matches[rule.id] >= min_consecutive:
+                    triggered += 1
+                    await _fire_rule(db, rule, value, now)
+                    _consecutive_matches[rule.id] = 0
+            else:
+                _consecutive_matches.pop(rule.id, None)
 
         except Exception as exc:
             logger.warning("Rule %s (%s) evaluation failed: %s", rule.id, rule.name, exc)
