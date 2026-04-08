@@ -195,6 +195,7 @@ export interface AlertRule {
   notify_channels: string | null;
   message_template: string | null;
   cooldown_minutes: number;
+  required_consecutive: number;
   last_triggered_at: string | null;
   created_at: string;
 }
