@@ -57,10 +57,10 @@ async def apply_update(request: Request):
             result = resp.json()
     except Exception as e:
         log.error("Update sidecar error: %s", e)
-        return JSONResponse({"error": "Update service unavailable"}, status_code=503)
+        return JSONResponse({"ok": False, "error": f"Update service unavailable: {e}"})
 
     if not result.get("ok"):
-        return JSONResponse({"error": result.get("error", "Update failed")}, status_code=500)
+        return JSONResponse({"ok": False, "error": result.get("error", "Update failed")})
 
     return JSONResponse({
         "ok": True,

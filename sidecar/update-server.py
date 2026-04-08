@@ -29,7 +29,7 @@ class UpdateHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/apply":
             result = self._apply_update()
-            self._json(200 if result.get("ok") else 500, result)
+            self._json(200, result)
         else:
             self._json(404, {"error": "Not found"})
 

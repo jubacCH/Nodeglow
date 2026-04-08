@@ -203,8 +203,15 @@ export default function SystemStatusPage() {
       } else {
         toast(result.error || 'Update failed', 'error');
       }
-    } catch {
-      toast('Failed to apply update', 'error');
+    } catch (err) {
+      let msg = 'Failed to apply update';
+      if (err instanceof Error && 'data' in err) {
+        try {
+          const parsed = JSON.parse((err as { data?: string }).data ?? '');
+          if (parsed?.error) msg = parsed.error;
+        } catch { /* use default */ }
+      }
+      toast(msg, 'error');
     } finally {
       setUpdating(false);
     }
