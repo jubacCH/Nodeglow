@@ -1,4 +1,4 @@
-"""Async ClickHouse client — syslog storage backend."""
+"""Async ClickHouse client — syslog and time-series storage backend."""
 import asyncio
 import logging
 import os
@@ -6,6 +6,72 @@ from datetime import datetime
 from typing import Any
 
 log = logging.getLogger("nodeglow.clickhouse")
+
+
+# ── Schema migrations ────────────────────────────────────────────────────────
+# Run on first connect. Existing deployments did NOT re-run clickhouse/init.sql,
+# so the Phase 2 tables (ping_checks, agent_metrics, bandwidth_metrics) need to
+# be created from the application side. CREATE TABLE IF NOT EXISTS is idempotent.
+_PHASE2_SCHEMAS = [
+    """
+    CREATE TABLE IF NOT EXISTS ping_checks
+    (
+        timestamp   DateTime64(3, 'UTC') NOT NULL,
+        host_id     UInt32 NOT NULL,
+        success     UInt8  NOT NULL,
+        latency_ms  Nullable(Float32)
+    )
+    ENGINE = MergeTree()
+    PARTITION BY toYYYYMMDD(timestamp)
+    ORDER BY (host_id, timestamp)
+    TTL toDateTime(timestamp) + INTERVAL 30 DAY
+    SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_metrics
+    (
+        timestamp     DateTime64(3, 'UTC') NOT NULL,
+        agent_id      UInt32 NOT NULL,
+        cpu_pct       Nullable(Float32),
+        mem_pct       Nullable(Float32),
+        mem_used_mb   Nullable(Float32),
+        mem_total_mb  Nullable(Float32),
+        disk_pct      Nullable(Float32),
+        load_1        Nullable(Float32),
+        load_5        Nullable(Float32),
+        load_15       Nullable(Float32),
+        uptime_s      Nullable(UInt64),
+        rx_bytes      Nullable(Float64),
+        tx_bytes      Nullable(Float64),
+        data_json     String DEFAULT ''
+    )
+    ENGINE = MergeTree()
+    PARTITION BY toYYYYMMDD(timestamp)
+    ORDER BY (agent_id, timestamp)
+    TTL toDateTime(timestamp) + INTERVAL 7 DAY
+    SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS bandwidth_metrics
+    (
+        timestamp       DateTime64(3, 'UTC') NOT NULL,
+        source_type     LowCardinality(String) NOT NULL,
+        source_id       String NOT NULL,
+        interface_name  LowCardinality(String) NOT NULL,
+        rx_bytes        UInt64 DEFAULT 0,
+        tx_bytes        UInt64 DEFAULT 0,
+        rx_rate_bps     UInt64 DEFAULT 0,
+        tx_rate_bps     UInt64 DEFAULT 0
+    )
+    ENGINE = MergeTree()
+    PARTITION BY toYYYYMMDD(timestamp)
+    ORDER BY (source_type, source_id, interface_name, timestamp)
+    TTL toDateTime(timestamp) + INTERVAL 7 DAY
+    SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1
+    """,
+]
+
+_schemas_applied = False
 
 CLICKHOUSE_URL = os.environ.get(
     "CLICKHOUSE_URL", "http://nodeglow:nodeglow@clickhouse:8123/nodeglow"
@@ -34,6 +100,7 @@ async def get_client():
                     send_receive_timeout=30,
                 )
                 log.info("ClickHouse connected: %s", CLICKHOUSE_URL)
+                await _ensure_schemas(_client)
                 return _client
             except Exception as e:
                 log.warning("ClickHouse connect attempt %d failed: %s", attempt, e)
@@ -45,6 +112,19 @@ async def get_client():
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
         raise RuntimeError("Could not connect to ClickHouse after 5 attempts")
+
+
+async def _ensure_schemas(client) -> None:
+    """Apply Phase 2 CREATE TABLE IF NOT EXISTS once per process."""
+    global _schemas_applied
+    if _schemas_applied:
+        return
+    for ddl in _PHASE2_SCHEMAS:
+        try:
+            await client.command(ddl)
+        except Exception as exc:
+            log.warning("ClickHouse schema migration failed: %s", exc)
+    _schemas_applied = True
 
 
 async def insert_batch(rows: list[dict]) -> None:
@@ -100,6 +180,116 @@ def _record_insert_metric(table: str, status: str, row_count: int) -> None:
             CLICKHOUSE_INSERT_ROWS.labels(table=table).inc(row_count)
     except Exception:
         pass
+
+
+# ── Phase 2 typed inserts ────────────────────────────────────────────────────
+# Each helper is fire-and-forget safe: callers should NOT let a ClickHouse
+# failure break their primary Postgres write. Wrap calls in try/except, the
+# helpers themselves only suppress connection-level errors so unexpected bugs
+# still surface during development.
+
+async def insert_ping_checks(rows: list[dict]) -> None:
+    """Bulk-insert ping check results.
+
+    Each row: {timestamp, host_id, success (bool), latency_ms (float|None)}
+    """
+    if not rows:
+        return
+    columns = ["timestamp", "host_id", "success", "latency_ms"]
+    data = [
+        [
+            r.get("timestamp") or datetime.utcnow(),
+            int(r["host_id"]),
+            1 if r.get("success") else 0,
+            float(r["latency_ms"]) if r.get("latency_ms") is not None else None,
+        ]
+        for r in rows
+    ]
+    client = await get_client()
+    try:
+        await client.insert("ping_checks", data, column_names=columns)
+        _record_insert_metric("ping_checks", "success", len(data))
+    except Exception:
+        _record_insert_metric("ping_checks", "failure", len(data))
+        raise
+
+
+async def insert_agent_metrics(rows: list[dict]) -> None:
+    """Bulk-insert agent metric snapshots.
+
+    Each row: {timestamp, agent_id, cpu_pct, mem_pct, mem_used_mb, mem_total_mb,
+              disk_pct, load_1, load_5, load_15, uptime_s, rx_bytes, tx_bytes,
+              data_json}
+    Missing keys become NULL.
+    """
+    if not rows:
+        return
+    columns = [
+        "timestamp", "agent_id",
+        "cpu_pct", "mem_pct", "mem_used_mb", "mem_total_mb", "disk_pct",
+        "load_1", "load_5", "load_15",
+        "uptime_s", "rx_bytes", "tx_bytes", "data_json",
+    ]
+    data = [
+        [
+            r.get("timestamp") or datetime.utcnow(),
+            int(r["agent_id"]),
+            r.get("cpu_pct"),
+            r.get("mem_pct"),
+            r.get("mem_used_mb"),
+            r.get("mem_total_mb"),
+            r.get("disk_pct"),
+            r.get("load_1"),
+            r.get("load_5"),
+            r.get("load_15"),
+            int(r["uptime_s"]) if r.get("uptime_s") is not None else None,
+            r.get("rx_bytes"),
+            r.get("tx_bytes"),
+            r.get("data_json") or "",
+        ]
+        for r in rows
+    ]
+    client = await get_client()
+    try:
+        await client.insert("agent_metrics", data, column_names=columns)
+        _record_insert_metric("agent_metrics", "success", len(data))
+    except Exception:
+        _record_insert_metric("agent_metrics", "failure", len(data))
+        raise
+
+
+async def insert_bandwidth_metrics(rows: list[dict]) -> None:
+    """Bulk-insert bandwidth samples.
+
+    Each row: {timestamp, source_type, source_id, interface_name,
+              rx_bytes, tx_bytes, rx_rate_bps, tx_rate_bps}
+    """
+    if not rows:
+        return
+    columns = [
+        "timestamp", "source_type", "source_id", "interface_name",
+        "rx_bytes", "tx_bytes", "rx_rate_bps", "tx_rate_bps",
+    ]
+    data = [
+        [
+            r.get("timestamp") or datetime.utcnow(),
+            str(r.get("source_type") or ""),
+            str(r.get("source_id") or ""),
+            str(r.get("interface_name") or ""),
+            int(r.get("rx_bytes") or 0),
+            int(r.get("tx_bytes") or 0),
+            int(r.get("rx_rate_bps") or 0),
+            int(r.get("tx_rate_bps") or 0),
+        ]
+        for r in rows
+    ]
+    client = await get_client()
+    try:
+        await client.insert("bandwidth_metrics", data, column_names=columns)
+        _record_insert_metric("bandwidth_metrics", "success", len(data))
+    except Exception:
+        _record_insert_metric("bandwidth_metrics", "failure", len(data))
+        raise
 
 
 async def query(sql: str, params: dict | None = None) -> list[dict]:

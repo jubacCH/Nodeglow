@@ -178,9 +178,11 @@ async def agent_report(request: Request):
         mem = body.get("memory", {})
         load = body.get("load", {})
 
+        snap_ts = datetime.utcnow()
+        snap_data_json = json.dumps(body)
         snap = AgentSnapshot(
             agent_id=agent.id,
-            timestamp=datetime.utcnow(),
+            timestamp=snap_ts,
             cpu_pct=body.get("cpu_pct"),
             mem_pct=mem.get("pct"),
             mem_used_mb=mem.get("used_mb"),
@@ -192,7 +194,7 @@ async def agent_report(request: Request):
             uptime_s=body.get("uptime_s"),
             rx_bytes=body.get("network", {}).get("rx_bytes"),
             tx_bytes=body.get("network", {}).get("tx_bytes"),
-            data_json=json.dumps(body),
+            data_json=snap_data_json,
         )
         db.add(snap)
 
@@ -209,6 +211,29 @@ async def agent_report(request: Request):
             agent.pending_command = None
 
         await db.commit()
+
+    # Phase 2 dual-write: mirror agent snapshot to ClickHouse `agent_metrics`.
+    # Postgres remains source of truth until cutover; CH failures are logged.
+    try:
+        from services.clickhouse_client import insert_agent_metrics
+        await insert_agent_metrics([{
+            "timestamp": snap_ts,
+            "agent_id": agent.id,
+            "cpu_pct": body.get("cpu_pct"),
+            "mem_pct": mem.get("pct"),
+            "mem_used_mb": mem.get("used_mb"),
+            "mem_total_mb": mem.get("total_mb"),
+            "disk_pct": primary_disk_pct,
+            "load_1": load.get("load_1"),
+            "load_5": load.get("load_5"),
+            "load_15": load.get("load_15"),
+            "uptime_s": body.get("uptime_s"),
+            "rx_bytes": body.get("network", {}).get("rx_bytes"),
+            "tx_bytes": body.get("network", {}).get("tx_bytes"),
+            "data_json": snap_data_json,
+        }])
+    except Exception as ch_exc:
+        logger.warning("ClickHouse dual-write (agent_metrics) failed: %s", ch_exc)
 
     # Broadcast to all WebSocket clients (global hub)
     await broadcast_agent_metric(agent.id, agent.name, {

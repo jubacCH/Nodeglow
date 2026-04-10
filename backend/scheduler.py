@@ -163,6 +163,7 @@ async def run_ping_checks():
     if agent_hosts:
         from models.agent import Agent
         from sqlalchemy import func as sa_func
+        agent_ping_rows: list[dict] = []
         async with AsyncSessionLocal() as db:
             for host in agent_hosts:
                 # Find matching agent by name (PingHost.name == Agent.hostname)
@@ -173,15 +174,30 @@ async def run_ping_checks():
                 success = False
                 if agent and agent.last_seen:
                     success = (datetime.utcnow() - agent.last_seen).total_seconds() < 120
+                ts_now = datetime.utcnow()
+                latency_val = 0 if success else None
                 db.add(PingResult(
                     host_id=host.id,
-                    timestamp=datetime.utcnow(),
+                    timestamp=ts_now,
                     success=success,
-                    latency_ms=0 if success else None,
+                    latency_ms=latency_val,
                 ))
+                agent_ping_rows.append({
+                    "timestamp": ts_now,
+                    "host_id": host.id,
+                    "success": success,
+                    "latency_ms": latency_val,
+                })
                 from services.websocket import broadcast_ping_update
                 _asyncio.create_task(broadcast_ping_update(host.id, host.name, success, 0 if success else None))
             await db.commit()
+
+        # Phase 2 dual-write: agent heartbeat results → ClickHouse.
+        try:
+            from services.clickhouse_client import insert_ping_checks
+            await insert_ping_checks(agent_ping_rows)
+        except Exception as ch_exc:
+            logger.warning("ClickHouse dual-write (agent ping_checks) failed: %s", ch_exc)
 
     active_hosts = ping_hosts
 
@@ -250,6 +266,23 @@ async def run_ping_checks():
                     came_online.append(host.name)
 
         await db.commit()
+
+    # Phase 2 dual-write: mirror ICMP results to ClickHouse `ping_checks`.
+    # Failures are swallowed — Postgres remains the source of truth until
+    # cutover, so a CH outage must not break ping monitoring.
+    try:
+        from services.clickhouse_client import insert_ping_checks
+        await insert_ping_checks([
+            {
+                "timestamp": now,
+                "host_id": host.id,
+                "success": online,
+                "latency_ms": latency,
+            }
+            for host, online, _port_err, latency, _detail in results
+        ])
+    except Exception as ch_exc:
+        logger.warning("ClickHouse dual-write (ping_checks) failed: %s", ch_exc)
 
     # Grace period: only notify after host has been offline for N minutes
     from models.settings import get_setting
