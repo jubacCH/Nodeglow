@@ -47,22 +47,22 @@ async def run_integration_checks():
         return
 
     async with AsyncSessionLocal() as db:
-        # Get all enabled configs in one query
-        result = await db.execute(
-            select(IntegrationConfig).where(IntegrationConfig.enabled == True)
-        )
-        all_configs = result.scalars().all()
+        # Pull only the IDs in id-order, then re-fetch each cfg fresh inside
+        # the per-type loop. This avoids the stale-ORM-object trap where
+        # cfg.cluster_group mutations would not be tracked by a different
+        # session and silently fail to persist.
+        id_rows = (await db.execute(
+            select(IntegrationConfig.id, IntegrationConfig.type)
+            .where(IntegrationConfig.enabled == True)
+            .order_by(IntegrationConfig.id)
+        )).all()
 
-    if not all_configs:
+    if not id_rows:
         return
 
-    # Group by type. Within a type, configs are processed in id-order so the
-    # primary selection is deterministic when multiple are healthy.
-    by_type: dict[str, list] = {}
-    for cfg in all_configs:
-        by_type.setdefault(cfg.type, []).append(cfg)
-    for cfgs in by_type.values():
-        cfgs.sort(key=lambda c: c.id)
+    by_type: dict[str, list[int]] = {}
+    for cfg_id, cfg_type in id_rows:
+        by_type.setdefault(cfg_type, []).append(cfg_id)
 
     from services.tracing import tracer
 
@@ -71,13 +71,16 @@ async def run_integration_checks():
     # are demoted to standby.
     cluster_owners: set[tuple[str, str]] = set()
 
-    for integration_type, configs in by_type.items():
+    for integration_type, cfg_ids in by_type.items():
         integration_cls = registry.get(integration_type)
         if not integration_cls:
             continue
 
         async with AsyncSessionLocal() as db:
-            for cfg in configs:
+            for cfg_id in cfg_ids:
+                cfg = await db.get(IntegrationConfig, cfg_id)
+                if cfg is None or not cfg.enabled:
+                    continue
                 with tracer.start_as_current_span("integration.collect") as _span:
                     _span.set_attribute("integration.type", integration_type)
                     _span.set_attribute("integration.config_id", cfg.id)
@@ -191,7 +194,7 @@ async def run_integration_checks():
 
     logger.debug(
         "Integration check done for %d type(s), %d config(s), %d active cluster groups",
-        len(by_type), len(all_configs), len(cluster_owners),
+        len(by_type), len(id_rows), len(cluster_owners),
     )
 
 
