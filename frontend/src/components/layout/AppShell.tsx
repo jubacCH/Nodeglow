@@ -6,6 +6,7 @@ import { Sidebar } from './Sidebar';
 import { GlowPanel } from '@/components/copilot/CopilotPanel';
 import { ToastContainer } from '@/components/ui/Toast';
 import { KeyboardShortcuts } from '@/components/ui/KeyboardShortcuts';
+import { CommandPaletteHost } from '@/components/ui/CommandPaletteHost';
 import { useAuthStore } from '@/stores/auth';
 import { useWsStore } from '@/stores/websocket';
 import { useThemeStore } from '@/stores/theme';
@@ -98,6 +99,7 @@ export function AppShell({ children }: AppShellProps) {
       <GlowPanel />
       <ToastContainer />
       <KeyboardShortcuts />
+      <CommandPaletteHost />
     </div>
   );
 }

@@ -118,11 +118,9 @@ export function Sidebar() {
       const target = e.target as HTMLElement;
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        searchRef.current?.focus();
-        return;
-      }
+      // Cmd/Ctrl+K is owned by the global CommandPaletteHost — do not
+      // intercept it here. The sidebar search remains usable but is no
+      // longer the keyboard target.
 
       if (isInput) return;
 
