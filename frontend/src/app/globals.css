@@ -56,11 +56,16 @@
   --ng-glass-border-elevated: var(--ng-card-border-hover);
 }
 
+html, body {
+  background: var(--ng-bg);
+  /* The radial gradient lives on the scrolling <main> in AppShell so it
+     stays consistent with the content surface. body just provides the
+     solid base color so any element that escapes the AppShell tree
+     (modals, portals) still has a sane background underneath. */
+}
+
 body {
   color: var(--ng-text-primary);
-  background: var(--ng-bg);
-  background-image: var(--ng-body-gradient);
-  background-attachment: fixed;
   font-family: var(--font-inter), system-ui, sans-serif;
 }
 
