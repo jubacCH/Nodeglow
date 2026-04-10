@@ -314,7 +314,13 @@ async def insert_bandwidth_metrics(rows: list[dict]) -> None:
 
 async def get_latest_ping_per_host(host_ids: list[int] | None = None) -> dict[int, dict]:
     """Return {host_id: {timestamp, success, latency_ms, host_name}} for the
-    most recent ping per host. If host_ids is None, returns all hosts."""
+    most recent ping per host. If host_ids is None, returns all hosts.
+
+    Note: the SQL aliases use `_ts` instead of `timestamp` to avoid a
+    ClickHouse 24.8 parser quirk where aliasing a column to its own name
+    while other aggregates reference the column triggers ILLEGAL_AGGREGATION
+    ("nested aggregate function"). We rename in Python after the query.
+    """
     where = ""
     params: dict = {}
     if host_ids:
@@ -323,7 +329,7 @@ async def get_latest_ping_per_host(host_ids: list[int] | None = None) -> dict[in
     sql = f"""
         SELECT
             host_id,
-            max(timestamp)                AS timestamp,
+            max(timestamp)                AS _ts,
             argMax(success,    timestamp) AS success,
             argMax(latency_ms, timestamp) AS latency_ms,
             argMax(host_name,  timestamp) AS host_name
@@ -332,7 +338,11 @@ async def get_latest_ping_per_host(host_ids: list[int] | None = None) -> dict[in
         GROUP BY host_id
     """
     rows = await query(sql, params)
-    return {int(r["host_id"]): r for r in rows}
+    out: dict[int, dict] = {}
+    for r in rows:
+        r["timestamp"] = r.pop("_ts")
+        out[int(r["host_id"])] = r
+    return out
 
 
 async def get_ping_uptime(
@@ -422,10 +432,12 @@ async def get_latest_agent_metrics(agent_ids: list[int] | None = None) -> dict[i
     if agent_ids:
         where = "WHERE agent_id IN ({aids:Array(UInt32)})"
         params["aids"] = list(agent_ids)
+    # _ts alias avoids the same ClickHouse parser quirk documented in
+    # get_latest_ping_per_host above.
     sql = f"""
         SELECT
             agent_id,
-            max(timestamp)                  AS timestamp,
+            max(timestamp)                  AS _ts,
             argMax(agent_name,   timestamp) AS agent_name,
             argMax(cpu_pct,      timestamp) AS cpu_pct,
             argMax(mem_pct,      timestamp) AS mem_pct,
@@ -444,7 +456,11 @@ async def get_latest_agent_metrics(agent_ids: list[int] | None = None) -> dict[i
         GROUP BY agent_id
     """
     rows = await query(sql, params)
-    return {int(r["agent_id"]): r for r in rows}
+    out: dict[int, dict] = {}
+    for r in rows:
+        r["timestamp"] = r.pop("_ts")
+        out[int(r["agent_id"])] = r
+    return out
 
 
 async def get_agent_history(
@@ -489,12 +505,13 @@ async def get_latest_bandwidth_per_iface(
         where_clauses.append("source_id = {sid:String}")
         params["sid"] = source_id
     where = " AND ".join(where_clauses)
+    # _ts alias avoids the ClickHouse parser quirk — see get_latest_ping_per_host.
     sql = f"""
         SELECT
             source_type,
             source_id,
             interface_name,
-            max(timestamp)                 AS timestamp,
+            max(timestamp)                 AS _ts,
             argMax(source_name, timestamp) AS source_name,
             argMax(rx_bytes,    timestamp) AS rx_bytes,
             argMax(tx_bytes,    timestamp) AS tx_bytes,
@@ -504,7 +521,10 @@ async def get_latest_bandwidth_per_iface(
         WHERE {where}
         GROUP BY source_type, source_id, interface_name
     """
-    return await query(sql, params)
+    rows = await query(sql, params)
+    for r in rows:
+        r["timestamp"] = r.pop("_ts")
+    return rows
 
 
 async def get_bandwidth_history_ch(
