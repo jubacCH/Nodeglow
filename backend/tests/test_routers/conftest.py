@@ -101,7 +101,11 @@ async def client():
          patch("database.get_current_user", new_callable=AsyncMock, return_value=FakeUser()), \
          patch("services.clickhouse_client.query", side_effect=_ch_query_mock), \
          patch("services.clickhouse_client.query_scalar", side_effect=_ch_scalar_mock), \
-         patch("services.clickhouse_client.get_client", new_callable=AsyncMock):
+         patch("services.clickhouse_client.get_client", new_callable=AsyncMock), \
+         patch("services.clickhouse_client.insert_batch", new_callable=AsyncMock), \
+         patch("services.clickhouse_client.insert_ping_checks", new_callable=AsyncMock), \
+         patch("services.clickhouse_client.insert_agent_metrics", new_callable=AsyncMock), \
+         patch("services.clickhouse_client.insert_bandwidth_metrics", new_callable=AsyncMock):
 
         mock_templates.TemplateResponse = _fake_template_response
 
