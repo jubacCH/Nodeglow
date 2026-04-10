@@ -88,11 +88,13 @@ GROUP BY bucket, source_ip, hostname, host_id, severity, app_name, template_hash
 -- Ping check results — replaces ping_results in Postgres.
 -- Volume estimate: 1 row per host per ping interval (~1/min). At 100 hosts,
 -- that's ~144k rows/day. Daily partitions keep TTL deletes cheap.
+-- host_name is denormalized so dashboard queries don't need to JOIN Postgres.
 CREATE TABLE IF NOT EXISTS ping_checks
 (
     timestamp   DateTime64(3, 'UTC') NOT NULL,
     host_id     UInt32 NOT NULL,
-    success     UInt8  NOT NULL,           -- 0/1, avoids Nullable for hot column
+    host_name   LowCardinality(String) DEFAULT '',
+    success     UInt8  NOT NULL,
     latency_ms  Nullable(Float32)
 )
 ENGINE = MergeTree()
@@ -108,10 +110,12 @@ SETTINGS
 -- Volume estimate: 1 row per agent per heartbeat (~30s). At 50 agents,
 -- ~144k rows/day. The data_json blob stays as raw JSON for now; we can
 -- promote individual columns as the schema stabilises.
+-- agent_name is denormalized so dashboard queries don't need to JOIN Postgres.
 CREATE TABLE IF NOT EXISTS agent_metrics
 (
     timestamp     DateTime64(3, 'UTC') NOT NULL,
     agent_id      UInt32 NOT NULL,
+    agent_name    LowCardinality(String) DEFAULT '',
     cpu_pct       Nullable(Float32),
     mem_pct       Nullable(Float32),
     mem_used_mb   Nullable(Float32),
@@ -137,11 +141,13 @@ SETTINGS
 -- Bandwidth samples — replaces bandwidth_samples in Postgres.
 -- Source can be an agent, a Proxmox node, or a UniFi device.
 -- Volume varies with how many interfaces / devices are tracked.
+-- source_name denormalizes the agent/integration display name.
 CREATE TABLE IF NOT EXISTS bandwidth_metrics
 (
     timestamp       DateTime64(3, 'UTC') NOT NULL,
     source_type     LowCardinality(String) NOT NULL,   -- agent | proxmox | unifi
     source_id       String NOT NULL,                   -- agent_id, config_id, device_mac
+    source_name     LowCardinality(String) DEFAULT '',
     interface_name  LowCardinality(String) NOT NULL,
     rx_bytes        UInt64 DEFAULT 0,
     tx_bytes        UInt64 DEFAULT 0,

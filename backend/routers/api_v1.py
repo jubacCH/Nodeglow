@@ -18,8 +18,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import PingHost, PingResult, get_setting
-from models.agent import Agent, AgentSnapshot
+from database import PingHost, get_setting
+from models.agent import Agent
 from models.api_key import ApiKey
 from models.audit import AuditLog
 from models.base import get_db
@@ -287,13 +287,11 @@ async def get_host(
     if not host:
         raise HTTPException(404, "Host not found")
 
-    lr_q = await db.execute(
-        select(PingResult).where(PingResult.host_id == host_id)
-        .order_by(PingResult.timestamp.desc()).limit(1)
-    )
-    lr = lr_q.scalar_one_or_none()
+    from services.clickhouse_client import get_latest_ping_per_host, get_ping_uptime
+    latest_map = await get_latest_ping_per_host([host_id])
+    lr = latest_map.get(host_id)  # dict or None
 
-    um = (await ping_svc.get_uptime_map(db)).get(host_id, {})
+    um = (await get_ping_uptime([host_id], hours=24)).get(host_id, {})
 
     # Agent metrics (if host is agent-sourced)
     agent_metrics = None
@@ -325,13 +323,9 @@ async def get_host(
                 )
                 agent = agent_q.scalar_one_or_none()
         if agent:
-            snap_q = await db.execute(
-                select(AgentSnapshot)
-                .where(AgentSnapshot.agent_id == agent.id)
-                .order_by(AgentSnapshot.id.desc())
-                .limit(1)
-            )
-            snap = snap_q.scalar_one_or_none()
+            from services.clickhouse_client import get_latest_agent_metrics
+            snaps = await get_latest_agent_metrics([agent.id])
+            snap = snaps.get(agent.id)
             agent_metrics = {
                 "agent_id": agent.id,
                 "agent_name": agent.name,
@@ -339,19 +333,19 @@ async def get_host(
                 "arch": agent.arch,
                 "agent_version": agent.agent_version,
                 "last_seen": agent.last_seen.isoformat() if agent.last_seen else None,
-                "cpu_pct": snap.cpu_pct if snap else None,
-                "mem_pct": snap.mem_pct if snap else None,
-                "mem_used_mb": snap.mem_used_mb if snap else None,
-                "mem_total_mb": snap.mem_total_mb if snap else None,
-                "disk_pct": snap.disk_pct if snap else None,
-                "load_1": snap.load_1 if snap else None,
-                "load_5": snap.load_5 if snap else None,
-                "load_15": snap.load_15 if snap else None,
-                "uptime_s": snap.uptime_s if snap else None,
-                "rx_bytes": snap.rx_bytes if snap else None,
-                "tx_bytes": snap.tx_bytes if snap else None,
-                "snapshot_time": snap.timestamp.isoformat() if snap else None,
-                "extra": json.loads(snap.data_json) if snap and snap.data_json else None,
+                "cpu_pct": snap.get("cpu_pct") if snap else None,
+                "mem_pct": snap.get("mem_pct") if snap else None,
+                "mem_used_mb": snap.get("mem_used_mb") if snap else None,
+                "mem_total_mb": snap.get("mem_total_mb") if snap else None,
+                "disk_pct": snap.get("disk_pct") if snap else None,
+                "load_1": snap.get("load_1") if snap else None,
+                "load_5": snap.get("load_5") if snap else None,
+                "load_15": snap.get("load_15") if snap else None,
+                "uptime_s": snap.get("uptime_s") if snap else None,
+                "rx_bytes": snap.get("rx_bytes") if snap else None,
+                "tx_bytes": snap.get("tx_bytes") if snap else None,
+                "snapshot_time": snap["timestamp"].isoformat() if snap and snap.get("timestamp") else None,
+                "extra": json.loads(snap["data_json"]) if snap and snap.get("data_json") else None,
             }
 
     # Integration snapshots (for non-agent hosts with integration data)
@@ -388,8 +382,8 @@ async def get_host(
                 break
 
     # ── Health score (0.0 = healthy, 1.0 = critical) ──────────────────────
-    _online = lr.success if lr else None
-    _lat = lr.latency_ms if lr else None
+    _online = bool(lr.get("success")) if lr else None
+    _lat = lr.get("latency_ms") if lr else None
     _thr = host.latency_threshold_ms
     if _online is False:
         health_score = 1.0
@@ -407,7 +401,7 @@ async def get_host(
             else: _hs += 0.20
         elif _lat is not None:
             _hs += min(_lat / 200.0, 0.20)
-        uptime_24h = um.get("h24") or 100.0
+        uptime_24h = um.get("uptime_pct") or 100.0
         deficit = 1 - uptime_24h / 100.0
         if deficit > 0:
             _hs += min((deficit ** 0.5) * 0.15, 0.15)
@@ -433,9 +427,9 @@ async def get_host(
         "check_detail": json.loads(host.check_detail) if host.check_detail else None,
         "created_at": host.created_at.isoformat() if host.created_at else None,
         "latest": {
-            "online": lr.success if lr else None,
-            "latency_ms": round(lr.latency_ms, 2) if lr and lr.latency_ms else None,
-            "timestamp": lr.timestamp.isoformat() if lr else None,
+            "online": bool(lr.get("success")) if lr else None,
+            "latency_ms": round(float(lr["latency_ms"]), 2) if lr and lr.get("latency_ms") is not None else None,
+            "timestamp": lr["timestamp"].isoformat() if lr and lr.get("timestamp") else None,
         },
         "uptime": {"h24": um.get("h24"), "d7": um.get("d7"), "d30": um.get("d30")},
         "health_score": health_score,
@@ -457,24 +451,20 @@ async def host_history(
     if not host:
         raise HTTPException(404, "Host not found")
 
-    since = datetime.utcnow() - timedelta(hours=hours)
-    q = await db.execute(
-        select(PingResult)
-        .where(PingResult.host_id == host_id, PingResult.timestamp >= since)
-        .order_by(PingResult.timestamp.desc())
-        .limit(limit)
-    )
-    results = list(reversed(q.scalars().all()))
+    from services.clickhouse_client import get_ping_history
+    rows = await get_ping_history(host_id, hours=hours)
+    if limit and len(rows) > limit:
+        rows = rows[-limit:]
     return {
         "host_id": host_id,
-        "count": len(results),
+        "count": len(rows),
         "results": [
             {
-                "timestamp": r.timestamp.isoformat(),
-                "success": r.success,
-                "latency_ms": round(r.latency_ms, 2) if r.latency_ms else None,
+                "timestamp": r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"],
+                "success": bool(r["success"]),
+                "latency_ms": round(float(r["latency_ms"]), 2) if r.get("latency_ms") is not None else None,
             }
-            for r in results
+            for r in rows
         ],
     }
 
@@ -587,21 +577,9 @@ async def list_agents(
     agents = result.scalars().all()
     now = datetime.utcnow()
 
-    # Fetch latest snapshot per agent in one query
-    from sqlalchemy.orm import aliased
-    latest_sub = (
-        select(
-            AgentSnapshot.agent_id,
-            func.max(AgentSnapshot.id).label("max_id"),
-        )
-        .group_by(AgentSnapshot.agent_id)
-        .subquery()
-    )
-    snap_q = await db.execute(
-        select(AgentSnapshot)
-        .join(latest_sub, AgentSnapshot.id == latest_sub.c.max_id)
-    )
-    snaps_by_agent = {s.agent_id: s for s in snap_q.scalars().all()}
+    # Fetch latest snapshot per agent from ClickHouse
+    from services.clickhouse_client import get_latest_agent_metrics
+    snaps_by_agent = await get_latest_agent_metrics([a.id for a in agents])
 
     # Lookup PingHost ids for agent-sourced hosts (to link agent → host detail)
     host_by_name: dict[str, int] = {}
@@ -631,9 +609,9 @@ async def list_agents(
             "online": a.last_seen is not None and (now - a.last_seen).total_seconds() < 120,
             "last_seen": a.last_seen.isoformat() if a.last_seen else None,
             "enabled": a.enabled,
-            "cpu_pct": s.cpu_pct if s else None,
-            "mem_pct": s.mem_pct if s else None,
-            "disk_pct": s.disk_pct if s else None,
+            "cpu_pct": s.get("cpu_pct") if s else None,
+            "mem_pct": s.get("mem_pct") if s else None,
+            "disk_pct": s.get("disk_pct") if s else None,
             "host_id": host_id,
         })
     return out
@@ -649,11 +627,8 @@ async def get_agent(
     if not agent:
         raise HTTPException(404, "Agent not found")
 
-    snap_q = await db.execute(
-        select(AgentSnapshot).where(AgentSnapshot.agent_id == agent_id)
-        .order_by(AgentSnapshot.timestamp.desc()).limit(60)
-    )
-    snaps = snap_q.scalars().all()
+    from services.clickhouse_client import get_agent_history
+    snaps = await get_agent_history(agent_id, limit=60)
 
     now = datetime.utcnow()
     return {
@@ -672,15 +647,15 @@ async def get_agent(
         "agent_log_level": agent.agent_log_level or "errors",
         "snapshots": [
             {
-                "agent_id": s.agent_id,
-                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
-                "cpu_pct": s.cpu_pct,
-                "mem_pct": s.mem_pct,
-                "mem_used_mb": s.mem_used_mb,
-                "mem_total_mb": s.mem_total_mb,
-                "disk_pct": s.disk_pct,
-                "uptime_s": s.uptime_s,
-                "data_json": json.loads(s.data_json) if s.data_json else None,
+                "agent_id": agent_id,
+                "timestamp": s["timestamp"].isoformat() if isinstance(s.get("timestamp"), datetime) else s.get("timestamp"),
+                "cpu_pct": s.get("cpu_pct"),
+                "mem_pct": s.get("mem_pct"),
+                "mem_used_mb": s.get("mem_used_mb"),
+                "mem_total_mb": s.get("mem_total_mb"),
+                "disk_pct": s.get("disk_pct"),
+                "uptime_s": s.get("uptime_s"),
+                "data_json": json.loads(s["data_json"]) if s.get("data_json") else None,
             }
             for s in snaps
         ],
@@ -729,9 +704,9 @@ async def delete_agent(
     if not agent:
         raise HTTPException(404, "Agent not found")
 
-    # Clean up related PingHost
+    # Clean up related PingHost (ClickHouse time-series rows expire via TTL)
+    from sqlalchemy import delete as sa_delete
     if agent.hostname:
-        from sqlalchemy import delete as sa_delete
         hn = agent.hostname.lower()
         ph = await db.execute(
             select(PingHost).where(
@@ -741,11 +716,8 @@ async def delete_agent(
         )
         ping_host = ph.scalar_one_or_none()
         if ping_host:
-            await db.execute(sa_delete(PingResult).where(PingResult.host_id == ping_host.id))
             await db.execute(sa_delete(PingHost).where(PingHost.id == ping_host.id))
 
-    from sqlalchemy import delete as sa_delete
-    await db.execute(sa_delete(AgentSnapshot).where(AgentSnapshot.agent_id == agent_id))
     await db.execute(sa_delete(Agent).where(Agent.id == agent_id))
     await db.commit()
     return {"ok": True}

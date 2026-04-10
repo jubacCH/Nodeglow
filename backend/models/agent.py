@@ -1,7 +1,11 @@
-"""Agent model — stores registered agent hosts and their metric snapshots."""
+"""Agent model — registered agent host configuration only.
+
+Time-series snapshots live in ClickHouse `agent_metrics` table; query them
+via `services.clickhouse_client` helpers.
+"""
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, func
 
 from models.base import Base
 
@@ -17,39 +21,15 @@ class Agent(Base):
     arch       = Column(String(32), nullable=True)
     agent_version = Column(String(16), nullable=True)
     enabled    = Column(Boolean, default=True)
-    log_levels = Column(String(32), nullable=True, default="1,2,3")  # Windows Event Log levels to collect
-    log_channels = Column(Text, nullable=True, default="System,Application")  # Event Log channels to collect
-    log_file_paths = Column(Text, nullable=True)  # Custom log file paths to tail (one per line)
-    agent_log_level = Column(String(16), nullable=True, default="errors")  # "off", "errors", "all"
-    pending_command = Column(String(32), nullable=True)  # e.g. "uninstall" — consumed on next report
-    watched_services = Column(Text, nullable=True)  # JSON list: ["nginx", "postgresql", ...]
+    log_levels = Column(String(32), nullable=True, default="1,2,3")
+    log_channels = Column(Text, nullable=True, default="System,Application")
+    log_file_paths = Column(Text, nullable=True)
+    agent_log_level = Column(String(16), nullable=True, default="errors")
+    pending_command = Column(String(32), nullable=True)
+    watched_services = Column(Text, nullable=True)
     last_seen  = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         Index("ix_agents_hostname_lower", func.lower(hostname), unique=True),
-    )
-
-
-class AgentSnapshot(Base):
-    """One metric report from an agent."""
-    __tablename__ = "agent_snapshots"
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    agent_id   = Column(Integer, nullable=False, index=True)
-    timestamp  = Column(DateTime, default=datetime.utcnow)
-    cpu_pct    = Column(Float, nullable=True)
-    mem_pct    = Column(Float, nullable=True)
-    mem_used_mb = Column(Float, nullable=True)
-    mem_total_mb = Column(Float, nullable=True)
-    disk_pct   = Column(Float, nullable=True)       # primary disk usage %
-    load_1     = Column(Float, nullable=True)
-    load_5     = Column(Float, nullable=True)
-    load_15    = Column(Float, nullable=True)
-    uptime_s   = Column(Integer, nullable=True)
-    rx_bytes   = Column(Float, nullable=True)        # cumulative
-    tx_bytes   = Column(Float, nullable=True)        # cumulative
-    data_json  = Column(Text, nullable=True)         # full payload (disks, processes etc.)
-
-    __table_args__ = (
-        Index("ix_agent_snap_ts", "agent_id", timestamp.desc()),
     )

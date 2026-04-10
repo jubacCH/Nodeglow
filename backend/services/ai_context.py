@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.ping import PingHost, PingResult
+from models.ping import PingHost
 from models.incident import Incident, IncidentEvent
 from models.integration import IntegrationConfig
 

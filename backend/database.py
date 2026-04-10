@@ -22,5 +22,5 @@ from models.settings import (      # noqa: F401
     set_setting,
     is_setup_complete,
 )
-from models.ping import PingHost, PingResult   # noqa: F401
+from models.ping import PingHost   # noqa: F401
 from models import init_db                      # noqa: F401

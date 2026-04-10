@@ -292,8 +292,8 @@ async def _get_source_data(db: AsyncSession, rule: AlertRule) -> dict | None:
 
 async def _get_ping_data(db: AsyncSession, source_id: int | None) -> dict | None:
     """Build a dict from latest ping results for rule evaluation."""
-    from database import PingHost, PingResult
-    from sqlalchemy import func as sa_func
+    from database import PingHost
+    from services.clickhouse_client import get_latest_ping_per_host
 
     query = select(PingHost)
     if source_id:
@@ -302,17 +302,7 @@ async def _get_ping_data(db: AsyncSession, source_id: int | None) -> dict | None
     if not hosts:
         return None
 
-    # Get latest result per host
-    sub = (
-        select(PingResult.host_id, sa_func.max(PingResult.timestamp).label("max_ts"))
-        .group_by(PingResult.host_id)
-        .subquery()
-    )
-    results = await db.execute(
-        select(PingResult)
-        .join(sub, (PingResult.host_id == sub.c.host_id) & (PingResult.timestamp == sub.c.max_ts))
-    )
-    result_map = {r.host_id: r for r in results.scalars().all()}
+    result_map = await get_latest_ping_per_host([h.id for h in hosts])
 
     if source_id:
         r = result_map.get(source_id)
@@ -321,12 +311,13 @@ async def _get_ping_data(db: AsyncSession, source_id: int | None) -> dict | None
             return None
         return {
             "host": h.name, "hostname": h.hostname,
-            "success": r.success, "latency_ms": r.latency_ms,
+            "success": bool(r.get("success")),
+            "latency_ms": r.get("latency_ms"),
         }
 
     # Aggregate for "any ping"
     total = len(hosts)
-    online = sum(1 for h in hosts if result_map.get(h.id) and result_map[h.id].success)
+    online = sum(1 for h in hosts if result_map.get(h.id) and bool(result_map[h.id].get("success")))
     return {
         "total_hosts": total, "online": online, "offline": total - online,
         "offline_pct": round((total - online) / total * 100, 1) if total else 0,

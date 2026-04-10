@@ -1,38 +1,24 @@
 """
-Bandwidth service — extract traffic data from agent/integration snapshots,
-calculate rates, and provide query helpers for the bandwidth API.
+Bandwidth service — extract per-interface traffic data from agent and
+integration snapshots and store it in ClickHouse `bandwidth_metrics`.
+
+Post-cutover: ClickHouse is the only store. The previous Postgres-backed
+implementation kept rows in `bandwidth_samples` for both writes and reads;
+all of that has been replaced with `services.clickhouse_client` helpers.
 """
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from models.bandwidth import BandwidthSample
+from services import clickhouse_client as ch
 
 logger = logging.getLogger(__name__)
 
 
-async def _ch_mirror(rows: list[dict]) -> None:
-    """Phase 2 dual-write helper: mirror bandwidth rows to ClickHouse.
-
-    Postgres remains the source of truth until cutover, so we swallow CH
-    errors with a warning rather than break the calling extract function.
-    """
-    if not rows:
-        return
-    try:
-        from services.clickhouse_client import insert_bandwidth_metrics
-        await insert_bandwidth_metrics(rows)
-    except Exception as exc:
-        logger.warning("ClickHouse dual-write (bandwidth_metrics) failed: %s", exc)
-
-
-# ── Extraction helpers ──────────────────────────────────────────────────────
+# ── Rate calculation ────────────────────────────────────────────────────────
 
 
 def _calc_rate_bps(
@@ -49,128 +35,106 @@ def _calc_rate_bps(
         return 0
     delta = curr_bytes - prev_bytes
     if delta < 0:
-        # Counter reset (e.g. reboot) — skip this sample
-        return 0
+        return 0  # Counter reset (e.g. reboot)
     return int((delta * 8) / delta_seconds)
 
 
-async def _get_previous_sample(
-    db: AsyncSession,
+async def _rate_from_history(
     source_type: str,
     source_id: str,
     interface_name: str,
-) -> BandwidthSample | None:
-    """Get the most recent sample for a specific source+interface."""
-    result = await db.execute(
-        select(BandwidthSample)
-        .where(
-            BandwidthSample.source_type == source_type,
-            BandwidthSample.source_id == source_id,
-            BandwidthSample.interface_name == interface_name,
-        )
-        .order_by(BandwidthSample.timestamp.desc())
-        .limit(1)
+    curr_rx: int,
+    curr_tx: int,
+    ts: datetime,
+) -> tuple[int, int]:
+    """Look up the previous CH sample and compute rx/tx rates."""
+    try:
+        prev = await ch.get_previous_bandwidth_sample(source_type, source_id, interface_name)
+    except Exception as exc:
+        logger.warning("ClickHouse history lookup failed: %s", exc)
+        return 0, 0
+    if not prev:
+        return 0, 0
+    prev_ts = prev.get("timestamp")
+    if not isinstance(prev_ts, datetime):
+        return 0, 0
+    delta_s = (ts - prev_ts).total_seconds()
+    return (
+        _calc_rate_bps(prev.get("rx_bytes"), curr_rx, delta_s),
+        _calc_rate_bps(prev.get("tx_bytes"), curr_tx, delta_s),
     )
-    return result.scalar_one_or_none()
 
 
 # ── Agent bandwidth extraction ──────────────────────────────────────────────
 
 
 async def extract_agent_bandwidth(
-    db: AsyncSession,
+    db: Any,  # kept for signature compat; unused
     agent_id: int,
-    snapshot_data_json: str | dict | None,
+    body: dict,
     timestamp: datetime | None = None,
+    *,
+    source_name: str = "",
 ) -> int:
-    """Extract bandwidth samples from an agent snapshot.
+    """Extract bandwidth samples from an agent heartbeat payload.
 
-    Parses network_interfaces from the agent's data_json, calculates rates
-    from previous samples, and inserts BandwidthSample records.
-
-    Returns the number of samples inserted.
+    `db` is accepted but ignored — bandwidth lives in ClickHouse now.
+    Returns the number of samples written.
     """
-    if snapshot_data_json is None:
+    if not body:
         return 0
-
-    if isinstance(snapshot_data_json, str):
-        try:
-            data = json.loads(snapshot_data_json)
-        except (json.JSONDecodeError, TypeError):
-            return 0
-    else:
-        data = snapshot_data_json
-
-    interfaces = data.get("network_interfaces", [])
-    if not interfaces:
-        # Fallback: check top-level network dict (older agent format)
-        net = data.get("network", {})
-        if net and ("rx_bytes" in net or "tx_bytes" in net):
-            interfaces = [{"name": "total", **net}]
-
+    interfaces = body.get("network", {}).get("interfaces") or []
     if not interfaces:
         return 0
 
     ts = timestamp or datetime.utcnow()
     source_id = str(agent_id)
-    ch_rows: list[dict] = []
+    rows: list[dict] = []
 
     for iface in interfaces:
         iface_name = iface.get("name") or iface.get("interface", "unknown")
         rx = iface.get("rx_bytes")
         tx = iface.get("tx_bytes")
-
         if rx is None and tx is None:
             continue
-
         rx = int(rx) if rx is not None else 0
         tx = int(tx) if tx is not None else 0
 
-        # Get previous sample for rate calculation
-        prev = await _get_previous_sample(db, "agent", source_id, iface_name)
-        rx_rate = 0
-        tx_rate = 0
-        if prev and prev.timestamp:
-            delta_s = (ts - prev.timestamp).total_seconds()
-            rx_rate = _calc_rate_bps(prev.rx_bytes, rx, delta_s)
-            tx_rate = _calc_rate_bps(prev.tx_bytes, tx, delta_s)
-
-        row = {
+        rx_rate, tx_rate = await _rate_from_history("agent", source_id, iface_name, rx, tx, ts)
+        rows.append({
             "timestamp": ts,
             "source_type": "agent",
             "source_id": source_id,
+            "source_name": source_name,
             "interface_name": iface_name,
             "rx_bytes": rx,
             "tx_bytes": tx,
             "rx_rate_bps": rx_rate,
             "tx_rate_bps": tx_rate,
-        }
-        db.add(BandwidthSample(**row))
-        ch_rows.append(row)
+        })
 
-    if ch_rows:
-        await db.flush()
-    await _ch_mirror(ch_rows)
-    return len(ch_rows)
+    if rows:
+        try:
+            await ch.insert_bandwidth_metrics(rows)
+        except Exception as exc:
+            logger.error("ClickHouse insert (agent bandwidth) failed: %s", exc)
+    return len(rows)
 
 
 # ── Proxmox bandwidth extraction ───────────────────────────────────────────
 
 
 async def extract_proxmox_bandwidth(
-    db: AsyncSession,
+    db: Any,
     config_id: int,
     snapshot_data_json: str | dict | None,
     timestamp: datetime | None = None,
+    *,
+    source_name: str = "",
 ) -> int:
-    """Extract bandwidth samples from a Proxmox integration snapshot.
-
-    Parses netin/netout from nodes and VMs in the snapshot data.
-    Returns the number of samples inserted.
-    """
+    """Extract bandwidth samples from a Proxmox integration snapshot."""
     if snapshot_data_json is None:
         return 0
-
     if isinstance(snapshot_data_json, str):
         try:
             data = json.loads(snapshot_data_json)
@@ -181,100 +145,82 @@ async def extract_proxmox_bandwidth(
 
     ts = timestamp or datetime.utcnow()
     source_id = str(config_id)
-    ch_rows: list[dict] = []
+    rows: list[dict] = []
 
-    # Proxmox data may contain nodes and VMs/CTs
-    nodes = data.get("nodes", [])
-    for node in nodes:
+    # Nodes
+    for node in data.get("nodes", []):
         node_name = node.get("node", node.get("name", "unknown"))
         netin = node.get("netin")
         netout = node.get("netout")
+        if netin is None and netout is None:
+            continue
+        rx = int(netin) if netin is not None else 0
+        tx = int(netout) if netout is not None else 0
+        iface_name = f"node/{node_name}"
+        rx_rate, tx_rate = await _rate_from_history("proxmox", source_id, iface_name, rx, tx, ts)
+        rows.append({
+            "timestamp": ts,
+            "source_type": "proxmox",
+            "source_id": source_id,
+            "source_name": source_name,
+            "interface_name": iface_name,
+            "rx_bytes": rx,
+            "tx_bytes": tx,
+            "rx_rate_bps": rx_rate,
+            "tx_rate_bps": tx_rate,
+        })
 
-        if netin is not None or netout is not None:
+    # VMs / containers
+    for vm_type in ("qemu", "lxc"):
+        for vm in data.get(vm_type, []):
+            vmid = vm.get("vmid", vm.get("id", "?"))
+            vm_name = vm.get("name", f"{vm_type}-{vmid}")
+            netin = vm.get("netin")
+            netout = vm.get("netout")
+            if netin is None and netout is None:
+                continue
             rx = int(netin) if netin is not None else 0
             tx = int(netout) if netout is not None else 0
-            iface_name = f"node/{node_name}"
-
-            prev = await _get_previous_sample(db, "proxmox", source_id, iface_name)
-            rx_rate = 0
-            tx_rate = 0
-            if prev and prev.timestamp:
-                delta_s = (ts - prev.timestamp).total_seconds()
-                rx_rate = _calc_rate_bps(prev.rx_bytes, rx, delta_s)
-                tx_rate = _calc_rate_bps(prev.tx_bytes, tx, delta_s)
-
-            row = {
+            iface_name = f"{vm_type}/{vmid}-{vm_name}"
+            rx_rate, tx_rate = await _rate_from_history("proxmox", source_id, iface_name, rx, tx, ts)
+            rows.append({
                 "timestamp": ts,
                 "source_type": "proxmox",
                 "source_id": source_id,
+                "source_name": source_name,
                 "interface_name": iface_name,
                 "rx_bytes": rx,
                 "tx_bytes": tx,
                 "rx_rate_bps": rx_rate,
                 "tx_rate_bps": tx_rate,
-            }
-            db.add(BandwidthSample(**row))
-            ch_rows.append(row)
+            })
 
-    # VMs and containers (qemu + lxc)
-    for vm_type in ("qemu", "lxc"):
-        vms = data.get(vm_type, [])
-        for vm in vms:
-            vmid = vm.get("vmid", vm.get("id", "?"))
-            vm_name = vm.get("name", f"{vm_type}-{vmid}")
-            netin = vm.get("netin")
-            netout = vm.get("netout")
-
-            if netin is not None or netout is not None:
-                rx = int(netin) if netin is not None else 0
-                tx = int(netout) if netout is not None else 0
-                iface_name = f"{vm_type}/{vmid}-{vm_name}"
-
-                prev = await _get_previous_sample(db, "proxmox", source_id, iface_name)
-                rx_rate = 0
-                tx_rate = 0
-                if prev and prev.timestamp:
-                    delta_s = (ts - prev.timestamp).total_seconds()
-                    rx_rate = _calc_rate_bps(prev.rx_bytes, rx, delta_s)
-                    tx_rate = _calc_rate_bps(prev.tx_bytes, tx, delta_s)
-
-                row = {
-                    "timestamp": ts,
-                    "source_type": "proxmox",
-                    "source_id": source_id,
-                    "interface_name": iface_name,
-                    "rx_bytes": rx,
-                    "tx_bytes": tx,
-                    "rx_rate_bps": rx_rate,
-                    "tx_rate_bps": tx_rate,
-                }
-                db.add(BandwidthSample(**row))
-                ch_rows.append(row)
-
-    if ch_rows:
-        await db.flush()
-    await _ch_mirror(ch_rows)
-    return len(ch_rows)
+    if rows:
+        try:
+            await ch.insert_bandwidth_metrics(rows)
+        except Exception as exc:
+            logger.error("ClickHouse insert (proxmox bandwidth) failed: %s", exc)
+    return len(rows)
 
 
 # ── UniFi bandwidth extraction ─────────────────────────────────────────────
 
 
 async def extract_unifi_bandwidth(
-    db: AsyncSession,
+    db: Any,
     config_id: int,
     snapshot_data_json: str | dict | None,
     timestamp: datetime | None = None,
+    *,
+    source_name: str = "",
 ) -> int:
     """Extract bandwidth samples from a UniFi integration snapshot.
 
-    UniFi provides rx_bytes_r/tx_bytes_r which are already rates (bytes/sec),
-    so we convert to bits/sec directly without needing a previous sample.
-    Returns the number of samples inserted.
+    UniFi exposes rx_bytes_r/tx_bytes_r as bytes/sec — convert to bits/sec
+    directly without needing prior history.
     """
     if snapshot_data_json is None:
         return 0
-
     if isinstance(snapshot_data_json, str):
         try:
             data = json.loads(snapshot_data_json)
@@ -285,193 +231,120 @@ async def extract_unifi_bandwidth(
 
     ts = timestamp or datetime.utcnow()
     source_id = str(config_id)
-    ch_rows: list[dict] = []
+    rows: list[dict] = []
 
-    devices = data.get("devices", [])
-    for device in devices:
+    for device in data.get("devices", []):
         dev_mac = device.get("mac", device.get("_id", "unknown"))
         dev_name = device.get("name", dev_mac)
 
-        # Device-level rates
         rx_rate = device.get("rx_bytes_r") or device.get("rx_bytes-r")
         tx_rate = device.get("tx_bytes_r") or device.get("tx_bytes-r")
-
         if rx_rate is not None or tx_rate is not None:
-            rx_bps = int(rx_rate or 0) * 8  # bytes/s -> bits/s
-            tx_bps = int(tx_rate or 0) * 8
-
-            row = {
+            rows.append({
                 "timestamp": ts,
                 "source_type": "unifi",
                 "source_id": source_id,
+                "source_name": source_name,
                 "interface_name": f"device/{dev_name}",
-                "rx_bytes": 0,  # UniFi rates don't give cumulative bytes
+                "rx_bytes": 0,
                 "tx_bytes": 0,
-                "rx_rate_bps": rx_bps,
-                "tx_rate_bps": tx_bps,
-            }
-            db.add(BandwidthSample(**row))
-            ch_rows.append(row)
+                "rx_rate_bps": int(rx_rate or 0) * 8,
+                "tx_rate_bps": int(tx_rate or 0) * 8,
+            })
 
-        # Per-port stats (for switches)
-        ports = device.get("port_table", [])
-        for port in ports:
+        for port in device.get("port_table", []) or []:
             port_idx = port.get("port_idx", port.get("name", "?"))
             port_name = port.get("name", f"port{port_idx}")
             p_rx = port.get("rx_bytes_r") or port.get("rx_bytes-r")
             p_tx = port.get("tx_bytes_r") or port.get("tx_bytes-r")
+            if p_rx is None and p_tx is None:
+                continue
+            rows.append({
+                "timestamp": ts,
+                "source_type": "unifi",
+                "source_id": source_id,
+                "source_name": source_name,
+                "interface_name": f"device/{dev_name}/{port_name}",
+                "rx_bytes": 0,
+                "tx_bytes": 0,
+                "rx_rate_bps": int(p_rx or 0) * 8,
+                "tx_rate_bps": int(p_tx or 0) * 8,
+            })
 
-            if p_rx is not None or p_tx is not None:
-                row = {
-                    "timestamp": ts,
-                    "source_type": "unifi",
-                    "source_id": source_id,
-                    "interface_name": f"device/{dev_name}/{port_name}",
-                    "rx_bytes": 0,
-                    "tx_bytes": 0,
-                    "rx_rate_bps": int(p_rx or 0) * 8,
-                    "tx_rate_bps": int(p_tx or 0) * 8,
-                }
-                db.add(BandwidthSample(**row))
-                ch_rows.append(row)
-
-    if ch_rows:
-        await db.flush()
-    await _ch_mirror(ch_rows)
-    return len(ch_rows)
+    if rows:
+        try:
+            await ch.insert_bandwidth_metrics(rows)
+        except Exception as exc:
+            logger.error("ClickHouse insert (unifi bandwidth) failed: %s", exc)
+    return len(rows)
 
 
-# ── Query helpers ───────────────────────────────────────────────────────────
+# ── Query helpers (read from ClickHouse) ─────────────────────────────────────
 
 
 async def get_bandwidth_history(
-    db: AsyncSession,
+    db: Any = None,
     source_type: str | None = None,
     source_id: str | None = None,
     interface_name: str | None = None,
     hours: int = 24,
     limit: int = 2000,
 ) -> list[dict]:
-    """Return time-series bandwidth data for charting.
-
-    Filters by source_type, source_id, and/or interface_name.
-    Returns list of dicts sorted by timestamp ascending.
-    """
-    cutoff = datetime.utcnow() - timedelta(hours=hours)
-
-    q = select(BandwidthSample).where(BandwidthSample.timestamp >= cutoff)
-
-    if source_type:
-        q = q.where(BandwidthSample.source_type == source_type)
-    if source_id:
-        q = q.where(BandwidthSample.source_id == source_id)
-    if interface_name:
-        q = q.where(BandwidthSample.interface_name == interface_name)
-
-    q = q.order_by(BandwidthSample.timestamp.asc()).limit(limit)
-
-    result = await db.execute(q)
-    rows = result.scalars().all()
-
+    """Time-series bandwidth data for charting (sorted ascending)."""
+    rows = await ch.get_bandwidth_history_ch(
+        source_type=source_type,
+        source_id=source_id,
+        interface_name=interface_name,
+        hours=hours,
+        limit=limit,
+    )
     return [
         {
-            "id": r.id,
-            "timestamp": r.timestamp.isoformat(),
-            "source_type": r.source_type,
-            "source_id": r.source_id,
-            "interface_name": r.interface_name,
-            "rx_bytes": r.rx_bytes,
-            "tx_bytes": r.tx_bytes,
-            "rx_rate_bps": r.rx_rate_bps,
-            "tx_rate_bps": r.tx_rate_bps,
+            "timestamp": (
+                r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"]
+            ),
+            "source_type": r["source_type"],
+            "source_id": r["source_id"],
+            "source_name": r.get("source_name", ""),
+            "interface_name": r["interface_name"],
+            "rx_bytes": int(r.get("rx_bytes") or 0),
+            "tx_bytes": int(r.get("tx_bytes") or 0),
+            "rx_rate_bps": int(r.get("rx_rate_bps") or 0),
+            "tx_rate_bps": int(r.get("tx_rate_bps") or 0),
         }
         for r in rows
     ]
 
 
-async def get_bandwidth_summary(db: AsyncSession) -> dict:
-    """Return bandwidth summary: top talkers and total throughput.
+async def get_bandwidth_summary(db: Any = None) -> dict:
+    """Top talkers + total throughput, computed from latest sample per
+    (source_type, source_id, interface_name) over the last hour."""
+    latest = await ch.get_latest_bandwidth_per_iface(since_hours=1)
 
-    Top talkers are based on the most recent sample per source+interface,
-    ranked by combined rx+tx rate.
-    """
-    # Get the latest sample for each source+interface (last hour only)
-    cutoff = datetime.utcnow() - timedelta(hours=1)
-
-    # Subquery: max id per (source_type, source_id, interface_name)
-    sub = (
-        select(
-            func.max(BandwidthSample.id).label("max_id"),
-        )
-        .where(BandwidthSample.timestamp >= cutoff)
-        .group_by(
-            BandwidthSample.source_type,
-            BandwidthSample.source_id,
-            BandwidthSample.interface_name,
-        )
-        .subquery()
-    )
-
-    result = await db.execute(
-        select(BandwidthSample).join(sub, BandwidthSample.id == sub.c.max_id)
-    )
-    latest = result.scalars().all()
-
-    # Sort by total rate descending for top talkers
     sorted_samples = sorted(
         latest,
-        key=lambda s: (s.rx_rate_bps or 0) + (s.tx_rate_bps or 0),
+        key=lambda r: int(r.get("rx_rate_bps") or 0) + int(r.get("tx_rate_bps") or 0),
         reverse=True,
     )
+    total_rx_bps = sum(int(r.get("rx_rate_bps") or 0) for r in latest)
+    total_tx_bps = sum(int(r.get("tx_rate_bps") or 0) for r in latest)
 
-    total_rx_bps = sum(s.rx_rate_bps or 0 for s in latest)
-    total_tx_bps = sum(s.tx_rate_bps or 0 for s in latest)
-
-    # Per-source aggregates
     by_source: dict[str, dict] = {}
-    for s in latest:
-        key = f"{s.source_type}:{s.source_id}"
-        if key not in by_source:
-            by_source[key] = {
-                "source_type": s.source_type,
-                "source_id": s.source_id,
-                "rx_rate_bps": 0,
-                "tx_rate_bps": 0,
-                "interface_count": 0,
-            }
-        by_source[key]["rx_rate_bps"] += s.rx_rate_bps or 0
-        by_source[key]["tx_rate_bps"] += s.tx_rate_bps or 0
-        by_source[key]["interface_count"] += 1
+    for r in latest:
+        key = f"{r['source_type']}:{r['source_id']}"
+        bucket = by_source.setdefault(key, {
+            "source_type": r["source_type"],
+            "source_id": r["source_id"],
+            "rx_rate_bps": 0,
+            "tx_rate_bps": 0,
+            "interface_count": 0,
+        })
+        bucket["rx_rate_bps"] += int(r.get("rx_rate_bps") or 0)
+        bucket["tx_rate_bps"] += int(r.get("tx_rate_bps") or 0)
+        bucket["interface_count"] += 1
 
-    # Resolve names for display
-    agent_names: dict[str, str] = {}
-    config_names: dict[str, str] = {}
-    try:
-        from models.agent import Agent
-        agents = (await db.execute(select(Agent.id, Agent.hostname))).all()
-        agent_names = {str(a.id): a.hostname for a in agents}
-    except Exception:
-        pass
-    try:
-        from models.integration import IntegrationConfig
-        configs = (await db.execute(
-            select(IntegrationConfig.id, IntegrationConfig.name, IntegrationConfig.type)
-        )).all()
-        config_names = {str(c.id): c.name for c in configs}
-    except Exception:
-        pass
-
-    def _label(s: BandwidthSample) -> str:
-        if s.source_type == "agent":
-            return agent_names.get(s.source_id, s.source_id)
-        return config_names.get(s.source_id, s.source_id)
-
-    def _iface_label(s: BandwidthSample) -> str:
-        name = s.interface_name
-        # Clean up "device/..." prefix for UniFi
-        if name.startswith("device/"):
-            name = name[7:]
-        return name
+    def _iface_label(name: str) -> str:
+        return name[7:] if name.startswith("device/") else name
 
     return {
         "total_rx_bps": total_rx_bps,
@@ -479,102 +352,50 @@ async def get_bandwidth_summary(db: AsyncSession) -> dict:
         "total_interfaces": len(latest),
         "top_talkers": [
             {
-                "source_type": s.source_type,
-                "source_id": s.source_id,
-                "source_name": _label(s),
-                "interface_name": _iface_label(s),
-                "rx_rate_bps": s.rx_rate_bps or 0,
-                "tx_rate_bps": s.tx_rate_bps or 0,
-                "timestamp": s.timestamp.isoformat(),
+                "source_type": r["source_type"],
+                "source_id": r["source_id"],
+                "source_name": r.get("source_name") or r["source_id"],
+                "interface_name": _iface_label(r["interface_name"]),
+                "rx_rate_bps": int(r.get("rx_rate_bps") or 0),
+                "tx_rate_bps": int(r.get("tx_rate_bps") or 0),
+                "timestamp": (
+                    r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"]
+                ),
             }
-            for s in sorted_samples[:20]
+            for r in sorted_samples[:20]
         ],
         "by_source": list(by_source.values()),
     }
 
 
-async def get_bandwidth_interfaces(db: AsyncSession) -> list[dict]:
-    """List all known interfaces with their latest rates (last hour only)."""
-    cutoff = datetime.utcnow() - timedelta(hours=1)
+async def get_bandwidth_interfaces(db: Any = None) -> list[dict]:
+    """List all known interfaces with their latest rates (last hour)."""
+    latest = await ch.get_latest_bandwidth_per_iface(since_hours=1)
 
-    sub = (
-        select(
-            func.max(BandwidthSample.id).label("max_id"),
-        )
-        .where(BandwidthSample.timestamp >= cutoff)
-        .group_by(
-            BandwidthSample.source_type,
-            BandwidthSample.source_id,
-            BandwidthSample.interface_name,
-        )
-        .subquery()
-    )
-
-    result = await db.execute(
-        select(BandwidthSample).join(sub, BandwidthSample.id == sub.c.max_id)
-    )
-    latest = result.scalars().all()
-
-    # Resolve agent hostnames
-    agent_names: dict[str, str] = {}
-    try:
-        from models.agent import Agent
-        agents = (await db.execute(select(Agent.id, Agent.hostname))).all()
-        agent_names = {str(a.id): a.hostname for a in agents}
-    except Exception:
-        pass
-
-    # Resolve integration config names
-    config_names: dict[str, str] = {}
-    try:
-        from models.integration import IntegrationConfig
-        configs = (await db.execute(
-            select(IntegrationConfig.id, IntegrationConfig.name, IntegrationConfig.type)
-        )).all()
-        config_names = {str(c.id): f"{c.type}/{c.name}" for c in configs}
-    except Exception:
-        pass
-
-    def _display_name(s: BandwidthSample) -> str:
-        if s.source_type == "agent":
-            host = agent_names.get(s.source_id, s.source_id)
-            iface = s.interface_name.replace("total", "all")
-            return f"{host} ({iface})"
-        elif s.source_type in ("unifi", "proxmox"):
-            src = config_names.get(s.source_id, s.source_type)
-            return f"{src} / {s.interface_name}"
-        return f"{s.source_type}/{s.interface_name}"
+    def _display(r: dict) -> str:
+        name = r.get("source_name") or r["source_id"]
+        if r["source_type"] == "agent":
+            iface = r["interface_name"].replace("total", "all")
+            return f"{name} ({iface})"
+        return f"{name} / {r['interface_name']}"
 
     return [
         {
-            "source_type": s.source_type,
-            "source_id": s.source_id,
-            "interface_name": s.interface_name,
-            "display_name": _display_name(s),
-            "rx_rate_bps": s.rx_rate_bps or 0,
-            "tx_rate_bps": s.tx_rate_bps or 0,
-            "rx_bytes": s.rx_bytes or 0,
-            "tx_bytes": s.tx_bytes or 0,
-            "last_seen": s.timestamp.isoformat(),
+            "source_type": r["source_type"],
+            "source_id": r["source_id"],
+            "interface_name": r["interface_name"],
+            "display_name": _display(r),
+            "rx_rate_bps": int(r.get("rx_rate_bps") or 0),
+            "tx_rate_bps": int(r.get("tx_rate_bps") or 0),
+            "rx_bytes": int(r.get("rx_bytes") or 0),
+            "tx_bytes": int(r.get("tx_bytes") or 0),
+            "last_seen": (
+                r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"]
+            ),
         }
-        for s in sorted(
+        for r in sorted(
             latest,
-            key=lambda s: (s.rx_rate_bps or 0) + (s.tx_rate_bps or 0),
+            key=lambda r: int(r.get("rx_rate_bps") or 0) + int(r.get("tx_rate_bps") or 0),
             reverse=True,
         )
     ]
-
-
-# ── Cleanup ─────────────────────────────────────────────────────────────────
-
-
-async def cleanup_old_bandwidth(db: AsyncSession, days: int = 7) -> int:
-    """Delete bandwidth samples older than the retention period.
-
-    Returns the number of rows deleted.
-    """
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    result = await db.execute(
-        delete(BandwidthSample).where(BandwidthSample.timestamp < cutoff)
-    )
-    return result.rowcount or 0
