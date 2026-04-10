@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss';
+import { ngColors, ngFont, ngRadius } from './src/styles/tokens.gen';
 
 const config: Config = {
   content: [
@@ -9,21 +10,18 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['var(--font-inter)', 'system-ui', 'sans-serif'],
-        mono: ['var(--font-mono)', 'monospace'],
+        sans: ngFont.sans.split(','),
+        mono: ngFont.mono.split(','),
       },
       colors: {
-        ng: {
-          bg: '#0B0E14',
-          surface: '#111621',
-          elevated: '#1A1F2E',
-          border: '#1E2433',
-          primary: '#38BDF8',
-          accent: '#A78BFA',
-          success: '#34D399',
-          warning: '#FBBF24',
-          critical: '#F87171',
-        },
+        // Generated from design-tokens/tokens.json — do not hardcode here.
+        // Run `npm run build:tokens` after editing tokens.json.
+        ng: ngColors,
+      },
+      borderRadius: {
+        'ng-card': ngRadius.card,
+        'ng-button': ngRadius.button,
+        'ng-pill': ngRadius.pill,
       },
     },
   },
