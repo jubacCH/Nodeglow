@@ -583,13 +583,6 @@ async def run_log_intelligence():
     await run_intelligence()
 
 
-@instrument_job("scheduled_scans")
-async def run_scheduled_scans():
-    """Run due scheduled subnet scans."""
-    from routers.subnet_scanner import run_scheduled_scans as _run
-    await _run()
-
-
 @instrument_job("snmp_polls")
 async def run_snmp_polls():
     """Run due SNMP polls."""
@@ -995,10 +988,25 @@ async def start_scheduler():
                       id="cleanup", replace_existing=True)
     scheduler.add_job(run_log_intelligence, "interval", seconds=30,
                       id="log_intelligence", replace_existing=True)
-    scheduler.add_job(run_scheduled_scans, "interval", seconds=60,
-                      id="subnet_scans", replace_existing=True)
     scheduler.add_job(run_snmp_polls, "interval", seconds=30,
                       id="snmp_polls", replace_existing=True)
+
+    # Auto-discover & schedule MonitoringSource subclasses (replaces manual
+    # scheduler.add_job entries for newer poll-style jobs).
+    from services import sources as _sources_pkg
+    from services.monitoring_source import get_registry, run_source
+    _sources_pkg.discover_all()
+    for src_name, src_cls in get_registry().items():
+        if src_cls.interval_seconds is None:
+            continue
+        async def _runner(_cls=src_cls):
+            await run_source(_cls)
+        scheduler.add_job(
+            _runner, "interval", seconds=src_cls.interval_seconds,
+            id=f"src:{src_name}", replace_existing=True,
+        )
+        logger.info("MonitoringSource registered: %s (every %ds)",
+                    src_name, src_cls.interval_seconds)
     scheduler.add_job(run_alert_rules, "interval", seconds=60,
                       id="alert_rules", replace_existing=True)
     scheduler.add_job(run_port_discovery, "interval", hours=6,
