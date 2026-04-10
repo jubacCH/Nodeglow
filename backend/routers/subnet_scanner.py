@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from templating import templates
 
 from models.base import get_db
 from models.ping import PingHost
