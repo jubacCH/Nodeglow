@@ -12,9 +12,8 @@ from database import AsyncSessionLocal, get_setting, init_db
 from models.integration import IntegrationConfig
 from scheduler import start_scheduler, stop_scheduler
 from routers import (
-    auth, dashboard, ping, setup, settings, alerts, users,
+    auth, dashboard, ping, setup, settings, users,
     syslog as syslog_router,
-    incidents as incidents_router,
     system,
     integrations as integrations_router,
     agents as agents_router,
@@ -367,9 +366,7 @@ app.include_router(dashboard.router)
 app.include_router(setup.router)
 app.include_router(ping.router)
 app.include_router(settings.router)
-app.include_router(alerts.router)
 app.include_router(syslog_router.router)
-app.include_router(incidents_router.router)
 app.include_router(users.router)
 app.include_router(users.api_router)
 app.include_router(system.router)

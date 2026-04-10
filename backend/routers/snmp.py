@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from templating import templates
 
 from models.base import get_db
 from models.credential import Credential

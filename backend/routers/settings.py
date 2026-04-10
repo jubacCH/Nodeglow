@@ -3,8 +3,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from templating import templates
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,90 +25,6 @@ def _require_admin(request: Request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     return None
 
-
-@router.get("", response_class=HTMLResponse)
-async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
-    site_name           = await get_setting(db, "site_name", "NODEGLOW")
-    ping_interval       = await get_setting(db, "ping_interval", "60")
-    proxmox_interval    = await get_setting(db, "proxmox_interval", "60")
-    ping_retention      = await get_setting(db, "ping_retention_days", "30")
-    proxmox_retention   = await get_setting(db, "proxmox_retention_days", "7")
-    anomaly_threshold   = await get_setting(db, "anomaly_threshold", "2.0")
-    timezone            = await get_setting(db, "timezone", "UTC")
-
-    latency_threshold   = await get_setting(db, "latency_threshold_ms", "")
-    cpu_threshold       = await get_setting(db, "proxmox_cpu_threshold", "85")
-    ram_threshold       = await get_setting(db, "proxmox_ram_threshold", "85")
-    disk_threshold      = await get_setting(db, "proxmox_disk_threshold", "90")
-
-    phpipam_url         = await get_setting(db, "phpipam_url", "")
-    phpipam_app_id      = await get_setting(db, "phpipam_app_id", "")
-    phpipam_username    = await get_setting(db, "phpipam_username", "")
-    phpipam_has_pw      = bool(await get_setting(db, "phpipam_password", ""))
-    phpipam_verify_ssl  = await get_setting(db, "phpipam_verify_ssl", "1")
-    phpipam_sync_hours  = await get_setting(db, "phpipam_sync_hours", "0")
-    integration_retention = await get_setting(db, "integration_retention_days", "7")
-
-    syslog_port         = await get_setting(db, "syslog_port", "1514")
-    syslog_allowlist    = await get_setting(db, "syslog_allowlist_only", "0")
-
-    digest_enabled      = await get_setting(db, "digest_enabled", "0")
-    digest_day          = await get_setting(db, "digest_day", "0")
-    digest_hour         = await get_setting(db, "digest_hour", "9")
-
-    notify_enabled      = await get_setting(db, "notify_enabled", "0")
-    telegram_bot_token  = await get_setting(db, "telegram_bot_token", "")
-    telegram_chat_id    = await get_setting(db, "telegram_chat_id", "")
-    discord_webhook_url = await get_setting(db, "discord_webhook_url", "")
-    webhook_url         = await get_setting(db, "webhook_url", "")
-    webhook_secret      = await get_setting(db, "webhook_secret", "")
-    smtp_host           = await get_setting(db, "smtp_host", "")
-    smtp_port           = await get_setting(db, "smtp_port", "587")
-    smtp_user           = await get_setting(db, "smtp_user", "")
-    smtp_has_pw         = bool(await get_setting(db, "smtp_password", ""))
-    smtp_from           = await get_setting(db, "smtp_from", "")
-    smtp_to             = await get_setting(db, "smtp_to", "")
-
-    return templates.TemplateResponse("settings.html", {
-        "request": request,
-        "site_name": site_name,
-        "ping_interval": ping_interval,
-        "proxmox_interval": proxmox_interval,
-        "ping_retention": ping_retention,
-        "proxmox_retention": proxmox_retention,
-        "anomaly_threshold": anomaly_threshold,
-        "timezone": timezone,
-        "latency_threshold": latency_threshold,
-        "cpu_threshold": cpu_threshold,
-        "ram_threshold": ram_threshold,
-        "disk_threshold": disk_threshold,
-        "phpipam_url": phpipam_url,
-        "phpipam_app_id": phpipam_app_id,
-        "phpipam_username": phpipam_username,
-        "phpipam_has_pw": phpipam_has_pw,
-        "phpipam_verify_ssl": phpipam_verify_ssl,
-        "phpipam_sync_hours": phpipam_sync_hours,
-        "integration_retention": integration_retention,
-        "syslog_port": syslog_port,
-        "syslog_allowlist_only": syslog_allowlist,
-        "digest_enabled": digest_enabled,
-        "digest_day": digest_day,
-        "digest_hour": digest_hour,
-        "notify_enabled": notify_enabled,
-        "telegram_bot_token": telegram_bot_token,
-        "telegram_chat_id": telegram_chat_id,
-        "discord_webhook_url": discord_webhook_url,
-        "webhook_url": webhook_url,
-        "webhook_secret": webhook_secret,
-        "smtp_host": smtp_host,
-        "smtp_port": smtp_port,
-        "smtp_user": smtp_user,
-        "smtp_has_pw": smtp_has_pw,
-        "smtp_from": smtp_from,
-        "smtp_to": smtp_to,
-        "active_page": "settings",
-        "saved": request.query_params.get("saved"),
-    })
 
 
 @router.get("/json")
@@ -379,12 +294,6 @@ async def manual_phpipam_sync(request: Request, db: AsyncSession = Depends(get_d
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 
-@router.get("/notifications", response_class=HTMLResponse)
-async def notifications_settings(request: Request, db: AsyncSession = Depends(get_db)):
-    # This is handled inline in the main settings page, just redirect
-    return RedirectResponse(url="/settings?tab=notifications")
-
-
 @router.post("/notifications/save")
 @rate_limit(max_requests=10, window_seconds=60)
 async def save_notifications(
@@ -567,7 +476,7 @@ async def notification_history(db: AsyncSession = Depends(get_db)):
 # ── API Keys (web UI management) ────────────────────────────────────────────
 
 
-@router.get("/api-keys", response_class=HTMLResponse)
+@router.get("/api-keys")
 async def api_keys_list(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ApiKey).order_by(ApiKey.created_at.desc()))
     keys = result.scalars().all()
