@@ -71,14 +71,14 @@ async def test_get_latest_ping_per_host_argmax_and_keys(fake_query):
     fake_query.returns([
         {
             "host_id": 1,
-            "timestamp": datetime(2026, 4, 10, 12, 0, 0),
+            "_ts": datetime(2026, 4, 10, 12, 0, 0),
             "success": 1,
             "latency_ms": 12.5,
             "host_name": "router-01",
         },
         {
             "host_id": 2,
-            "timestamp": datetime(2026, 4, 10, 12, 0, 0),
+            "_ts": datetime(2026, 4, 10, 12, 0, 0),
             "success": 0,
             "latency_ms": None,
             "host_name": "switch-02",
@@ -168,7 +168,7 @@ async def test_get_latest_agent_metrics(fake_query):
     fake_query.returns([
         {
             "agent_id": 7,
-            "timestamp": datetime(2026, 4, 10, 12, 0),
+            "_ts": datetime(2026, 4, 10, 12, 0),
             "agent_name": "vm-01",
             "cpu_pct": 23.5,
             "mem_pct": 67.0,
@@ -229,7 +229,7 @@ async def test_get_latest_bandwidth_per_iface(fake_query):
             "source_type": "agent",
             "source_id": "1",
             "interface_name": "eth0",
-            "timestamp": datetime(2026, 4, 10, 12, 0),
+            "_ts": datetime(2026, 4, 10, 12, 0),
             "source_name": "vm-01",
             "rx_bytes": 1000,
             "tx_bytes": 500,
