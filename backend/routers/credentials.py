@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from templating import templates
 
 from models.base import get_db
 from models.credential import Credential
@@ -51,36 +50,6 @@ CREDENTIAL_TYPES = {
         ],
     },
 }
-
-
-@router.get("/credentials")
-async def credentials_page(request: Request, db: AsyncSession = Depends(get_db)):
-    q = await db.execute(select(Credential).order_by(Credential.type, Credential.name))
-    creds = q.scalars().all()
-    # Decrypt to show names but mask secrets
-    cred_list = []
-    for c in creds:
-        data = decrypt_credential(c.data_json)
-        # Mask sensitive fields
-        masked = {}
-        type_def = CREDENTIAL_TYPES.get(c.type, {})
-        for field in type_def.get("fields", []):
-            val = data.get(field["name"], "")
-            if field["type"] == "password" and val:
-                masked[field["name"]] = "••••••••"
-            else:
-                masked[field["name"]] = val
-        cred_list.append({
-            "id": c.id, "name": c.name, "type": c.type,
-            "type_label": type_def.get("label", c.type),
-            "fields": masked,
-            "created_at": c.created_at,
-        })
-    return templates.TemplateResponse("credentials.html", {
-        "request": request,
-        "credentials": cred_list,
-        "credential_types": CREDENTIAL_TYPES,
-    })
 
 
 @router.post("/api/credentials")

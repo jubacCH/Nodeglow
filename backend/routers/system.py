@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 import psutil
 from fastapi import APIRouter, Depends, Request
-from templating import templates, localtime
+from templating import localtime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -175,7 +175,6 @@ def _collect_logs() -> list[str]:
 
 
 @router.get("/api/system/status")
-@router.get("/system/status")
 async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     now = datetime.utcnow()
     loop = asyncio.get_event_loop()
@@ -509,34 +508,8 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         "logs": log_lines,
     }
 
-    # JSON requested (Next.js frontend via /api/system/status)
-    accept = request.headers.get("accept", "")
-    if "application/json" in accept:
-        from fastapi.responses import JSONResponse
-        return JSONResponse(payload)
-
-    return templates.TemplateResponse("system_status.html", {
-        "request": request,
-        "app_info": sysinfo["app_info"],
-        "system_info": sysinfo["system_info"],
-        "process_info": sysinfo["process_info"],
-        "db_stats": db_stats,
-        "top_tables": top_tables,
-        "pool_info": pool_info,
-        "scheduler_jobs": scheduler_jobs,
-        "integration_summary": integration_summary,
-        "log_lines": log_lines,
-        "ping_stats": ping_stats,
-        "syslog_status": syslog_status,
-        "ssl_certs": ssl_certs,
-        "notification_info": notification_info,
-        "retention_info": retention_info,
-        "incident_stats": incident_stats,
-        "alert_rule_stats": alert_rule_stats,
-        "maintenance_stats": maintenance_stats,
-        "log_intelligence": log_intelligence,
-        "active_page": "system",
-    })
+    from fastapi.responses import JSONResponse
+    return JSONResponse(payload)
 
 
 def _format_duration(seconds: int) -> str:

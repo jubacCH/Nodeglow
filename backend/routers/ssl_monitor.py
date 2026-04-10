@@ -5,14 +5,13 @@ import logging
 import ssl as _ssl
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import PingHost, get_db
 from models.integration import Snapshot
-from templating import templates
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -220,42 +219,6 @@ async def ssl_certs_json(db: AsyncSession = Depends(get_db)):
     certs.sort(key=lambda c: c["days"] if c["days"] is not None else 9999)
     expiring_soon = sum(1 for c in certs if c["days"] is not None and c["days"] <= 30)
     return JSONResponse({"certs": certs, "expiring_soon": expiring_soon})
-
-
-@router.get("/ssl", response_class=HTMLResponse)
-async def ssl_page(request: Request, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(PingHost)
-        .where(PingHost.check_type.contains("https"))
-        .order_by(PingHost.name)
-    )
-    hosts = result.scalars().all()
-
-    certs = []
-    for h in hosts:
-        certs.append({
-            "id": h.id,
-            "name": h.name,
-            "hostname": h.hostname,
-            "enabled": h.enabled,
-            "days": h.ssl_expiry_days,
-        })
-
-    # Sort: expiring soonest first, None at bottom
-    certs.sort(key=lambda c: c["days"] if c["days"] is not None else 9999)
-
-    expiring_soon = sum(1 for c in certs if c["days"] is not None and c["days"] <= 30)
-
-    accept = request.headers.get("accept", "")
-    if "application/json" in accept:
-        return JSONResponse({"certs": certs, "expiring_soon": expiring_soon})
-
-    return templates.TemplateResponse("ssl.html", {
-        "request": request,
-        "certs": certs,
-        "expiring_soon": expiring_soon,
-        "active_page": "ssl",
-    })
 
 
 @router.post("/api/ssl/refresh/{host_id}")

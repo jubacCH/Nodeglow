@@ -1,25 +1,14 @@
-"""Weekly Digest page — summary of the last 7 days."""
+"""Weekly Digest API — summary of the last 7 days."""
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models.api_key import ApiKey
 from routers.api_v1 import require_api_key
 from services.digest import build_weekly_digest
-from templating import templates
 
 router = APIRouter()
-
-
-@router.get("/digest", response_class=HTMLResponse)
-async def digest_page(request: Request, db: AsyncSession = Depends(get_db)):
-    data = await build_weekly_digest(db)
-    return templates.TemplateResponse("digest.html", {
-        "request": request,
-        "digest": data,
-        "active_page": "digest",
-    })
 
 
 @router.get("/api/v1/digest")

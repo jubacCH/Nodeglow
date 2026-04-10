@@ -2,13 +2,12 @@
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.alert_rule import AlertRule
 from models.base import get_db
 from services import rules as rules_svc
-from templating import templates
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

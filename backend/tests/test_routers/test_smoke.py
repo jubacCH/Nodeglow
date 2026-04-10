@@ -21,59 +21,50 @@ async def test_login_api_exists(client):
     assert resp.status_code == 405  # Method Not Allowed (POST only)
 
 
-async def test_dashboard(client):
-    """Dashboard renders with empty data."""
-    resp = await client.get("/")
+async def test_dashboard_api(client):
+    """Dashboard JSON API returns 200 with empty data."""
+    resp = await client.get("/api/dashboard")
     assert resp.status_code == 200
+    assert isinstance(resp.json(), dict)
 
 
-async def test_ping_list(client):
-    """Hosts list page renders (no hosts)."""
-    resp = await client.get("/hosts")
-    assert resp.status_code == 200
-
-
-async def test_alerts_page(client):
-    """Alerts page renders."""
-    resp = await client.get("/alerts")
-    assert resp.status_code == 200
-
-
-async def test_syslog_page(client):
-    """Syslog page renders."""
-    resp = await client.get("/syslog")
-    assert resp.status_code == 200
-
-
-async def test_incidents_page(client):
-    """Incidents redirects to unified alerts page."""
-    resp = await client.get("/incidents", follow_redirects=False)
-    assert resp.status_code == 302
-    assert "alerts?tab=incidents" in resp.headers.get("location", "")
-
-
-async def test_settings_page(client):
-    """Settings page renders for admin user."""
-    resp = await client.get("/settings")
-    assert resp.status_code == 200
-
-
-async def test_api_status(client):
-    """Status API returns JSON list."""
+async def test_hosts_status_api(client):
+    """Hosts status JSON API returns a list."""
     resp = await client.get("/hosts/api/status")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
 
-async def test_integration_list(client):
-    """Integration list page renders."""
-    resp = await client.get("/integration/proxmox")
+async def test_incidents_api(client):
+    """Incidents v1 API returns a list."""
+    resp = await client.get("/api/v1/incidents")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+async def test_syslog_api(client):
+    """Syslog v1 API returns paged result envelope."""
+    resp = await client.get("/api/v1/syslog")
     assert resp.status_code == 200
 
 
-async def test_unknown_integration_404(client):
-    """Non-existent integration type returns 404."""
-    resp = await client.get("/integration/nonexistent")
+async def test_settings_json(client):
+    """Settings JSON endpoint returns config dict for admin."""
+    resp = await client.get("/settings/json")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), dict)
+
+
+async def test_integrations_v1_api(client):
+    """Integrations v1 API returns a list."""
+    resp = await client.get("/api/v1/integrations")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+async def test_unknown_integration_fields_404(client):
+    """Unknown integration type returns 404 from fields API."""
+    resp = await client.get("/api/integration/nonexistent/fields")
     assert resp.status_code == 404
 
 
@@ -154,22 +145,18 @@ async def test_hosts_search_no_results(client):
     assert resp.json() == []
 
 
-# ── Dashboard API ───────────────────────────────────────────────────────────
+# ── Agents / Users API ──────────────────────────────────────────────────────
 
 
-async def test_dashboard_renders(client):
-    """Dashboard renders with empty database."""
-    resp = await client.get("/")
+async def test_agents_api(client):
+    """Agents v1 API returns a list."""
+    resp = await client.get("/api/v1/agents")
     assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
 
 
-async def test_agents_page(client):
-    """Agents page renders."""
-    resp = await client.get("/agents")
-    assert resp.status_code == 200
-
-
-async def test_users_page(client):
-    """Users page renders for admin."""
+async def test_users_api(client):
+    """Users API returns a list for admin."""
     resp = await client.get("/users")
     assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
