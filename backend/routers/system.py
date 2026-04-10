@@ -184,35 +184,46 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     logs_fut = loop.run_in_executor(None, _collect_logs)
 
     # ── Database stats + top tables (single query) ───────────────────────
+    # Postgres now only holds config + state tables. Time-series ping data
+    # lives in ClickHouse `ping_checks` since the Phase 3 cutover (Alembic 026).
     db_stats = {}
     top_tables = []
     try:
         row = (await db.execute(text("""
             SELECT
                 (SELECT count(*) FROM ping_hosts) AS host_count,
-                (SELECT reltuples::bigint FROM pg_class WHERE relname = 'ping_results') AS result_count,
                 (SELECT count(*) FROM integration_configs) AS config_count,
                 (SELECT reltuples::bigint FROM pg_class WHERE relname = 'snapshots') AS snapshot_count,
-                (SELECT pg_size_pretty(pg_database_size(current_database()))) AS db_size,
-                (SELECT min(timestamp) FROM ping_results) AS oldest_ping,
-                (SELECT max(timestamp) FROM ping_results) AS newest_ping
+                (SELECT pg_size_pretty(pg_database_size(current_database()))) AS db_size
         """))).one()
-        # Syslog count from ClickHouse
+
+        # Time-series stats come from ClickHouse now.
+        result_count = 0
+        oldest_ping = None
+        newest_ping = None
         syslog_count = 0
         try:
-            from services.clickhouse_client import query_scalar as ch_scalar
+            from services.clickhouse_client import query as ch_query, query_scalar as ch_scalar
+            result_count = int(await ch_scalar("SELECT count() FROM ping_checks") or 0)
+            ts_rows = await ch_query(
+                "SELECT min(timestamp) AS oldest, max(timestamp) AS newest FROM ping_checks"
+            )
+            if ts_rows:
+                oldest_ping = ts_rows[0].get("oldest")
+                newest_ping = ts_rows[0].get("newest")
             syslog_count = int(await ch_scalar("SELECT count() FROM syslog_messages") or 0)
         except Exception:
             pass
+
         db_stats = {
             "db_size": row.db_size or "—",
             "host_count": row.host_count or 0,
-            "result_count": max(row.result_count or 0, 0),
+            "result_count": result_count,
             "config_count": row.config_count or 0,
             "snapshot_count": max(row.snapshot_count or 0, 0),
             "syslog_count": syslog_count,
-            "oldest_ping": localtime(row.oldest_ping, "%Y-%m-%d %H:%M") if row.oldest_ping else "—",
-            "newest_ping": localtime(row.newest_ping, "%Y-%m-%d %H:%M") if row.newest_ping else "—",
+            "oldest_ping": localtime(oldest_ping, "%Y-%m-%d %H:%M") if oldest_ping else "—",
+            "newest_ping": localtime(newest_ping, "%Y-%m-%d %H:%M") if newest_ping else "—",
         }
         # Top tables by size
         tt_rows = (await db.execute(text("""
@@ -235,6 +246,13 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             })
     except Exception as e:
         db_stats = {"error": str(e)}
+        # Roll back the failed transaction so subsequent queries on this same
+        # session aren't poisoned (asyncpg keeps the transaction in aborted
+        # state until rollback, after which every other read returns nothing).
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     # ── DB connection pool status ────────────────────────────────────────
     pool_info = {}
