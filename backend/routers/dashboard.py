@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
-    PingHost, PingResult,
+    PingHost,
     get_db, get_setting, set_setting, is_setup_complete,
 )
 from models.integration import IntegrationConfig, Snapshot
@@ -27,37 +27,36 @@ router = APIRouter()
 
 
 async def _predict_agent_disks(db, days_back: int = 14) -> dict[str, dict]:
-    """Predict disk-full for agent disks using historical AgentSnapshot data."""
-    from models.agent import Agent, AgentSnapshot as ASnap
+    """Predict disk-full for agent disks using historical agent_metrics data."""
+    from models.agent import Agent
     from datetime import timedelta
     from services.predictions import _linear_predict
+    from services.clickhouse_client import get_agent_history
 
-    since = datetime.utcnow() - timedelta(days=days_back)
     predictions: dict[str, dict] = {}
 
     result = await db.execute(select(Agent).where(Agent.enabled == True))
     agents = result.scalars().all()
 
     for agent in agents:
-        snap_result = await db.execute(
-            select(ASnap)
-            .where(ASnap.agent_id == agent.id, ASnap.timestamp >= since)
-            .order_by(ASnap.timestamp.asc())
-        )
-        snapshots = snap_result.scalars().all()
+        snapshots = await get_agent_history(agent.id, limit=10000, hours=days_back * 24)
         if len(snapshots) < 3:
             continue
 
         # Build time-series per mount: {mount: [(epoch, pct), ...]}
         mount_series: dict[str, list[tuple[float, float]]] = {}
         for snap in snapshots:
-            if not snap.data_json:
+            data_json = snap.get("data_json")
+            if not data_json:
                 continue
             try:
-                data = json.loads(snap.data_json)
+                data = json.loads(data_json)
             except (json.JSONDecodeError, TypeError):
                 continue
-            ts = snap.timestamp.timestamp()
+            ts_val = snap.get("timestamp")
+            if not isinstance(ts_val, datetime):
+                continue
+            ts = ts_val.timestamp()
             for disk in data.get("disks", []):
                 mount = disk.get("mount", "/")
                 pct = disk.get("pct")
@@ -138,58 +137,52 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     host_stats = []
     ping_alarms: list[dict] = []
 
-    # Batch 1: latest result per host (single query)
-    latest_by_host: dict[int, PingResult] = {}
-    if host_ids:
-        latest_sub = (
-            select(PingResult.host_id, func.max(PingResult.id).label("max_id"))
-            .where(PingResult.host_id.in_(host_ids))
-            .group_by(PingResult.host_id)
-            .subquery()
-        )
-        latest_rows = (await db.execute(
-            select(PingResult).join(latest_sub, PingResult.id == latest_sub.c.max_id)
-        )).scalars().all()
-        latest_by_host = {r.host_id: r for r in latest_rows}
+    # All time-series ping data comes from ClickHouse.
+    from services.clickhouse_client import (
+        get_latest_ping_per_host,
+        get_ping_uptime,
+        query as ch_query,
+    )
 
-    # Batch 2: 24h stats per host (total, success, avg latency) in one query
+    latest_by_host: dict[int, dict] = {}
     stats_by_host: dict[int, dict] = {}
+    sparklines_by_host: dict[int, list] = defaultdict(list)
+
     if host_ids:
-        stats_rows = (await db.execute(
-            select(
-                PingResult.host_id,
-                func.count().label("total"),
-                func.count().filter(PingResult.success == True).label("success"),
-                func.avg(PingResult.latency_ms).filter(PingResult.success == True).label("avg_lat"),
-            )
-            .where(PingResult.host_id.in_(host_ids), PingResult.timestamp >= window_24h)
-            .group_by(PingResult.host_id)
-        )).all()
-        for row in stats_rows:
-            stats_by_host[row.host_id] = {
-                "total": row.total,
-                "success": row.success,
-                "avg_lat": row.avg_lat,
+        latest_by_host = await get_latest_ping_per_host(host_ids)
+
+        # 24h aggregation in one query
+        uptime_24h = await get_ping_uptime(host_ids, hours=24)
+        for hid, stats in uptime_24h.items():
+            stats_by_host[hid] = {
+                "total":   stats["total"],
+                "success": stats["ok"],
+                "avg_lat": stats["avg_latency"],
             }
 
-    # Batch 3: sparkline data (last 2h) – fetch all at once, group in Python
-    sparklines_by_host: dict[int, list] = defaultdict(list)
-    if host_ids:
-        spark_rows = (await db.execute(
-            select(PingResult.host_id, PingResult.success, PingResult.latency_ms)
-            .where(PingResult.host_id.in_(host_ids), PingResult.timestamp >= window_2h)
-            .order_by(PingResult.host_id, PingResult.timestamp.asc())
-        )).all()
+        # Sparkline (last 2h) — single CH query
+        spark_rows = await ch_query(
+            "SELECT host_id, success, latency_ms "
+            "FROM ping_checks "
+            "WHERE host_id IN ({hids:Array(UInt32)}) "
+            "  AND timestamp >= {since:DateTime64(3)} "
+            "ORDER BY host_id, timestamp ASC",
+            {"hids": host_ids, "since": window_2h},
+        )
         for row in spark_rows:
-            sparklines_by_host[row.host_id].append(
-                row.latency_ms if row.success else None
+            hid = int(row["host_id"])
+            sparklines_by_host[hid].append(
+                float(row["latency_ms"]) if row.get("success") and row.get("latency_ms") is not None else None
             )
-        # Limit to 60 points per host
         for hid in sparklines_by_host:
             sparklines_by_host[hid] = sparklines_by_host[hid][-60:]
 
     for host in hosts:
         latest_row = latest_by_host.get(host.id)
+        latest_success = bool(latest_row.get("success")) if latest_row else None
+        latest_latency = latest_row.get("latency_ms") if latest_row else None
+        latest_ts = latest_row.get("timestamp") if latest_row else None
+
         st = stats_by_host.get(host.id, {"total": 0, "success": 0, "avg_lat": None})
         total_count = st["total"]
         success_count = st["success"]
@@ -203,26 +196,26 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         effective_threshold = host.latency_threshold_ms if host.latency_threshold_ms is not None else global_latency_ms
         if (
             not host.maintenance
-            and latest_row and latest_row.success
-            and latest_row.latency_ms is not None
+            and latest_success
+            and latest_latency is not None
             and effective_threshold is not None
-            and latest_row.latency_ms > effective_threshold
+            and latest_latency > effective_threshold
         ):
             ping_alarms.append({
                 "name": host.name,
                 "hostname": host.hostname,
-                "latency": latest_row.latency_ms,
+                "latency": latest_latency,
                 "threshold": effective_threshold,
                 "host_id": host.id,
             })
 
         host_stats.append({
             "host": host,
-            "online": latest_row.success if latest_row else None,
-            "latency": latest_row.latency_ms if latest_row else None,
+            "online": latest_success,
+            "latency": latest_latency,
             "uptime_pct": uptime_pct,
             "avg_latency": avg_latency,
-            "last_check": latest_row.timestamp if latest_row else None,
+            "last_check": latest_ts,
             "sparkline": sparkline,
             "effective_threshold": effective_threshold,
             "health_score": 0.0,  # computed later with all metrics
@@ -719,24 +712,16 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    # Agent disks (from latest AgentSnapshot per agent)
+    # Agent disks (from latest agent_metrics in ClickHouse)
     try:
-        from models.agent import Agent, AgentSnapshot as ASnap
-        from sqlalchemy import text as sa_text2
-        snap_rows = await db.execute(
-            sa_text2("""
-                SELECT ls.data_json, a.hostname, a.id as agent_id
-                FROM agents a
-                CROSS JOIN LATERAL (
-                    SELECT s.data_json FROM agent_snapshots s
-                    WHERE s.agent_id = a.id
-                    ORDER BY s.timestamp DESC LIMIT 1
-                ) ls
-                WHERE a.enabled = true
-            """)
-        )
-        for row in snap_rows:
-            data_json, hostname = row[0], row[1]
+        from models.agent import Agent
+        from services.clickhouse_client import get_latest_agent_metrics
+        agents_q = await db.execute(select(Agent).where(Agent.enabled == True))
+        enabled_agents = agents_q.scalars().all()
+        snaps = await get_latest_agent_metrics([a.id for a in enabled_agents])
+        for a in enabled_agents:
+            snap = snaps.get(a.id)
+            data_json = snap.get("data_json") if snap else None
             if not data_json:
                 continue
             try:
@@ -749,13 +734,13 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                     continue  # skip tiny mounts (tmpfs etc.)
                 mount = disk.get("mount", "/")
                 storage_pools.append({
-                    "name": f"{hostname}:{mount}",
-                    "source": f"Agent: {hostname}",
+                    "name": f"{a.hostname}:{mount}",
+                    "source": f"Agent: {a.hostname}",
                     "healthy": True,
                     "pct": disk.get("pct", 0),
                     "used_gb": disk.get("used_gb", 0),
                     "total_gb": total,
-                    "_pred_key": f"agent-{row[2]}:{mount}",
+                    "_pred_key": f"agent-{a.id}:{mount}",
                 })
     except Exception:
         pass
@@ -809,25 +794,17 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                         })
 
         _cp("containers_portainer_done")
-        # Agent Docker containers (from latest snapshots, already queried above)
+        # Agent Docker containers (from latest CH snapshot per agent)
         try:
-            from models.agent import Agent, AgentSnapshot as ASnap
-            from sqlalchemy import text as sa_text
-            a_rows = await db.execute(
-                sa_text("""
-                    SELECT ls.data_json, a.hostname
-                    FROM agents a
-                    CROSS JOIN LATERAL (
-                        SELECT s.data_json FROM agent_snapshots s
-                        WHERE s.agent_id = a.id
-                        ORDER BY s.timestamp DESC LIMIT 1
-                    ) ls
-                    WHERE a.enabled = true
-                """)
-            )
+            from models.agent import Agent
+            from services.clickhouse_client import get_latest_agent_metrics
+            agents_q = await db.execute(select(Agent).where(Agent.enabled == True))
+            enabled_agents = agents_q.scalars().all()
+            snaps = await get_latest_agent_metrics([a.id for a in enabled_agents])
             _cp("containers_query_done")
-            for row in a_rows:
-                data_json, hostname = row[0], row[1]
+            for a in enabled_agents:
+                snap = snaps.get(a.id)
+                data_json = snap.get("data_json") if snap else None
                 if not data_json:
                     continue
                 try:
@@ -839,7 +816,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                         "name": ct.get("name", "?"),
                         "image": ct.get("image", "?"),
                         "state": ct.get("state", "running" if "Up" in ct.get("status", "") else "exited"),
-                        "host": hostname,
+                        "host": a.hostname,
                         "source": "agent",
                         "cpu_pct": ct.get("cpu_pct"),
                         "mem_pct": ct.get("mem_pct"),
@@ -1014,22 +991,28 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             d = (now - timedelta(days=_HEATMAP_DAYS - 1 - i))
             heatmap_days.append(d.strftime("%a %d.%m"))
 
-        from sqlalchemy import cast, Date
-        day_stats = (await db.execute(
-            select(
-                PingResult.host_id,
-                cast(PingResult.timestamp, Date).label("day"),
-                func.count().label("total"),
-                func.count().filter(PingResult.success == True).label("ok"),
-            )
-            .where(PingResult.host_id.in_(host_ids), PingResult.timestamp >= window_30d)
-            .group_by(PingResult.host_id, cast(PingResult.timestamp, Date))
-        )).all()
+        # Daily availability per host from ClickHouse — single query.
+        day_stats = await ch_query(
+            """
+            SELECT
+                host_id,
+                toDate(timestamp) AS day,
+                count() AS total,
+                sumIf(1, success = 1) AS ok
+            FROM ping_checks
+            WHERE host_id IN ({hids:Array(UInt32)})
+              AND timestamp >= {since:DateTime64(3)}
+            GROUP BY host_id, day
+            """,
+            {"hids": host_ids, "since": window_30d},
+        )
 
         day_map: dict[tuple, float] = {}
         for row in day_stats:
-            pct = round(row.ok / row.total * 100, 1) if row.total > 0 else None
-            day_map[(row.host_id, str(row.day))] = pct
+            total = int(row.get("total") or 0)
+            ok = int(row.get("ok") or 0)
+            pct = round(ok / total * 100, 1) if total > 0 else None
+            day_map[(int(row["host_id"]), str(row["day"]))] = pct
 
         heatmap_hosts = sorted(
             [h for h in hosts if not h.maintenance],
