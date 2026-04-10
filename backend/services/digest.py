@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import PingHost, PingResult
+from database import PingHost
 from models.incident import Incident
 from models.integration import IntegrationConfig, Snapshot
 from models.log_template import LogTemplate
@@ -52,25 +52,19 @@ async def build_weekly_digest(db: AsyncSession) -> dict:
         digest["incidents"]["by_severity"][i.severity] = digest["incidents"]["by_severity"].get(i.severity, 0) + 1
         digest["incidents"]["by_status"][i.status] = digest["incidents"]["by_status"].get(i.status, 0) + 1
 
-    # ── Host availability (single batch query) ─────────────────────────────
+    # ── Host availability (ClickHouse aggregation, single query) ─────────────
     hosts_result = await db.execute(
         select(PingHost).where(PingHost.enabled == True)
     )
     all_hosts = hosts_result.scalars().all()
     host_by_id = {h.id: h for h in all_hosts}
 
-    # One query: total + success per host
-    uptime_rows = (await db.execute(
-        select(
-            PingResult.host_id,
-            func.count().label("total"),
-            func.count(case((PingResult.success == True, 1))).label("ok"),
-        )
-        .where(PingResult.timestamp >= week_ago)
-        .group_by(PingResult.host_id)
-    )).all()
-
-    uptime_by_host = {row.host_id: (row.ok, row.total) for row in uptime_rows}
+    from services.clickhouse_client import get_ping_uptime
+    uptime_stats = await get_ping_uptime([h.id for h in all_hosts], hours=24 * 7)
+    uptime_by_host = {
+        hid: (stats["ok"], stats["total"])
+        for hid, stats in uptime_stats.items()
+    }
 
     host_uptimes = []
     for host in all_hosts:
@@ -443,17 +437,12 @@ async def build_daily_summary_data(db: AsyncSession) -> dict:
     )
     all_hosts = hosts_result.scalars().all()
 
-    uptime_rows = (await db.execute(
-        select(
-            PingResult.host_id,
-            func.count().label("total"),
-            func.count(case((PingResult.success == True, 1))).label("ok"),
-        )
-        .where(PingResult.timestamp >= yesterday)
-        .group_by(PingResult.host_id)
-    )).all()
-
-    uptime_by_host = {row.host_id: (row.ok, row.total) for row in uptime_rows}
+    from services.clickhouse_client import get_ping_uptime
+    uptime_stats = await get_ping_uptime([h.id for h in all_hosts], hours=24)
+    uptime_by_host = {
+        hid: (stats["ok"], stats["total"])
+        for hid, stats in uptime_stats.items()
+    }
 
     down_hosts = []
     for host in all_hosts:

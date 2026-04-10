@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, and_
 
 from models.base import AsyncSessionLocal
-from models.ping import PingHost, PingResult
+from models.ping import PingHost
 from services.clickhouse_client import query_scalar as ch_scalar
 from models.integration import IntegrationConfig, Snapshot
 from models.incident import Incident, IncidentEvent
@@ -124,12 +124,10 @@ async def _find_or_create_incident(
 async def _get_offline_hosts(db, min_failures: int = 3) -> list[PingHost]:
     """Get hosts that are offline: last *min_failures* consecutive pings all failed.
 
-    This prevents transient single-ping failures from triggering incidents.
+    Single ClickHouse query — no per-host N+1.
     """
-    from sqlalchemy import literal_column
-    from sqlalchemy.orm import aliased
+    from services.clickhouse_client import get_offline_hosts_since
 
-    # Get all enabled, non-maintenance hosts
     hosts_q = await db.execute(
         select(PingHost).where(PingHost.enabled == True, PingHost.maintenance == False)
     )
@@ -137,21 +135,10 @@ async def _get_offline_hosts(db, min_failures: int = 3) -> list[PingHost]:
     if not hosts:
         return []
 
-    offline = []
-    for host in hosts:
-        # Fetch the last N results for this host, newest first
-        recent = (await db.execute(
-            select(PingResult.success)
-            .where(PingResult.host_id == host.id)
-            .order_by(PingResult.id.desc())
-            .limit(min_failures)
-        )).scalars().all()
-
-        # Need at least min_failures results, ALL must be failures
-        if len(recent) >= min_failures and all(not s for s in recent):
-            offline.append(host)
-
-    return offline
+    offline_ids = set(await get_offline_hosts_since(
+        [h.id for h in hosts], min_failures=min_failures,
+    ))
+    return [h for h in hosts if h.id in offline_ids]
 
 
 # ── Topology cache (refreshed once per correlation run) ────────────────────
