@@ -1,7 +1,6 @@
 import bcrypt
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from templating import templates
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 

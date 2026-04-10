@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 _last_perf: dict = {}
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from templating import localtime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,7 +111,6 @@ DEFAULT_LAYOUT = [
 
 
 @router.get("/api/dashboard")
-@router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     import time as _time; _t0 = _time.time(); _checkpoints = []
     def _cp(label): _checkpoints.append((label, (_time.time()-_t0)*1000))
@@ -1282,7 +1281,8 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         sections.append({"name": label, "ms": round(t - prev)})
         prev = t
     total_ms = round(_checkpoints[-1][1])
-    _log.warning(f"DASHBOARD_API {total_ms}ms total | {' | '.join(f'{s['name']}:+{s['ms']}' for s in sections)}")
+    _section_summary = " | ".join("{0}:+{1}".format(s["name"], s["ms"]) for s in sections)
+    _log.warning(f"DASHBOARD_API {total_ms}ms total | {_section_summary}")
     global _last_perf
     _last_perf = {
         "total_ms": total_ms,
