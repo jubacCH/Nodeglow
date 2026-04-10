@@ -104,6 +104,15 @@ async def health():
         return {"status": "error", "db": "connection failed"}
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus-format self-monitoring metrics. Auth-bypassed (see middleware)."""
+    from fastapi.responses import Response
+    from services.metrics import render_metrics
+    body, content_type = render_metrics()
+    return Response(content=body, media_type=content_type)
+
+
 # ── Nav counts cache (60s TTL, single GROUP BY query) ────────────────────────
 
 _nav_cache: dict = {"counts": {}, "ts": 0.0}
@@ -218,6 +227,7 @@ async def inject_globals(request: Request, call_next):
     # Skip auth entirely for these paths
     _skip = (
         request.url.path.startswith("/static/") or request.url.path == "/health"
+        or request.url.path == "/metrics"
         or request.url.path.startswith("/api/agent/")
         or request.url.path.startswith("/api/auth/")
         or request.url.path.startswith("/api/docs") or request.url.path.startswith("/api/redoc")
