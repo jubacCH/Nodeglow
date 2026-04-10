@@ -74,13 +74,13 @@ function AlertsPageInner() {
         description="Active alerts, incidents, and maintenance windows"
       />
 
-      {/* Tab bar */}
-      <div className="flex gap-1 border-b border-white/[0.06] mb-6">
+      {/* Tab bar — larger tap targets on mobile (44pt minimum). */}
+      <div className="flex gap-1 border-b border-white/[0.06] mb-6 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
         {tabs.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`px-4 py-3 sm:py-2 text-sm font-medium transition-colors whitespace-nowrap min-h-[44px] sm:min-h-0 ${
               activeTab === tab.key
                 ? 'accent-text border-b-2 border-current'
                 : 'text-slate-400 hover:text-slate-200'
@@ -169,12 +169,12 @@ function AlertsPageInner() {
                   className="w-full pl-8 pr-3 py-1.5 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
                 />
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
                 {['all', 'critical', 'warning', 'info'].map((s) => (
                   <button
                     key={s}
                     onClick={() => setSeverityFilter(s)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                    className={`px-3 py-2 sm:py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
                       severityFilter === s
                         ? s === 'critical' ? 'bg-red-500/20 text-red-400 border border-red-500/40'
                           : s === 'warning' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
@@ -187,12 +187,12 @@ function AlertsPageInner() {
                   </button>
                 ))}
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
                 {['all', 'open', 'acknowledged', 'resolved'].map((s) => (
                   <button
                     key={s}
                     onClick={() => setStatusFilter(s)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                    className={`px-3 py-2 sm:py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
                       statusFilter === s
                         ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
                         : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
