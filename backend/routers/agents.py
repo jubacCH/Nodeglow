@@ -25,7 +25,7 @@ from sqlalchemy import select
 
 from database import AsyncSessionLocal, PingHost, get_setting, set_setting
 from ratelimit import rate_limit
-from models.agent import Agent, AgentSnapshot
+from models.agent import Agent
 from services.websocket import broadcast_agent_metric
 
 logger = logging.getLogger(__name__)
@@ -180,28 +180,11 @@ async def agent_report(request: Request):
 
         snap_ts = datetime.utcnow()
         snap_data_json = json.dumps(body)
-        snap = AgentSnapshot(
-            agent_id=agent.id,
-            timestamp=snap_ts,
-            cpu_pct=body.get("cpu_pct"),
-            mem_pct=mem.get("pct"),
-            mem_used_mb=mem.get("used_mb"),
-            mem_total_mb=mem.get("total_mb"),
-            disk_pct=primary_disk_pct,
-            load_1=load.get("load_1"),
-            load_5=load.get("load_5"),
-            load_15=load.get("load_15"),
-            uptime_s=body.get("uptime_s"),
-            rx_bytes=body.get("network", {}).get("rx_bytes"),
-            tx_bytes=body.get("network", {}).get("tx_bytes"),
-            data_json=snap_data_json,
-        )
-        db.add(snap)
 
-        # Extract bandwidth samples from agent network data
+        # Extract bandwidth samples from agent network data (writes to ClickHouse)
         try:
             from services.bandwidth import extract_agent_bandwidth
-            await extract_agent_bandwidth(db, agent.id, body, datetime.utcnow())
+            await extract_agent_bandwidth(db, agent.id, body, snap_ts, source_name=agent.name)
         except Exception as bw_exc:
             logger.warning("Bandwidth extraction failed for agent %d: %s", agent.id, bw_exc)
 
@@ -212,13 +195,13 @@ async def agent_report(request: Request):
 
         await db.commit()
 
-    # Phase 2 dual-write: mirror agent snapshot to ClickHouse `agent_metrics`.
-    # Postgres remains source of truth until cutover; CH failures are logged.
+    # Time-series snapshot lives in ClickHouse only (post-cutover).
     try:
         from services.clickhouse_client import insert_agent_metrics
         await insert_agent_metrics([{
             "timestamp": snap_ts,
             "agent_id": agent.id,
+            "agent_name": agent.name,
             "cpu_pct": body.get("cpu_pct"),
             "mem_pct": mem.get("pct"),
             "mem_used_mb": mem.get("used_mb"),
@@ -233,7 +216,7 @@ async def agent_report(request: Request):
             "data_json": snap_data_json,
         }])
     except Exception as ch_exc:
-        logger.warning("ClickHouse dual-write (agent_metrics) failed: %s", ch_exc)
+        logger.error("ClickHouse insert (agent_metrics) failed: %s", ch_exc)
 
     # Broadcast to all WebSocket clients (global hub)
     await broadcast_agent_metric(agent.id, agent.name, {

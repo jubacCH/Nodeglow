@@ -22,12 +22,12 @@ from models.settings import (
     set_setting,
     is_setup_complete,
 )
-from models.ping import PingHost, PingResult
+from models.ping import PingHost
 from models.integration import IntegrationConfig, Snapshot
 from models.syslog import SyslogView
 from models.incident import Incident, IncidentEvent
 from models.log_template import LogTemplate, HostBaseline, PrecursorPattern
-from models.agent import Agent, AgentSnapshot
+from models.agent import Agent
 from models.scanner import SubnetScanSchedule, SubnetScanLog
 from models.credential import Credential
 from models.snmp import SnmpMib, SnmpOid, SnmpHostConfig, SnmpResult
@@ -37,7 +37,6 @@ from models.alert_rule import AlertRule
 from models.discovered_port import DiscoveredPort
 from models.audit import AuditLog
 from models.ai_usage import AiUsageLog
-from models.bandwidth import BandwidthSample
 from models.backup import BackupJob, BackupHistory
 
 
@@ -57,12 +56,12 @@ __all__ = [
     "encrypt_value", "decrypt_value", "get_db",
     "Setting", "User", "Session",
     "get_current_user", "get_setting", "set_setting", "is_setup_complete",
-    "PingHost", "PingResult",
+    "PingHost",
     "IntegrationConfig", "Snapshot",
     "SyslogView",
     "Incident", "IncidentEvent",
     "LogTemplate", "HostBaseline", "PrecursorPattern",
-    "Agent", "AgentSnapshot",
+    "Agent",
     "SubnetScanSchedule", "SubnetScanLog",
     "Credential",
     "SnmpMib", "SnmpOid", "SnmpHostConfig", "SnmpResult",
@@ -72,7 +71,6 @@ __all__ = [
     "DiscoveredPort",
     "AuditLog",
     "AiUsageLog",
-    "BandwidthSample",
     "BackupJob", "BackupHistory",
     "init_db",
 ]

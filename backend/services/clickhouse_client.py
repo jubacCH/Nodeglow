@@ -12,12 +12,15 @@ log = logging.getLogger("nodeglow.clickhouse")
 # Run on first connect. Existing deployments did NOT re-run clickhouse/init.sql,
 # so the Phase 2 tables (ping_checks, agent_metrics, bandwidth_metrics) need to
 # be created from the application side. CREATE TABLE IF NOT EXISTS is idempotent.
+# ALTER TABLE ... ADD COLUMN IF NOT EXISTS handles the Phase 3 denormalized
+# columns for installs that already created the original Phase 2 tables.
 _PHASE2_SCHEMAS = [
     """
     CREATE TABLE IF NOT EXISTS ping_checks
     (
         timestamp   DateTime64(3, 'UTC') NOT NULL,
         host_id     UInt32 NOT NULL,
+        host_name   LowCardinality(String) DEFAULT '',
         success     UInt8  NOT NULL,
         latency_ms  Nullable(Float32)
     )
@@ -32,6 +35,7 @@ _PHASE2_SCHEMAS = [
     (
         timestamp     DateTime64(3, 'UTC') NOT NULL,
         agent_id      UInt32 NOT NULL,
+        agent_name    LowCardinality(String) DEFAULT '',
         cpu_pct       Nullable(Float32),
         mem_pct       Nullable(Float32),
         mem_used_mb   Nullable(Float32),
@@ -57,6 +61,7 @@ _PHASE2_SCHEMAS = [
         timestamp       DateTime64(3, 'UTC') NOT NULL,
         source_type     LowCardinality(String) NOT NULL,
         source_id       String NOT NULL,
+        source_name     LowCardinality(String) DEFAULT '',
         interface_name  LowCardinality(String) NOT NULL,
         rx_bytes        UInt64 DEFAULT 0,
         tx_bytes        UInt64 DEFAULT 0,
@@ -69,6 +74,14 @@ _PHASE2_SCHEMAS = [
     TTL toDateTime(timestamp) + INTERVAL 7 DAY
     SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1
     """,
+]
+
+# Idempotent column additions for installs that created the original Phase 2
+# tables before host_name/agent_name/source_name were introduced.
+_PHASE3_ALTERS = [
+    "ALTER TABLE ping_checks ADD COLUMN IF NOT EXISTS host_name LowCardinality(String) DEFAULT ''",
+    "ALTER TABLE agent_metrics ADD COLUMN IF NOT EXISTS agent_name LowCardinality(String) DEFAULT ''",
+    "ALTER TABLE bandwidth_metrics ADD COLUMN IF NOT EXISTS source_name LowCardinality(String) DEFAULT ''",
 ]
 
 _schemas_applied = False
@@ -115,7 +128,7 @@ async def get_client():
 
 
 async def _ensure_schemas(client) -> None:
-    """Apply Phase 2 CREATE TABLE IF NOT EXISTS once per process."""
+    """Apply Phase 2 CREATE TABLE + Phase 3 ALTERs once per process."""
     global _schemas_applied
     if _schemas_applied:
         return
@@ -124,6 +137,11 @@ async def _ensure_schemas(client) -> None:
             await client.command(ddl)
         except Exception as exc:
             log.warning("ClickHouse schema migration failed: %s", exc)
+    for ddl in _PHASE3_ALTERS:
+        try:
+            await client.command(ddl)
+        except Exception as exc:
+            log.warning("ClickHouse schema alter failed: %s", exc)
     _schemas_applied = True
 
 
@@ -182,24 +200,24 @@ def _record_insert_metric(table: str, status: str, row_count: int) -> None:
         pass
 
 
-# ── Phase 2 typed inserts ────────────────────────────────────────────────────
-# Each helper is fire-and-forget safe: callers should NOT let a ClickHouse
-# failure break their primary Postgres write. Wrap calls in try/except, the
-# helpers themselves only suppress connection-level errors so unexpected bugs
-# still surface during development.
+# ── Time-series writes ────────────────────────────────────────────────────────
+# Post-cutover: ClickHouse is the authoritative store for ping_checks,
+# agent_metrics, and bandwidth_metrics. Failures here are real failures and
+# must propagate so callers can decide whether to retry.
 
 async def insert_ping_checks(rows: list[dict]) -> None:
     """Bulk-insert ping check results.
 
-    Each row: {timestamp, host_id, success (bool), latency_ms (float|None)}
+    Each row: {timestamp, host_id, host_name, success (bool), latency_ms (float|None)}
     """
     if not rows:
         return
-    columns = ["timestamp", "host_id", "success", "latency_ms"]
+    columns = ["timestamp", "host_id", "host_name", "success", "latency_ms"]
     data = [
         [
             r.get("timestamp") or datetime.utcnow(),
             int(r["host_id"]),
+            str(r.get("host_name") or ""),
             1 if r.get("success") else 0,
             float(r["latency_ms"]) if r.get("latency_ms") is not None else None,
         ]
@@ -217,15 +235,15 @@ async def insert_ping_checks(rows: list[dict]) -> None:
 async def insert_agent_metrics(rows: list[dict]) -> None:
     """Bulk-insert agent metric snapshots.
 
-    Each row: {timestamp, agent_id, cpu_pct, mem_pct, mem_used_mb, mem_total_mb,
-              disk_pct, load_1, load_5, load_15, uptime_s, rx_bytes, tx_bytes,
-              data_json}
+    Each row: {timestamp, agent_id, agent_name, cpu_pct, mem_pct, mem_used_mb,
+              mem_total_mb, disk_pct, load_1, load_5, load_15, uptime_s,
+              rx_bytes, tx_bytes, data_json}
     Missing keys become NULL.
     """
     if not rows:
         return
     columns = [
-        "timestamp", "agent_id",
+        "timestamp", "agent_id", "agent_name",
         "cpu_pct", "mem_pct", "mem_used_mb", "mem_total_mb", "disk_pct",
         "load_1", "load_5", "load_15",
         "uptime_s", "rx_bytes", "tx_bytes", "data_json",
@@ -234,6 +252,7 @@ async def insert_agent_metrics(rows: list[dict]) -> None:
         [
             r.get("timestamp") or datetime.utcnow(),
             int(r["agent_id"]),
+            str(r.get("agent_name") or ""),
             r.get("cpu_pct"),
             r.get("mem_pct"),
             r.get("mem_used_mb"),
@@ -261,13 +280,14 @@ async def insert_agent_metrics(rows: list[dict]) -> None:
 async def insert_bandwidth_metrics(rows: list[dict]) -> None:
     """Bulk-insert bandwidth samples.
 
-    Each row: {timestamp, source_type, source_id, interface_name,
+    Each row: {timestamp, source_type, source_id, source_name, interface_name,
               rx_bytes, tx_bytes, rx_rate_bps, tx_rate_bps}
     """
     if not rows:
         return
     columns = [
-        "timestamp", "source_type", "source_id", "interface_name",
+        "timestamp", "source_type", "source_id", "source_name",
+        "interface_name",
         "rx_bytes", "tx_bytes", "rx_rate_bps", "tx_rate_bps",
     ]
     data = [
@@ -275,6 +295,7 @@ async def insert_bandwidth_metrics(rows: list[dict]) -> None:
             r.get("timestamp") or datetime.utcnow(),
             str(r.get("source_type") or ""),
             str(r.get("source_id") or ""),
+            str(r.get("source_name") or ""),
             str(r.get("interface_name") or ""),
             int(r.get("rx_bytes") or 0),
             int(r.get("tx_bytes") or 0),
@@ -290,6 +311,257 @@ async def insert_bandwidth_metrics(rows: list[dict]) -> None:
     except Exception:
         _record_insert_metric("bandwidth_metrics", "failure", len(data))
         raise
+
+
+# ── Time-series read API ─────────────────────────────────────────────────────
+# All callers should use these helpers instead of writing raw SQL — keeps the
+# query patterns consistent and the typing stable.
+
+async def get_latest_ping_per_host(host_ids: list[int] | None = None) -> dict[int, dict]:
+    """Return {host_id: {timestamp, success, latency_ms, host_name}} for the
+    most recent ping per host. If host_ids is None, returns all hosts."""
+    where = ""
+    params: dict = {}
+    if host_ids:
+        where = "WHERE host_id IN ({hids:Array(UInt32)})"
+        params["hids"] = list(host_ids)
+    sql = f"""
+        SELECT
+            host_id,
+            argMax(timestamp,  timestamp) AS timestamp,
+            argMax(success,    timestamp) AS success,
+            argMax(latency_ms, timestamp) AS latency_ms,
+            argMax(host_name,  timestamp) AS host_name
+        FROM ping_checks
+        {where}
+        GROUP BY host_id
+    """
+    rows = await query(sql, params)
+    return {int(r["host_id"]): r for r in rows}
+
+
+async def get_ping_uptime(
+    host_ids: list[int] | None = None,
+    hours: int = 24,
+) -> dict[int, dict]:
+    """Return {host_id: {total, ok, uptime_pct, avg_latency}} aggregated over
+    the last N hours."""
+    where_clauses = ["timestamp >= now() - toIntervalHour({h:UInt32})"]
+    params: dict = {"h": int(hours)}
+    if host_ids:
+        where_clauses.append("host_id IN ({hids:Array(UInt32)})")
+        params["hids"] = list(host_ids)
+    where = " AND ".join(where_clauses)
+    sql = f"""
+        SELECT
+            host_id,
+            count() AS total,
+            sumIf(1, success = 1) AS ok,
+            avgIf(latency_ms, success = 1) AS avg_latency
+        FROM ping_checks
+        WHERE {where}
+        GROUP BY host_id
+    """
+    rows = await query(sql, params)
+    out: dict[int, dict] = {}
+    for r in rows:
+        total = int(r["total"]) or 0
+        ok = int(r["ok"] or 0)
+        out[int(r["host_id"])] = {
+            "total": total,
+            "ok": ok,
+            "uptime_pct": round(ok / total * 100, 2) if total else None,
+            "avg_latency": float(r["avg_latency"]) if r["avg_latency"] is not None else None,
+        }
+    return out
+
+
+async def get_ping_history(host_id: int, hours: int = 24) -> list[dict]:
+    """Return raw ping records for one host over the last N hours, oldest first."""
+    sql = """
+        SELECT timestamp, success, latency_ms
+        FROM ping_checks
+        WHERE host_id = {hid:UInt32}
+          AND timestamp >= now() - toIntervalHour({h:UInt32})
+        ORDER BY timestamp ASC
+    """
+    return await query(sql, {"hid": int(host_id), "h": int(hours)})
+
+
+async def get_offline_hosts_since(
+    host_ids: list[int],
+    min_failures: int,
+) -> list[int]:
+    """Return host_ids whose last `min_failures` checks all failed.
+
+    Used by the correlation engine to detect host-down events without N+1
+    queries against Postgres.
+    """
+    if not host_ids or min_failures <= 0:
+        return []
+    sql = """
+        SELECT host_id
+        FROM (
+            SELECT
+                host_id,
+                groupArray({n:UInt32})(success) AS recent
+            FROM (
+                SELECT host_id, success
+                FROM ping_checks
+                WHERE host_id IN ({hids:Array(UInt32)})
+                ORDER BY timestamp DESC
+            )
+            GROUP BY host_id
+        )
+        WHERE length(recent) >= {n:UInt32}
+          AND arraySum(recent) = 0
+    """
+    rows = await query(sql, {"hids": list(host_ids), "n": int(min_failures)})
+    return [int(r["host_id"]) for r in rows]
+
+
+async def get_latest_agent_metrics(agent_ids: list[int] | None = None) -> dict[int, dict]:
+    """Return {agent_id: latest_snapshot_dict}."""
+    where = ""
+    params: dict = {}
+    if agent_ids:
+        where = "WHERE agent_id IN ({aids:Array(UInt32)})"
+        params["aids"] = list(agent_ids)
+    sql = f"""
+        SELECT
+            agent_id,
+            argMax(timestamp,    timestamp) AS timestamp,
+            argMax(agent_name,   timestamp) AS agent_name,
+            argMax(cpu_pct,      timestamp) AS cpu_pct,
+            argMax(mem_pct,      timestamp) AS mem_pct,
+            argMax(mem_used_mb,  timestamp) AS mem_used_mb,
+            argMax(mem_total_mb, timestamp) AS mem_total_mb,
+            argMax(disk_pct,     timestamp) AS disk_pct,
+            argMax(load_1,       timestamp) AS load_1,
+            argMax(load_5,       timestamp) AS load_5,
+            argMax(load_15,      timestamp) AS load_15,
+            argMax(uptime_s,     timestamp) AS uptime_s,
+            argMax(rx_bytes,     timestamp) AS rx_bytes,
+            argMax(tx_bytes,     timestamp) AS tx_bytes,
+            argMax(data_json,    timestamp) AS data_json
+        FROM agent_metrics
+        {where}
+        GROUP BY agent_id
+    """
+    rows = await query(sql, params)
+    return {int(r["agent_id"]): r for r in rows}
+
+
+async def get_agent_history(
+    agent_id: int,
+    limit: int = 60,
+    hours: int | None = None,
+) -> list[dict]:
+    """Return recent agent_metrics rows for one agent, newest first."""
+    where = "agent_id = {aid:UInt32}"
+    params: dict = {"aid": int(agent_id), "lim": int(limit)}
+    if hours:
+        where += " AND timestamp >= now() - toIntervalHour({h:UInt32})"
+        params["h"] = int(hours)
+    sql = f"""
+        SELECT
+            timestamp, cpu_pct, mem_pct, mem_used_mb, mem_total_mb,
+            disk_pct, load_1, load_5, load_15, uptime_s,
+            rx_bytes, tx_bytes, data_json
+        FROM agent_metrics
+        WHERE {where}
+        ORDER BY timestamp DESC
+        LIMIT {{lim:UInt32}}
+    """
+    return await query(sql, params)
+
+
+async def get_latest_bandwidth_per_iface(
+    source_type: str | None = None,
+    source_id: str | None = None,
+    since_hours: int = 1,
+) -> list[dict]:
+    """Return latest sample per (source_type, source_id, interface_name).
+
+    Used by the bandwidth dashboard for "top talkers" and per-interface gauges.
+    """
+    where_clauses = ["timestamp >= now() - toIntervalHour({h:UInt32})"]
+    params: dict = {"h": int(since_hours)}
+    if source_type:
+        where_clauses.append("source_type = {st:String}")
+        params["st"] = source_type
+    if source_id:
+        where_clauses.append("source_id = {sid:String}")
+        params["sid"] = source_id
+    where = " AND ".join(where_clauses)
+    sql = f"""
+        SELECT
+            source_type,
+            source_id,
+            interface_name,
+            argMax(timestamp,   timestamp) AS timestamp,
+            argMax(source_name, timestamp) AS source_name,
+            argMax(rx_bytes,    timestamp) AS rx_bytes,
+            argMax(tx_bytes,    timestamp) AS tx_bytes,
+            argMax(rx_rate_bps, timestamp) AS rx_rate_bps,
+            argMax(tx_rate_bps, timestamp) AS tx_rate_bps
+        FROM bandwidth_metrics
+        WHERE {where}
+        GROUP BY source_type, source_id, interface_name
+    """
+    return await query(sql, params)
+
+
+async def get_bandwidth_history_ch(
+    source_type: str | None = None,
+    source_id: str | None = None,
+    interface_name: str | None = None,
+    hours: int = 24,
+    limit: int = 2000,
+) -> list[dict]:
+    """Time-series bandwidth data for charting."""
+    where_clauses = ["timestamp >= now() - toIntervalHour({h:UInt32})"]
+    params: dict = {"h": int(hours), "lim": int(limit)}
+    if source_type:
+        where_clauses.append("source_type = {st:String}")
+        params["st"] = source_type
+    if source_id:
+        where_clauses.append("source_id = {sid:String}")
+        params["sid"] = source_id
+    if interface_name:
+        where_clauses.append("interface_name = {iface:String}")
+        params["iface"] = interface_name
+    where = " AND ".join(where_clauses)
+    sql = f"""
+        SELECT timestamp, source_type, source_id, source_name, interface_name,
+               rx_bytes, tx_bytes, rx_rate_bps, tx_rate_bps
+        FROM bandwidth_metrics
+        WHERE {where}
+        ORDER BY timestamp ASC
+        LIMIT {{lim:UInt32}}
+    """
+    return await query(sql, params)
+
+
+async def get_previous_bandwidth_sample(
+    source_type: str,
+    source_id: str,
+    interface_name: str,
+) -> dict | None:
+    """Return the most recent prior sample for rate calculation, or None."""
+    sql = """
+        SELECT timestamp, rx_bytes, tx_bytes
+        FROM bandwidth_metrics
+        WHERE source_type = {st:String}
+          AND source_id   = {sid:String}
+          AND interface_name = {iface:String}
+        ORDER BY timestamp DESC
+        LIMIT 1
+    """
+    rows = await query(sql, {
+        "st": source_type, "sid": source_id, "iface": interface_name,
+    })
+    return rows[0] if rows else None
 
 
 async def query(sql: str, params: dict | None = None) -> list[dict]:

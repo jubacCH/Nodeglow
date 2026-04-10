@@ -724,20 +724,19 @@ async def learn_precursors(db: AsyncSession):
     host-down events, integration failures, and incidents.
     Build confidence scores over time.
     """
-    from models.ping import PingResult
+    from services.clickhouse_client import query as ch_query
 
     now = datetime.utcnow()
     lookback = now - timedelta(days=7)
 
-    # 1. Host-down events
-    down_events = (await db.execute(
-        select(PingResult.host_id, PingResult.timestamp)
-        .where(
-            PingResult.success == False,
-            PingResult.timestamp >= lookback,
-        )
-        .order_by(PingResult.timestamp)
-    )).all()
+    # 1. Host-down events from ClickHouse
+    down_rows = await ch_query(
+        "SELECT host_id, timestamp FROM ping_checks "
+        "WHERE success = 0 AND timestamp >= {since:DateTime64(3)} "
+        "ORDER BY timestamp",
+        {"since": lookback},
+    )
+    down_events = [(int(r["host_id"]), r["timestamp"]) for r in down_rows]
 
     if down_events:
         await _learn_precursors_for_event(db, "host_down", down_events, now)

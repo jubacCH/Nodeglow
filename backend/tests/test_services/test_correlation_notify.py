@@ -3,7 +3,7 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
-from models.ping import PingHost, PingResult
+from models.ping import PingHost
 from models.incident import Incident, IncidentEvent
 from services.correlation import (
     _find_or_create_incident,

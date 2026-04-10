@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import delete, select
 
-from database import AsyncSessionLocal, PingHost, PingResult
+from database import AsyncSessionLocal, PingHost
 from models.integration import IntegrationConfig
 from services import integration as int_svc
 from services import snapshot as snap_svc
@@ -83,11 +83,11 @@ async def run_integration_checks():
                             )
                             if integration_type == "proxmox":
                                 await extract_proxmox_bandwidth(
-                                    db, cfg.id, result.data,
+                                    db, cfg.id, result.data, source_name=cfg.name,
                                 )
                             elif integration_type == "unifi":
                                 await extract_unifi_bandwidth(
-                                    db, cfg.id, result.data,
+                                    db, cfg.id, result.data, source_name=cfg.name,
                                 )
                         except Exception as bw_exc:
                             logger.warning(
@@ -176,44 +176,34 @@ async def run_ping_checks():
                     success = (datetime.utcnow() - agent.last_seen).total_seconds() < 120
                 ts_now = datetime.utcnow()
                 latency_val = 0 if success else None
-                db.add(PingResult(
-                    host_id=host.id,
-                    timestamp=ts_now,
-                    success=success,
-                    latency_ms=latency_val,
-                ))
                 agent_ping_rows.append({
                     "timestamp": ts_now,
                     "host_id": host.id,
+                    "host_name": host.name,
                     "success": success,
                     "latency_ms": latency_val,
                 })
                 from services.websocket import broadcast_ping_update
                 _asyncio.create_task(broadcast_ping_update(host.id, host.name, success, 0 if success else None))
-            await db.commit()
 
-        # Phase 2 dual-write: agent heartbeat results → ClickHouse.
+        from services.clickhouse_client import insert_ping_checks
         try:
-            from services.clickhouse_client import insert_ping_checks
             await insert_ping_checks(agent_ping_rows)
         except Exception as ch_exc:
-            logger.warning("ClickHouse dual-write (agent ping_checks) failed: %s", ch_exc)
+            logger.error("ClickHouse insert (agent ping_checks) failed: %s", ch_exc)
 
     active_hosts = ping_hosts
 
-    # Load previous results for state-change detection
-    async with AsyncSessionLocal() as db:
-        from sqlalchemy import func as sa_func
-        sub = (
-            select(PingResult.host_id, sa_func.max(PingResult.timestamp).label("max_ts"))
-            .group_by(PingResult.host_id)
-            .subquery()
-        )
-        prev_rows = await db.execute(
-            select(PingResult.host_id, PingResult.success)
-            .join(sub, (PingResult.host_id == sub.c.host_id) & (PingResult.timestamp == sub.c.max_ts))
-        )
-        prev_success: dict[int, bool] = {row.host_id: row.success for row in prev_rows}
+    # Load previous success state per host from ClickHouse (for state-change detection)
+    from services.clickhouse_client import get_latest_ping_per_host
+    try:
+        latest_map = await get_latest_ping_per_host([h.id for h in active_hosts])
+        prev_success: dict[int, bool] = {
+            hid: bool(rec.get("success")) for hid, rec in latest_map.items()
+        }
+    except Exception as ch_exc:
+        logger.warning("ClickHouse previous-state lookup failed: %s", ch_exc)
+        prev_success = {}
 
     # Run all checks concurrently with semaphore to limit parallelism
     sem = _asyncio.Semaphore(50)
@@ -225,20 +215,23 @@ async def run_ping_checks():
 
     results = await _asyncio.gather(*[_check_one(h) for h in active_hosts])
 
-    # Batch-write all results in one transaction
+    # Update host port_error / detail state in Postgres (config table) and
+    # collect the time-series rows for the ClickHouse insert.
     import json as _json
     from services.metrics import PING_CHECKS_TOTAL
     now = datetime.utcnow()
     went_offline: list[str] = []
     came_online: list[str] = []
+    icmp_rows: list[dict] = []
     async with AsyncSessionLocal() as db:
         for host, online, port_error, latency, detail in results:
-            db.add(PingResult(
-                host_id=host.id,
-                timestamp=now,
-                success=online,
-                latency_ms=latency,
-            ))
+            icmp_rows.append({
+                "timestamp": now,
+                "host_id": host.id,
+                "host_name": host.name,
+                "success": online,
+                "latency_ms": latency,
+            })
             PING_CHECKS_TOTAL.labels(result="success" if online else "failure").inc()
 
             # Update port_error flag and check detail on the host
@@ -267,22 +260,12 @@ async def run_ping_checks():
 
         await db.commit()
 
-    # Phase 2 dual-write: mirror ICMP results to ClickHouse `ping_checks`.
-    # Failures are swallowed — Postgres remains the source of truth until
-    # cutover, so a CH outage must not break ping monitoring.
-    try:
-        from services.clickhouse_client import insert_ping_checks
-        await insert_ping_checks([
-            {
-                "timestamp": now,
-                "host_id": host.id,
-                "success": online,
-                "latency_ms": latency,
-            }
-            for host, online, _port_err, latency, _detail in results
-        ])
-    except Exception as ch_exc:
-        logger.warning("ClickHouse dual-write (ping_checks) failed: %s", ch_exc)
+    # ClickHouse is the authoritative store for ping check time-series.
+    if icmp_rows:
+        try:
+            await insert_ping_checks(icmp_rows)
+        except Exception as ch_exc:
+            logger.error("ClickHouse insert (ping_checks) failed: %s", ch_exc)
 
     # Grace period: only notify after host has been offline for N minutes
     from models.settings import get_setting
@@ -355,35 +338,25 @@ async def update_ssl_expiry():
 
 @instrument_job("cleanup_old_results")
 async def cleanup_old_results():
-    """Delete old ping results, snapshots, and syslog messages."""
+    """Delete old integration snapshots and SNMP results from Postgres.
+
+    Time-series data (ping_checks, agent_metrics, bandwidth_metrics, syslog)
+    lives in ClickHouse and is reaped by table-level TTL — no cleanup needed.
+    """
     from database import get_setting
 
     async with AsyncSessionLocal() as db:
-        ping_ret = int(await get_setting(db, "ping_retention_days", "30"))
         int_ret = int(await get_setting(db, "integration_retention_days", "7"))
 
     async with AsyncSessionLocal() as db:
-        # Ping results
-        ping_cutoff = datetime.utcnow() - timedelta(days=ping_ret)
-        await db.execute(delete(PingResult).where(PingResult.timestamp < ping_cutoff))
-        # Integration snapshots
         await snap_svc.cleanup_all(db, int_ret)
-        # Syslog retention handled by ClickHouse TTL — no cleanup needed here
-        total_deleted = 0
-        # Agent snapshots: keep 7 days
-        from models.agent import AgentSnapshot
-        agent_cutoff = datetime.utcnow() - timedelta(days=7)
-        await db.execute(delete(AgentSnapshot).where(AgentSnapshot.timestamp < agent_cutoff))
-        # SNMP results: keep 7 days
+        # SNMP results: keep 7 days (still in Postgres)
         from models.snmp import SnmpResult
         snmp_cutoff = datetime.utcnow() - timedelta(days=7)
         await db.execute(delete(SnmpResult).where(SnmpResult.timestamp < snmp_cutoff))
-        # Bandwidth samples: keep 7 days
-        from services.bandwidth import cleanup_old_bandwidth
-        await cleanup_old_bandwidth(db, days=7)
         await db.commit()
 
-    logger.info("Cleanup done (ping: %dd, integrations: %dd, syslog: %d msgs)", ping_ret, int_ret, total_deleted)
+    logger.info("Cleanup done (integrations: %dd)", int_ret)
 
 
 # ── Disk space health check ──────────────────────────────────────────────────
@@ -952,22 +925,12 @@ async def resolve_host_dns():
                     except (socket.herror, socket.gaierror, asyncio.TimeoutError, OSError):
                         pass
 
-        # Delete merged duplicates (move ping results first)
+        # Delete merged duplicate hosts. ClickHouse ping_checks rows for the
+        # dead host_id are intentionally NOT reassigned — they'll expire via
+        # TTL within 30 days. Reassigning would require an ALTER UPDATE which
+        # is async/eventually-consistent in CH and not worth the complexity.
         if to_delete:
-            from sqlalchemy import update
             for dead_id in to_delete:
-                # Find the surviving host by IP
-                dead_host = await db.get(PingHost, dead_id)
-                if not dead_host:
-                    continue
-                survivor = ip_to_host.get(dead_host.ip_address or dead_host.hostname)
-                if survivor:
-                    # Reassign ping results to survivor
-                    await db.execute(
-                        update(PingResult)
-                        .where(PingResult.host_id == dead_id)
-                        .values(host_id=survivor.id)
-                    )
                 await db.execute(delete(PingHost).where(PingHost.id == dead_id))
 
         if changed or to_delete:
