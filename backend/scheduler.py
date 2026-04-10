@@ -20,11 +20,25 @@ scheduler = AsyncIOScheduler()
 # ── Generic integration collection ───────────────────────────────────────────
 
 
+# Markers placed in the snapshot row's `error` field to indicate dedupe state.
+# These are visible in the API/UI so the user can see "this integration is a
+# standby for cluster X". They are not real errors.
+_STANDBY_MARKER = "[standby:duplicate-of-primary]"
+
+
 @instrument_job("integration_checks")
 async def run_integration_checks():
     """
     Generic collector loop: for each registered integration, fetch all configs
     and run collect(). Stores results as Snapshots.
+
+    Cluster grouping (Phase 8): when multiple integrations share the same
+    `cluster_group`, only the FIRST one to successfully poll this cycle writes
+    its data (snapshot, bandwidth, alerts, on_snapshot hook). The others still
+    poll for failover but their writes are suppressed and they record a
+    "standby" marker. If the active primary fails, the next member naturally
+    takes over the next cycle. For Proxmox integrations the cluster_group is
+    auto-populated from the cluster_name on first successful poll.
     """
     from integrations import get_registry
 
@@ -42,12 +56,20 @@ async def run_integration_checks():
     if not all_configs:
         return
 
-    # Group by type
+    # Group by type. Within a type, configs are processed in id-order so the
+    # primary selection is deterministic when multiple are healthy.
     by_type: dict[str, list] = {}
     for cfg in all_configs:
         by_type.setdefault(cfg.type, []).append(cfg)
+    for cfgs in by_type.values():
+        cfgs.sort(key=lambda c: c.id)
 
     from services.tracing import tracer
+
+    # Tracks which (type, cluster_group) tuples have already been written this
+    # cycle. First successful poll wins; subsequent members of the same group
+    # are demoted to standby.
+    cluster_owners: set[tuple[str, str]] = set()
 
     for integration_type, configs in by_type.items():
         integration_cls = registry.get(integration_type)
@@ -78,37 +100,77 @@ async def run_integration_checks():
                         result = await instance.collect()
 
                         if result.success:
-                            await snap_svc.save(
-                                db, integration_type, cfg.id,
-                                ok=True, data=result.data,
+                            # Auto-populate cluster_group from cluster_name for
+                            # Proxmox integrations on first successful poll.
+                            if (
+                                integration_type == "proxmox"
+                                and not cfg.cluster_group
+                                and isinstance(result.data, dict)
+                                and result.data.get("cluster_name")
+                            ):
+                                cfg.cluster_group = str(result.data["cluster_name"])
+                                logger.info(
+                                    "Auto-grouped %s/%s under cluster_group=%s",
+                                    integration_type, cfg.name, cfg.cluster_group,
+                                )
+
+                            # Determine primary vs standby for this cluster_group.
+                            group_key = (
+                                (integration_type, cfg.cluster_group)
+                                if cfg.cluster_group else None
                             )
-                            # Extract bandwidth data from supported integration types
-                            try:
-                                from services.bandwidth import (
-                                    extract_proxmox_bandwidth,
-                                    extract_unifi_bandwidth,
+                            is_standby = group_key is not None and group_key in cluster_owners
+
+                            if is_standby:
+                                # Standby: write a health-only snapshot so the
+                                # health check passes but skip data, bandwidth,
+                                # hooks, and alerts.
+                                _span.set_attribute("integration.standby", True)
+                                await snap_svc.save(
+                                    db, integration_type, cfg.id,
+                                    ok=True, error=_STANDBY_MARKER,
                                 )
-                                if integration_type == "proxmox":
-                                    await extract_proxmox_bandwidth(
-                                        cfg.id, result.data, source_name=cfg.name,
+                                logger.debug(
+                                    "Standby skip [%s/%s] — primary already wrote group=%s",
+                                    integration_type, cfg.name, cfg.cluster_group,
+                                )
+                            else:
+                                # Primary: write everything.
+                                if group_key is not None:
+                                    cluster_owners.add(group_key)
+                                    _span.set_attribute("integration.cluster_group", cfg.cluster_group)
+
+                                await snap_svc.save(
+                                    db, integration_type, cfg.id,
+                                    ok=True, data=result.data,
+                                )
+                                # Extract bandwidth data from supported integration types
+                                try:
+                                    from services.bandwidth import (
+                                        extract_proxmox_bandwidth,
+                                        extract_unifi_bandwidth,
                                     )
-                                elif integration_type == "unifi":
-                                    await extract_unifi_bandwidth(
-                                        cfg.id, result.data, source_name=cfg.name,
+                                    if integration_type == "proxmox":
+                                        await extract_proxmox_bandwidth(
+                                            cfg.id, result.data, source_name=cfg.name,
+                                        )
+                                    elif integration_type == "unifi":
+                                        await extract_unifi_bandwidth(
+                                            cfg.id, result.data, source_name=cfg.name,
+                                        )
+                                except Exception as bw_exc:
+                                    logger.warning(
+                                        "Bandwidth extraction failed [%s/%s]: %s",
+                                        integration_type, cfg.name, bw_exc,
                                     )
-                            except Exception as bw_exc:
-                                logger.warning(
-                                    "Bandwidth extraction failed [%s/%s]: %s",
-                                    integration_type, cfg.name, bw_exc,
-                                )
-                            # Run post-snapshot hook (e.g., auto-import hosts)
-                            try:
-                                await instance.on_snapshot(result.data, config_dict, db)
-                            except Exception as hook_exc:
-                                logger.warning(
-                                    "on_snapshot hook failed [%s/%s]: %s",
-                                    integration_type, cfg.name, hook_exc,
-                                )
+                                # Run post-snapshot hook (e.g., auto-import hosts)
+                                try:
+                                    await instance.on_snapshot(result.data, config_dict, db)
+                                except Exception as hook_exc:
+                                    logger.warning(
+                                        "on_snapshot hook failed [%s/%s]: %s",
+                                        integration_type, cfg.name, hook_exc,
+                                    )
                         else:
                             await snap_svc.save(
                                 db, integration_type, cfg.id,
@@ -127,8 +189,10 @@ async def run_integration_checks():
                         )
             await db.commit()
 
-    logger.debug("Integration check done for %d type(s), %d config(s)",
-                 len(by_type), len(all_configs))
+    logger.debug(
+        "Integration check done for %d type(s), %d config(s), %d active cluster groups",
+        len(by_type), len(all_configs), len(cluster_owners),
+    )
 
 
 # ── Ping checks ──────────────────────────────────────────────────────────────

@@ -11,14 +11,22 @@ class IntegrationConfig(Base):
     Single table for all integration configurations.
     Each row stores one integration instance (e.g. one Proxmox cluster, one UniFi controller).
     The config_json field holds all config fields as encrypted JSON.
+
+    cluster_group: optional logical grouping. Multiple integrations sharing
+    the same cluster_group are treated as members of one HA source — the
+    scheduler picks one as the active primary each cycle, the others poll
+    for failover but skip duplicate writes (snapshots, bandwidth, alerts).
+    For Proxmox integrations this is auto-populated from the cluster_name
+    after the first successful poll.
     """
     __tablename__ = "integration_configs"
-    id          = Column(Integer, primary_key=True, autoincrement=True)
-    type        = Column(String(32), nullable=False, index=True)
-    name        = Column(String(128), nullable=False)
-    config_json = Column(Text, nullable=False)    # encrypted JSON with all fields
-    enabled     = Column(Boolean, default=True)
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    type          = Column(String(32), nullable=False, index=True)
+    name          = Column(String(128), nullable=False)
+    config_json   = Column(Text, nullable=False)    # encrypted JSON with all fields
+    enabled       = Column(Boolean, default=True)
+    cluster_group = Column(String(128), nullable=True, index=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
 
 
 class Snapshot(Base):
