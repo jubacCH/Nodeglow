@@ -10,7 +10,7 @@ os.environ.setdefault("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", 
 
 import pytest
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import String
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine

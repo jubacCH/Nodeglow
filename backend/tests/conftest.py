@@ -11,8 +11,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("DATA_DIR", os.path.join(os.path.dirname(__file__), ".test_data"))
 
 import pytest
-from sqlalchemy import event, String
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import String
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from models.base import Base
 
