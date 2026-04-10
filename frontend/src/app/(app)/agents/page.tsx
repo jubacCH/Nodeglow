@@ -12,7 +12,8 @@ import { get, del } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, X, Copy, Check, Terminal, Monitor, Trash2, Tag } from 'lucide-react';
+import { Plus, X, Copy, Check, Terminal, Monitor, Trash2, Tag, Cpu } from 'lucide-react';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { timeAgo } from '@/lib/utils';
 import Link from 'next/link';
 
@@ -253,8 +254,17 @@ export default function AgentsPage() {
           );
         })}
         {!isLoading && (!agents || agents.length === 0) && (
-          <GlassCard className="p-8 col-span-full">
-            <p className="text-center text-sm text-slate-500">No agents registered</p>
+          <GlassCard className="col-span-full">
+            <EmptyState
+              icon={Cpu}
+              title="No agents registered"
+              description="Install the Nodeglow agent on a Linux or Windows host to collect CPU, memory, disk, and network metrics. Agents auto-enrol against this server."
+              action={
+                <Button size="sm" onClick={() => setShowAdd(true)}>
+                  <Terminal size={14} /> Show install command
+                </Button>
+              }
+            />
           </GlassCard>
         )}
       </div>
