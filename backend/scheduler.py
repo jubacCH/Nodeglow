@@ -47,6 +47,8 @@ async def run_integration_checks():
     for cfg in all_configs:
         by_type.setdefault(cfg.type, []).append(cfg)
 
+    from services.tracing import tracer
+
     for integration_type, configs in by_type.items():
         integration_cls = registry.get(integration_type)
         if not integration_cls:
@@ -54,68 +56,75 @@ async def run_integration_checks():
 
         async with AsyncSessionLocal() as db:
             for cfg in configs:
-                try:
+                with tracer.start_as_current_span("integration.collect") as _span:
+                    _span.set_attribute("integration.type", integration_type)
+                    _span.set_attribute("integration.config_id", cfg.id)
+                    _span.set_attribute("integration.config_name", cfg.name)
                     try:
-                        config_dict = int_svc.decrypt_config(cfg.config_json)
-                    except Exception as dec_exc:
-                        logger.error(
-                            "Failed to decrypt config [%s/%s]: %s",
-                            integration_type, cfg.name, dec_exc,
-                        )
-                        await snap_svc.save(
-                            db, integration_type, cfg.id,
-                            ok=False, error=f"Decryption failed: {dec_exc}",
-                        )
-                        continue
-                    instance = integration_cls(config=config_dict)
-                    result = await instance.collect()
+                        try:
+                            config_dict = int_svc.decrypt_config(cfg.config_json)
+                        except Exception as dec_exc:
+                            logger.error(
+                                "Failed to decrypt config [%s/%s]: %s",
+                                integration_type, cfg.name, dec_exc,
+                            )
+                            await snap_svc.save(
+                                db, integration_type, cfg.id,
+                                ok=False, error=f"Decryption failed: {dec_exc}",
+                            )
+                            _span.set_attribute("error", True)
+                            continue
+                        instance = integration_cls(config=config_dict)
+                        result = await instance.collect()
 
-                    if result.success:
+                        if result.success:
+                            await snap_svc.save(
+                                db, integration_type, cfg.id,
+                                ok=True, data=result.data,
+                            )
+                            # Extract bandwidth data from supported integration types
+                            try:
+                                from services.bandwidth import (
+                                    extract_proxmox_bandwidth,
+                                    extract_unifi_bandwidth,
+                                )
+                                if integration_type == "proxmox":
+                                    await extract_proxmox_bandwidth(
+                                        db, cfg.id, result.data, source_name=cfg.name,
+                                    )
+                                elif integration_type == "unifi":
+                                    await extract_unifi_bandwidth(
+                                        db, cfg.id, result.data, source_name=cfg.name,
+                                    )
+                            except Exception as bw_exc:
+                                logger.warning(
+                                    "Bandwidth extraction failed [%s/%s]: %s",
+                                    integration_type, cfg.name, bw_exc,
+                                )
+                            # Run post-snapshot hook (e.g., auto-import hosts)
+                            try:
+                                await instance.on_snapshot(result.data, config_dict, db)
+                            except Exception as hook_exc:
+                                logger.warning(
+                                    "on_snapshot hook failed [%s/%s]: %s",
+                                    integration_type, cfg.name, hook_exc,
+                                )
+                        else:
+                            await snap_svc.save(
+                                db, integration_type, cfg.id,
+                                ok=False, error=result.error,
+                            )
+                    except Exception as exc:
+                        logger.error(
+                            "Integration collect [%s/%s]: %s",
+                            integration_type, cfg.name, exc,
+                        )
+                        _span.set_attribute("error", True)
+                        _span.set_attribute("error.type", type(exc).__name__)
                         await snap_svc.save(
                             db, integration_type, cfg.id,
-                            ok=True, data=result.data,
+                            ok=False, error=str(exc),
                         )
-                        # Extract bandwidth data from supported integration types
-                        try:
-                            from services.bandwidth import (
-                                extract_proxmox_bandwidth,
-                                extract_unifi_bandwidth,
-                            )
-                            if integration_type == "proxmox":
-                                await extract_proxmox_bandwidth(
-                                    db, cfg.id, result.data, source_name=cfg.name,
-                                )
-                            elif integration_type == "unifi":
-                                await extract_unifi_bandwidth(
-                                    db, cfg.id, result.data, source_name=cfg.name,
-                                )
-                        except Exception as bw_exc:
-                            logger.warning(
-                                "Bandwidth extraction failed [%s/%s]: %s",
-                                integration_type, cfg.name, bw_exc,
-                            )
-                        # Run post-snapshot hook (e.g., auto-import hosts)
-                        try:
-                            await instance.on_snapshot(result.data, config_dict, db)
-                        except Exception as hook_exc:
-                            logger.warning(
-                                "on_snapshot hook failed [%s/%s]: %s",
-                                integration_type, cfg.name, hook_exc,
-                            )
-                    else:
-                        await snap_svc.save(
-                            db, integration_type, cfg.id,
-                            ok=False, error=result.error,
-                        )
-                except Exception as exc:
-                    logger.error(
-                        "Integration collect [%s/%s]: %s",
-                        integration_type, cfg.name, exc,
-                    )
-                    await snap_svc.save(
-                        db, integration_type, cfg.id,
-                        ok=False, error=str(exc),
-                    )
             await db.commit()
 
     logger.debug("Integration check done for %d type(s), %d config(s)",

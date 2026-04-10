@@ -179,7 +179,8 @@ T = TypeVar("T")
 
 def instrument_job(name: str) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Decorator that records duration, success/failure, and last-success
-    timestamp for an async scheduler job.
+    timestamp for an async scheduler job — and wraps the call in an OTel
+    span named ``scheduler.<name>`` for distributed tracing.
 
     Usage:
         @instrument_job("ping_checks")
@@ -189,16 +190,20 @@ def instrument_job(name: str) -> Callable[[Callable[..., Awaitable[T]]], Callabl
     def decorator(fn: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
+            from services.tracing import tracer
             start = time.time()
-            try:
-                result = await fn(*args, **kwargs)
-            except Exception:
-                SCHEDULER_JOB_RUNS.labels(job=name, status="failure").inc()
+            with tracer.start_as_current_span(f"scheduler.{name}") as span:
+                try:
+                    result = await fn(*args, **kwargs)
+                except Exception as exc:
+                    SCHEDULER_JOB_RUNS.labels(job=name, status="failure").inc()
+                    SCHEDULER_JOB_DURATION.labels(job=name).observe(time.time() - start)
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.type", type(exc).__name__)
+                    raise
+                SCHEDULER_JOB_RUNS.labels(job=name, status="success").inc()
                 SCHEDULER_JOB_DURATION.labels(job=name).observe(time.time() - start)
-                raise
-            SCHEDULER_JOB_RUNS.labels(job=name, status="success").inc()
-            SCHEDULER_JOB_DURATION.labels(job=name).observe(time.time() - start)
-            SCHEDULER_JOB_LAST_SUCCESS.labels(job=name).set(time.time())
-            return result
+                SCHEDULER_JOB_LAST_SUCCESS.labels(job=name).set(time.time())
+                return result
         return wrapper
     return decorator

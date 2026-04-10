@@ -32,6 +32,11 @@ from routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialise OpenTelemetry first so subsequent SQLAlchemy / scheduler /
+    # ClickHouse activity is captured. Safe no-op if no OTLP endpoint is set.
+    from services.tracing import init_tracing
+    init_tracing()
+
     await init_db()
     from models import init_db as init_new_db
     await init_new_db()
@@ -61,6 +66,14 @@ app = FastAPI(
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Wire FastAPI auto-instrumentation onto the running app instance.
+# No-op if init_tracing() did not configure the OTel SDK.
+try:
+    from services.tracing import instrument_app as _otel_instrument_app
+    _otel_instrument_app(app)
+except Exception:
+    pass
 
 # ── CORS (configurable via CORS_ORIGINS env var, defaults to none in production) ──
 from starlette.middleware.cors import CORSMiddleware
