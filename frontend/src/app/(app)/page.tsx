@@ -40,15 +40,20 @@ function WidgetHeader({ icon: Icon, iconColor, title, trailing }: {
   title: string;
   trailing?: React.ReactNode;
 }) {
-  const tintBg = iconColor
-    .replace('text-', 'bg-')
-    .replace('-400', '-500/15');
+  // Compact header (Phase: density pass) — was 56px, now ~28px. The icon
+  // tint background was decoration; now it's just the icon in its accent
+  // color directly next to the title. Title becomes a label-style uppercase
+  // tracking-widest piece, which reads as a section marker rather than
+  // a hero element.
   return (
-    <div className="flex items-center gap-2.5 mb-4 pb-3 border-b" style={{ borderColor: 'var(--ng-card-border)' }}>
-      <div className={`p-1.5 rounded-lg ${tintBg}`}>
-        <Icon size={16} className={iconColor} />
-      </div>
-      <h3 className="text-sm font-semibold text-slate-200 flex-1">{title}</h3>
+    <div
+      className="flex items-center gap-2 mb-3 pb-2 border-b"
+      style={{ borderColor: 'var(--ng-card-border)' }}
+    >
+      <Icon size={13} className={iconColor} />
+      <h3 className="text-[10px] font-semibold uppercase tracking-widest text-slate-300 flex-1">
+        {title}
+      </h3>
       {trailing}
     </div>
   );
@@ -56,7 +61,18 @@ function WidgetHeader({ icon: Icon, iconColor, title, trailing }: {
 
 export default function DashboardPage() {
   useEffect(() => { document.title = 'Dashboard | Nodeglow'; }, []);
-  const { data, isLoading } = useDashboard();
+  const { data, isLoading, dataUpdatedAt } = useDashboard();
+
+  // "Just refreshed" indicator — flashes a small sky pulse next to the
+  // page header for ~1.6s every time a new dashboard payload arrives. Tells
+  // the user the screen is alive and what they're looking at is current.
+  const [justRefreshed, setJustRefreshed] = useState(false);
+  useEffect(() => {
+    if (!dataUpdatedAt) return;
+    setJustRefreshed(true);
+    const t = setTimeout(() => setJustRefreshed(false), 1600);
+    return () => clearTimeout(t);
+  }, [dataUpdatedAt]);
 
   const avgLatency = data?.host_stats
     ? Math.round(
@@ -93,15 +109,36 @@ export default function DashboardPage() {
       <PageHeader
         title="Dashboard"
         description="Infrastructure overview"
-        actions={data?.nodeglow_uptime ? (
-          <span className="text-xs text-slate-500 flex items-center gap-1.5">
-            <Clock size={12} /> Uptime: {data.nodeglow_uptime}
-          </span>
-        ) : undefined}
+        actions={
+          <div className="flex items-center gap-3">
+            {/* Live-refresh indicator: tiny sky dot that pulses when fresh
+                data lands. Reads as "this screen is alive". */}
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-500',
+                justRefreshed && 'text-sky-400',
+              )}
+              title={dataUpdatedAt ? `Last refresh: ${new Date(dataUpdatedAt).toLocaleTimeString()}` : undefined}
+            >
+              <span
+                className={cn(
+                  'inline-block w-1.5 h-1.5 rounded-full bg-sky-400 transition-opacity',
+                  justRefreshed ? 'opacity-100 animate-ping' : 'opacity-40',
+                )}
+              />
+              live
+            </span>
+            {data?.nodeglow_uptime && (
+              <span className="text-xs text-slate-500 flex items-center gap-1.5 tabular-nums">
+                <Clock size={12} /> Uptime: {data.nodeglow_uptime}
+              </span>
+            )}
+          </div>
+        }
       />
 
-      {/* ── Quick Stats ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+      {/* ── Quick Stats — compact row, ~64px tall ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
         <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} href="/hosts?status=online" />
         <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} href="/hosts?status=offline" />
         <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} href="/hosts" />
@@ -112,16 +149,16 @@ export default function DashboardPage() {
 
       {/* ── Gravity Widget (Hero) ── */}
       {data?.host_stats && (
-        <div className="mb-6">
+        <div className="mb-4">
           <GravityWidget hosts={data.host_stats} />
         </div>
       )}
 
-      {/* ── Command Center Grid ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+      {/* ── Command Center Grid — tighter gaps ── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
 
         {/* Row 1: Hosts | Incidents | Syslog Rate (2-col) */}
-        <GlassCard className="p-5">
+        <GlassCard className="p-4">
           <WidgetHeader icon={Server} iconColor="text-sky-400" title="Hosts" />
           {isLoading ? (
             <div className="space-y-2">
@@ -146,7 +183,7 @@ export default function DashboardPage() {
           )}
         </GlassCard>
 
-        <GlassCard className="p-5">
+        <GlassCard className="p-4">
           <WidgetHeader icon={ShieldAlert} iconColor="text-red-400" title="Recent Incidents" />
           {isLoading ? (
             <div className="space-y-2">
@@ -180,7 +217,7 @@ export default function DashboardPage() {
           )}
         </GlassCard>
 
-        <GlassCard className="p-5 lg:col-span-2">
+        <GlassCard className="p-4 lg:col-span-2">
           <WidgetHeader icon={ArrowUpDown} iconColor="text-sky-400" title="Syslog Rate (24h)" trailing={
             data?.syslog_stats ? (
               <span className="text-xs text-slate-500 font-mono">
@@ -213,7 +250,7 @@ export default function DashboardPage() {
         </GlassCard>
 
         {/* Row 2: 30-Day Heatmap (full-width) */}
-        <GlassCard className="p-5 lg:col-span-4 md:col-span-2">
+        <GlassCard className="p-4 lg:col-span-4 md:col-span-2">
           <WidgetHeader icon={Activity} iconColor="text-sky-400" title="30-Day Availability" />
           {isLoading ? (
             <Skeleton className="h-40 w-full" />
@@ -225,7 +262,7 @@ export default function DashboardPage() {
         </GlassCard>
 
         {/* Row 3: Uptime | Latency | Alert Trends (2-col) */}
-        <GlassCard className="p-5">
+        <GlassCard className="p-4">
           <WidgetHeader icon={Trophy} iconColor="text-amber-400" title="Uptime Ranking" />
           {isLoading ? (
             <Skeleton className="h-[200px] w-full" />
@@ -254,7 +291,7 @@ export default function DashboardPage() {
           )}
         </GlassCard>
 
-        <GlassCard className="p-5">
+        <GlassCard className="p-4">
           <WidgetHeader icon={Timer} iconColor="text-rose-400" title="Highest Latency" />
           {isLoading ? (
             <Skeleton className="h-[200px] w-full" />
@@ -280,7 +317,7 @@ export default function DashboardPage() {
           )}
         </GlassCard>
 
-        <GlassCard className="p-5 lg:col-span-2">
+        <GlassCard className="p-4 lg:col-span-2">
           <WidgetHeader icon={TrendingUp} iconColor="text-amber-400" title="Alert Trends (14d)" />
           {isLoading || !data?.incident_trend ? (
             <Skeleton className="h-[180px] w-full" />
@@ -308,7 +345,7 @@ export default function DashboardPage() {
         </GlassCard>
 
         {/* Row 4: Integrations | Anomalies | Storage (cond.) | Live Syslog */}
-        <GlassCard className="p-5">
+        <GlassCard className="p-4">
           <WidgetHeader icon={Zap} iconColor="text-violet-400" title="Integrations" />
           {isLoading ? (
             <div className="space-y-2">
@@ -333,7 +370,7 @@ export default function DashboardPage() {
           )}
         </GlassCard>
 
-        <GlassCard className="p-5">
+        <GlassCard className="p-4">
           <WidgetHeader icon={AlertTriangle} iconColor="text-amber-400" title="Anomalies" trailing={
             anomalyCount > 0 ? (
               <span className="text-xs font-mono text-amber-400">{anomalyCount}</span>
@@ -373,7 +410,7 @@ export default function DashboardPage() {
         </GlassCard>
 
         {data?.storage_pools?.length ? (
-          <GlassCard className="p-5">
+          <GlassCard className="p-4">
             <WidgetHeader icon={HardDrive} iconColor="text-sky-400" title="Storage" />
             <div className="space-y-3 max-h-[260px] overflow-y-auto">
               {data.storage_pools.map((pool, i) => (
@@ -414,7 +451,7 @@ export default function DashboardPage() {
 
         {/* Row 5: Conditional infra widgets */}
         {data?.speedtest_data && (
-          <GlassCard className="p-5">
+          <GlassCard className="p-4">
             <WidgetHeader icon={Wifi} iconColor="text-blue-400" title="Speedtest" />
             <div className="grid grid-cols-3 gap-3 text-center">
               <div>
@@ -438,7 +475,7 @@ export default function DashboardPage() {
         )}
 
         {data?.ups_data && (
-          <GlassCard className="p-5">
+          <GlassCard className="p-4">
             <WidgetHeader
               icon={BatteryCharging}
               iconColor={data.ups_data.on_battery ? 'text-amber-400' : 'text-emerald-400'}
@@ -477,7 +514,7 @@ export default function DashboardPage() {
         )}
 
         {(data?.ssl_certs?.length ?? 0) > 0 && (
-          <GlassCard className="p-5">
+          <GlassCard className="p-4">
             <WidgetHeader icon={Lock} iconColor="text-emerald-400" title="SSL Certificates" />
             <div className="space-y-1 max-h-[160px] overflow-y-auto">
               {data!.ssl_certs.map((cert, i) => {
@@ -520,7 +557,7 @@ export default function DashboardPage() {
         )}
 
         {data?.container_data && (
-          <GlassCard className="p-5">
+          <GlassCard className="p-4">
             <WidgetHeader icon={Container} iconColor="text-cyan-400" title="Containers"
               trailing={data.container_data.updates_available ? (
                 <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-[10px] font-medium text-amber-400">
@@ -604,22 +641,26 @@ function StatCard({
   alert?: boolean;
   href?: string;
 }) {
+  // Compact StatCard (density pass) — was 96px tall, now ~64px. Icon
+  // shrinks from 22 to 16, padding p-5 → p-3, value from text-3xl to
+  // text-2xl. Top accent bar stays for visual identification of the stat
+  // family. Tabular nums prevent layout shift on changing values.
   const card = (
     <GlassCard className={cn(
-      'p-5 flex items-center gap-4 stat-card-hover relative overflow-hidden',
+      'p-3 flex items-center gap-3 stat-card-hover relative overflow-hidden',
       alert && value ? 'border-red-500/25' : '',
       href && 'cursor-pointer',
     )}>
       <div className={`absolute top-0 left-0 right-0 h-[2px] ${tint?.replace('/10', '/40') || ''}`} />
-      <div className={`p-3 rounded-xl ${tint || 'bg-white/[0.06]'} ${color}`}>
-        <Icon size={22} />
+      <div className={`p-2 rounded-lg ${tint || 'bg-white/[0.06]'} ${color}`}>
+        <Icon size={16} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-[11px] text-slate-500 uppercase tracking-wider font-medium mb-0.5">{label}</p>
+        <p className="text-[10px] text-slate-500 uppercase tracking-widest font-medium leading-none mb-1">{label}</p>
         {loading ? (
-          <Skeleton className="h-8 w-16 mt-1" />
+          <Skeleton className="h-6 w-14" />
         ) : (
-          <p className="text-3xl font-bold tracking-tight text-slate-100">
+          <p className="text-2xl font-bold tracking-tight text-slate-100 tabular-nums leading-none">
             <AnimatedCounter value={value ?? 0} suffix={suffix} />
           </p>
         )}
