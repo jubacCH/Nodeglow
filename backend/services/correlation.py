@@ -609,6 +609,106 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
             )
 
 
+# ── Rule 10: Learned Precursor Pattern Observed (predictive) ────────────────
+
+async def _rule_precursor_observed(
+    db,
+    min_confidence: float = 0.7,
+    min_occurrences: int = 5,
+    min_cycles: int = 2,
+):
+    """Predict incidents from learned precursor patterns.
+
+    The Log Intelligence engine learns which log templates historically appear
+    just before host_down, integration_fail, etc. This rule closes the loop:
+    when one of those high-confidence precursors fires in real-time, we open
+    a predictive incident BEFORE the failure happens.
+
+    Configurable thresholds:
+        min_confidence  — minimum learned confidence (0..1) to act on
+        min_occurrences — minimum historical observations of the precursor
+                          (filters out one-off coincidences)
+    """
+    from services.clickhouse_client import query as ch_query
+    from models.log_template import LogTemplate, PrecursorPattern
+
+    # Hashes of templates seen in the last 60s, with their associated host_id
+    # if any. We grab the last 2 minutes to give the precursor pattern enough
+    # context to fire reliably.
+    window = datetime.utcnow() - timedelta(minutes=2)
+    try:
+        rows = await ch_query(
+            "SELECT DISTINCT template_hash, host_id "
+            "FROM syslog_messages "
+            "WHERE timestamp >= {since:DateTime64(3)} "
+            "  AND template_hash != '' "
+            "LIMIT 1000",
+            {"since": window},
+        )
+    except Exception as exc:
+        log.debug("Precursor rule: CH query failed: %s", exc)
+        return
+
+    if not rows:
+        return
+
+    # Pull all high-confidence precursors in one query so we can join in Python
+    precursor_q = (
+        select(PrecursorPattern, LogTemplate.template_hash, LogTemplate.template)
+        .join(LogTemplate, PrecursorPattern.template_id == LogTemplate.id)
+        .where(
+            PrecursorPattern.confidence >= min_confidence,
+            PrecursorPattern.occurrence_count >= min_occurrences,
+        )
+    )
+    precursor_rows = (await db.execute(precursor_q)).all()
+    if not precursor_rows:
+        return
+
+    # Index by template_hash for fast lookup
+    by_hash: dict[str, list[tuple]] = {}
+    for pp, tpl_hash, tpl_text in precursor_rows:
+        by_hash.setdefault(tpl_hash, []).append((pp, tpl_text))
+
+    # Match observed templates against the index
+    for row in rows:
+        observed_hash = row.get("template_hash")
+        if not observed_hash:
+            continue
+        host_id = row.get("host_id")
+
+        for pp, tpl_text in by_hash.get(observed_hash, []):
+            # De-dup: don't fire repeatedly for the same template+host
+            dedup_id = host_id if host_id is not None else 0
+            if not _track_rule_hit(
+                f"precursor_{pp.precedes_event}_{observed_hash[:8]}",
+                [dedup_id],
+                min_cycles,
+            ):
+                continue
+
+            confidence_pct = round(pp.confidence * 100)
+            lead_min = round((pp.avg_lead_time_sec or 0) / 60, 1) if pp.avg_lead_time_sec else None
+            lead_str = f"~{lead_min}min lead time" if lead_min else "unknown lead time"
+            event_label = pp.precedes_event.replace("_", " ").title()
+            tpl_preview = (tpl_text or "")[:80]
+
+            await _find_or_create_incident(
+                db,
+                rule="learned_precursor",
+                title=f"Predicted: {event_label} ({confidence_pct}% confidence)",
+                severity="warning",
+                host_ids=[dedup_id] if dedup_id else [],
+                event_type="predicted_incident",
+                summary=(
+                    f"Learned precursor template fired: \"{tpl_preview}\" — "
+                    f"{event_label} typically follows in {lead_str} "
+                    f"({pp.occurrence_count} historical observations, "
+                    f"{confidence_pct}% confidence)."
+                ),
+            )
+
+
 # ── Auto-Resolve ────────────────────────────────────────────────────────────
 
 async def _auto_resolve(db):
@@ -625,9 +725,10 @@ async def _auto_resolve(db):
     offline_ids = {h.id for h in offline_hosts}
 
     for incident in open_incidents:
-        # Skip syslog/fleet/trend/content rules – auto-resolve after timeout
+        # Skip syslog/fleet/trend/content/precursor rules – auto-resolve after timeout
         if incident.rule in ("syslog_spike", "log_anomaly", "fleet_wide_issue",
-                             "severity_trend", "content_anomaly") or incident.rule.startswith("alert_rule_"):
+                             "severity_trend", "content_anomaly",
+                             "learned_precursor") or incident.rule.startswith("alert_rule_"):
             # Resolve if last update was > 10min ago (no new activity)
             if incident.updated_at < datetime.utcnow() - timedelta(minutes=10):
                 incident.status = "resolved"
@@ -752,6 +853,7 @@ async def run_correlation():
             await _rule_fleet_wide(db, min_cycles)
             await _rule_severity_trend(db, min_cycles)
             await _rule_content_anomaly(db, min_cycles)
+            await _rule_precursor_observed(db, min_cycles=min_cycles)
             await _auto_resolve(db)
             _prune_stale_hits()
             await db.commit()
