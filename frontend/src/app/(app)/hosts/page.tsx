@@ -66,15 +66,15 @@ function SortHeader({ label, sortKey, currentKey, dir, onSort }: {
   const active = currentKey === sortKey;
   return (
     <th
-      className={`text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider cursor-pointer hover:text-slate-300 transition-colors select-none ${active ? 'accent-text' : 'text-slate-400'}`}
+      className={`text-left px-4 py-2 text-[10px] font-semibold uppercase tracking-widest cursor-pointer hover:text-slate-300 transition-colors select-none ${active ? 'accent-text' : 'text-slate-500'}`}
       onClick={() => onSort(sortKey)}
     >
       <span className="inline-flex items-center gap-1">
         {label}
         {active ? (
-          dir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
+          dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
         ) : (
-          <ArrowUpDown size={12} className="opacity-30" />
+          <ArrowUpDown size={11} className="opacity-30" />
         )}
       </span>
     </th>
@@ -439,38 +439,42 @@ function HostsPageInner() {
                     <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
                   </tr>
                 ))}
-              {pagedHosts.map((host) => (
-                <tr
-                  key={host.id}
-                  className={`border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer ${selected.has(host.id) ? 'bg-sky-500/5' : ''}`}
-                >
-                  {selectMode && (
-                    <td className="px-4 py-3">
-                      <button onClick={(e) => { e.stopPropagation(); toggleSelect(host.id); }} className="text-slate-500 hover:text-slate-300">
-                        {selected.has(host.id) ? <CheckSquare size={16} className="text-sky-400" /> : <Square size={16} />}
-                      </button>
+              {pagedHosts.map((host) => {
+                const ipText = host.ip_address && host.ip_address !== host.hostname
+                  ? host.ip_address
+                  : host.hostname;
+                return (
+                  <tr
+                    key={host.id}
+                    className={`group border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer ${selected.has(host.id) ? 'bg-sky-500/5' : ''}`}
+                  >
+                    {selectMode && (
+                      <td className="px-4 py-2">
+                        <button onClick={(e) => { e.stopPropagation(); toggleSelect(host.id); }} className="text-slate-500 hover:text-slate-300">
+                          {selected.has(host.id) ? <CheckSquare size={16} className="text-sky-400" /> : <Square size={16} />}
+                        </button>
+                      </td>
+                    )}
+                    {/* Single-row layout (density pass): name + IP + copy on
+                        one line, status pill condensed, all metadata aligned
+                        in tabular form. ~28px row height vs old ~64px. */}
+                    <td className="px-4 py-2">
+                      <Link href={`/hosts/${host.id}`} className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm font-medium text-slate-200 truncate">{host.name}</span>
+                        <span className="text-[11px] text-slate-500 font-mono truncate tabular-nums">{ipText}</span>
+                        <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <CopyButton text={host.ip_address || host.hostname} size={11} />
+                        </span>
+                      </Link>
                     </td>
-                  )}
-                  <td className="px-4 py-3">
-                    <Link href={`/hosts/${host.id}`} className="block">
-                      <p className="font-medium text-slate-200">{host.name}</p>
-                      <div className="flex items-center gap-1">
-                        <p className="text-xs text-slate-500 font-mono">{host.hostname}</p>
-                        {host.ip_address && host.ip_address !== host.hostname && (
-                          <span className="text-[10px] text-slate-600 font-mono">({host.ip_address})</span>
-                        )}
-                        <CopyButton text={host.ip_address || host.hostname} size={12} />
-                      </div>
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <StatusDot
-                        status={hostStatusKey(host)}
-                        pulse={host.online === false || host.port_error}
-                      />
-                      <div>
-                        <span className="text-xs text-slate-400 block">
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-2">
+                        <StatusDot
+                          status={hostStatusKey(host)}
+                          pulse={host.online === false || host.port_error}
+                          size="sm"
+                        />
+                        <span className="text-[11px] text-slate-400">
                           {hostStatusLabel(host)}
                         </span>
                         {host.port_error && host.check_detail && (
@@ -480,26 +484,26 @@ function HostsPageInner() {
                         )}
                         {host.online === false && host.last_seen && (
                           <span className="text-[10px] text-slate-500" title={new Date(host.last_seen).toLocaleString()}>
-                            Last seen {timeAgo(host.last_seen)}
+                            · {timeAgo(host.last_seen)}
                           </span>
                         )}
                       </div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge>{host.check_type}</Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-xs text-slate-400">{host.source ?? 'manual'}</span>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-300">
-                    {formatLatency(host.latency_ms)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <UptimeBar h24={host.uptime_h24} d7={host.uptime_d7} d30={host.uptime_d30} />
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge>{host.check_type}</Badge>
+                    </td>
+                    <td className="px-4 py-2">
+                      <span className="text-[11px] text-slate-500">{host.source ?? 'manual'}</span>
+                    </td>
+                    <td className="px-4 py-2 font-mono text-[11px] text-slate-300 tabular-nums">
+                      {formatLatency(host.latency_ms)}
+                    </td>
+                    <td className="px-4 py-2">
+                      <UptimeBar h24={host.uptime_h24} d7={host.uptime_d7} d30={host.uptime_d30} />
+                    </td>
+                  </tr>
+                );
+              })}
               {!isLoading && filteredHosts.length === 0 && (
                 <tr>
                   <td colSpan={selectMode ? 7 : 6} className="px-4 py-12 text-center">
