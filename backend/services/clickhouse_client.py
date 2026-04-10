@@ -323,7 +323,7 @@ async def get_latest_ping_per_host(host_ids: list[int] | None = None) -> dict[in
     sql = f"""
         SELECT
             host_id,
-            argMax(timestamp,  timestamp) AS timestamp,
+            max(timestamp)                AS timestamp,
             argMax(success,    timestamp) AS success,
             argMax(latency_ms, timestamp) AS latency_ms,
             argMax(host_name,  timestamp) AS host_name
@@ -425,7 +425,7 @@ async def get_latest_agent_metrics(agent_ids: list[int] | None = None) -> dict[i
     sql = f"""
         SELECT
             agent_id,
-            argMax(timestamp,    timestamp) AS timestamp,
+            max(timestamp)                  AS timestamp,
             argMax(agent_name,   timestamp) AS agent_name,
             argMax(cpu_pct,      timestamp) AS cpu_pct,
             argMax(mem_pct,      timestamp) AS mem_pct,
@@ -494,7 +494,7 @@ async def get_latest_bandwidth_per_iface(
             source_type,
             source_id,
             interface_name,
-            argMax(timestamp,   timestamp) AS timestamp,
+            max(timestamp)                 AS timestamp,
             argMax(source_name, timestamp) AS source_name,
             argMax(rx_bytes,    timestamp) AS rx_bytes,
             argMax(tx_bytes,    timestamp) AS tx_bytes,
