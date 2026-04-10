@@ -3,7 +3,6 @@ Database engine, session factory, base class, and encryption helpers.
 """
 import base64
 import hashlib
-import os
 from typing import AsyncGenerator
 
 from cryptography.fernet import Fernet

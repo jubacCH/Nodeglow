@@ -19,7 +19,7 @@ def _hash_agent_token_legacy(token: str) -> str:
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 
@@ -184,7 +184,7 @@ async def agent_report(request: Request):
         # Extract bandwidth samples from agent network data (writes to ClickHouse)
         try:
             from services.bandwidth import extract_agent_bandwidth
-            await extract_agent_bandwidth(db, agent.id, body, snap_ts, source_name=agent.name)
+            await extract_agent_bandwidth(agent.id, body, snap_ts, source_name=agent.name)
         except Exception as bw_exc:
             logger.warning("Bandwidth extraction failed for agent %d: %s", agent.id, bw_exc)
 
@@ -283,7 +283,6 @@ async def agent_logs(request: Request):
     # Resolve host_id via syslog host cache
     try:
         from services.syslog import _resolve_host_id, _refresh_host_cache
-        import asyncio
         await _refresh_host_cache()
         host_id = _resolve_host_id(source_ip, hostname)
     except Exception:

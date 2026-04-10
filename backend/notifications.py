@@ -15,7 +15,6 @@ import logging
 import smtplib
 import ssl
 import time
-from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape as html_escape

@@ -1,5 +1,4 @@
 """Backup/restore service — JSON-based PostgreSQL export/import."""
-import json
 import logging
 from datetime import datetime
 

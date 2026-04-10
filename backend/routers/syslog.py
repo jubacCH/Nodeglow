@@ -441,7 +441,6 @@ async def reverse_cause(
     """For a given log template, look BACKWARD to find what messages preceded it.
     Helps answer: 'what caused this error?'"""
     from models.log_template import LogTemplate
-    from services.log_intelligence import extract_template
 
     if not re.match(r"^[a-f0-9]{16}$", template_hash):
         return {"error": "Invalid template hash"}

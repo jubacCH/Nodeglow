@@ -74,7 +74,6 @@ async def download_geolite2(license_key: str) -> dict:
             log.info("GeoLite2-City.mmdb updated successfully (%.1f MB)", size_mb)
 
             # Reset the cached reader so it picks up the new file
-            from services.geoip import _load_db
             import services.geoip as _geoip_mod
             _geoip_mod._db = None
             _geoip_mod._db_loaded = False

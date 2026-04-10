@@ -59,8 +59,7 @@ async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get
     )
     from services.ai_client import generate_completion
     from notifications import (
-        _send_telegram, _send_discord, _log_notification,
-        _send_webhook, _send_email, _build_html_email,
+        _send_telegram, _send_discord, _send_webhook, _send_email, _build_html_email,
     )
     from database import decrypt_value
 

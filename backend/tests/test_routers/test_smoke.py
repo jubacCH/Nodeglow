@@ -1,5 +1,4 @@
 """Smoke tests – verify key routes return 200 and don't crash."""
-import pytest
 from unittest.mock import AsyncMock, patch
 
 
