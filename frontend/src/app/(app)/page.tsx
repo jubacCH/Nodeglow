@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
@@ -649,11 +649,18 @@ const SEV_LABELS: Record<number, string> = {
 };
 
 function LiveSyslogWidget() {
+  // WARN-and-above filter is the default — the dashboard is for ambient
+  // awareness, not full log browsing. Click "View all" to see everything.
+  const [warnOnly, setWarnOnly] = useState(true);
   const { messages, isStreaming } = useSSE<SyslogMessage>({
     url: '/syslog/stream',
     enabled: true,
     maxMessages: 50,
   });
+
+  const visible = warnOnly
+    ? messages.filter((m) => typeof m.severity === 'number' && m.severity <= 4)
+    : messages;
 
   return (
     <>
@@ -667,18 +674,34 @@ function LiveSyslogWidget() {
             </span>
           )}
         </div>
-        <Link href="/syslog" className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors">
-          View all
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setWarnOnly((v: boolean) => !v)}
+            className={`text-[10px] px-1.5 py-0.5 rounded font-mono transition-colors ${
+              warnOnly
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                : 'bg-slate-500/10 text-slate-400 border border-slate-500/20 hover:text-slate-200'
+            }`}
+            title="Toggle WARN+ filter"
+          >
+            {warnOnly ? 'WARN+' : 'ALL'}
+          </button>
+          <Link href="/syslog" className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors">
+            View all
+          </Link>
+        </div>
       </div>
 
-      {messages.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="text-xs text-slate-500 text-center py-4">
-          Waiting for messages...
+          {warnOnly && messages.length > 0
+            ? `Quiet — no WARN+ in last ${messages.length} messages.`
+            : 'Waiting for messages...'}
         </p>
       ) : (
         <div className="max-h-[200px] overflow-y-auto space-y-0">
-          {messages.map((msg, i) => (
+          {visible.map((msg, i) => (
             <div
               key={`${msg.timestamp}-${i}`}
               className="flex items-start gap-2 px-1 py-1 hover:bg-white/[0.06] transition-colors"
