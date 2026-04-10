@@ -37,6 +37,11 @@ async def get_client():
                 return _client
             except Exception as e:
                 log.warning("ClickHouse connect attempt %d failed: %s", attempt, e)
+                try:
+                    from services.metrics import CLICKHOUSE_CONNECTION_ERRORS
+                    CLICKHOUSE_CONNECTION_ERRORS.inc()
+                except Exception:
+                    pass
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
         raise RuntimeError("Could not connect to ClickHouse after 5 attempts")
@@ -78,7 +83,23 @@ async def insert_batch(rows: list[dict]) -> None:
             row.get("geo_country") or "",
             row.get("geo_city") or "",
         ])
-    await client.insert("syslog_messages", data, column_names=columns)
+    try:
+        await client.insert("syslog_messages", data, column_names=columns)
+        _record_insert_metric("syslog_messages", "success", len(data))
+    except Exception:
+        _record_insert_metric("syslog_messages", "failure", len(data))
+        raise
+
+
+def _record_insert_metric(table: str, status: str, row_count: int) -> None:
+    """Best-effort: increment ClickHouse insert metrics. Never raises."""
+    try:
+        from services.metrics import CLICKHOUSE_INSERTS, CLICKHOUSE_INSERT_ROWS
+        CLICKHOUSE_INSERTS.labels(table=table, status=status).inc()
+        if status == "success":
+            CLICKHOUSE_INSERT_ROWS.labels(table=table).inc(row_count)
+    except Exception:
+        pass
 
 
 async def query(sql: str, params: dict | None = None) -> list[dict]:

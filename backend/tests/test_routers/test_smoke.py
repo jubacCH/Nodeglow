@@ -21,6 +21,17 @@ async def test_login_api_exists(client):
     assert resp.status_code == 405  # Method Not Allowed (POST only)
 
 
+async def test_metrics_endpoint(client):
+    """Prometheus /metrics endpoint returns text/plain with self-monitoring data."""
+    resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    assert "text/plain" in resp.headers.get("content-type", "")
+    body = resp.text
+    assert "nodeglow_uptime_seconds" in body
+    assert "nodeglow_scheduler_job_runs_total" in body
+    assert "nodeglow_clickhouse_inserts_total" in body
+
+
 async def test_dashboard_api(client):
     """Dashboard JSON API returns 200 with empty data."""
     resp = await client.get("/api/dashboard")
