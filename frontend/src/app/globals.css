@@ -2,27 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Color tokens come from design-tokens/tokens.json via the auto-generated
+ * tokens.gen.css. To change a brand color, edit the JSON and run
+ * `npm run build:tokens` — never hardcode hex values in this file.
+ *
+ * The handful of card/glass/gradient/hover tokens that are theme-specific
+ * but NOT primary brand colors stay inline below — they're either runtime-
+ * computed (rgba alpha tweaks) or one-offs that don't justify a JSON entry.
+ */
+@import './../styles/tokens.gen.css';
+
 :root,
 [data-theme="dark"] {
-  --ng-bg: #0B0E14;
-  --ng-surface: #111621;
-  --ng-elevated: #1A1F2E;
-  --ng-border: #1E2433;
-  --ng-primary: #38BDF8;
-  --ng-accent: #A78BFA;
-  --accent: #38BDF8;
-  --ng-text-primary: #F1F5F9;
-  --ng-text-secondary: #94A3B8;
-  --ng-text-muted: #64748B;
+  --accent: var(--ng-primary);
   --ng-hover: rgba(255, 255, 255, 0.08);
   --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.03) 0%, transparent 60%);
 
-  /* Bento card tokens */
+  /* Bento card tokens (theme-specific, not in tokens.json) */
   --ng-card-bg: #131820;
   --ng-card-bg-elevated: #171D2A;
   --ng-card-border: rgba(255, 255, 255, 0.10);
   --ng-card-border-hover: rgba(255, 255, 255, 0.16);
-  --ng-card-radius: 16px;
+  --ng-card-radius: var(--ng-radius-card);
   --ng-card-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2);
   --ng-card-shadow-hover: 0 2px 8px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25);
 
@@ -34,16 +36,7 @@
 }
 
 [data-theme="light"] {
-  --ng-bg: #E8EEF4;
-  --ng-surface: #EFF4F8;
-  --ng-elevated: #F4F7FA;
-  --ng-border: #CBD5E1;
-  --ng-primary: #0284C7;
-  --ng-accent: #7C3AED;
-  --accent: #0284C7;
-  --ng-text-primary: #0F172A;
-  --ng-text-secondary: #334155;
-  --ng-text-muted: #64748B;
+  --accent: var(--ng-primary);
   --ng-hover: rgba(0, 0, 0, 0.04);
   --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.08) 0%, rgba(139, 92, 246, 0.03) 40%, transparent 70%);
 
@@ -52,7 +45,7 @@
   --ng-card-bg-elevated: #FFFFFF;
   --ng-card-border: rgba(0, 0, 0, 0.08);
   --ng-card-border-hover: rgba(0, 0, 0, 0.14);
-  --ng-card-radius: 16px;
+  --ng-card-radius: var(--ng-radius-card);
   --ng-card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
   --ng-card-shadow-hover: 0 2px 8px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06);
 
