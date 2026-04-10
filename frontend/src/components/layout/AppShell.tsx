@@ -70,7 +70,17 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       )}
 
-      <main className="flex-1 overflow-y-auto" style={{ background: 'var(--ng-bg)' }}>
+      <main
+        className="flex-1 overflow-y-auto flex flex-col"
+        style={{
+          background: 'var(--ng-bg)',
+          backgroundImage: 'var(--ng-body-gradient)',
+          // No fixed attachment here — the gradient travels with the scroll
+          // surface, so empty space at the bottom of short pages still looks
+          // like the rest of the page instead of a black bar.
+          overscrollBehavior: 'contain',
+        }}
+      >
         {/* Mobile header bar */}
         <div className="lg:hidden flex items-center gap-3 px-4 h-14 sticky top-0 z-40" style={{ background: 'var(--ng-bg)', borderBottom: '1px solid var(--ng-glass-border)' }}>
           <button
@@ -89,7 +99,10 @@ export function AppShell({ children }: AppShellProps) {
         <div
           key={pathname}
           className={cn(
-            'max-w-[1920px] mx-auto animate-page-enter',
+            // flex-1 makes the content wrapper fill the main height even
+            // when the page is shorter than the viewport — no more empty
+            // area at the bottom of short pages.
+            'flex-1 max-w-[1920px] w-full mx-auto animate-page-enter',
             density === 'compact' ? 'px-4 py-4' : 'px-6 py-6',
           )}
         >
