@@ -1,5 +1,4 @@
 """Auto-postmortem generation for resolved incidents."""
-import asyncio
 import logging
 from datetime import datetime
 

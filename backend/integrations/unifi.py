@@ -1,11 +1,14 @@
 """UniFi Network integration – device health, client stats, WAN metrics, speedtest."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import httpx
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
+
+logger = logging.getLogger(__name__)
 
 
 # ── API Client ────────────────────────────────────────────────────────────────

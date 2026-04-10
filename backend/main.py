@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import AsyncSessionLocal, get_setting, init_db
-from models.integration import IntegrationConfig
 from scheduler import start_scheduler, stop_scheduler
 from routers import (
     auth, dashboard, ping, setup, settings, users,
@@ -179,7 +178,6 @@ async def _get_nav_counts(db) -> dict:
 @app.get("/api/tasks")
 async def tasks_api():
     """Aggregate all pending admin tasks."""
-    from sqlalchemy import func
     from models.discovered_port import DiscoveredPort
     from models.ping import PingHost
 

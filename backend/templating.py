@@ -1,7 +1,7 @@
 """Shared Jinja2 templates with timezone-aware filters."""
 
 import contextvars
-from datetime import datetime, timezone as _tz
+from datetime import timezone as _tz
 from html import escape as html_escape
 
 from fastapi.templating import Jinja2Templates

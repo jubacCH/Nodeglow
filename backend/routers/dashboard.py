@@ -1,5 +1,4 @@
 import json
-import time as _perf_time
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -29,7 +28,6 @@ router = APIRouter()
 async def _predict_agent_disks(db, days_back: int = 14) -> dict[str, dict]:
     """Predict disk-full for agent disks using historical agent_metrics data."""
     from models.agent import Agent
-    from datetime import timedelta
     from services.predictions import _linear_predict
     from services.clickhouse_client import get_agent_history
 

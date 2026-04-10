@@ -19,12 +19,12 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, and_
+from sqlalchemy import select
 
 from models.base import AsyncSessionLocal
 from models.ping import PingHost
 from services.clickhouse_client import query_scalar as ch_scalar
-from models.integration import IntegrationConfig, Snapshot
+from models.integration import IntegrationConfig
 from models.incident import Incident, IncidentEvent
 from models.log_template import HostBaseline
 from services.topology import build_topology, filter_upstream_failures

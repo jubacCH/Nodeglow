@@ -1,10 +1,8 @@
 """Tests for utils/ping.py — check_host with multi-port support."""
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from models.ping import PingHost
 
 
 class FakeHost:

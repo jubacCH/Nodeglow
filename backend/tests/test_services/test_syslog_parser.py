@@ -1,5 +1,4 @@
 """Tests for syslog message parsing (RFC 3164, 5424, fallbacks)."""
-import pytest
 from services.syslog import parse_syslog
 
 

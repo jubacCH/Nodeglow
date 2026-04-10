@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import PingHost, get_setting
+from database import PingHost
 from models.agent import Agent
 from models.api_key import ApiKey
 from models.audit import AuditLog
@@ -238,13 +238,13 @@ async def list_hosts(
     result = await db.execute(q)
     hosts = result.scalars().all()
 
-    latest_map = await ping_svc.get_latest_by_host(db, [h.id for h in hosts])
-    uptime_map = await ping_svc.get_uptime_map(db)
+    latest_map = await ping_svc.get_latest_by_host([h.id for h in hosts])
+    uptime_map = await ping_svc.get_uptime_map()
 
     out = []
     for h in hosts:
         lr = latest_map.get(h.id)
-        is_online = lr.success if lr else None
+        is_online = bool(lr.get("success")) if lr else None
         host_status = (
             "disabled" if not h.enabled
             else "maintenance" if h.maintenance
@@ -255,6 +255,8 @@ async def list_hosts(
         if status and host_status != status:
             continue
         um = uptime_map.get(h.id, {})
+        _lat = lr.get("latency_ms") if lr else None
+        _ts = lr.get("timestamp") if lr else None
         out.append({
             "id": h.id,
             "name": h.name,
@@ -264,8 +266,8 @@ async def list_hosts(
             "port": h.port,
             "source": h.source or "manual",
             "source_detail": h.source_detail,
-            "latency_ms": round(lr.latency_ms, 2) if lr and lr.latency_ms else None,
-            "last_check": lr.timestamp.isoformat() if lr else None,
+            "latency_ms": round(float(_lat), 2) if _lat is not None else None,
+            "last_check": _ts.isoformat() if _ts is not None else None,
             "uptime": {
                 "h24": um.get("h24"),
                 "d7": um.get("d7"),

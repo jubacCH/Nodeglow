@@ -1,7 +1,5 @@
 """Tests for the correlation engine helpers."""
-from datetime import datetime
 
-from models.incident import Incident, IncidentEvent
 from services.correlation import _host_ids_hash, _find_or_create_incident
 
 

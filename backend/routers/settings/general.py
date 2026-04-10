@@ -11,7 +11,7 @@ from models.integration import IntegrationConfig
 from ratelimit import rate_limit
 from services.audit import log_action
 
-from ._helpers import log, require_admin
+from ._helpers import require_admin
 
 router = APIRouter()
 

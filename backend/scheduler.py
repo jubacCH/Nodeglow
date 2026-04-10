@@ -90,11 +90,11 @@ async def run_integration_checks():
                                 )
                                 if integration_type == "proxmox":
                                     await extract_proxmox_bandwidth(
-                                        db, cfg.id, result.data, source_name=cfg.name,
+                                        cfg.id, result.data, source_name=cfg.name,
                                     )
                                 elif integration_type == "unifi":
                                     await extract_unifi_bandwidth(
-                                        db, cfg.id, result.data, source_name=cfg.name,
+                                        cfg.id, result.data, source_name=cfg.name,
                                     )
                             except Exception as bw_exc:
                                 logger.warning(

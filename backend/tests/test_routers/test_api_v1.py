@@ -1,5 +1,4 @@
 """Tests for /api/v1/ endpoints — key routes for external API."""
-import pytest
 
 
 # ── System Status ────────────────────────────────────────────────────────────

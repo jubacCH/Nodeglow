@@ -69,7 +69,6 @@ class PhpIpamClient:
 
 
 async def sync_phpipam_hosts(db: "AsyncSession", config: dict) -> dict:
-    from models.base import decrypt_value
     from models.ping import PingHost
     from sqlalchemy import select
 
