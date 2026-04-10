@@ -761,18 +761,37 @@ async def list_integrations(
         if snap:
             latest[cfg.id] = snap
 
+    from scheduler import _STANDBY_MARKER
     out = []
     for cfg in configs:
         snap = latest.get(cfg.id)
+        # Standby members write ok=True with the standby marker in `error`.
+        # Surface that as a separate UI state — not "error", not "ok primary".
+        is_standby = bool(snap and snap.ok and snap.error == _STANDBY_MARKER)
+        if is_standby:
+            status = "standby"
+            display_error = None
+        elif snap and snap.ok:
+            status = "ok"
+            display_error = None
+        elif snap:
+            status = "error"
+            display_error = snap.error
+        else:
+            status = "no_data"
+            display_error = None
+
         out.append({
             "id": cfg.id,
             "type": cfg.type,
             "name": cfg.name,
             "enabled": cfg.enabled,
+            "cluster_group": cfg.cluster_group,
+            "is_standby": is_standby,
             "created_at": cfg.created_at.isoformat() if hasattr(cfg, "created_at") and cfg.created_at else None,
-            "status": "ok" if snap and snap.ok else ("error" if snap else "no_data"),
+            "status": status,
             "last_check": snap.timestamp.isoformat() if snap else None,
-            "error": snap.error if snap and not snap.ok else None,
+            "error": display_error,
         })
     return out
 
@@ -789,15 +808,19 @@ async def get_integration(
     snap = await snap_svc.get_latest(db, cfg.type, cfg.id)
     data = json.loads(snap.data_json) if snap and snap.data_json else None
 
+    from scheduler import _STANDBY_MARKER
+    is_standby = bool(snap and snap.ok and snap.error == _STANDBY_MARKER)
     return {
         "id": cfg.id,
         "entity_type": cfg.type,
         "entity_id": cfg.id,
         "name": cfg.name,
         "enabled": cfg.enabled,
+        "cluster_group": cfg.cluster_group,
+        "is_standby": is_standby,
         "ok": snap.ok if snap else False,
         "timestamp": snap.timestamp.isoformat() if snap else None,
-        "error": snap.error if snap and not snap.ok else None,
+        "error": (snap.error if snap and not snap.ok else None) if not is_standby else None,
         "data_json": data,
     }
 

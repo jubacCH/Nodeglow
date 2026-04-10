@@ -51,17 +51,28 @@ async def get_config(db: AsyncSession, config_id: int) -> IntegrationConfig | No
     return await db.get(IntegrationConfig, config_id)
 
 
+# Sentinel for tri-state "unset" parameter on update_config (so callers can
+# distinguish "leave unchanged" from "explicitly clear to NULL").
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
+
+
 async def create_config(
     db: AsyncSession,
     integration_type: str,
     name: str,
     config_dict: dict[str, Any],
+    cluster_group: str | None = None,
 ) -> IntegrationConfig:
     """Create a new integration config."""
     cfg = IntegrationConfig(
         type=integration_type,
         name=name,
         config_json=encrypt_config(config_dict),
+        cluster_group=cluster_group or None,
     )
     db.add(cfg)
     await db.commit()
@@ -74,8 +85,13 @@ async def update_config(
     config_id: int,
     name: str | None = None,
     config_dict: dict[str, Any] | None = None,
+    cluster_group: str | None | _Unset = _UNSET,
 ) -> IntegrationConfig | None:
-    """Update an existing config."""
+    """Update an existing config.
+
+    `cluster_group` follows tri-state semantics: pass _UNSET (default) to leave
+    unchanged, pass None to clear, pass a string to set.
+    """
     cfg = await db.get(IntegrationConfig, config_id)
     if not cfg:
         return None
@@ -83,6 +99,8 @@ async def update_config(
         cfg.name = name
     if config_dict is not None:
         cfg.config_json = encrypt_config(config_dict)
+    if not isinstance(cluster_group, _Unset):
+        cfg.cluster_group = cluster_group or None
     await db.commit()
     return cfg
 

@@ -80,12 +80,12 @@ export default function IntegrationListPage() {
     }
   }
 
-  function openEdit(id: number, name: string, e: React.MouseEvent) {
+  function openEdit(id: number, name: string, clusterGroup: string | null, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     setEditId(id);
-    // Pre-fill with name; config fields will show empty (password-safe)
-    setFormData({ name });
+    // Pre-fill name + cluster_group; secret config fields stay empty (password-safe)
+    setFormData({ name, cluster_group: clusterGroup ?? '' });
   }
 
   async function handleSaveEdit() {
@@ -150,6 +150,22 @@ export default function IntegrationListPage() {
                 placeholder={`My ${fieldsData?.display_name ?? type}`}
                 value={(formData.name as string) ?? ''}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                className={inputClass}
+              />
+            </div>
+
+            {/* Cluster group — HA grouping for instances of the same logical
+                source. Auto-populated for Proxmox from cluster_name. */}
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Cluster Group
+                <span className="text-slate-600 font-normal ml-1">(optional, for HA)</span>
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. prxmxcl01 — leave empty if standalone"
+                value={(formData.cluster_group as string) ?? ''}
+                onChange={(e) => setFormData({ ...formData, cluster_group: e.target.value })}
                 className={inputClass}
               />
             </div>
@@ -227,6 +243,20 @@ export default function IntegrationListPage() {
               />
             </div>
 
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Cluster Group
+                <span className="text-slate-600 font-normal ml-1">(optional, for HA)</span>
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. prxmxcl01"
+                value={(formData.cluster_group as string) ?? ''}
+                onChange={(e) => setFormData({ ...formData, cluster_group: e.target.value })}
+                className={inputClass}
+              />
+            </div>
+
             {fieldsData?.fields.map((field) => (
               <div key={field.key}>
                 <label className="block text-xs text-slate-400 mb-1">
@@ -286,7 +316,13 @@ export default function IntegrationListPage() {
             </GlassCard>
           ))}
         {integrations?.map((int) => {
-          const statusKey = !int.enabled ? 'disabled' : int.status === 'ok' ? 'online' : int.status === 'error' ? 'offline' : 'unknown';
+          const statusKey = !int.enabled
+            ? 'disabled'
+            : int.status === 'ok' || int.status === 'standby'
+              ? 'online'
+              : int.status === 'error'
+                ? 'offline'
+                : 'unknown';
           return (
             <Link key={int.id} href={`/integration/${type}/${int.id}`}>
               <GlassCard className="p-4 hover:bg-white/[0.06] transition-colors cursor-pointer">
@@ -294,7 +330,7 @@ export default function IntegrationListPage() {
                   <StatusDot status={statusKey} pulse={int.status === 'error' && int.enabled} />
                   <p className="text-sm font-medium text-slate-200 flex-1 truncate">{int.name}</p>
                   <button
-                    onClick={(e) => openEdit(int.id, int.name, e)}
+                    onClick={(e) => openEdit(int.id, int.name, int.cluster_group, e)}
                     className="text-slate-500 hover:text-sky-400 transition-colors"
                     title="Edit"
                   >
@@ -308,11 +344,27 @@ export default function IntegrationListPage() {
                     <Trash2 size={14} />
                   </button>
                 </div>
-                <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <Badge>{int.type}</Badge>
                   {!int.enabled && <Badge variant="severity" severity="warning">Disabled</Badge>}
                   {int.enabled && int.status === 'error' && <Badge variant="severity" severity="critical">Error</Badge>}
                   {int.enabled && int.status === 'no_data' && <Badge>No data</Badge>}
+                  {int.is_standby && (
+                    <Badge variant="severity" severity="info">Standby</Badge>
+                  )}
+                  {int.cluster_group && (
+                    <span
+                      className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono"
+                      style={{
+                        background: 'var(--ng-glass-bg)',
+                        border: '1px solid var(--ng-glass-border)',
+                        color: 'var(--ng-text-muted)',
+                      }}
+                      title="Cluster group — instances sharing this name run as one HA source"
+                    >
+                      ⛓ {int.cluster_group}
+                    </span>
+                  )}
                 </div>
                 {int.error && int.enabled && (
                   <div className="flex items-start gap-1.5 mb-2 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/15">

@@ -189,6 +189,7 @@ async def api_create_instance(
     name = str(body.get("name", "")).strip()
     if not name:
         name = f"{integration_cls.display_name} Instance"
+    cluster_group = str(body.get("cluster_group", "")).strip() or None
     config_dict = {}
     for field in integration_cls.config_fields:
         val = body.get(field.key, "")
@@ -204,7 +205,9 @@ async def api_create_instance(
     host_err = _validate_config_hosts(config_dict, integration_cls.config_fields)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
-    cfg = await int_svc.create_config(db, integration_type, name, config_dict)
+    cfg = await int_svc.create_config(
+        db, integration_type, name, config_dict, cluster_group=cluster_group,
+    )
     from main import invalidate_nav_cache
     invalidate_nav_cache()
     return JSONResponse({"ok": True, "id": cfg.id, "name": cfg.name})
@@ -258,7 +261,14 @@ async def api_edit_instance(
     host_err = _validate_config_hosts(config_dict, integration_cls.config_fields)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
-    await int_svc.update_config(db, config_id, name=name, config_dict=config_dict)
+
+    # Tri-state: only thread cluster_group when the body explicitly contains
+    # the key. Empty string or null clear it; missing key leaves it untouched.
+    update_kwargs: dict = {"name": name, "config_dict": config_dict}
+    if "cluster_group" in body:
+        update_kwargs["cluster_group"] = (str(body.get("cluster_group") or "").strip() or None)
+
+    await int_svc.update_config(db, config_id, **update_kwargs)
     return JSONResponse({"ok": True, "id": config_id, "name": name})
 
 

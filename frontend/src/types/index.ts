@@ -103,8 +103,10 @@ export interface IntegrationConfig {
   type: string;
   name: string;
   enabled: boolean;
+  cluster_group: string | null;
+  is_standby: boolean;
   created_at: string;
-  status: 'ok' | 'error' | 'no_data';
+  status: 'ok' | 'error' | 'no_data' | 'standby';
   last_check: string | null;
   error: string | null;
 }
@@ -113,6 +115,8 @@ export interface IntegrationSnapshot {
   id: number;
   entity_type: string;
   entity_id: number;
+  cluster_group?: string | null;
+  is_standby?: boolean;
   timestamp: string;
   ok: boolean;
   data_json: Record<string, unknown> | null;
