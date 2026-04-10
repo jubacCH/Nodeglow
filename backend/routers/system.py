@@ -315,7 +315,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Syslog receiver status ───────────────────────────────────────────
     syslog_status = {"running": False}
     try:
-        from services.syslog import _udp_transport, _tcp_server, _buffer
+        from services.syslog import _udp_transport, _buffer
         syslog_status["running"] = _udp_transport is not None
         syslog_status["buffer_size"] = len(_buffer)
         # Messages per minute (last 10 min) — query ClickHouse, not PostgreSQL
@@ -351,7 +351,6 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Notification channel config ──────────────────────────────────────
     notification_info = {}
     try:
-        from database import Setting
         settings = {}
         s_rows = (await db.execute(text(
             "SELECT key, value FROM settings WHERE key LIKE 'alert_%' OR key LIKE 'smtp_%' OR key LIKE 'telegram_%' OR key LIKE 'discord_%'"

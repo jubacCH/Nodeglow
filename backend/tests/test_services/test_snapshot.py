@@ -1,5 +1,4 @@
 """Tests for the generic snapshot service."""
-import pytest
 from services import snapshot as snap_svc
 
 

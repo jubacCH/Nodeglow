@@ -16,7 +16,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.log_template import HostBaseline, LogTemplate, PrecursorPattern

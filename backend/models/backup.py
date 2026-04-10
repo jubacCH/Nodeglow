@@ -1,5 +1,4 @@
 """Backup monitoring models – BackupJob and BackupHistory."""
-from datetime import datetime
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, DateTime, ForeignKey, Index,

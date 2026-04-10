@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any
 
 from services import clickhouse_client as ch
 
@@ -69,7 +68,6 @@ async def _rate_from_history(
 
 
 async def extract_agent_bandwidth(
-    db: Any,  # kept for signature compat; unused
     agent_id: int,
     body: dict,
     timestamp: datetime | None = None,
@@ -78,8 +76,7 @@ async def extract_agent_bandwidth(
 ) -> int:
     """Extract bandwidth samples from an agent heartbeat payload.
 
-    `db` is accepted but ignored — bandwidth lives in ClickHouse now.
-    Returns the number of samples written.
+    Returns the number of samples written to ClickHouse.
     """
     if not body:
         return 0
@@ -125,7 +122,6 @@ async def extract_agent_bandwidth(
 
 
 async def extract_proxmox_bandwidth(
-    db: Any,
     config_id: int,
     snapshot_data_json: str | dict | None,
     timestamp: datetime | None = None,
@@ -207,7 +203,6 @@ async def extract_proxmox_bandwidth(
 
 
 async def extract_unifi_bandwidth(
-    db: Any,
     config_id: int,
     snapshot_data_json: str | dict | None,
     timestamp: datetime | None = None,
@@ -283,7 +278,6 @@ async def extract_unifi_bandwidth(
 
 
 async def get_bandwidth_history(
-    db: Any = None,
     source_type: str | None = None,
     source_id: str | None = None,
     interface_name: str | None = None,
@@ -316,7 +310,7 @@ async def get_bandwidth_history(
     ]
 
 
-async def get_bandwidth_summary(db: Any = None) -> dict:
+async def get_bandwidth_summary() -> dict:
     """Top talkers + total throughput, computed from latest sample per
     (source_type, source_id, interface_name) over the last hour."""
     latest = await ch.get_latest_bandwidth_per_iface(since_hours=1)
@@ -368,7 +362,7 @@ async def get_bandwidth_summary(db: Any = None) -> dict:
     }
 
 
-async def get_bandwidth_interfaces(db: Any = None) -> list[dict]:
+async def get_bandwidth_interfaces() -> list[dict]:
     """List all known interfaces with their latest rates (last hour)."""
     latest = await ch.get_latest_bandwidth_per_iface(since_hours=1)
 

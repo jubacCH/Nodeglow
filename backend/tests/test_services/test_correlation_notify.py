@@ -1,14 +1,11 @@
 """Tests for correlation engine notification integration."""
-import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
-from models.ping import PingHost
-from models.incident import Incident, IncidentEvent
+from models.incident import Incident
 from services.correlation import (
     _find_or_create_incident,
     _auto_resolve,
-    run_correlation,
 )
 
 

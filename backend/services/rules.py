@@ -231,7 +231,6 @@ async def _evaluate_syslog_rule(rule: AlertRule, now: datetime) -> int:
 
 async def _fire_syslog_rule(db: AsyncSession, rule: AlertRule, match_count: int, now: datetime):
     """Fire a syslog rule — creates an incident and notifies."""
-    from models.incident import Incident, IncidentEvent
     from services.correlation import _find_or_create_incident
 
     op_label = OPERATORS.get(rule.operator, ("?",))[0]

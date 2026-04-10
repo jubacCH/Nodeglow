@@ -4,12 +4,10 @@ Used by dashboard, agents page, and any future live views.
 
 Each connection is tracked with its user role for per-role filtering.
 """
-import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from fastapi import WebSocket
 
