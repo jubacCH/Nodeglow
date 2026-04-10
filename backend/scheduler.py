@@ -11,6 +11,7 @@ from database import AsyncSessionLocal, PingHost, PingResult
 from models.integration import IntegrationConfig
 from services import integration as int_svc
 from services import snapshot as snap_svc
+from services.metrics import instrument_job
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -19,6 +20,7 @@ scheduler = AsyncIOScheduler()
 # ── Generic integration collection ───────────────────────────────────────────
 
 
+@instrument_job("integration_checks")
 async def run_integration_checks():
     """
     Generic collector loop: for each registered integration, fetch all configs
@@ -128,6 +130,7 @@ _offline_since: dict[int, datetime] = {}
 _grace_notified: set[int] = set()  # host_ids already notified after grace
 
 
+@instrument_job("ping_checks")
 async def run_ping_checks():
     """Ping all enabled hosts concurrently and store results."""
     import asyncio as _asyncio
@@ -208,6 +211,7 @@ async def run_ping_checks():
 
     # Batch-write all results in one transaction
     import json as _json
+    from services.metrics import PING_CHECKS_TOTAL
     now = datetime.utcnow()
     went_offline: list[str] = []
     came_online: list[str] = []
@@ -219,6 +223,7 @@ async def run_ping_checks():
                 success=online,
                 latency_ms=latency,
             ))
+            PING_CHECKS_TOTAL.labels(result="success" if online else "failure").inc()
 
             # Update port_error flag and check detail on the host
             host_obj = await db.get(PingHost, host.id)
@@ -281,6 +286,7 @@ async def run_ping_checks():
 # ── SSL expiry check ─────────────────────────────────────────────────────────
 
 
+@instrument_job("ssl_expiry")
 async def update_ssl_expiry():
     """Update ssl_expiry_days for all HTTPS hosts."""
     from utils.ping import get_ssl_expiry_days
@@ -314,6 +320,7 @@ async def update_ssl_expiry():
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 
 
+@instrument_job("cleanup_old_results")
 async def cleanup_old_results():
     """Delete old ping results, snapshots, and syslog messages."""
     from database import get_setting
@@ -431,6 +438,7 @@ def compute_disk_forecast(history: list[dict], total_gb: float) -> dict | None:
     }
 
 
+@instrument_job("disk_space_check")
 async def check_disk_space():
     """Monitor disk usage and create incidents when thresholds are exceeded."""
     import shutil
@@ -520,6 +528,7 @@ async def check_disk_space():
 # ── ClickHouse maintenance ───────────────────────────────────────────────────
 
 
+@instrument_job("clickhouse_log_cleanup")
 async def cleanup_clickhouse_logs():
     """Truncate ClickHouse system log tables if they exceed size thresholds."""
     try:
@@ -545,30 +554,35 @@ async def cleanup_clickhouse_logs():
 # ── Scheduler lifecycle ──────────────────────────────────────────────────────
 
 
+@instrument_job("correlation")
 async def run_correlation():
     """Run the correlation engine."""
     from services.correlation import run_correlation as _run
     await _run()
 
 
+@instrument_job("log_intelligence")
 async def run_log_intelligence():
     """Run the log intelligence engine (template flush, baselines, precursors)."""
     from services.log_intelligence import run_intelligence
     await run_intelligence()
 
 
+@instrument_job("scheduled_scans")
 async def run_scheduled_scans():
     """Run due scheduled subnet scans."""
     from routers.subnet_scanner import run_scheduled_scans as _run
     await _run()
 
 
+@instrument_job("snmp_polls")
 async def run_snmp_polls():
     """Run due SNMP polls."""
     from routers.snmp import run_snmp_polls as _run
     await _run()
 
 
+@instrument_job("port_discovery")
 async def run_port_discovery():
     """Discover open ports and SSL certs on monitored hosts."""
     from services.port_discovery import run_port_discovery as _run
@@ -824,6 +838,7 @@ async def update_geoip():
         logger.error("GeoIP update failed: %s", result.get("message", "unknown error"))
 
 
+@instrument_job("dns_resolution")
 async def resolve_host_dns():
     """Resolve DNS for hosts: rDNS for IP-only hosts, forward DNS for hostname-only hosts.
     Also merges duplicate scanner hosts into existing Proxmox/UniFi/agent hosts."""
@@ -927,6 +942,7 @@ async def resolve_host_dns():
             logger.info("DNS resolution job: updated hosts, deleted %d duplicates", len(to_delete))
 
 
+@instrument_job("alert_rules")
 async def run_alert_rules():
     """Evaluate all user-defined alert rules."""
     from services.rules import evaluate_rules
@@ -936,6 +952,7 @@ async def run_alert_rules():
             logger.info("Alert rules: %d rule(s) triggered", triggered)
 
 
+@instrument_job("backup_compliance")
 async def run_backup_compliance():
     """Check all backup jobs for compliance (overdue/failed) and log issues."""
     from services.backup_monitor import check_backup_compliance
