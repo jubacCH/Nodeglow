@@ -266,6 +266,32 @@ table tbody td {
 .glow-bullet { color: var(--ng-text-muted); }
 
 
+/* ── Tabular nums ────────────────────────────────────────────────────────── */
+/* Lock numeric digits to a fixed width so live-updating values
+   (latencies, counts, percentages, ms timestamps) don't trigger
+   layout shift as their digits change. Apply to any element that
+   displays numbers that update in place. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+
+/* ── Just-changed pulse ──────────────────────────────────────────────────── */
+/* Subtle sky-tinged border ring that fades over 1.6s. Apply via the
+   .ng-just-changed class — typically toggled for ~5s after fresh data
+   arrives. Discipline rule (DESIGN_GUIDE): only use for actual state
+   changes, not on every render. */
+@keyframes ng-just-changed {
+  0%   { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.45); }
+  60%  { box-shadow: 0 0 0 6px rgba(56, 189, 248, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+}
+.ng-just-changed {
+  animation: ng-just-changed 1.6s ease-out;
+}
+
+
 /* ── Command palette (cmdk) ────────────────────────────────────────────── */
 [cmdk-overlay] {
   position: fixed;

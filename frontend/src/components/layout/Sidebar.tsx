@@ -203,7 +203,7 @@ export function Sidebar() {
             <input
               ref={searchRef}
               type="text"
-              placeholder="Search... ⌘K"
+              placeholder="Search hosts, integrations…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onFocus={() => setSearchFocused(true)}
@@ -219,8 +219,27 @@ export function Sidebar() {
                   searchRef.current?.blur();
                 }
               }}
-              className="w-full pl-8 pr-3 py-2 text-xs rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-300 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+              className="w-full pl-8 pr-12 py-2 text-xs rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-300 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
             />
+            {/* Cmd+K discoverability pill — clicking this opens the global
+                command palette via a synthetic keydown so users learn the
+                shortcut by mousing over it once. */}
+            <kbd
+              onClick={() => {
+                document.dispatchEvent(
+                  new KeyboardEvent('keydown', {
+                    key: 'k',
+                    metaKey: true,
+                    ctrlKey: true,
+                    bubbles: true,
+                  }),
+                );
+              }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-mono text-slate-500 bg-white/[0.04] border border-white/[0.08] rounded cursor-pointer hover:text-slate-300 hover:border-white/[0.18] transition-colors select-none"
+              title="Open command palette"
+            >
+              ⌘K
+            </kbd>
           </div>
           {searchFocused && searchResults.length > 0 && (
             <div className="absolute left-3 right-3 mt-1 z-50 rounded-md border shadow-xl overflow-hidden max-h-80 overflow-y-auto" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border-elevated)' }}>
