@@ -181,12 +181,7 @@ async def insert_batch(rows: list[dict]) -> None:
             row.get("geo_country") or "",
             row.get("geo_city") or "",
         ])
-    try:
-        await client.insert("syslog_messages", data, column_names=columns)
-        _record_insert_metric("syslog_messages", "success", len(data))
-    except Exception:
-        _record_insert_metric("syslog_messages", "failure", len(data))
-        raise
+    await _do_insert(client, "syslog_messages", data, columns)
 
 
 def _record_insert_metric(table: str, status: str, row_count: int) -> None:
@@ -198,6 +193,21 @@ def _record_insert_metric(table: str, status: str, row_count: int) -> None:
             CLICKHOUSE_INSERT_ROWS.labels(table=table).inc(row_count)
     except Exception:
         pass
+
+
+async def _do_insert(client, table: str, data: list, columns: list[str]) -> None:
+    """Common insert path: wrapped in an OTel span and metric counters."""
+    from services.tracing import tracer
+    with tracer.start_as_current_span("clickhouse.insert") as span:
+        span.set_attribute("clickhouse.table", table)
+        span.set_attribute("clickhouse.row_count", len(data))
+        try:
+            await client.insert(table, data, column_names=columns)
+        except Exception:
+            _record_insert_metric(table, "failure", len(data))
+            span.set_attribute("error", True)
+            raise
+        _record_insert_metric(table, "success", len(data))
 
 
 # ── Time-series writes ────────────────────────────────────────────────────────
@@ -224,12 +234,7 @@ async def insert_ping_checks(rows: list[dict]) -> None:
         for r in rows
     ]
     client = await get_client()
-    try:
-        await client.insert("ping_checks", data, column_names=columns)
-        _record_insert_metric("ping_checks", "success", len(data))
-    except Exception:
-        _record_insert_metric("ping_checks", "failure", len(data))
-        raise
+    await _do_insert(client, "ping_checks", data, columns)
 
 
 async def insert_agent_metrics(rows: list[dict]) -> None:
@@ -269,12 +274,7 @@ async def insert_agent_metrics(rows: list[dict]) -> None:
         for r in rows
     ]
     client = await get_client()
-    try:
-        await client.insert("agent_metrics", data, column_names=columns)
-        _record_insert_metric("agent_metrics", "success", len(data))
-    except Exception:
-        _record_insert_metric("agent_metrics", "failure", len(data))
-        raise
+    await _do_insert(client, "agent_metrics", data, columns)
 
 
 async def insert_bandwidth_metrics(rows: list[dict]) -> None:
@@ -305,12 +305,7 @@ async def insert_bandwidth_metrics(rows: list[dict]) -> None:
         for r in rows
     ]
     client = await get_client()
-    try:
-        await client.insert("bandwidth_metrics", data, column_names=columns)
-        _record_insert_metric("bandwidth_metrics", "success", len(data))
-    except Exception:
-        _record_insert_metric("bandwidth_metrics", "failure", len(data))
-        raise
+    await _do_insert(client, "bandwidth_metrics", data, columns)
 
 
 # ── Time-series read API ─────────────────────────────────────────────────────
@@ -566,9 +561,22 @@ async def get_previous_bandwidth_sample(
 
 async def query(sql: str, params: dict | None = None) -> list[dict]:
     """Execute a SELECT and return list of row dicts."""
-    client = await get_client()
-    result = await client.query(sql, parameters=params or {})
-    return [dict(zip(result.column_names, row)) for row in result.result_rows]
+    from services.tracing import tracer
+    with tracer.start_as_current_span("clickhouse.query") as span:
+        client = await get_client()
+        try:
+            result = await client.query(sql, parameters=params or {})
+        except Exception:
+            try:
+                from services.metrics import CLICKHOUSE_QUERY_ERRORS
+                CLICKHOUSE_QUERY_ERRORS.inc()
+            except Exception:
+                pass
+            span.set_attribute("error", True)
+            raise
+        rows = [dict(zip(result.column_names, row)) for row in result.result_rows]
+        span.set_attribute("clickhouse.row_count", len(rows))
+        return rows
 
 
 async def query_scalar(sql: str, params: dict | None = None) -> Any:
