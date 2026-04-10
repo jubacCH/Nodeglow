@@ -8,7 +8,8 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { Search, ExternalLink, CheckCircle } from 'lucide-react';
+import { Search, ExternalLink, CheckCircle, Plug } from 'lucide-react';
+import { EmptyState } from '@/components/ui/EmptyState';
 
 interface IntegrationMeta {
   name: string;
@@ -100,8 +101,16 @@ export default function IntegrationStorePage() {
       )}
 
       {filtered?.length === 0 && !isLoading && (
-        <GlassCard className="p-8 text-center">
-          <p className="text-sm text-[var(--ng-text-muted)]">No integrations match your search.</p>
+        <GlassCard>
+          <EmptyState
+            icon={Plug}
+            title={search ? 'No matches' : 'No integrations available'}
+            description={
+              search
+                ? 'Try a different search term, or browse the full catalogue with an empty filter.'
+                : 'The integration registry is empty — this usually means a backend startup error. Check the logs.'
+            }
+          />
         </GlassCard>
       )}
     </div>
