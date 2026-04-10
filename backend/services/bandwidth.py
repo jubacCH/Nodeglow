@@ -17,6 +17,21 @@ from models.bandwidth import BandwidthSample
 logger = logging.getLogger(__name__)
 
 
+async def _ch_mirror(rows: list[dict]) -> None:
+    """Phase 2 dual-write helper: mirror bandwidth rows to ClickHouse.
+
+    Postgres remains the source of truth until cutover, so we swallow CH
+    errors with a warning rather than break the calling extract function.
+    """
+    if not rows:
+        return
+    try:
+        from services.clickhouse_client import insert_bandwidth_metrics
+        await insert_bandwidth_metrics(rows)
+    except Exception as exc:
+        logger.warning("ClickHouse dual-write (bandwidth_metrics) failed: %s", exc)
+
+
 # ── Extraction helpers ──────────────────────────────────────────────────────
 
 
@@ -98,7 +113,7 @@ async def extract_agent_bandwidth(
 
     ts = timestamp or datetime.utcnow()
     source_id = str(agent_id)
-    count = 0
+    ch_rows: list[dict] = []
 
     for iface in interfaces:
         iface_name = iface.get("name") or iface.get("interface", "unknown")
@@ -120,22 +135,23 @@ async def extract_agent_bandwidth(
             rx_rate = _calc_rate_bps(prev.rx_bytes, rx, delta_s)
             tx_rate = _calc_rate_bps(prev.tx_bytes, tx, delta_s)
 
-        sample = BandwidthSample(
-            timestamp=ts,
-            source_type="agent",
-            source_id=source_id,
-            interface_name=iface_name,
-            rx_bytes=rx,
-            tx_bytes=tx,
-            rx_rate_bps=rx_rate,
-            tx_rate_bps=tx_rate,
-        )
-        db.add(sample)
-        count += 1
+        row = {
+            "timestamp": ts,
+            "source_type": "agent",
+            "source_id": source_id,
+            "interface_name": iface_name,
+            "rx_bytes": rx,
+            "tx_bytes": tx,
+            "rx_rate_bps": rx_rate,
+            "tx_rate_bps": tx_rate,
+        }
+        db.add(BandwidthSample(**row))
+        ch_rows.append(row)
 
-    if count:
+    if ch_rows:
         await db.flush()
-    return count
+    await _ch_mirror(ch_rows)
+    return len(ch_rows)
 
 
 # ── Proxmox bandwidth extraction ───────────────────────────────────────────
@@ -165,7 +181,7 @@ async def extract_proxmox_bandwidth(
 
     ts = timestamp or datetime.utcnow()
     source_id = str(config_id)
-    count = 0
+    ch_rows: list[dict] = []
 
     # Proxmox data may contain nodes and VMs/CTs
     nodes = data.get("nodes", [])
@@ -187,17 +203,18 @@ async def extract_proxmox_bandwidth(
                 rx_rate = _calc_rate_bps(prev.rx_bytes, rx, delta_s)
                 tx_rate = _calc_rate_bps(prev.tx_bytes, tx, delta_s)
 
-            db.add(BandwidthSample(
-                timestamp=ts,
-                source_type="proxmox",
-                source_id=source_id,
-                interface_name=iface_name,
-                rx_bytes=rx,
-                tx_bytes=tx,
-                rx_rate_bps=rx_rate,
-                tx_rate_bps=tx_rate,
-            ))
-            count += 1
+            row = {
+                "timestamp": ts,
+                "source_type": "proxmox",
+                "source_id": source_id,
+                "interface_name": iface_name,
+                "rx_bytes": rx,
+                "tx_bytes": tx,
+                "rx_rate_bps": rx_rate,
+                "tx_rate_bps": tx_rate,
+            }
+            db.add(BandwidthSample(**row))
+            ch_rows.append(row)
 
     # VMs and containers (qemu + lxc)
     for vm_type in ("qemu", "lxc"):
@@ -221,21 +238,23 @@ async def extract_proxmox_bandwidth(
                     rx_rate = _calc_rate_bps(prev.rx_bytes, rx, delta_s)
                     tx_rate = _calc_rate_bps(prev.tx_bytes, tx, delta_s)
 
-                db.add(BandwidthSample(
-                    timestamp=ts,
-                    source_type="proxmox",
-                    source_id=source_id,
-                    interface_name=iface_name,
-                    rx_bytes=rx,
-                    tx_bytes=tx,
-                    rx_rate_bps=rx_rate,
-                    tx_rate_bps=tx_rate,
-                ))
-                count += 1
+                row = {
+                    "timestamp": ts,
+                    "source_type": "proxmox",
+                    "source_id": source_id,
+                    "interface_name": iface_name,
+                    "rx_bytes": rx,
+                    "tx_bytes": tx,
+                    "rx_rate_bps": rx_rate,
+                    "tx_rate_bps": tx_rate,
+                }
+                db.add(BandwidthSample(**row))
+                ch_rows.append(row)
 
-    if count:
+    if ch_rows:
         await db.flush()
-    return count
+    await _ch_mirror(ch_rows)
+    return len(ch_rows)
 
 
 # ── UniFi bandwidth extraction ─────────────────────────────────────────────
@@ -266,7 +285,7 @@ async def extract_unifi_bandwidth(
 
     ts = timestamp or datetime.utcnow()
     source_id = str(config_id)
-    count = 0
+    ch_rows: list[dict] = []
 
     devices = data.get("devices", [])
     for device in devices:
@@ -281,17 +300,18 @@ async def extract_unifi_bandwidth(
             rx_bps = int(rx_rate or 0) * 8  # bytes/s -> bits/s
             tx_bps = int(tx_rate or 0) * 8
 
-            db.add(BandwidthSample(
-                timestamp=ts,
-                source_type="unifi",
-                source_id=source_id,
-                interface_name=f"device/{dev_name}",
-                rx_bytes=0,  # UniFi rates don't give cumulative bytes
-                tx_bytes=0,
-                rx_rate_bps=rx_bps,
-                tx_rate_bps=tx_bps,
-            ))
-            count += 1
+            row = {
+                "timestamp": ts,
+                "source_type": "unifi",
+                "source_id": source_id,
+                "interface_name": f"device/{dev_name}",
+                "rx_bytes": 0,  # UniFi rates don't give cumulative bytes
+                "tx_bytes": 0,
+                "rx_rate_bps": rx_bps,
+                "tx_rate_bps": tx_bps,
+            }
+            db.add(BandwidthSample(**row))
+            ch_rows.append(row)
 
         # Per-port stats (for switches)
         ports = device.get("port_table", [])
@@ -302,21 +322,23 @@ async def extract_unifi_bandwidth(
             p_tx = port.get("tx_bytes_r") or port.get("tx_bytes-r")
 
             if p_rx is not None or p_tx is not None:
-                db.add(BandwidthSample(
-                    timestamp=ts,
-                    source_type="unifi",
-                    source_id=source_id,
-                    interface_name=f"device/{dev_name}/{port_name}",
-                    rx_bytes=0,
-                    tx_bytes=0,
-                    rx_rate_bps=int(p_rx or 0) * 8,
-                    tx_rate_bps=int(p_tx or 0) * 8,
-                ))
-                count += 1
+                row = {
+                    "timestamp": ts,
+                    "source_type": "unifi",
+                    "source_id": source_id,
+                    "interface_name": f"device/{dev_name}/{port_name}",
+                    "rx_bytes": 0,
+                    "tx_bytes": 0,
+                    "rx_rate_bps": int(p_rx or 0) * 8,
+                    "tx_rate_bps": int(p_tx or 0) * 8,
+                }
+                db.add(BandwidthSample(**row))
+                ch_rows.append(row)
 
-    if count:
+    if ch_rows:
         await db.flush()
-    return count
+    await _ch_mirror(ch_rows)
+    return len(ch_rows)
 
 
 # ── Query helpers ───────────────────────────────────────────────────────────
