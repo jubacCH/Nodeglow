@@ -21,6 +21,7 @@ const GravityWidget = dynamic(
   () => import('@/components/dashboard/GravityWidget').then(m => ({ default: m.GravityWidget })),
   { loading: () => <div className="h-[380px] bg-slate-500/10 rounded-lg animate-pulse" />, ssr: false }
 );
+import { FirstRunWelcome } from '@/components/dashboard/FirstRunWelcome';
 import { useDashboard } from '@/hooks/queries/useDashboard';
 import { useSSE } from '@/hooks/useSSE';
 import type { SyslogMessage } from '@/types';
@@ -67,6 +68,25 @@ export default function DashboardPage() {
     : 0;
 
   const anomalyCount = (data?.anomalies?.length ?? 0) + (data?.warnings?.length ?? 0);
+
+  // First-run detection: nothing to show. We branch BEFORE rendering the
+  // empty grid of widgets so the user gets a guided onboarding instead of
+  // a void.
+  const isFirstRun =
+    !isLoading &&
+    !!data &&
+    (data.total_count ?? 0) === 0 &&
+    (data.host_stats?.length ?? 0) === 0 &&
+    (data.integration_health?.length ?? 0) === 0;
+
+  if (isFirstRun) {
+    return (
+      <div>
+        <PageHeader title="Dashboard" description="Infrastructure overview" />
+        <FirstRunWelcome />
+      </div>
+    );
+  }
 
   return (
     <div>
