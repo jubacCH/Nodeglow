@@ -390,8 +390,19 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         oldest_snap = (await db.execute(text(
             "SELECT min(timestamp) FROM snapshots"
         ))).scalar()
+        # ping_age comes from ClickHouse ping_checks now (post-cutover). The
+        # min/max timestamps were already fetched into db_stats.oldest_ping
+        # and stored as a formatted string — parse it back for _format_age.
+        oldest_ping_str = db_stats.get("oldest_ping", "—")
+        ping_age_value = "—"
+        if oldest_ping_str and oldest_ping_str != "—":
+            try:
+                from datetime import datetime as _dt
+                ping_age_value = _format_age(_dt.strptime(oldest_ping_str, "%Y-%m-%d %H:%M"))
+            except Exception:
+                ping_age_value = "—"
         retention_info = {
-            "ping_age": _format_age(row.oldest_ping) if db_stats.get("oldest_ping") != "—" else "—",
+            "ping_age": ping_age_value,
             "snap_age": _format_age(oldest_snap) if oldest_snap else "—",
             "syslog_age": "—",
         }
