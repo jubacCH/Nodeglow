@@ -20,24 +20,30 @@ interface NavItem {
   href: string;
   icon: React.ElementType;
   iconColor?: string;
+  /** Tailwind bg-* class matching iconColor, used for the active-state
+   *  left accent bar. Must be a static class string so Tailwind JIT
+   *  includes it in the build. */
+  barColor?: string;
   adminOnly?: boolean;
   countKey?: string;
 }
 
+// Color-zone bar classes paired with icon color so Tailwind's JIT picks up
+// the full class name at build time (dynamic string-replace would miss them).
 const mainNav: NavItem[] = [
-  { label: 'Dashboard', href: '/', icon: LayoutDashboard, iconColor: 'text-sky-400' },
-  { label: 'Hosts', href: '/hosts', icon: Server, iconColor: 'text-emerald-400', countKey: 'hosts' },
-  { label: 'Alerts', href: '/alerts', icon: AlertTriangle, iconColor: 'text-amber-400', countKey: 'alerts' },
-  { label: 'Rules', href: '/rules', icon: Bell, iconColor: 'text-orange-400', countKey: 'rules' },
-  { label: 'Syslog', href: '/syslog', icon: FileText, iconColor: 'text-violet-400' },
-  { label: 'Agents', href: '/agents', icon: Bot, iconColor: 'text-cyan-400', countKey: 'agents' },
-  { label: 'Scanner', href: '/scanner', icon: Scan, iconColor: 'text-indigo-400' },
-  { label: 'SNMP', href: '/snmp', icon: Radio, iconColor: 'text-teal-400' },
-  { label: 'SSL', href: '/ssl', icon: ShieldCheck, iconColor: 'text-green-400', countKey: 'ssl' },
-  { label: 'Credentials', href: '/credentials', icon: KeyRound, iconColor: 'text-yellow-400', countKey: 'credentials' },
-  { label: 'Tasks', href: '/tasks', icon: ClipboardList, iconColor: 'text-rose-400', countKey: 'tasks' },
-  { label: 'Topology', href: '/topology', icon: Network, iconColor: 'text-purple-400' },
-  { label: 'Bandwidth', href: '/bandwidth', icon: ArrowUpDown, iconColor: 'text-pink-400' },
+  { label: 'Dashboard', href: '/', icon: LayoutDashboard, iconColor: 'text-sky-400', barColor: 'bg-sky-400' },
+  { label: 'Hosts', href: '/hosts', icon: Server, iconColor: 'text-emerald-400', barColor: 'bg-emerald-400', countKey: 'hosts' },
+  { label: 'Alerts', href: '/alerts', icon: AlertTriangle, iconColor: 'text-amber-400', barColor: 'bg-amber-400', countKey: 'alerts' },
+  { label: 'Rules', href: '/rules', icon: Bell, iconColor: 'text-orange-400', barColor: 'bg-orange-400', countKey: 'rules' },
+  { label: 'Syslog', href: '/syslog', icon: FileText, iconColor: 'text-violet-400', barColor: 'bg-violet-400' },
+  { label: 'Agents', href: '/agents', icon: Bot, iconColor: 'text-cyan-400', barColor: 'bg-cyan-400', countKey: 'agents' },
+  { label: 'Scanner', href: '/scanner', icon: Scan, iconColor: 'text-indigo-400', barColor: 'bg-indigo-400' },
+  { label: 'SNMP', href: '/snmp', icon: Radio, iconColor: 'text-teal-400', barColor: 'bg-teal-400' },
+  { label: 'SSL', href: '/ssl', icon: ShieldCheck, iconColor: 'text-green-400', barColor: 'bg-green-400', countKey: 'ssl' },
+  { label: 'Credentials', href: '/credentials', icon: KeyRound, iconColor: 'text-yellow-400', barColor: 'bg-yellow-400', countKey: 'credentials' },
+  { label: 'Tasks', href: '/tasks', icon: ClipboardList, iconColor: 'text-rose-400', barColor: 'bg-rose-400', countKey: 'tasks' },
+  { label: 'Topology', href: '/topology', icon: Network, iconColor: 'text-purple-400', barColor: 'bg-purple-400' },
+  { label: 'Bandwidth', href: '/bandwidth', icon: ArrowUpDown, iconColor: 'text-pink-400', barColor: 'bg-pink-400' },
 ];
 
 const systemNav: NavItem[] = [
@@ -277,12 +283,24 @@ export function Sidebar() {
               className={cn(
                 'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                 isActive
-                  ? 'nav-active'
-                  : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200',
+                  ? 'bg-white/[0.06] text-slate-100'
+                  : 'text-slate-400 hover:bg-white/[0.06] hover:text-slate-200',
               )}
             >
-              {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-current" />}
-              <item.icon size={18} className={isActive ? '' : item.iconColor || ''} />
+              {/* Color-zone accent: the active-indicator bar uses the nav
+                  item's own iconColor rather than a single global accent.
+                  That way each section of the app visually identifies
+                  itself — Hosts is emerald, Syslog is violet, SSL is
+                  green — rather than every active state being sky. */}
+              {isActive && (
+                <span
+                  className={cn(
+                    'absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full',
+                    item.barColor || 'bg-sky-400',
+                  )}
+                />
+              )}
+              <item.icon size={18} className={item.iconColor || 'text-slate-400'} />
               {!sidebarCollapsed && (
                 <>
                   <span className="flex-1">{item.label}</span>

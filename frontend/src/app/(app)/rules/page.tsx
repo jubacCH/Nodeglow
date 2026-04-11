@@ -13,7 +13,8 @@ import { api, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { AlertRule } from '@/types';
-import { Plus, Trash2, Power, Pencil, Play } from 'lucide-react';
+import { Plus, Trash2, Power, Pencil, Play, Bell } from 'lucide-react';
+import { EmptyState } from '@/components/ui/EmptyState';
 
 interface SourceInstance {
   id: number;
@@ -283,12 +284,16 @@ export default function RulesPage() {
             {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
           </div>
         ) : !rules?.length ? (
-          <div className="p-8 text-center">
-            <p className="text-sm text-slate-500">No alert rules configured</p>
-            <Button size="sm" className="mt-4" onClick={openAdd}>
-              <Plus size={16} /> Create First Rule
-            </Button>
-          </div>
+          <EmptyState
+            icon={Bell}
+            title="No alert rules configured"
+            description="Rules evaluate integration snapshot fields on every poll and open incidents when thresholds are crossed. Create one to get proactive alerts."
+            action={
+              <Button size="sm" onClick={openAdd}>
+                <Plus size={16} /> Create First Rule
+              </Button>
+            }
+          />
         ) : (
           <div className="divide-y divide-white/[0.04]">
             {rules.map((rule) => (

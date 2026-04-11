@@ -6,6 +6,7 @@ import { KeyRound, Plus, Trash2, Pencil, Shield, ShieldCheck, Terminal, MonitorD
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { get, post, api, del } from '@/lib/api';
@@ -214,16 +215,17 @@ export default function CredentialsPage() {
             ))}
           </div>
         ) : !credentials?.length ? (
-          /* Empty state */
-          <div className="flex flex-col items-center justify-center py-16 text-slate-500">
-            <KeyRound size={40} className="mb-3 text-slate-600" />
-            <p className="text-sm font-medium">No credentials stored</p>
-            <p className="text-xs mt-1">Add your first credential to get started.</p>
-            <Button onClick={openCreate} size="sm" className="mt-4">
-              <Plus size={14} />
-              Add Credential
-            </Button>
-          </div>
+          <EmptyState
+            icon={KeyRound}
+            title="No credentials stored"
+            description="Add your first credential to authenticate SNMP, WinRM, SSH or REST integrations. Stored values are encrypted with Fernet."
+            action={
+              <Button onClick={openCreate} size="sm">
+                <Plus size={14} />
+                Add Credential
+              </Button>
+            }
+          />
         ) : (
           /* Table */
           <table className="w-full text-sm">
