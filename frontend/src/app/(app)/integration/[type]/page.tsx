@@ -11,6 +11,7 @@ import { useIntegrations } from '@/hooks/queries/useIntegrations';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post, del } from '@/lib/api';
 import { Plus, Trash2, X, Pencil, AlertCircle, Clock } from 'lucide-react';
+import { EmptyState } from '@/components/ui/EmptyState';
 import Link from 'next/link';
 import { useState } from 'react';
 import { useToastStore } from '@/stores/toast';
@@ -386,8 +387,21 @@ export default function IntegrationListPage() {
           );
         })}
         {!isLoading && (!integrations || integrations.length === 0) && !showAdd && (
-          <GlassCard className="p-8 col-span-full">
-            <p className="text-center text-sm text-slate-500">No {type} integrations configured</p>
+          <GlassCard className="col-span-full">
+            <EmptyState
+              icon={Plus}
+              title={`No ${fieldsData?.display_name ?? type} instances`}
+              description={
+                fieldsData?.description
+                  ? `Add an instance to start collecting data. ${fieldsData.description}`
+                  : `Add an instance to start monitoring.`
+              }
+              action={
+                <Button size="sm" onClick={() => { setShowAdd(true); resetForm(); }}>
+                  <Plus size={14} /> Add Instance
+                </Button>
+              }
+            />
           </GlassCard>
         )}
       </div>
