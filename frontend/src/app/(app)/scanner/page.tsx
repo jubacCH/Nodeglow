@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { SectionHeader } from '@/components/layout/SectionHeader';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
 import { StatusDot } from '@/components/ui/StatusDot';
@@ -193,13 +195,8 @@ export default function ScannerPage() {
       />
 
       {/* ── Manual Scan ── */}
+      <SectionHeader title="Manual Scan" icon={Radar} iconColor="text-sky-400" className="mt-0" />
       <GlassCard className="mb-6">
-        <div className="px-6 py-4 border-b border-white/[0.06]">
-          <div className="flex items-center gap-2">
-            <Radar size={18} className="text-sky-400" />
-            <h2 className="text-sm font-semibold text-slate-200">Manual Scan</h2>
-          </div>
-        </div>
         <div className="p-6">
           <div className="flex items-center gap-3 mb-6">
             <input
@@ -328,14 +325,8 @@ export default function ScannerPage() {
       </GlassCard>
 
       {/* ── Scheduled Scans ── */}
+      <SectionHeader title="Scheduled Scans" icon={CalendarClock} iconColor="text-sky-400" />
       <GlassCard>
-        <div className="px-6 py-4 border-b border-white/[0.06]">
-          <div className="flex items-center gap-2">
-            <CalendarClock size={18} className="text-sky-400" />
-            <h2 className="text-sm font-semibold text-slate-200">Scheduled Scans</h2>
-          </div>
-        </div>
-
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>

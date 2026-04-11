@@ -151,7 +151,14 @@ function HostNode({ host, position }: HostNodeProps) {
       </mesh>
       {hovered && (
         <Html distanceFactor={6} style={{ pointerEvents: 'none' }}>
-          <div className="rounded-md bg-slate-900/90 border border-white/10 px-3 py-1.5 text-xs text-white whitespace-nowrap backdrop-blur-sm shadow-lg">
+          <div
+            className="rounded-md border px-3 py-1.5 text-xs whitespace-nowrap backdrop-blur-sm shadow-lg"
+            style={{
+              background: 'var(--ng-card-bg-elevated)',
+              borderColor: 'var(--ng-card-border-hover)',
+              color: 'var(--ng-text-primary)',
+            }}
+          >
             <span className="font-medium">{host.host.name}</span>
             {host.latency !== null && (
               <span className="ml-2 text-slate-400">{Math.round(host.latency)}ms</span>
