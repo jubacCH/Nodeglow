@@ -28,3 +28,43 @@ export function useHostHistory(id: number, hours = 24) {
     enabled: id > 0,
   });
 }
+
+export type TimelineEventType = 'status' | 'incident' | 'syslog';
+export type TimelineSeverity = 'critical' | 'error' | 'warning' | 'info';
+
+export interface TimelineEvent {
+  ts: string;
+  type: TimelineEventType;
+  severity: TimelineSeverity;
+  title: string;
+  summary: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface TimelineResponse {
+  host_id: number;
+  host_name: string | null;
+  hours: number;
+  since: string;
+  sources: TimelineEventType[];
+  total: number;
+  events: TimelineEvent[];
+}
+
+export function useHostTimeline(
+  id: number,
+  hours: number,
+  sources: TimelineEventType[],
+) {
+  const sourcesParam = [...sources].sort().join(',');
+  return useQuery({
+    queryKey: ['host-timeline', id, hours, sourcesParam],
+    queryFn: () =>
+      get<TimelineResponse>(
+        `/api/v1/hosts/${id}/timeline?hours=${hours}&sources=${sourcesParam}&limit=300`,
+      ),
+    enabled: id > 0 && sources.length > 0,
+    // Auto-refresh only on the 1h view — see design decision #6.
+    refetchInterval: hours <= 1 ? 30_000 : false,
+  });
+}
