@@ -8,7 +8,8 @@ import { Modal } from '@/components/ui/Modal';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post, patch, del } from '@/lib/api';
 import { useIsAdmin } from '@/stores/auth';
-import { Plus, Trash2, Key } from 'lucide-react';
+import { Plus, Trash2, Key, ShieldOff } from 'lucide-react';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { useEffect, useState } from 'react';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -105,8 +106,12 @@ export default function UsersPage() {
     return (
       <div>
         <PageHeader title="Users" description="User management" />
-        <GlassCard className="p-8 text-center">
-          <p className="text-sm text-slate-500">Admin access required</p>
+        <GlassCard>
+          <EmptyState
+            icon={ShieldOff}
+            title="Admin access required"
+            description="You need an admin role to manage users. Contact your administrator to request access."
+          />
         </GlassCard>
       </div>
     );

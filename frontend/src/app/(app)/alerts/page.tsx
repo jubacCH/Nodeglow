@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useIncidents } from '@/hooks/queries/useAlerts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post } from '@/lib/api';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -134,12 +135,12 @@ function AlertsPageInner() {
             </Link>
           ))}
           {!isLoading && openIncidents.length === 0 && (
-            <GlassCard className="p-12">
-              <div className="flex flex-col items-center gap-3">
-                <ShieldCheck size={48} className="text-emerald-500/60" />
-                <p className="text-base font-semibold text-slate-300">All clear</p>
-                <p className="text-sm text-slate-500">No active alerts — everything is running smoothly.</p>
-              </div>
+            <GlassCard>
+              <EmptyState
+                icon={ShieldCheck}
+                title="All clear"
+                description="No active alerts — everything is running smoothly."
+              />
             </GlassCard>
           )}
         </div>
@@ -238,20 +239,20 @@ function AlertsPageInner() {
                 </Link>
               ))}
               {!isLoading && filtered.length === 0 && (
-                <GlassCard className="p-12">
-                  <div className="flex flex-col items-center gap-3">
-                    <Bell size={48} className="text-slate-600" />
-                    <p className="text-base font-semibold text-slate-300">
-                      {incidentSearch || severityFilter !== 'all' || statusFilter !== 'all'
+                <GlassCard>
+                  <EmptyState
+                    icon={Bell}
+                    title={
+                      incidentSearch || severityFilter !== 'all' || statusFilter !== 'all'
                         ? 'No incidents match your filters'
-                        : 'No incidents yet'}
-                    </p>
-                    <p className="text-sm text-slate-500">
-                      {incidentSearch || severityFilter !== 'all' || statusFilter !== 'all'
+                        : 'No incidents yet'
+                    }
+                    description={
+                      incidentSearch || severityFilter !== 'all' || statusFilter !== 'all'
                         ? 'Try adjusting your filters.'
-                        : 'Incidents from correlation rules will appear here.'}
-                    </p>
-                  </div>
+                        : 'Incidents from correlation rules will appear here.'
+                    }
+                  />
                 </GlassCard>
               )}
             </div>
@@ -296,12 +297,12 @@ function AlertsPageInner() {
             </GlassCard>
           ))}
           {!maintLoading && (!maintHosts || maintHosts.length === 0) && (
-            <GlassCard className="p-12">
-              <div className="flex flex-col items-center gap-3">
-                <Wrench size={48} className="text-slate-600" />
-                <p className="text-base font-semibold text-slate-300">No maintenance windows</p>
-                <p className="text-sm text-slate-500">Hosts in maintenance mode will appear here.</p>
-              </div>
+            <GlassCard>
+              <EmptyState
+                icon={Wrench}
+                title="No maintenance windows"
+                description="Hosts in maintenance mode will appear here."
+              />
             </GlassCard>
           )}
         </div>
