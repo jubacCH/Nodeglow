@@ -111,6 +111,18 @@ body {
   .border-white\/\[0\.10\] { border-color: rgba(0, 0, 0, 0.10); }
   .border-white\/\[0\.12\] { border-color: rgba(0, 0, 0, 0.12); }
 
+  /* Solid slate backgrounds — used on progress bars, toggles, and other
+     elements that hardcoded a dark canvas color. Remap so light mode gets
+     a visible muted bar instead of a dark rectangle on a light bg. */
+  .bg-slate-700 { background-color: rgba(0, 0, 0, 0.12); }
+  .bg-slate-700\/50 { background-color: rgba(0, 0, 0, 0.07); }
+  .bg-slate-800 { background-color: rgba(0, 0, 0, 0.10); }
+  .bg-slate-800\/60 { background-color: rgba(0, 0, 0, 0.07); }
+  .bg-slate-800\/80 { background-color: rgba(0, 0, 0, 0.10); }
+  .bg-slate-900 { background-color: #F4F7FA; }
+  .bg-slate-900\/80 { background-color: rgba(255, 255, 255, 0.92); }
+  .bg-slate-900\/90 { background-color: rgba(255, 255, 255, 0.94); }
+
   /* Hover text */
   .hover\:text-slate-200:hover { color: #1E293B; }
   .hover\:text-slate-300:hover { color: #334155; }
