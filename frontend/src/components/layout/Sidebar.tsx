@@ -147,6 +147,25 @@ export function Sidebar() {
     return () => { document.removeEventListener('keydown', handler); clearTimeout(gTimeout); };
   }, [router]);
 
+  // Aggregate integration health per type. If any instance is !ok → error,
+  // if any is unknown → unknown, else ok. Drives the small dot next to each
+  // integration entry in the sidebar.
+  const integrationHealthByType: Record<string, 'ok' | 'error' | 'unknown'> = {};
+  if (dashData?.integration_health) {
+    for (const ih of dashData.integration_health) {
+      const prev = integrationHealthByType[ih.type];
+      const next: 'ok' | 'error' | 'unknown' =
+        ih.ok === true ? 'ok' : ih.ok === false ? 'error' : 'unknown';
+      if (prev === 'error' || next === 'error') {
+        integrationHealthByType[ih.type] = 'error';
+      } else if (prev === 'unknown' || next === 'unknown') {
+        integrationHealthByType[ih.type] = 'unknown';
+      } else {
+        integrationHealthByType[ih.type] = 'ok';
+      }
+    }
+  }
+
   // Build dynamic search items from dashboard data (hosts + integration instances)
   const dynamicSearchItems = (() => {
     const items: { label: string; href: string; category?: string }[] = [];
@@ -337,6 +356,19 @@ export function Sidebar() {
                   const href = `/integration/${int.slug}`;
                   const isActive = pathname.startsWith(href);
                   const count = navCounts?.[int.slug] ?? 0;
+                  const health = integrationHealthByType[int.slug];
+                  const dotColor =
+                    health === 'ok'
+                      ? 'bg-emerald-400'
+                      : health === 'error'
+                        ? 'bg-red-400'
+                        : 'bg-slate-500';
+                  const dotTitle =
+                    health === 'ok'
+                      ? 'Healthy'
+                      : health === 'error'
+                        ? 'Error — check integration status'
+                        : 'Status unknown';
                   return (
                     <Link
                       key={int.slug}
@@ -348,6 +380,14 @@ export function Sidebar() {
                           : 'text-slate-400 hover:bg-white/[0.08] hover:text-slate-200',
                       )}
                     >
+                      <span
+                        className={cn(
+                          'w-1.5 h-1.5 rounded-full shrink-0',
+                          dotColor,
+                          health === 'error' && 'animate-pulse',
+                        )}
+                        title={dotTitle}
+                      />
                       <span className="flex-1">{int.label}</span>
                       {count > 1 && (
                         <span className="text-[10px] text-slate-500">{count}</span>

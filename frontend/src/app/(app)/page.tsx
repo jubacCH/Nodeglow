@@ -33,6 +33,8 @@ import {
   TrendingUp, Wifi,
 } from 'lucide-react';
 import Link from 'next/link';
+import { ngColors } from '@/styles/tokens.gen';
+import { WidgetErrorBoundary } from '@/components/ui/WidgetErrorBoundary';
 
 function WidgetHeader({ icon: Icon, iconColor, title, trailing }: {
   icon: React.ElementType;
@@ -160,7 +162,9 @@ export default function DashboardPage() {
       {/* ── Gravity Widget (Hero) ── */}
       {data?.host_stats && (
         <div className="mb-4">
-          <GravityWidget hosts={data.host_stats} />
+          <WidgetErrorBoundary label="Gravity globe">
+            <GravityWidget hosts={data.host_stats} />
+          </WidgetErrorBoundary>
         </div>
       )}
 
@@ -273,21 +277,23 @@ export default function DashboardPage() {
           {isLoading || !data?.syslog_stats?.rate_data ? (
             <Skeleton className="h-[180px] w-full" />
           ) : (
-            <EChart
-              height={180}
-              option={{
-                tooltip: { trigger: 'axis' },
-                legend: { show: false },
-                grid: { left: 40, right: 12, top: 8, bottom: 24 },
-                xAxis: { type: 'category', data: data.syslog_stats.rate_data.labels, axisLabel: { fontSize: 10 } },
-                yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
-                series: [
-                  { name: 'Errors', type: 'bar', stack: 'total', data: data.syslog_stats.rate_data.errors, color: '#F87171' },
-                  { name: 'Warnings', type: 'bar', stack: 'total', data: data.syslog_stats.rate_data.warnings, color: '#FBBF24' },
-                  { name: 'Info', type: 'bar', stack: 'total', data: data.syslog_stats.rate_data.info, color: '#38BDF8' },
-                ],
-              }}
-            />
+            <WidgetErrorBoundary label="Syslog Rate">
+              <EChart
+                height={180}
+                option={{
+                  tooltip: { trigger: 'axis' },
+                  legend: { show: false },
+                  grid: { left: 40, right: 12, top: 8, bottom: 24 },
+                  xAxis: { type: 'category', data: data.syslog_stats.rate_data.labels, axisLabel: { fontSize: 10 } },
+                  yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
+                  series: [
+                    { name: 'Errors', type: 'bar', stack: 'total', data: data.syslog_stats.rate_data.errors, color: ngColors.critical },
+                    { name: 'Warnings', type: 'bar', stack: 'total', data: data.syslog_stats.rate_data.warnings, color: ngColors.warning },
+                    { name: 'Info', type: 'bar', stack: 'total', data: data.syslog_stats.rate_data.info, color: ngColors.primary },
+                  ],
+                }}
+              />
+            </WidgetErrorBoundary>
           )}
           <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--ng-card-border)' }}>
             <LiveSyslogWidget />
@@ -300,7 +306,9 @@ export default function DashboardPage() {
           {isLoading ? (
             <Skeleton className="h-40 w-full" />
           ) : data?.heatmap_data ? (
-            <HeatmapGrid data={data.heatmap_data} days={data.heatmap_days} />
+            <WidgetErrorBoundary label="Heatmap">
+              <HeatmapGrid data={data.heatmap_data} days={data.heatmap_days} />
+            </WidgetErrorBoundary>
           ) : (
             <p className="text-sm text-slate-500">No data</p>
           )}
@@ -371,21 +379,23 @@ export default function DashboardPage() {
               No incidents in the last 14 days
             </p>
           ) : (
-            <EChart
-              height={180}
-              option={{
-                tooltip: { trigger: 'axis' },
-                legend: { show: false },
-                grid: { left: 40, right: 12, top: 8, bottom: 24 },
-                xAxis: { type: 'category', data: data.incident_trend.map((d) => d.date), axisLabel: { fontSize: 10 } },
-                yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 10 } },
-                series: [
-                  { name: 'Critical', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.critical), color: '#F87171' },
-                  { name: 'Warning', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.warning), color: '#FBBF24' },
-                  { name: 'Info', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.info), color: '#38BDF8' },
-                ],
-              }}
-            />
+            <WidgetErrorBoundary label="Alert Trends">
+              <EChart
+                height={180}
+                option={{
+                  tooltip: { trigger: 'axis' },
+                  legend: { show: false },
+                  grid: { left: 40, right: 12, top: 8, bottom: 24 },
+                  xAxis: { type: 'category', data: data.incident_trend.map((d) => d.date), axisLabel: { fontSize: 10 } },
+                  yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 10 } },
+                  series: [
+                    { name: 'Critical', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.critical), color: ngColors.critical },
+                    { name: 'Warning', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.warning), color: ngColors.warning },
+                    { name: 'Info', type: 'bar', stack: 'total', data: data.incident_trend.map((d) => d.info), color: ngColors.primary },
+                  ],
+                }}
+              />
+            </WidgetErrorBoundary>
           )}
         </GlassCard>
 
@@ -474,7 +484,7 @@ export default function DashboardPage() {
                       className="h-full rounded-lg transition-all"
                       style={{
                         width: `${Math.min(pool.pct, 100)}%`,
-                        background: pool.pct >= 90 ? '#F87171' : pool.pct >= 75 ? '#FBBF24' : '#34D399',
+                        background: pool.pct >= 90 ? ngColors.critical : pool.pct >= 75 ? ngColors.warning : ngColors.success,
                       }}
                     />
                   </div>

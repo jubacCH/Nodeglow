@@ -150,20 +150,42 @@ body {
   .focus\:ring-offset-1:focus { --tw-ring-offset-color: #E8EEF4; }
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar — thin, theme-aware, accent on hover */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.15s ease-out;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: color-mix(in srgb, var(--ng-primary) 40%, transparent);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
+}
+
+/* Text selection — branded sky tint */
+::selection {
+  background: color-mix(in srgb, var(--ng-primary) 32%, transparent);
+  color: var(--ng-text-primary);
+}
+::-moz-selection {
+  background: color-mix(in srgb, var(--ng-primary) 32%, transparent);
+  color: var(--ng-text-primary);
 }
 
 /* Glass card styles */
@@ -324,6 +346,35 @@ textarea:focus-visible,
 .tabular-nums {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
+}
+
+
+/* ── Skeleton shimmer ────────────────────────────────────────────────────── */
+/* Horizontal shimmer that sweeps across a placeholder every 1.6s. More
+   alive than pulse, and reads as "data is coming" rather than "thing is
+   idle". Applied via the .ng-shimmer class on Skeleton. */
+@keyframes ng-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.ng-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.10) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: ng-shimmer 1.6s ease-in-out infinite;
+}
+[data-theme="light"] .ng-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.03) 0%,
+    rgba(0, 0, 0, 0.08) 50%,
+    rgba(0, 0, 0, 0.03) 100%
+  );
 }
 
 
