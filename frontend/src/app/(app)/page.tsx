@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
@@ -137,14 +137,24 @@ export default function DashboardPage() {
         }
       />
 
-      {/* ── Quick Stats — compact row, ~64px tall ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} href="/hosts?status=online" />
-        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} href="/hosts?status=offline" />
-        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} href="/hosts" />
-        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" tint="bg-amber-500/10" alert={!!data?.active_incidents} loading={isLoading} href="/alerts?tab=incidents" />
-        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" tint="bg-violet-500/10" loading={isLoading} href="/syslog" />
-        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} href="/hosts" />
+      {/* ── Quick Stats — compact row, ~64px tall ──
+          key={dataUpdatedAt} forces a remount every refresh, re-triggering
+          the .ng-just-changed CSS animation defined in globals.css. That's
+          the subtle sky ring pulse that tells you "fresh data just landed"
+          without being loud about it. */}
+      <div
+        key={dataUpdatedAt}
+        className={cn(
+          'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4 rounded-lg',
+          justRefreshed && 'ng-just-changed',
+        )}
+      >
+        <StatCard icon={Server} label="Online" value={data?.online_count} color="text-emerald-400" tint="bg-emerald-500/10" loading={isLoading} href="/hosts?status=online" deltaGoodWhen="up" />
+        <StatCard icon={ServerOff} label="Offline" value={data?.offline_count} color="text-red-400" tint="bg-red-500/10" alert={!!data?.offline_count} loading={isLoading} href="/hosts?status=offline" deltaGoodWhen="down" />
+        <StatCard icon={Gauge} label="Avg Latency" value={avgLatency} suffix="ms" color="text-sky-400" tint="bg-sky-500/10" loading={isLoading} href="/hosts" deltaGoodWhen="down" />
+        <StatCard icon={ShieldAlert} label="Incidents" value={data?.active_incidents} color="text-amber-400" tint="bg-amber-500/10" alert={!!data?.active_incidents} loading={isLoading} href="/alerts?tab=incidents" deltaGoodWhen="down" />
+        <StatCard icon={ArrowUpDown} label="Syslog 24h" value={data?.syslog_stats?.total_24h} color="text-violet-400" tint="bg-violet-500/10" loading={isLoading} href="/syslog" deltaGoodWhen="down" />
+        <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} href="/hosts" deltaGoodWhen="up" />
       </div>
 
       {/* ── Gravity Widget (Hero) ── */}
@@ -157,9 +167,28 @@ export default function DashboardPage() {
       {/* ── Command Center Grid — tighter gaps ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
 
-        {/* Row 1: Hosts | Incidents | Syslog Rate (2-col) */}
-        <GlassCard className="p-4">
-          <WidgetHeader icon={Server} iconColor="text-sky-400" title="Hosts" />
+        {/* Row 1: Hosts | Incidents | Syslog Rate (2-col)
+            Severity-driven accent: cards gain a colored border when their
+            content contains active alerts. The eye picks up border color
+            before it picks up the list contents. */}
+        <GlassCard
+          className={cn(
+            'p-4',
+            (data?.offline_count ?? 0) > 0 && 'border-red-500/25',
+          )}
+        >
+          <WidgetHeader
+            icon={Server}
+            iconColor="text-sky-400"
+            title="Hosts"
+            trailing={
+              (data?.offline_count ?? 0) > 0 && (
+                <span className="text-[10px] font-mono text-red-400 tabular-nums">
+                  {data?.offline_count} offline
+                </span>
+              )
+            }
+          />
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
@@ -174,7 +203,7 @@ export default function DashboardPage() {
                 >
                   <StatusDot status={h.host.maintenance ? 'maintenance' : h.online === null ? 'unknown' : h.online === false ? 'offline' : h.host.port_error ? 'error' : 'online'} />
                   <span className="flex-1 text-sm text-slate-200 truncate">{h.host.name}</span>
-                  <span className="text-xs font-mono text-slate-500">
+                  <span className="text-xs font-mono text-slate-500 tabular-nums">
                     {formatLatency(h.latency)}
                   </span>
                 </Link>
@@ -183,8 +212,24 @@ export default function DashboardPage() {
           )}
         </GlassCard>
 
-        <GlassCard className="p-4">
-          <WidgetHeader icon={ShieldAlert} iconColor="text-red-400" title="Recent Incidents" />
+        <GlassCard
+          className={cn(
+            'p-4',
+            (data?.active_incidents ?? 0) > 0 && 'border-amber-500/30',
+          )}
+        >
+          <WidgetHeader
+            icon={ShieldAlert}
+            iconColor="text-red-400"
+            title="Recent Incidents"
+            trailing={
+              (data?.active_incidents ?? 0) > 0 && (
+                <span className="text-[10px] font-mono text-amber-400 tabular-nums">
+                  {data?.active_incidents} active
+                </span>
+              )
+            }
+          />
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
@@ -630,6 +675,7 @@ function StatCard({
   suffix,
   alert,
   href,
+  deltaGoodWhen = 'down',
 }: {
   icon: React.ElementType;
   label: string;
@@ -640,7 +686,39 @@ function StatCard({
   suffix?: string;
   alert?: boolean;
   href?: string;
+  /** Which direction of delta is "good news" — e.g. latency going down
+   *  is good, online count going up is good. Controls the arrow color. */
+  deltaGoodWhen?: 'up' | 'down';
 }) {
+  // Remember the previous value across renders so we can flash a delta
+  // arrow when it changes. null until the first value arrives, so we
+  // don't flash on initial mount.
+  const prevRef = useRef<number | null>(null);
+  const [delta, setDelta] = useState<number | null>(null);
+  const [deltaVisible, setDeltaVisible] = useState(false);
+  useEffect(() => {
+    if (value == null) return;
+    if (prevRef.current == null) {
+      prevRef.current = value;
+      return;
+    }
+    const diff = value - prevRef.current;
+    if (diff !== 0) {
+      setDelta(diff);
+      setDeltaVisible(true);
+      const t = setTimeout(() => setDeltaVisible(false), 4000);
+      prevRef.current = value;
+      return () => clearTimeout(t);
+    }
+  }, [value]);
+
+  const deltaIsGood =
+    delta == null
+      ? false
+      : deltaGoodWhen === 'up'
+        ? delta > 0
+        : delta < 0;
+
   // Compact StatCard (density pass) — was 96px tall, now ~64px. Icon
   // shrinks from 22 to 16, padding p-5 → p-3, value from text-3xl to
   // text-2xl. Top accent bar stays for visual identification of the stat
@@ -660,9 +738,22 @@ function StatCard({
         {loading ? (
           <Skeleton className="h-6 w-14" />
         ) : (
-          <p className="text-2xl font-bold tracking-tight text-slate-100 tabular-nums leading-none">
-            <AnimatedCounter value={value ?? 0} suffix={suffix} />
-          </p>
+          <div className="flex items-baseline gap-1.5">
+            <p className="text-2xl font-bold tracking-tight text-slate-100 tabular-nums leading-none">
+              <AnimatedCounter value={value ?? 0} suffix={suffix} />
+            </p>
+            {delta != null && deltaVisible && (
+              <span
+                className={cn(
+                  'text-[10px] font-mono tabular-nums leading-none transition-opacity',
+                  deltaIsGood ? 'text-emerald-400' : 'text-red-400',
+                )}
+                title={`Changed by ${delta > 0 ? '+' : ''}${delta} since last refresh`}
+              >
+                {delta > 0 ? '↑' : '↓'}{Math.abs(delta)}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </GlassCard>
