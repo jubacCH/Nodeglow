@@ -240,6 +240,56 @@ table tbody td {
   transform: translateY(-1px);
 }
 
+/* ── Link-wrapped card microinteraction ─────────────────────────────────────
+   Any <a>/<Link> that wraps a GlassCard gets a subtle hover lift + press-
+   down feedback without the cards having to opt in individually. Uses
+   descendant selector `a > .glass-card` so static cards (not inside a link)
+   stay static.
+
+   Also apply to the common "navigable glass card" pattern used across the
+   app: divs that have cursor-pointer and contain a GlassCard. */
+a:not(.no-lift) .glass-card,
+a:not(.no-lift) .glass-elevated {
+  transition: transform 0.15s ease-out, border-color 0.15s ease-out, box-shadow 0.15s ease-out;
+  will-change: transform;
+}
+a:hover .glass-card,
+a:hover .glass-elevated {
+  transform: translateY(-1px);
+  border-color: var(--ng-card-border-hover);
+  box-shadow: var(--ng-card-shadow-hover);
+}
+a:active .glass-card,
+a:active .glass-elevated {
+  transform: translateY(0) scale(0.998);
+  transition-duration: 0.05s;
+}
+
+/* ── Global focus ring ──────────────────────────────────────────────────────
+   Keyboard-focus rings that transition in rather than snapping. Applied
+   via :focus-visible so mouse clicks don't trigger it. */
+*:focus-visible {
+  outline: none;
+}
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.55);
+  outline-offset: 2px;
+  border-radius: inherit;
+  transition: outline-color 0.15s ease-out, outline-offset 0.15s ease-out;
+}
+
+/* Press-down feedback on clickable-looking divs (cards wrapped in <div
+   onClick> or <Link>). Pair with cursor-pointer in markup. */
+.cursor-pointer:active {
+  transform: scale(0.995);
+  transition: transform 0.05s ease-out;
+}
+
 /* Page transition */
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(6px); }
