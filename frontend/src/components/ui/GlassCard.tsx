@@ -12,7 +12,7 @@ export const GlassCard = forwardRef<HTMLDivElement, GlassCardProps>(
     <div
       ref={ref}
       className={cn(
-        'border transition-all',
+        'border transition-all duration-200 ease-out',
         elevated ? 'glass-elevated' : 'glass-card',
         className,
       )}

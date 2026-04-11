@@ -26,9 +26,13 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-lg border font-medium transition-all',
-        'focus:outline-none focus:ring-2 focus:ring-sky-500/40 focus:ring-offset-1',
-        'disabled:opacity-40 disabled:pointer-events-none disabled:shadow-none',
+        'inline-flex items-center justify-center gap-2 rounded-lg border font-medium',
+        // Microinteraction: smooth transition on every state, tactile
+        // press-down feedback, subtle lift on hover.
+        'transition-all duration-150 ease-out',
+        'hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
+        'disabled:opacity-40 disabled:pointer-events-none disabled:shadow-none disabled:hover:translate-y-0',
         variants[variant],
         sizes[size],
         className,
