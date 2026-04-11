@@ -153,6 +153,69 @@ async def test_get_offline_hosts_since_returns_only_all_failed(fake_query):
     assert fake_query.last_params == {"hids": [1, 5, 9], "n": 3}
 
 
+async def test_get_ping_status_transitions(fake_query):
+    fake_query.returns([
+        {"timestamp": datetime(2026, 4, 10, 12, 0), "success": 0, "latency_ms": None, "prev_success": 1},
+        {"timestamp": datetime(2026, 4, 10, 10, 0), "success": 1, "latency_ms": 12.0, "prev_success": None},
+    ])
+
+    result = await ch.get_ping_status_transitions(host_id=7, hours=6)
+
+    assert len(fake_query.calls) == 1
+    sql = fake_query.last_sql.lower()
+    assert "from ping_checks" in sql
+    assert "laginframe" in sql
+    assert "prev_success" in sql
+    assert fake_query.last_params == {"hid": 7, "h": 6}
+    assert len(result) == 2
+    assert result[0]["success"] == 0
+    assert result[1]["prev_success"] is None
+
+
+async def test_get_syslog_events_for_host_requires_matcher():
+    # Without host_id / host_name / host_source_ip the helper short-circuits
+    # to avoid returning the entire syslog firehose.
+    result = await ch.get_syslog_events_for_host(
+        host_id=None, host_name="", host_source_ip="",
+        since=datetime(2026, 4, 10, 0, 0),
+    )
+    assert result == []
+
+
+async def test_get_syslog_events_for_host_builds_or_matchers(fake_query):
+    fake_query.returns([
+        {
+            "received_at": datetime(2026, 4, 10, 12, 0),
+            "severity": 3, "facility": 4,
+            "hostname": "router-01", "app_name": "sshd",
+            "message": "Failed password",
+        },
+    ])
+    since = datetime(2026, 4, 10, 0, 0)
+    rows = await ch.get_syslog_events_for_host(
+        host_id=42,
+        host_name="router-01",
+        host_source_ip="10.0.0.1",
+        since=since,
+        max_severity=4,
+        limit=50,
+    )
+
+    sql = fake_query.last_sql.lower()
+    assert "from syslog_messages" in sql
+    assert "severity <=" in sql
+    assert "order by received_at desc" in sql
+    p = fake_query.last_params
+    assert p["hid"] == 42
+    assert p["hname"] == "router-01"
+    assert p["hsip"] == "10.0.0.1"
+    assert p["max_sev"] == 4
+    assert p["lim"] == 50
+    assert p["since"] == since
+    assert len(rows) == 1
+    assert rows[0]["app_name"] == "sshd"
+
+
 async def test_get_offline_hosts_short_circuits_empty():
     # No CH call should happen with empty inputs.
     result = await ch.get_offline_hosts_since([], min_failures=3)
