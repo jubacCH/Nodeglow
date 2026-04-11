@@ -3,9 +3,11 @@
 import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { SectionHeader } from '@/components/layout/SectionHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useToastStore } from '@/stores/toast';
 import { get, patch, post } from '@/lib/api';
@@ -155,10 +157,12 @@ export default function TasksPage() {
 
       {/* All clear */}
       {!isLoading && totalPending === 0 && (
-        <GlassCard className="p-8 text-center">
-          <CheckCircle size={32} className="text-emerald-400 mx-auto mb-3" />
-          <p className="text-sm text-emerald-400 font-medium">All clear — no pending tasks</p>
-          <p className="text-xs text-slate-500 mt-1">Port scans run automatically every 6 hours</p>
+        <GlassCard>
+          <EmptyState
+            icon={CheckCircle}
+            title="All clear — no pending tasks"
+            description="Port scans run automatically every 6 hours."
+          />
         </GlassCard>
       )}
 
@@ -397,15 +401,12 @@ export default function TasksPage() {
 
       {/* Resolved items (collapsed) */}
       {(resolvedPorts.length > 0 || resolvedSsl.length > 0) && (
-        <GlassCard>
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-semibold text-slate-200">
-              History
-              <span className="ml-2 text-xs font-normal text-slate-500">
-                {resolvedPorts.length + resolvedSsl.length} resolved items
-              </span>
-            </h3>
-          </div>
+        <>
+          <SectionHeader
+            title="History"
+            subtitle={`${resolvedPorts.length + resolvedSsl.length} resolved items`}
+          />
+          <GlassCard>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -447,7 +448,8 @@ export default function TasksPage() {
               </tbody>
             </table>
           </div>
-        </GlassCard>
+          </GlassCard>
+        </>
       )}
     </div>
   );

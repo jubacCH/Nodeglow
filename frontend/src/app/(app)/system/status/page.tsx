@@ -650,7 +650,7 @@ export default function SystemStatusPage() {
             <h3 className="text-sm font-semibold text-slate-200">Dashboard API Performance</h3>
           </div>
           <div className="flex items-center gap-3 mb-3">
-            <span className="text-2xl font-bold text-white">{status.dashboard_perf.total_ms}ms</span>
+            <span className="text-2xl font-bold text-slate-100">{status.dashboard_perf.total_ms}ms</span>
             <Badge variant="severity" severity={status.dashboard_perf.total_ms < 1000 ? 'info' : status.dashboard_perf.total_ms < 3000 ? 'warning' : 'critical'}>
               {status.dashboard_perf.total_ms < 1000 ? 'Fast' : status.dashboard_perf.total_ms < 3000 ? 'Slow' : 'Very Slow'}
             </Badge>
