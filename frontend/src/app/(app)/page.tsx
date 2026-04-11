@@ -17,10 +17,7 @@ const EChart = dynamic(
   () => import('@/components/charts/EChart').then(m => ({ default: m.EChart })),
   { loading: () => <Skeleton className="h-[180px] w-full" />, ssr: false }
 );
-const GravityWidget = dynamic(
-  () => import('@/components/dashboard/GravityWidget').then(m => ({ default: m.GravityWidget })),
-  { loading: () => <div className="h-[380px] bg-slate-500/10 rounded-lg animate-pulse" />, ssr: false }
-);
+import { HostHealthGrid } from '@/components/dashboard/HostHealthGrid';
 import { FirstRunWelcome } from '@/components/dashboard/FirstRunWelcome';
 import { useDashboard } from '@/hooks/queries/useDashboard';
 import { useSSE } from '@/hooks/useSSE';
@@ -157,10 +154,10 @@ export default function DashboardPage() {
         <StatCard icon={TrendingUp} label="Total" value={data?.total_count} color="text-slate-300" tint="bg-slate-400/10" loading={isLoading} href="/hosts" deltaGoodWhen="up" />
       </div>
 
-      {/* ── Gravity Widget (Hero) ── */}
+      {/* ── Fleet Health Grid (Hero) ── */}
       {data?.host_stats && (
         <div className="mb-4">
-          <GravityWidget hosts={data.host_stats} />
+          <HostHealthGrid hosts={data.host_stats} />
         </div>
       )}
 
