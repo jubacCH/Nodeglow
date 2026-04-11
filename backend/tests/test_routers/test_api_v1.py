@@ -89,6 +89,60 @@ async def test_host_not_found(client):
     assert resp.status_code == 404
 
 
+async def test_host_timeline_not_found(client):
+    """GET /api/v1/hosts/99999/timeline returns 404 for missing host."""
+    resp = await client.get("/api/v1/hosts/99999/timeline")
+    assert resp.status_code == 404
+
+
+async def test_host_timeline_empty_sources(client):
+    """Timeline returns empty event list when CH mocks return nothing."""
+    create = await client.post("/api/v1/hosts", json={
+        "name": "timeline-host",
+        "hostname": "10.0.0.42",
+        "check_type": "icmp",
+    })
+    host_id = create.json()["id"]
+
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=24")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["host_id"] == host_id
+    assert body["host_name"] == "timeline-host"
+    assert body["hours"] == 24
+    assert body["events"] == []
+    assert set(body["sources"]) == {"status", "incident", "syslog"}
+
+
+async def test_host_timeline_source_filter(client):
+    """sources=status only disables incident + syslog queries."""
+    create = await client.post("/api/v1/hosts", json={
+        "name": "filter-host",
+        "hostname": "10.0.0.43",
+        "check_type": "icmp",
+    })
+    host_id = create.json()["id"]
+
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?sources=status")
+    assert resp.status_code == 200
+    assert resp.json()["sources"] == ["status"]
+
+
+async def test_host_timeline_hours_validation(client):
+    """Lookback window is clamped to 1..720 hours."""
+    create = await client.post("/api/v1/hosts", json={
+        "name": "clamp-host",
+        "hostname": "10.0.0.44",
+        "check_type": "icmp",
+    })
+    host_id = create.json()["id"]
+
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=0")
+    assert resp.status_code == 422
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=9999")
+    assert resp.status_code == 422
+
+
 async def test_list_hosts_filter_enabled(client):
     """GET /api/v1/hosts?enabled=true filters correctly."""
     resp = await client.get("/api/v1/hosts?enabled=true")
