@@ -21,6 +21,7 @@ import { useToastStore } from '@/stores/toast';
 import { Modal } from '@/components/ui/Modal';
 import type { EChartsOption } from 'echarts';
 import type { Incident } from '@/types';
+import { HostTimeline } from '@/components/hosts/HostTimeline';
 
 interface DiscoveredPort {
   id: number;
@@ -104,7 +105,7 @@ const sevColors: Record<number, string> = {
   4: 'text-amber-400', 5: 'text-blue-400', 6: 'text-slate-400', 7: 'text-slate-500',
 };
 
-type Tab = 'overview' | 'ports' | 'syslog';
+type Tab = 'overview' | 'ports' | 'timeline' | 'syslog';
 
 interface PortInfo {
   idx: number;
@@ -245,6 +246,7 @@ export default function HostDetailPage() {
   const tabs: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
     ...(hasPorts ? [{ key: 'ports' as const, label: `Ports (${device.port_table.length})` }] : []),
+    { key: 'timeline', label: 'Timeline' },
     { key: 'syslog', label: 'Syslog' },
   ];
 
@@ -1136,6 +1138,10 @@ export default function HostDetailPage() {
 
       {activeTab === 'ports' && hasPorts && (
         <PortsTab ports={device.port_table} clients={device.connected_clients ?? []} allHosts={allHosts ?? []} />
+      )}
+
+      {activeTab === 'timeline' && (
+        <HostTimeline hostId={hostId} />
       )}
 
       {activeTab === 'syslog' && (

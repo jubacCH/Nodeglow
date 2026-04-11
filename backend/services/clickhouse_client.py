@@ -393,6 +393,84 @@ async def get_ping_history(host_id: int, hours: int = 24) -> list[dict]:
     return await query(sql, {"hid": int(host_id), "h": int(hours)})
 
 
+async def get_ping_status_transitions(
+    host_id: int,
+    hours: int = 24,
+) -> list[dict]:
+    """Return list of ping status transition events for one host.
+
+    Uses a window function to compare each check against its predecessor and
+    emits one row per flip (success changes from 0↔1). First row is always
+    emitted as the initial state. Latest rows first.
+
+    Row shape: {timestamp, success, latency_ms, prev_success}
+
+    Time-series-cheap: one CH query, no per-row round trips.
+    """
+    sql = """
+        SELECT timestamp, success, latency_ms, prev_success
+        FROM (
+            SELECT
+                timestamp,
+                success,
+                latency_ms,
+                lagInFrame(success) OVER (ORDER BY timestamp ASC) AS prev_success,
+                row_number() OVER (ORDER BY timestamp ASC) AS rn
+            FROM ping_checks
+            WHERE host_id = {hid:UInt32}
+              AND timestamp >= now() - toIntervalHour({h:UInt32})
+        )
+        WHERE rn = 1 OR prev_success != success
+        ORDER BY timestamp DESC
+    """
+    return await query(sql, {"hid": int(host_id), "h": int(hours)})
+
+
+async def get_syslog_events_for_host(
+    host_id: int | None,
+    host_name: str,
+    host_source_ip: str,
+    since: datetime,
+    max_severity: int = 4,
+    limit: int = 200,
+) -> list[dict]:
+    """Return syslog rows for one host over a time window, filtered by
+    severity (≤ max_severity; 4=warning, 3=error, etc.). Newest first.
+
+    At least one of host_id / host_name / host_source_ip should be provided
+    — without any matcher the query returns an empty list instead of the
+    entire log firehose.
+    """
+    if not host_id and not host_name and not host_source_ip:
+        return []
+
+    matchers: list[str] = []
+    params: dict = {"since": since, "max_sev": int(max_severity), "lim": int(limit)}
+    if host_id is not None:
+        matchers.append("host_id = {hid:Int32}")
+        params["hid"] = int(host_id)
+    if host_name:
+        matchers.append("positionCaseInsensitive(hostname, {hname:String}) > 0")
+        params["hname"] = host_name
+    if host_source_ip:
+        matchers.append("source_ip = {hsip:String}")
+        params["hsip"] = host_source_ip
+
+    where = (
+        "received_at >= {since:DateTime64(3)} "
+        f"AND ({' OR '.join(matchers)}) "
+        "AND severity <= {max_sev:Int8}"
+    )
+    sql = f"""
+        SELECT received_at, severity, facility, hostname, app_name, message
+        FROM syslog_messages
+        WHERE {where}
+        ORDER BY received_at DESC
+        LIMIT {{lim:UInt32}}
+    """
+    return await query(sql, params)
+
+
 async def get_offline_hosts_since(
     host_ids: list[int],
     min_failures: int,

@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -468,6 +468,162 @@ async def host_history(
             }
             for r in rows
         ],
+    }
+
+
+@router.get("/hosts/{host_id}/timeline", summary="Merged event timeline for a host")
+async def host_timeline(
+    host_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+    hours: int = Query(24, ge=1, le=720, description="Lookback window in hours"),
+    sources: str = Query(
+        "status,incident,syslog",
+        description="Comma-separated: status, incident, syslog",
+    ),
+    severity_max: int = Query(
+        4, ge=0, le=7,
+        description="Syslog max severity (4=warning, 3=error, 2=critical)",
+    ),
+    limit: int = Query(200, ge=10, le=1000),
+):
+    """Return a time-sorted merged event stream for one host.
+
+    Merges three sources:
+    - `status`  — ping success transitions (online↔offline flips) from CH ping_checks
+    - `incident` — correlation incidents whose events reference this host name
+    - `syslog` — syslog messages ≤ severity_max matching host_id/hostname/source_ip
+
+    Response rows share a common shape: {ts, type, severity, title, summary,
+    details{}}. Newest first. Useful for root-cause analysis — scan the few
+    minutes before an offline event for the syslog line that explains it.
+    """
+    host = await db.get(PingHost, host_id)
+    if not host:
+        raise HTTPException(404, "Host not found")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    wanted = {s.strip() for s in sources.split(",") if s.strip()}
+    events: list[dict] = []
+
+    # ── Ping status transitions (CH) ────────────────────────────────────────
+    if "status" in wanted:
+        from services.clickhouse_client import get_ping_status_transitions
+        try:
+            transitions = await get_ping_status_transitions(host_id, hours=hours)
+        except Exception:
+            transitions = []
+        for t in transitions:
+            success = bool(t.get("success"))
+            prev = t.get("prev_success")
+            latency = t.get("latency_ms")
+            if prev is None:
+                title = "Initial state: online" if success else "Initial state: offline"
+                severity = "info" if success else "critical"
+            elif success:
+                title = "Host came back online"
+                severity = "info"
+            else:
+                title = "Host went offline"
+                severity = "critical"
+            events.append({
+                "ts": t["timestamp"].isoformat() if isinstance(t["timestamp"], datetime) else t["timestamp"],
+                "type": "status",
+                "severity": severity,
+                "title": title,
+                "summary": (
+                    f"Latency {round(float(latency), 1)}ms" if success and latency is not None
+                    else "No response" if not success
+                    else None
+                ),
+                "details": {
+                    "success": success,
+                    "latency_ms": round(float(latency), 2) if latency is not None else None,
+                },
+            })
+
+    # ── Correlation incidents (Postgres) ────────────────────────────────────
+    if "incident" in wanted and host.name:
+        # Match incidents whose events mention this host's name. Mirrors
+        # the pattern used by /api/v1/incidents?host_name=…
+        iq = await db.execute(
+            select(Incident)
+            .join(IncidentEvent, IncidentEvent.incident_id == Incident.id)
+            .where(
+                Incident.created_at >= since,
+                IncidentEvent.summary.ilike(f"%{host.name}%"),
+            )
+            .order_by(Incident.created_at.desc())
+            .distinct()
+            .limit(limit)
+        )
+        for inc in iq.scalars().all():
+            events.append({
+                "ts": inc.created_at.isoformat() if inc.created_at else None,
+                "type": "incident",
+                "severity": inc.severity or "info",
+                "title": inc.title or inc.rule or "Incident",
+                "summary": (
+                    f"Resolved {inc.resolved_at.strftime('%H:%M')}"
+                    if inc.resolved_at else f"Status: {inc.status or 'open'}"
+                ),
+                "details": {
+                    "incident_id": inc.id,
+                    "rule": inc.rule,
+                    "status": inc.status,
+                    "resolved_at": inc.resolved_at.isoformat() if inc.resolved_at else None,
+                },
+            })
+
+    # ── Syslog matches (CH) ─────────────────────────────────────────────────
+    if "syslog" in wanted:
+        from services.clickhouse_client import get_syslog_events_for_host
+        try:
+            rows = await get_syslog_events_for_host(
+                host_id=host_id,
+                host_name=host.name or "",
+                host_source_ip=host.hostname or "",  # hostname col holds IP/DNS target
+                since=since,
+                max_severity=severity_max,
+                limit=limit,
+            )
+        except Exception:
+            rows = []
+        # syslog severity int → label
+        sev_map = {
+            0: "critical", 1: "critical", 2: "critical",
+            3: "error", 4: "warning", 5: "info", 6: "info", 7: "info",
+        }
+        for r in rows:
+            sev_int = int(r.get("severity") or 6)
+            events.append({
+                "ts": r["received_at"].isoformat() if isinstance(r["received_at"], datetime) else r["received_at"],
+                "type": "syslog",
+                "severity": sev_map.get(sev_int, "info"),
+                "title": (r.get("app_name") or "syslog") + (f": {r.get('message', '')[:80]}" if r.get("message") else ""),
+                "summary": f"{r.get('hostname') or ''} · sev {sev_int}",
+                "details": {
+                    "severity_int": sev_int,
+                    "facility": r.get("facility"),
+                    "hostname": r.get("hostname"),
+                    "app_name": r.get("app_name"),
+                    "message": r.get("message"),
+                },
+            })
+
+    # Sort merged stream newest first and cap
+    events.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    if len(events) > limit:
+        events = events[:limit]
+
+    return {
+        "host_id": host_id,
+        "host_name": host.name,
+        "hours": hours,
+        "since": since.isoformat(),
+        "sources": sorted(wanted),
+        "total": len(events),
+        "events": events,
     }
 
 
