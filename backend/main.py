@@ -258,8 +258,9 @@ async def inject_globals(request: Request, call_next):
     generate_csrf_token(request)
 
     # CSRF protection for state-changing methods
-    # Skip for: API-key-authenticated requests, /api/v1/ (has own API key auth layer)
-    has_api_key = bool(request.headers.get("X-API-Key") or request.query_params.get("api_key"))
+    # Skip for: API-key-authenticated requests, /api/v1/ (has own API key auth layer).
+    # Header-only — query-string keys are rejected by the auth layer anyway.
+    has_api_key = bool(request.headers.get("X-API-Key"))
     is_api_v1 = request.url.path.startswith("/api/v1/")
     if request.method in ("POST", "PUT", "DELETE", "PATCH") and not has_api_key and not is_api_v1:
         content_type = request.headers.get("content-type", "")
