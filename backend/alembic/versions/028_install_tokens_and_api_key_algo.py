@@ -26,7 +26,7 @@ def upgrade():
         sa.Column("note", sa.String(length=256), nullable=True),
         sa.Column("hostname_pattern", sa.String(length=256), nullable=True),
         sa.Column("expires_at", sa.DateTime, nullable=False),
-        sa.Column("revoked", sa.Boolean, nullable=False, server_default=sa.false()),
+        sa.Column("revoked", sa.Boolean, nullable=False, server_default=sa.text("false")),
         sa.Column("used_count", sa.Integer, nullable=False, server_default="0"),
         sa.Column("last_used_at", sa.DateTime, nullable=True),
         sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
