@@ -576,8 +576,17 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
 
     loop = asyncio.get_running_loop()
 
-    # Initial host cache load
+    # Initial host cache load (also populates _allowlist_only from DB setting).
     await _refresh_host_cache()
+
+    if not _allowlist_only:
+        log.warning(
+            "Syslog host allowlist is DISABLED — every UDP/TCP source on "
+            "port %d/%d can inject log entries and trigger host auto-assignment. "
+            "Enable 'syslog_allowlist_only' in Settings → General for "
+            "production/internet-exposed deployments.",
+            udp_port, tcp_port,
+        )
 
     # Load log intelligence template cache
     try:
