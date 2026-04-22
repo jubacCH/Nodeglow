@@ -81,6 +81,10 @@ async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) 
                 if api_key.key_hash != hmac_hash:
                     api_key.key_hash = hmac_hash
                     logger.warning("Migrated legacy SHA256 API key '%s' to HMAC. Consider rotating this key.", api_key.name)
+                # Mark the algo even when the hash already matched — legacy
+                # rows created before migration column existed are NULL.
+                if api_key.hash_algo != "hmac":
+                    api_key.hash_algo = "hmac"
                 api_key.last_used = datetime.utcnow()
                 await db.commit()
                 return api_key

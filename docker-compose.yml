@@ -51,6 +51,14 @@ services:
       SYSLOG_PORT: "1514"
       UPDATE_SIDECAR_URL: http://updater:9100
       UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with updater)}
+      # Fernet/HMAC pepper. Provide via env for stronger separation from the
+      # data volume. If unset, a key is auto-generated in DATA_DIR (see warning
+      # in backend logs at startup).
+      SECRET_KEY: ${SECRET_KEY:-}
+      # Opt-in legacy escape hatch: when "1", the shared agent_enrollment_key
+      # flow is still accepted alongside per-install tokens. Leave unset on
+      # new deployments.
+      NODEGLOW_ALLOW_SHARED_ENROLLMENT: ${NODEGLOW_ALLOW_SHARED_ENROLLMENT:-}
     depends_on:
       db:
         condition: service_healthy
