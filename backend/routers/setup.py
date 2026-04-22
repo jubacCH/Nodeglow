@@ -47,6 +47,9 @@ async def complete_setup(
 
     await set_setting(db, "site_name", site_name.strip() or "NODEGLOW")
     await set_setting(db, "ping_interval", "60")
+    # Secure-by-default for new installs: only accept syslog from registered hosts.
+    # Operators can opt out on the settings page.
+    await set_setting(db, "syslog_allowlist_only", "1")
     # Set setup_complete last — only after user creation
     await set_setting(db, "setup_complete", "true")
     await db.commit()

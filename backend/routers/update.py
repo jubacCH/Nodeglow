@@ -12,6 +12,18 @@ router = APIRouter(prefix="/api/update")
 log = logging.getLogger(__name__)
 
 SIDECAR_URL = os.environ.get("UPDATE_SIDECAR_URL", "http://updater:9100")
+# Shared secret for authenticating to the updater sidecar. Must match the
+# UPDATE_SIDECAR_TOKEN env var on the `updater` container.
+_SIDECAR_TOKEN = os.environ.get("UPDATE_SIDECAR_TOKEN", "").strip()
+
+
+def _sidecar_headers() -> dict[str, str]:
+    if not _SIDECAR_TOKEN:
+        # Fail-closed: refuse to even contact the sidecar without a token.
+        raise RuntimeError(
+            "UPDATE_SIDECAR_TOKEN is not configured on the backend container."
+        )
+    return {"Authorization": f"Bearer {_SIDECAR_TOKEN}"}
 
 
 @router.get("/check")
@@ -19,12 +31,20 @@ SIDECAR_URL = os.environ.get("UPDATE_SIDECAR_URL", "http://updater:9100")
 async def check_for_updates(request: Request):
     """Check for available updates via the update sidecar."""
     try:
-        async with httpx.AsyncClient(timeout=35.0) as client:
+        headers = _sidecar_headers()
+        async with httpx.AsyncClient(timeout=35.0, headers=headers) as client:
             ver_resp = await client.get(f"{SIDECAR_URL}/version")
             local = ver_resp.json() if ver_resp.status_code == 200 else {"commit": "unknown"}
 
             check_resp = await client.get(f"{SIDECAR_URL}/check")
             check = check_resp.json() if check_resp.status_code == 200 else {}
+    except RuntimeError as e:
+        log.error("Update sidecar misconfigured: %s", e)
+        return JSONResponse({
+            "local": {"commit": "unknown"},
+            "update_available": False,
+            "error": "Update service is not configured (missing UPDATE_SIDECAR_TOKEN).",
+        }, status_code=503)
     except Exception as e:
         log.error("Update sidecar unreachable: %s", e)
         return JSONResponse({
@@ -52,9 +72,16 @@ async def apply_update(request: Request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
 
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        headers = _sidecar_headers()
+        async with httpx.AsyncClient(timeout=90.0, headers=headers) as client:
             resp = await client.post(f"{SIDECAR_URL}/apply")
             result = resp.json()
+    except RuntimeError as e:
+        log.error("Update sidecar misconfigured: %s", e)
+        return JSONResponse(
+            {"ok": False, "error": "Update service is not configured (missing UPDATE_SIDECAR_TOKEN)."},
+            status_code=503,
+        )
     except Exception as e:
         log.error("Update sidecar error: %s", e)
         return JSONResponse({"ok": False, "error": f"Update service unavailable: {e}"})

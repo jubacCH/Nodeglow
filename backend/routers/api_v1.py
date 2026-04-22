@@ -2,7 +2,8 @@
 REST API v1 – External JSON API with API key authentication.
 
 All endpoints are under /api/v1/ and require an API key via
-X-API-Key header or ?api_key= query parameter.
+the `X-API-Key` HTTP header. Query-string keys are NOT accepted
+(would leak through logs, browser history and proxies).
 """
 from __future__ import annotations
 
@@ -51,8 +52,21 @@ def _hash_key_legacy(key: str) -> str:
 
 
 async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) -> ApiKey:
-    """Validate API key from header/query param, or fall back to session auth."""
-    key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+    """Validate API key from the X-API-Key header, or fall back to session auth."""
+    # Header only: query-string keys would leak via proxy/access logs + browser history.
+    key = request.headers.get("X-API-Key")
+    if not key and request.query_params.get("api_key"):
+        logger.warning(
+            "Rejected API request with key in query-string from %s (path=%s). "
+            "Clients must use the X-API-Key header.",
+            request.client.host if request.client else "?",
+            request.url.path,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="API key must be sent via the X-API-Key header. "
+                   "Query-string authentication was removed for security reasons.",
+        )
     if key:
         # Try HMAC hash first, fall back to legacy SHA256
         for hasher in (_hash_key, _hash_key_legacy):
