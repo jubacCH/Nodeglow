@@ -1017,6 +1017,49 @@ async def run_alert_rules():
             logger.info("Alert rules: %d rule(s) triggered", triggered)
 
 
+@instrument_job("legacy_api_key_cleanup")
+async def cleanup_legacy_api_keys():
+    """Disable API keys that still use legacy (plain SHA256) hashing and have
+    not been touched in 30 days. The `hash_algo` column is set to 'hmac' both
+    when a new key is minted and when an old key is migrated on successful
+    auth; any row that is still NULL after 30d is either abandoned or unused
+    legacy material and should not be a valid credential in production."""
+    from models.api_key import ApiKey
+    from sqlalchemy import update as sa_update
+    from models.audit import AuditLog
+
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ApiKey).where(
+                ApiKey.hash_algo.is_(None),
+                ApiKey.enabled == True,
+                ApiKey.created_at < cutoff,
+            )
+        )
+        stale = result.scalars().all()
+        if not stale:
+            return
+        names = [k.name for k in stale]
+        await db.execute(
+            sa_update(ApiKey)
+            .where(ApiKey.id.in_([k.id for k in stale]))
+            .values(enabled=False)
+        )
+        db.add(AuditLog(
+            username="system",
+            action="api_key.legacy_auto_disabled",
+            target_type="api_key",
+            target_name=", ".join(names)[:256],
+            details=f"Auto-disabled {len(stale)} legacy-hash key(s) unused for 30+ days",
+        ))
+        await db.commit()
+    logger.warning(
+        "Disabled %d legacy-algo API key(s) untouched for 30+ days: %s",
+        len(stale), ", ".join(names),
+    )
+
+
 @instrument_job("backup_compliance")
 async def run_backup_compliance():
     """Check all backup jobs for compliance (overdue/failed) and log issues."""
@@ -1082,6 +1125,8 @@ async def start_scheduler():
                       id="disk_space", replace_existing=True)
     scheduler.add_job(run_backup_compliance, "interval", hours=1,
                       id="backup_compliance", replace_existing=True)
+    scheduler.add_job(cleanup_legacy_api_keys, "cron", hour=3, minute=30,
+                      id="legacy_api_key_cleanup", replace_existing=True)
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
                       id="ch_cleanup", replace_existing=True)
 

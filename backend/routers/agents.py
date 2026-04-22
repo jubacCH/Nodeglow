@@ -5,7 +5,21 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy import select
+
+from database import AsyncSessionLocal, PingHost, get_setting, set_setting
+from ratelimit import rate_limit
+from models.agent import Agent
+from models.agent_install_token import AgentInstallToken
+from services.websocket import broadcast_agent_metric
+
 
 def _hash_agent_token(token: str) -> str:
     """HMAC-SHA256 hash an agent token for secure storage."""
@@ -16,24 +30,36 @@ def _hash_agent_token(token: str) -> str:
 def _hash_agent_token_legacy(token: str) -> str:
     """Legacy plain SHA256 — for migration from pre-HMAC tokens."""
     return hashlib.sha256(token.encode()).hexdigest()
-from datetime import datetime
-from pathlib import Path
 
-from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import select
 
-from database import AsyncSessionLocal, PingHost, get_setting, set_setting
-from ratelimit import rate_limit
-from models.agent import Agent
-from services.websocket import broadcast_agent_metric
+def _hash_install_token(token: str) -> str:
+    """Same pepper as agent tokens so we share the key-derivation pattern."""
+    from config import SECRET_KEY
+    return hmac.new(SECRET_KEY.encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
+def _shared_enrollment_allowed() -> bool:
+    """Opt-in escape hatch for existing installs still using the shared key."""
+    return os.environ.get("NODEGLOW_ALLOW_SHARED_ENROLLMENT", "").strip() in ("1", "true", "yes")
+
+
+def _require_admin(request: Request):
+    """Return None on admin, or a 403 JSONResponse otherwise."""
+    user = getattr(request.state, "current_user", None)
+    role = getattr(user, "role", None)
+    if not user or role != "admin":
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    return None
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 async def _get_enrollment_key() -> str:
-    """Get or create the global agent enrollment key."""
+    """Legacy shared enrollment key. Only used when
+    NODEGLOW_ALLOW_SHARED_ENROLLMENT=1 is set on the backend container.
+    New deployments must use per-install tokens (AgentInstallToken)."""
     async with AsyncSessionLocal() as db:
         key = await get_setting(db, "agent_enrollment_key")
         if not key:
@@ -43,12 +69,36 @@ async def _get_enrollment_key() -> str:
         return key
 
 
+async def _consume_install_token(db, raw_token: str, hostname: str) -> tuple[bool, str]:
+    """Validate and consume an install token. Returns (ok, reason)."""
+    token_hash = _hash_install_token(raw_token)
+    result = await db.execute(
+        select(AgentInstallToken).where(AgentInstallToken.token_hash == token_hash)
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        return False, "Unknown install token"
+    if row.revoked:
+        return False, "Install token revoked"
+    if row.expires_at <= datetime.utcnow():
+        return False, "Install token expired"
+    if row.hostname_pattern:
+        needle = row.hostname_pattern.strip().lower()
+        if needle and needle not in hostname.lower():
+            return False, "Install token is not valid for this hostname"
+    row.used_count = (row.used_count or 0) + 1
+    row.last_used_at = datetime.utcnow()
+    return True, ""
+
+
 # ── API: Agent self-enrollment ────────────────────────────────────────────────
 
 @router.post("/api/agent/enroll")
 @rate_limit(max_requests=5, window_seconds=60)
 async def agent_enroll(request: Request):
-    """Agent self-registers using the enrollment key. Returns a token."""
+    """Agent self-registers using an install token (preferred) or the legacy
+    shared enrollment key when NODEGLOW_ALLOW_SHARED_ENROLLMENT=1 is set.
+    Returns a permanent bearer token."""
     try:
         body = await request.json()
     except Exception:
@@ -66,11 +116,38 @@ async def agent_enroll(request: Request):
     if len(hostname) > 253 or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]*$', hostname):
         return JSONResponse({"error": "Invalid hostname"}, status_code=400)
 
-    logger.info("Agent enrollment attempt: hostname=%s, ip=%s", hostname, request.client.host if request.client else "unknown")
+    client_ip_log = request.client.host if request.client else "unknown"
+    logger.info("Agent enrollment attempt: hostname=%s, ip=%s", hostname, client_ip_log)
 
-    expected_key = await _get_enrollment_key()
-    if not hmac.compare_digest(enroll_key, expected_key):
-        return JSONResponse({"error": "Invalid enrollment key"}, status_code=403)
+    # Preferred path: per-install token (scoped, expiring, revocable).
+    async with AsyncSessionLocal() as token_db:
+        token_ok, token_err = await _consume_install_token(token_db, enroll_key, hostname)
+        if token_ok:
+            await token_db.commit()
+        else:
+            await token_db.rollback()
+
+    if not token_ok:
+        # Legacy fallback — only when explicitly enabled by the operator.
+        if not _shared_enrollment_allowed():
+            logger.warning(
+                "Rejected enrollment from %s (hostname=%s): %s and shared-key flow disabled",
+                client_ip_log, hostname, token_err,
+            )
+            return JSONResponse(
+                {"error": token_err or "Invalid install token"}, status_code=403,
+            )
+        expected_key = await _get_enrollment_key()
+        if not hmac.compare_digest(enroll_key, expected_key):
+            logger.warning(
+                "Rejected enrollment from %s (hostname=%s): legacy shared-key mismatch",
+                client_ip_log, hostname,
+            )
+            return JSONResponse({"error": "Invalid enrollment key"}, status_code=403)
+        logger.warning(
+            "Legacy shared-key enrollment accepted for %s — migrate to install tokens",
+            hostname,
+        )
 
     # Use the client's real IP for PingHost (hostname may not be resolvable from server)
     client_ip = request.client.host if request.client else None
@@ -316,15 +393,110 @@ async def agent_logs(request: Request):
     return {"ok": True, "count": count}
 
 
+# ── Install-token CRUD (admin) ────────────────────────────────────────────────
+
+@router.post("/api/agents/install-tokens")
+@rate_limit(max_requests=10, window_seconds=60)
+async def create_install_token(request: Request):
+    """Issue a new per-install enrollment token. Admin only. Returns the
+    plaintext token once — it is stored only as an HMAC hash afterwards."""
+    if err := _require_admin(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    note = (body.get("note") or "").strip()[:256]
+    hostname_pattern = (body.get("hostname_pattern") or "").strip()[:256] or None
+    try:
+        ttl_hours = int(body.get("ttl_hours", 24))
+    except (TypeError, ValueError):
+        ttl_hours = 24
+    ttl_hours = max(1, min(ttl_hours, 24 * 30))  # clamp 1h..30d
+
+    raw = f"nt_{secrets.token_hex(24)}"
+    token_row = AgentInstallToken(
+        token_hash=_hash_install_token(raw),
+        prefix=raw[:8],
+        note=note or None,
+        hostname_pattern=hostname_pattern,
+        expires_at=datetime.utcnow() + timedelta(hours=ttl_hours),
+        created_by=(getattr(request.state, "current_user", None).username
+                    if getattr(request.state, "current_user", None) else None),
+    )
+    async with AsyncSessionLocal() as db:
+        db.add(token_row)
+        await db.commit()
+        await db.refresh(token_row)
+
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    async with AsyncSessionLocal() as db:
+        custom_url = await get_setting(db, "agent_server_url", "")
+    server_url = custom_url or f"{scheme}://{request.url.netloc}"
+
+    return {
+        "ok": True,
+        "id": token_row.id,
+        "token": raw,
+        "prefix": token_row.prefix,
+        "expires_at": token_row.expires_at.isoformat(),
+        "install_linux": f"curl -sSL '{server_url}/install/linux?token={raw}' | sudo bash",
+        "install_windows": f"irm '{server_url}/install/windows?token={raw}' | iex",
+    }
+
+
+@router.get("/api/agents/install-tokens")
+async def list_install_tokens(request: Request):
+    """List active install tokens (prefix + metadata only, no secrets)."""
+    if err := _require_admin(request):
+        return err
+    now = datetime.utcnow()
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(AgentInstallToken).order_by(AgentInstallToken.created_at.desc())
+        )).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "prefix": r.prefix,
+            "note": r.note,
+            "hostname_pattern": r.hostname_pattern,
+            "expires_at": r.expires_at.isoformat(),
+            "expired": r.expires_at <= now,
+            "revoked": bool(r.revoked),
+            "used_count": r.used_count or 0,
+            "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "created_by": r.created_by,
+        }
+        for r in rows
+    ]
+
+
+@router.delete("/api/agents/install-tokens/{token_id}")
+@rate_limit(max_requests=10, window_seconds=60)
+async def revoke_install_token(token_id: int, request: Request):
+    """Revoke an install token without deleting its audit record."""
+    if err := _require_admin(request):
+        return err
+    async with AsyncSessionLocal() as db:
+        row = await db.get(AgentInstallToken, token_id)
+        if not row:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        row.revoked = True
+        await db.commit()
+    return {"ok": True}
+
+
 # ── Enrollment info (JSON API for SPA) ────────────────────────────────────────
 
 @router.get("/api/enrollment-info")
 async def enrollment_info(request: Request):
-    """Return enrollment key + install commands for SPA. Requires admin session."""
-    user = getattr(request.state, "current_user", None)
-    role = getattr(user, "role", "admin") or "admin"
-    if not user or role != "admin":
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    """Return install hints for the SPA. Admin only. Does NOT leak any
+    enrollment secret — the SPA must call POST /api/agents/install-tokens
+    to mint one."""
+    if err := _require_admin(request):
+        return err
     async with AsyncSessionLocal() as db:
         custom_url = await get_setting(db, "agent_server_url", "")
     if custom_url:
@@ -332,20 +504,46 @@ async def enrollment_info(request: Request):
     else:
         scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
         server_url = f"{scheme}://{request.url.netloc}"
-    key = await _get_enrollment_key()
     return {
-        "enrollment_key": key,
         "server_url": server_url,
-        "install_linux": f"curl -sSL {server_url}/install/linux | sudo bash",
-        "install_windows": f"irm {server_url}/install/windows | iex",
+        "install_linux_template": f"curl -sSL '{server_url}/install/linux?token=<INSTALL_TOKEN>' | sudo bash",
+        "install_windows_template": f"irm '{server_url}/install/windows?token=<INSTALL_TOKEN>' | iex",
+        "shared_enrollment_enabled": _shared_enrollment_allowed(),
     }
+
+
+async def _authorize_install_request(request: Request) -> tuple[bool, str | None]:
+    """Authorize a /install/* request by validating a ?token=<raw> query
+    parameter against AgentInstallToken. Returns (ok, raw_token_or_None).
+    NOTE: /install/* is on the auth-middleware skip list in main.py, so we
+    cannot rely on session state here; the query-param token is the single
+    source of authentication."""
+    qp_token = (request.query_params.get("token") or "").strip()
+    if not qp_token:
+        return False, None
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(AgentInstallToken).where(
+                AgentInstallToken.token_hash == _hash_install_token(qp_token)
+            )
+        )
+        row = result.scalar_one_or_none()
+    if not row or row.revoked or row.expires_at <= datetime.utcnow():
+        return False, None
+    return True, qp_token
 
 
 # ── Install scripts (universal one-liner endpoints) ──────────────────────────
 
 @router.get("/install/linux")
 async def install_linux(request: Request):
-    """Universal Linux installer. Usage: curl -sSL <url>/install/linux | sudo bash"""
+    """Universal Linux installer. Usage:
+        curl -sSL '<url>/install/linux?token=<INSTALL_TOKEN>' | sudo bash
+    Requires a valid per-install token generated via
+    POST /api/agents/install-tokens (admin)."""
+    ok, install_token = await _authorize_install_request(request)
+    if not ok:
+        return JSONResponse({"error": "Valid install token required"}, status_code=401)
     async with AsyncSessionLocal() as db:
         custom_url = await get_setting(db, "agent_server_url", "")
     if custom_url:
@@ -353,7 +551,10 @@ async def install_linux(request: Request):
     else:
         scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
         server_url = f"{scheme}://{request.url.netloc}"
-    enrollment_key = await _get_enrollment_key()
+    # Script needs a value for the shell variable. For admin-session access
+    # without a token query-param we emit a placeholder that will visibly
+    # fail at enrollment time instead of silently using something valid.
+    enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
 
     script = f'''#!/bin/bash
 set -e
@@ -475,7 +676,13 @@ echo ""
 
 @router.get("/install/windows")
 async def install_windows(request: Request):
-    """Universal Windows installer. Usage: irm <url>/install/windows | iex"""
+    """Universal Windows installer. Usage:
+        irm '<url>/install/windows?token=<INSTALL_TOKEN>' | iex
+    Requires a valid per-install token generated via
+    POST /api/agents/install-tokens (admin)."""
+    ok, install_token = await _authorize_install_request(request)
+    if not ok:
+        return JSONResponse({"error": "Valid install token required"}, status_code=401)
     async with AsyncSessionLocal() as db:
         custom_url = await get_setting(db, "agent_server_url", "")
     if custom_url:
@@ -483,7 +690,7 @@ async def install_windows(request: Request):
     else:
         scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
         server_url = f"{scheme}://{request.url.netloc}"
-    enrollment_key = await _get_enrollment_key()
+    enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
 
     script = f'''# ── Nodeglow Agent Installer for Windows ─────────────────────────────────────
 $ErrorActionPreference = "Stop"
