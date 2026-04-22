@@ -50,6 +50,7 @@ services:
       DATA_DIR: /data
       SYSLOG_PORT: "1514"
       UPDATE_SIDECAR_URL: http://updater:9100
+      UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with updater)}
     depends_on:
       db:
         condition: service_healthy
@@ -65,6 +66,8 @@ services:
     volumes:
       - .:/opt/repo
       - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with backend)}
     expose:
       - "9100"
     restart: unless-stopped
