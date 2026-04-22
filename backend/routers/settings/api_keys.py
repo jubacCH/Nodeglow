@@ -52,6 +52,7 @@ async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
     api_key = ApiKey(
         name=name, key_hash=key_hash, prefix=prefix, role=role,
         created_by=user.username if user else None,
+        hash_algo="hmac",
     )
     db.add(api_key)
     await db.commit()

@@ -28,6 +28,7 @@ from models.syslog import SyslogView
 from models.incident import Incident, IncidentEvent
 from models.log_template import LogTemplate, HostBaseline, PrecursorPattern
 from models.agent import Agent
+from models.agent_install_token import AgentInstallToken
 from models.scanner import SubnetScanSchedule, SubnetScanLog
 from models.credential import Credential
 from models.snmp import SnmpMib, SnmpOid, SnmpHostConfig, SnmpResult
@@ -61,7 +62,7 @@ __all__ = [
     "SyslogView",
     "Incident", "IncidentEvent",
     "LogTemplate", "HostBaseline", "PrecursorPattern",
-    "Agent",
+    "Agent", "AgentInstallToken",
     "SubnetScanSchedule", "SubnetScanLog",
     "Credential",
     "SnmpMib", "SnmpOid", "SnmpHostConfig", "SnmpResult",
