@@ -19,3 +19,8 @@ class ApiKey(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     created_by = Column(String(64), nullable=True)
     note = Column(Text, nullable=True)
+    # Which hashing scheme produced key_hash. 'hmac' = current (HMAC-SHA256 with
+    # SECRET_KEY pepper). NULL = legacy plain SHA256 that has not yet been
+    # touched by the auto-migration path in require_api_key(). A scheduled
+    # cleanup job disables NULL-algo keys older than 30 days.
+    hash_algo = Column(String(16), nullable=True)
