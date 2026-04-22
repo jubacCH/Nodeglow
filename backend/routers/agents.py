@@ -70,25 +70,33 @@ async def _get_enrollment_key() -> str:
 
 
 async def _consume_install_token(db, raw_token: str, hostname: str) -> tuple[bool, str]:
-    """Validate and consume an install token. Returns (ok, reason)."""
+    """Validate and consume an install token. The `reason` in the return value
+    is for server-side logging ONLY — the caller must not surface it to the
+    client, otherwise the distinct error cases enable token-existence
+    enumeration via timing/response-body differences."""
+    import fnmatch
     token_hash = _hash_install_token(raw_token)
     result = await db.execute(
         select(AgentInstallToken).where(AgentInstallToken.token_hash == token_hash)
     )
     row = result.scalar_one_or_none()
     if not row:
-        return False, "Unknown install token"
+        return False, "unknown"
     if row.revoked:
-        return False, "Install token revoked"
+        return False, "revoked"
     if row.expires_at <= datetime.utcnow():
-        return False, "Install token expired"
+        return False, "expired"
     if row.hostname_pattern:
-        needle = row.hostname_pattern.strip().lower()
-        if needle and needle not in hostname.lower():
-            return False, "Install token is not valid for this hostname"
+        # fnmatch is case-sensitive by default; lower() both sides so patterns
+        # like "web-*.b8n.ch" are host-case-insensitive but still anchored
+        # (substring matching was replaced because ".b8n.ch" would otherwise
+        # accept evil.b8n.ch.attacker.com).
+        pat = row.hostname_pattern.strip().lower()
+        if pat and not fnmatch.fnmatchcase(hostname.lower(), pat):
+            return False, "hostname_mismatch"
     row.used_count = (row.used_count or 0) + 1
     row.last_used_at = datetime.utcnow()
-    return True, ""
+    return True, "ok"
 
 
 # ── API: Agent self-enrollment ────────────────────────────────────────────────
@@ -129,21 +137,25 @@ async def agent_enroll(request: Request):
 
     if not token_ok:
         # Legacy fallback — only when explicitly enabled by the operator.
+        # In all failure paths we return the SAME generic error so the client
+        # cannot distinguish "unknown token" from "revoked/expired/hostname
+        # mismatch" via the response body. Detailed reasons go to logs.
+        generic_403 = JSONResponse(
+            {"error": "Invalid enrollment credential"}, status_code=403,
+        )
         if not _shared_enrollment_allowed():
             logger.warning(
-                "Rejected enrollment from %s (hostname=%s): %s and shared-key flow disabled",
+                "Rejected enrollment from %s (hostname=%s): token %s; shared-key flow disabled",
                 client_ip_log, hostname, token_err,
             )
-            return JSONResponse(
-                {"error": token_err or "Invalid install token"}, status_code=403,
-            )
+            return generic_403
         expected_key = await _get_enrollment_key()
         if not hmac.compare_digest(enroll_key, expected_key):
             logger.warning(
-                "Rejected enrollment from %s (hostname=%s): legacy shared-key mismatch",
-                client_ip_log, hostname,
+                "Rejected enrollment from %s (hostname=%s): token %s; legacy shared-key mismatch",
+                client_ip_log, hostname, token_err,
             )
-            return JSONResponse({"error": "Invalid enrollment key"}, status_code=403)
+            return generic_403
         logger.warning(
             "Legacy shared-key enrollment accepted for %s — migrate to install tokens",
             hostname,
