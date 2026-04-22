@@ -2,8 +2,16 @@
 
 Listens on port 9100 (internal only). The main app calls this instead of
 accessing the Docker socket directly.
+
+Authentication
+--------------
+All endpoints except ``/health`` require a bearer token matching the
+``UPDATE_SIDECAR_TOKEN`` environment variable (shared with the backend
+container). If the variable is unset or empty, the sidecar refuses every
+non-health request — fail-closed default so a misconfigured deployment
+cannot be driven to pull arbitrary code + rebuild containers.
 """
-import asyncio
+import hmac
 import json
 import os
 import subprocess
@@ -12,11 +20,36 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 REPO_PATH = "/opt/repo"
 COMPOSE_FILE = f"{REPO_PATH}/docker-compose.yml"
 
+# Shared secret with the backend. Must be set in the environment of both
+# containers via docker-compose. An empty value means no request can mutate
+# anything — this is intentional (fail-closed).
+AUTH_TOKEN = os.environ.get("UPDATE_SIDECAR_TOKEN", "").strip()
+
 
 class UpdateHandler(BaseHTTPRequestHandler):
     """Simple HTTP handler for update operations."""
 
+    # Paths that never require authentication (for compose healthcheck + liveness).
+    PUBLIC_PATHS = {"/health"}
+
+    def _authorized(self) -> bool:
+        """Check Bearer token using constant-time comparison."""
+        if self.path in self.PUBLIC_PATHS:
+            return True
+        if not AUTH_TOKEN:
+            return False
+        header = self.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            return False
+        provided = header[len("Bearer "):].strip()
+        return hmac.compare_digest(provided, AUTH_TOKEN)
+
+    def _reject_unauthorized(self):
+        self._json(401, {"error": "Unauthorized"})
+
     def do_GET(self):
+        if not self._authorized():
+            return self._reject_unauthorized()
         if self.path == "/health":
             self._json(200, {"status": "ok"})
         elif self.path == "/version":
@@ -27,6 +60,8 @@ class UpdateHandler(BaseHTTPRequestHandler):
             self._json(404, {"error": "Not found"})
 
     def do_POST(self):
+        if not self._authorized():
+            return self._reject_unauthorized()
         if self.path == "/apply":
             result = self._apply_update()
             self._json(200, result)
@@ -121,6 +156,9 @@ class UpdateHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "9100"))
+    if not AUTH_TOKEN:
+        print("[update-sidecar] WARNING: UPDATE_SIDECAR_TOKEN is empty — "
+              "all mutating endpoints will return 401 until it is set.")
     server = HTTPServer(("0.0.0.0", port), UpdateHandler)
     print(f"[update-sidecar] listening on :{port}")
     server.serve_forever()
