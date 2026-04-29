@@ -205,6 +205,17 @@ async def run_integration_checks():
 _offline_since: dict[int, datetime] = {}
 _grace_notified: set[int] = set()  # host_ids already notified after grace
 
+# Hysteresis for the host.port_error flag. The raw single-cycle result from
+# check_host() flaps for borderline hosts (e.g. external HTTPS endpoints with
+# transient TLS / rate-limit issues), which causes the correlation engine to
+# fire and auto-resolve incidents in the same 60s cycle. Latch the flag:
+# only set it True after N consecutive failed service checks, and only clear
+# it after M consecutive passes.
+PORT_ERROR_SET_THRESHOLD = 3
+PORT_ERROR_CLEAR_THRESHOLD = 2
+_port_fail_streak: dict[int, int] = {}
+_port_pass_streak: dict[int, int] = {}
+
 
 @instrument_job("ping_checks")
 async def run_ping_checks():
@@ -310,10 +321,29 @@ async def run_ping_checks():
             })
             PING_CHECKS_TOTAL.labels(result="success" if online else "failure").inc()
 
-            # Update port_error flag and check detail on the host
+            # Update port_error flag and check detail on the host. Apply
+            # hysteresis on top of the raw single-cycle result so a flapping
+            # endpoint doesn't trigger fire-then-resolve in the correlation
+            # engine. Only count cycles where ICMP succeeded and a non-ICMP
+            # check actually ran — otherwise we can't tell anything about
+            # service health and must not adjust the streaks.
             host_obj = await db.get(PingHost, host.id)
             if host_obj:
-                host_obj.port_error = port_error
+                has_service_check = any(k != "icmp" for k in (detail or {}).keys())
+                if online and has_service_check:
+                    if port_error:
+                        _port_pass_streak.pop(host.id, None)
+                        _port_fail_streak[host.id] = _port_fail_streak.get(host.id, 0) + 1
+                    else:
+                        _port_fail_streak.pop(host.id, None)
+                        _port_pass_streak[host.id] = _port_pass_streak.get(host.id, 0) + 1
+
+                latched = host_obj.port_error
+                if not latched and _port_fail_streak.get(host.id, 0) >= PORT_ERROR_SET_THRESHOLD:
+                    latched = True
+                elif latched and _port_pass_streak.get(host.id, 0) >= PORT_ERROR_CLEAR_THRESHOLD:
+                    latched = False
+                host_obj.port_error = latched
                 host_obj.check_detail = _json.dumps(detail) if detail else None
 
             # Broadcast live update via WebSocket
