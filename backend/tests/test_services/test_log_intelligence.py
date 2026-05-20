@@ -198,3 +198,59 @@ def test_process_message_detects_new_template():
     result2 = process_message("A very unique message 87654321 that nobody has ever seen", severity=6)
     assert result2["is_new_template"] is False
     assert result2["template_hash"] == result["template_hash"]
+
+
+# ── Predictor: blacklist + Wilson ───────────────────────────────────────────
+
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
+
+from models.log_template import LogTemplate, PrecursorPattern
+from services.log_intelligence import _learn_precursors_for_event, _template_cache
+from sqlalchemy import select
+
+
+async def _seed_template(db, template_text: str, template_hash: str) -> int:
+    tpl = LogTemplate(template_hash=template_hash, template=template_text, example=template_text)
+    db.add(tpl)
+    await db.commit()
+    await db.refresh(tpl)
+    _template_cache[template_hash] = tpl.id
+    return tpl.id
+
+
+async def test_learn_skips_blacklisted_template(db):
+    tpl_id = await _seed_template(db, "udhcpc[1234]: sending renew to server <*>", "h_udhcpc")
+
+    # Mock ClickHouse to return that template right before 5 host_down events.
+    fake_msgs = [{"message": "udhcpc[1234]: sending renew to server 10.0.0.1",
+                  "timestamp": datetime(2026, 5, 20, 12, 0, 0)}]
+    with patch("services.log_intelligence.ch_query", new=AsyncMock(return_value=fake_msgs)), \
+         patch("services.log_intelligence.extract_template",
+               return_value=("udhcpc[<*>]: sending renew to server <*>", "h_udhcpc")):
+        events = [(1, datetime(2026, 5, 20, 12, 2, 30))] * 5
+        await _learn_precursors_for_event(db, "host_down", events, datetime(2026, 5, 20, 12, 5, 0))
+
+    rows = (await db.execute(
+        select(PrecursorPattern).where(PrecursorPattern.template_id == tpl_id)
+    )).scalars().all()
+    assert rows == []  # blacklist suppressed creation
+
+
+async def test_learn_uses_wilson_not_naive_ratio(db):
+    tpl_id = await _seed_template(db, "kernel: <*> oom-killer invoked", "h_oom")
+
+    fake_msgs = [{"message": "kernel: oom-killer invoked", "timestamp": datetime(2026, 5, 20, 12, 0, 0)}]
+    with patch("services.log_intelligence.ch_query", new=AsyncMock(return_value=fake_msgs)), \
+         patch("services.log_intelligence.extract_template",
+               return_value=("kernel: <*> oom-killer invoked", "h_oom")):
+        events = [(1, datetime(2026, 5, 20, 12, 2, 30))] * 5
+        await _learn_precursors_for_event(db, "host_down", events, datetime(2026, 5, 20, 12, 5, 0))
+
+    pp = (await db.execute(
+        select(PrecursorPattern).where(PrecursorPattern.template_id == tpl_id)
+    )).scalar_one()
+    # Naive ratio would be 1.0; Wilson at 5/5 is ~0.566.
+    assert 0.55 < pp.confidence < 0.58
+    assert pp.occurrence_count == 5
+    assert pp.total_checked == 5
