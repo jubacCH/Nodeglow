@@ -254,3 +254,33 @@ async def test_learn_uses_wilson_not_naive_ratio(db):
     assert 0.55 < pp.confidence < 0.58
     assert pp.occurrence_count == 5
     assert pp.total_checked == 5
+
+
+async def test_cleanup_removes_blacklisted_patterns(db):
+    from services.log_intelligence import cleanup_precursor_patterns
+
+    tpl_bad = LogTemplate(template_hash="hb", template="udhcpc[<*>]: sending renew", example="x")
+    tpl_good = LogTemplate(template_hash="hg", template="kernel: panic", example="x")
+    db.add_all([tpl_bad, tpl_good])
+    await db.commit()
+    await db.refresh(tpl_bad)
+    await db.refresh(tpl_good)
+
+    db.add_all([
+        PrecursorPattern(template_id=tpl_bad.id, precedes_event="host_down",
+                         confidence=0.95, occurrence_count=5, total_checked=5,
+                         updated_at=datetime.utcnow()),
+        PrecursorPattern(template_id=tpl_good.id, precedes_event="host_down",
+                         confidence=1.0, occurrence_count=5, total_checked=5,
+                         updated_at=datetime.utcnow()),
+    ])
+    await db.commit()
+
+    await cleanup_precursor_patterns(db)
+    await db.commit()
+
+    remaining = (await db.execute(select(PrecursorPattern))).scalars().all()
+    # Blacklisted one gone, kernel-panic one re-projected to Wilson 5/5 ~0.566.
+    assert len(remaining) == 1
+    assert remaining[0].template_id == tpl_good.id
+    assert 0.55 < remaining[0].confidence < 0.58
