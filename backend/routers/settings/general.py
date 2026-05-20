@@ -1,4 +1,5 @@
 """General settings: /json read endpoint, /save form, phpIPAM, GeoIP."""
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -36,6 +37,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "daily_ai_summary_enabled", "daily_ai_summary_hour", "daily_ai_summary_channels",
         "geoip_enabled", "geoip_last_updated",
         "correlation_min_failures", "correlation_min_cycles",
+        "predictor_min_confidence", "predictor_min_occurrences", "predictor_template_blacklist",
     ]
     result = {}
     for key in keys:
@@ -50,6 +52,8 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "notify_grace_minutes": "5",
         "correlation_min_failures": "3",
         "correlation_min_cycles": "2",
+        "predictor_min_confidence": "0.85",
+        "predictor_min_occurrences": "20",
         "digest_day": "0", "digest_hour": "9",
         "daily_ai_summary_hour": "8",
         "daily_ai_summary_channels": "telegram,discord,webhook,email",
@@ -57,6 +61,9 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
     for key, default in defaults.items():
         if not result.get(key):
             result[key] = default
+    if not result.get("predictor_template_blacklist"):
+        from services.predictor_config import DEFAULT_BLACKLIST_PATTERNS
+        result["predictor_template_blacklist"] = json.dumps(DEFAULT_BLACKLIST_PATTERNS)
     result["smtp_has_pw"] = bool(await get_setting(db, "smtp_password", ""))
     result["claude_has_key"] = bool(await get_setting(db, "claude_api_key", ""))
     result["geoip_has_key"] = bool(await get_setting(db, "geoip_license_key", ""))
@@ -94,6 +101,9 @@ async def save_settings(
     integration_retention: str = Form("7"),
     syslog_port:        str = Form("1514"),
     syslog_allowlist_only: str = Form("0"),
+    predictor_min_confidence: str = Form(""),
+    predictor_min_occurrences: str = Form(""),
+    predictor_template_blacklist: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     if err := require_admin(request):
@@ -181,6 +191,28 @@ async def save_settings(
     px_job = scheduler.get_job("proxmox_checks")
     if px_job:
         px_job.reschedule(trigger="interval", seconds=px_interval)
+
+    if predictor_min_confidence:
+        try:
+            val = float(predictor_min_confidence)
+            if 0.0 < val <= 1.0:
+                await set_setting(db, "predictor_min_confidence", str(val))
+        except ValueError:
+            pass
+    if predictor_min_occurrences:
+        try:
+            val = int(predictor_min_occurrences)
+            if val >= 1:
+                await set_setting(db, "predictor_min_occurrences", str(val))
+        except ValueError:
+            pass
+    if predictor_template_blacklist:
+        try:
+            parsed = json.loads(predictor_template_blacklist)
+            if isinstance(parsed, list) and all(isinstance(p, str) for p in parsed):
+                await set_setting(db, "predictor_template_blacklist", predictor_template_blacklist)
+        except json.JSONDecodeError:
+            pass
 
     from main import invalidate_settings_cache
     invalidate_settings_cache()
