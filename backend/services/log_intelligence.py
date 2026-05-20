@@ -20,6 +20,9 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
+from services._stats import wilson_lower_bound
+from services.clickhouse_client import query as ch_query
+from services.predictor_config import get_blacklist_regexes, is_template_blacklisted
 
 log = logging.getLogger("nodeglow.intelligence")
 
@@ -633,8 +636,6 @@ async def _learn_precursors_for_event(
 ):
     """Learn which templates appeared before a specific event type.
     Measures actual lead times instead of using hardcoded values."""
-    from services.clickhouse_client import query as ch_query
-
     template_before: dict[int, int] = defaultdict(int)
     template_lead_times: dict[int, list[float]] = defaultdict(list)
     total_events = 0
@@ -670,8 +671,24 @@ async def _learn_precursors_for_event(
     if not total_events:
         return
 
+    blacklist = await get_blacklist_regexes(db)
+    # Build a lookup of tpl_id → template text for the templates we touched,
+    # so the blacklist check costs one query, not one per template.
+    tpl_ids = list(template_before.keys())
+    if tpl_ids:
+        tpl_rows = (await db.execute(
+            select(LogTemplate.id, LogTemplate.template).where(LogTemplate.id.in_(tpl_ids))
+        )).all()
+        tpl_text_by_id = {r[0]: r[1] for r in tpl_rows}
+    else:
+        tpl_text_by_id = {}
+
     for tpl_id, before_count in template_before.items():
-        confidence = before_count / total_events
+        tpl_text = tpl_text_by_id.get(tpl_id, "")
+        if is_template_blacklisted(tpl_text, blacklist):
+            continue  # noise template – never let it become a precursor
+
+        confidence = wilson_lower_bound(before_count, total_events)
         if confidence < 0.3:
             continue
 
