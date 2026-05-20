@@ -101,10 +101,10 @@ async def test_precursor_rule_creates_predictive_incident(db):
     db.add(PrecursorPattern(
         template_id=tpl.id,
         precedes_event="host_down",
-        confidence=0.85,
+        confidence=0.9,
         avg_lead_time_sec=180,  # 3 min
-        occurrence_count=12,
-        total_checked=14,
+        occurrence_count=25,
+        total_checked=28,
     ))
     await db.commit()
 
@@ -117,7 +117,7 @@ async def test_precursor_rule_creates_predictive_incident(db):
     _corr._current_cycle_hits.clear()
     _corr._rule_hit_counts.clear()
 
-    with patch("services.clickhouse_client.query", fake_ch), \
+    with patch("services.correlation.ch_query", fake_ch), \
          patch("notifications.notify", new_callable=AsyncMock):
         # First call — gets tracked but doesn't fire (min_cycles=2)
         await _rule_precursor_observed(db, min_cycles=2)
@@ -134,7 +134,7 @@ async def test_precursor_rule_creates_predictive_incident(db):
     assert len(incidents) == 1
     inc = incidents[0]
     assert "Predicted" in inc.title
-    assert "85%" in inc.title or "85" in inc.title
+    assert "90%" in inc.title or "90" in inc.title
     # Summary lives on the IncidentEvent
     events = (await db.execute(
         select(IncidentEvent).where(IncidentEvent.incident_id == inc.id)
@@ -162,7 +162,7 @@ async def test_precursor_rule_skips_low_confidence(db):
     _corr._current_cycle_hits.clear()
     _corr._rule_hit_counts.clear()
 
-    with patch("services.clickhouse_client.query", fake_ch), \
+    with patch("services.correlation.ch_query", fake_ch), \
          patch("notifications.notify", new_callable=AsyncMock):
         await _rule_precursor_observed(db, min_cycles=1)
         await db.commit()
@@ -195,7 +195,7 @@ async def test_precursor_rule_skips_few_occurrences(db):
     _corr._current_cycle_hits.clear()
     _corr._rule_hit_counts.clear()
 
-    with patch("services.clickhouse_client.query", fake_ch), \
+    with patch("services.correlation.ch_query", fake_ch), \
          patch("notifications.notify", new_callable=AsyncMock):
         await _rule_precursor_observed(db, min_cycles=1)
         await db.commit()
@@ -206,3 +206,39 @@ async def test_precursor_rule_skips_few_occurrences(db):
         select(Incident).where(Incident.rule == "learned_precursor")
     )).scalars().all()
     assert len(incidents) == 0
+
+
+async def test_precursor_rule_skips_blacklisted_template_at_fire_time(db):
+    """Even if a stale udhcpc row sits in the DB, the rule must not fire on it."""
+    tpl = LogTemplate(
+        template_hash="h_udhcpc_stale",
+        template="udhcpc[<*>]: sending renew to server <*>",
+        example="udhcpc[123]: sending renew to server 10.0.0.1",
+    )
+    db.add(tpl)
+    await db.commit()
+    await db.refresh(tpl)
+
+    db.add(PrecursorPattern(
+        template_id=tpl.id,
+        precedes_event="host_down",
+        confidence=0.95,
+        occurrence_count=50,
+        total_checked=50,
+        avg_lead_time_sec=160,
+        min_lead_time_sec=120,
+        max_lead_time_sec=200,
+        updated_at=datetime.utcnow(),
+    ))
+    await db.commit()
+
+    ch_rows = [{"template_hash": "h_udhcpc_stale", "host_id": 1}]
+    with patch("services.correlation.ch_query", new=AsyncMock(return_value=ch_rows)):
+        await _rule_precursor_observed(db, min_cycles=1)
+
+    from models.incident import Incident
+    from sqlalchemy import select
+    incidents = (await db.execute(
+        select(Incident).where(Incident.rule == "learned_precursor")
+    )).scalars().all()
+    assert incidents == []

@@ -23,10 +23,17 @@ from sqlalchemy import select
 
 from models.base import AsyncSessionLocal
 from models.ping import PingHost
+from services.clickhouse_client import query as ch_query
 from services.clickhouse_client import query_scalar as ch_scalar
 from models.integration import IntegrationConfig
 from models.incident import Incident, IncidentEvent
-from models.log_template import HostBaseline
+from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
+from services.predictor_config import (
+    get_blacklist_regexes,
+    get_min_confidence,
+    get_min_occurrences,
+    is_template_blacklisted,
+)
 from services.topology import build_topology, filter_upstream_failures
 
 log = logging.getLogger("nodeglow.correlation")
@@ -613,28 +620,24 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
 
 async def _rule_precursor_observed(
     db,
-    min_confidence: float = 0.7,
-    min_occurrences: int = 5,
+    min_confidence: float | None = None,
+    min_occurrences: int | None = None,
     min_cycles: int = 2,
 ):
     """Predict incidents from learned precursor patterns.
 
-    The Log Intelligence engine learns which log templates historically appear
-    just before host_down, integration_fail, etc. This rule closes the loop:
-    when one of those high-confidence precursors fires in real-time, we open
-    a predictive incident BEFORE the failure happens.
-
-    Configurable thresholds:
-        min_confidence  — minimum learned confidence (0..1) to act on
-        min_occurrences — minimum historical observations of the precursor
-                          (filters out one-off coincidences)
+    Thresholds default to the user-configurable settings
+    ``predictor_min_confidence`` / ``predictor_min_occurrences`` when the
+    caller does not override them.  Templates matching
+    ``predictor_template_blacklist`` never fire.
     """
-    from services.clickhouse_client import query as ch_query
-    from models.log_template import LogTemplate, PrecursorPattern
+    if min_confidence is None:
+        min_confidence = await get_min_confidence(db)
+    if min_occurrences is None:
+        min_occurrences = await get_min_occurrences(db)
+    blacklist = await get_blacklist_regexes(db)
 
-    # Hashes of templates seen in the last 60s, with their associated host_id
-    # if any. We grab the last 2 minutes to give the precursor pattern enough
-    # context to fire reliably.
+    # Hashes of templates seen in the last 2 minutes with their associated host_id
     window = datetime.utcnow() - timedelta(minutes=2)
     try:
         rows = await ch_query(
@@ -665,9 +668,11 @@ async def _rule_precursor_observed(
     if not precursor_rows:
         return
 
-    # Index by template_hash for fast lookup
+    # Index by template_hash for fast lookup; skip blacklisted templates here
     by_hash: dict[str, list[tuple]] = {}
     for pp, tpl_hash, tpl_text in precursor_rows:
+        if is_template_blacklisted(tpl_text or "", blacklist):
+            continue  # defense-in-depth – ignore stale blacklisted rows
         by_hash.setdefault(tpl_hash, []).append((pp, tpl_text))
 
     # Match observed templates against the index
