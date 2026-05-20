@@ -44,6 +44,9 @@ interface SettingsData {
   notify_grace_minutes: string;
   correlation_min_failures: string;
   correlation_min_cycles: string;
+  predictor_min_confidence: string;
+  predictor_min_occurrences: string;
+  predictor_template_blacklist: string;  // JSON-stringified array of regex strings
   telegram_bot_token: string;
   telegram_chat_id: string;
   discord_webhook_url: string;
@@ -219,6 +222,22 @@ const SEVERITY_OPTIONS = [
 
 /* ---------- Helpers ---------- */
 
+function blacklistAsLines(jsonStr: string): string {
+  try {
+    const arr = JSON.parse(jsonStr);
+    return Array.isArray(arr) ? arr.join("\n") : "";
+  } catch {
+    return "";
+  }
+}
+
+function linesToBlacklistJson(text: string): string {
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  return JSON.stringify(lines);
+}
 
 /* ---------- API Doc Helper ---------- */
 
@@ -290,6 +309,9 @@ export default function SettingsPage() {
   const [graceMinutes, setGraceMinutes] = useState('5');
   const [corrMinFailures, setCorrMinFailures] = useState('3');
   const [corrMinCycles, setCorrMinCycles] = useState('2');
+  const [predictorMinConfidence, setPredictorMinConfidence] = useState('0.85');
+  const [predictorMinOccurrences, setPredictorMinOccurrences] = useState('20');
+  const [predictorTemplateBlacklist, setPredictorTemplateBlacklist] = useState('[]');
   const [telegramToken, setTelegramToken] = useState('');
   const [telegramChat, setTelegramChat] = useState('');
   const [discordWebhook, setDiscordWebhook] = useState('');
@@ -364,6 +386,9 @@ export default function SettingsPage() {
     setGraceMinutes(s.notify_grace_minutes || '5');
     setCorrMinFailures(s.correlation_min_failures || '3');
     setCorrMinCycles(s.correlation_min_cycles || '2');
+    setPredictorMinConfidence(s.predictor_min_confidence || '0.8');
+    setPredictorMinOccurrences(s.predictor_min_occurrences || '3');
+    setPredictorTemplateBlacklist(s.predictor_template_blacklist || '[]');
     setTelegramToken(s.telegram_bot_token);
     setTelegramChat(s.telegram_chat_id);
     setDiscordWebhook(s.discord_webhook_url);
@@ -523,6 +548,9 @@ export default function SettingsPage() {
     params.set('disk_threshold', diskThreshold);
     params.set('syslog_port', syslogPort);
     params.set('syslog_allowlist_only', syslogAllowlist ? '1' : '0');
+    params.set('predictor_min_confidence', predictorMinConfidence);
+    params.set('predictor_min_occurrences', predictorMinOccurrences);
+    params.set('predictor_template_blacklist', predictorTemplateBlacklist);
     return params;
   }
 
@@ -807,6 +835,53 @@ export default function SettingsPage() {
               </div>
             </div>
           </GlassCard>
+          <GlassCard className="p-4">
+            <div className="mb-3">
+              <h3 className="text-sm font-semibold text-[var(--ng-text-primary)]">Predictive correlation</h3>
+              <p className="text-xs text-[var(--ng-text-secondary)] mt-1">
+                Threshold and blacklist for the learned-precursor predictor. Tighten these
+                if you see false-positive &ldquo;Predicted: Host Down&rdquo; incidents from periodic
+                noise such as DHCP renewals or NTP sync.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <label className="block text-xs">
+                <span className="text-[var(--ng-text-secondary)]">Min. confidence (0.0 – 1.0)</span>
+                <input
+                  type="number" step="0.01" min="0" max="1"
+                  value={predictorMinConfidence}
+                  onChange={(e) => setPredictorMinConfidence(e.target.value)}
+                  className="mt-1 w-full bg-transparent border border-white/10 rounded px-2 py-1 text-sm"
+                />
+              </label>
+              <label className="block text-xs">
+                <span className="text-[var(--ng-text-secondary)]">Min. historical observations</span>
+                <input
+                  type="number" min="1" step="1"
+                  value={predictorMinOccurrences}
+                  onChange={(e) => setPredictorMinOccurrences(e.target.value)}
+                  className="mt-1 w-full bg-transparent border border-white/10 rounded px-2 py-1 text-sm"
+                />
+              </label>
+            </div>
+
+            <label className="block text-xs">
+              <span className="text-[var(--ng-text-secondary)]">
+                Template blacklist (one regex per line — case-insensitive)
+              </span>
+              <textarea
+                rows={6}
+                className="mt-1 w-full bg-transparent border border-white/10 rounded px-2 py-1 text-xs font-mono"
+                value={blacklistAsLines(predictorTemplateBlacklist)}
+                onChange={(e) => setPredictorTemplateBlacklist(linesToBlacklistJson(e.target.value))}
+              />
+              <span className="block text-[10px] text-[var(--ng-text-tertiary)] mt-1">
+                Templates matching any pattern will never become precursors and will be removed on the next intelligence cycle.
+              </span>
+            </label>
+          </GlassCard>
+
           <div className="flex justify-end">
             <Button size="sm" onClick={handleSaveMonitoring} disabled={isSaving}>
               {isSaving ? 'Saving...' : 'Save Changes'}
