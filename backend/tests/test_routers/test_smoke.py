@@ -170,3 +170,21 @@ async def test_users_api(client):
     resp = await client.get("/users")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+# ── Predictor settings ───────────────────────────────────────────────────────
+
+
+async def test_predictor_settings_defaults_present(client):
+    """settings/json includes predictor keys with correct defaults when unset."""
+    import json as _json
+    resp = await client.get("/settings/json")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("predictor_min_confidence") == "0.85"
+    assert body.get("predictor_min_occurrences") == "20"
+    raw = body.get("predictor_template_blacklist")
+    assert raw is not None
+    parsed = _json.loads(raw)
+    assert isinstance(parsed, list)
+    assert len(parsed) > 0
