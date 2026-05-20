@@ -735,12 +735,44 @@ async def _learn_precursors_for_event(
              event_type, len(template_before), total_events)
 
 
+async def cleanup_precursor_patterns(db: AsyncSession):
+    """Drop blacklisted patterns + re-project naive confidences onto Wilson.
+
+    Runs every intelligence cycle.  Idempotent: re-projecting an already-Wilson
+    value gives the same value back, and blacklisted rows are simply absent on
+    subsequent runs.
+    """
+    blacklist = await get_blacklist_regexes(db)
+
+    rows = (await db.execute(
+        select(PrecursorPattern, LogTemplate.template)
+        .join(LogTemplate, PrecursorPattern.template_id == LogTemplate.id)
+    )).all()
+
+    removed = 0
+    rescored = 0
+    for pp, tpl_text in rows:
+        if is_template_blacklisted(tpl_text or "", blacklist):
+            await db.delete(pp)
+            removed += 1
+            continue
+        if pp.total_checked and pp.total_checked > 0:
+            new_conf = wilson_lower_bound(pp.occurrence_count, pp.total_checked)
+            if abs((pp.confidence or 0.0) - new_conf) > 1e-6:
+                pp.confidence = new_conf
+                rescored += 1
+    if removed or rescored:
+        log.info("Precursor cleanup: removed=%d, rescored=%d", removed, rescored)
+
+
 async def learn_precursors(db: AsyncSession):
     """
     Analyze which log templates appeared in the 5-minute window before
     host-down events, integration failures, and incidents.
     Build confidence scores over time.
     """
+    await cleanup_precursor_patterns(db)
+
     from services.clickhouse_client import query as ch_query
 
     now = datetime.utcnow()
