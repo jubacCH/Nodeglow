@@ -20,8 +20,13 @@ log = logging.getLogger(__name__)
 DEFAULT_MIN_CONFIDENCE = 0.85
 DEFAULT_MIN_OCCURRENCES = 20
 
-# Periodic / housekeeping templates that should never count as precursors.
-# Case-insensitive regex match against the LogTemplate ``template`` text.
+# Templates that should never count as precursors. Case-insensitive regex
+# match against the LogTemplate ``template`` text. Two groups:
+#   - Periodic / housekeeping noise that fires on every host on a fixed
+#     cadence and so has spurious correlation with anything that happens.
+#   - Vendor firmware / config noise that is known not to precede outages
+#     (UniFi APs, switches, UDM family — patterns are stable across 8.x
+#     firmware lines and document GitHub-tracked nuisance bugs).
 DEFAULT_BLACKLIST_PATTERNS: list[str] = [
     r"udhcpc\[",
     r"dhclient\b",
@@ -31,6 +36,12 @@ DEFAULT_BLACKLIST_PATTERNS: list[str] = [
     r"logrotate",
     r"session-\d+\.scope",
     r"pam_unix.*session opened",
+    r"ntpd.*bad address",
+    r"wlan_objmgr_iterate_log_del_obj",
+    r"MCA: compress failed",
+    r"hostapd.*FT: RRB wpa_auth is null",
+    r"wpa_supplicant.*bgscan.*Failed to enable signal strength",
+    r"mcad.*teleport.*Failed to get teleport clients",
 ]
 
 
