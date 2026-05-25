@@ -276,19 +276,20 @@ async def template_browser(
     all_tags_raw = (await db.execute(select(LogTemplate.tags).where(LogTemplate.tags != ""))).scalars().all()
     all_tags = sorted({t.strip() for raw in all_tags_raw for t in raw.split(",") if t.strip()})
 
-    from services.clickhouse_client import query as _ch_q
+    from services.clickhouse_client import query_chunked as _ch_q_chunked
 
     # Compute avg_rate_per_hour for each template from ClickHouse
     tpl_hashes = [t.template_hash for t in tpls if t.template_hash]
     rate_map: dict[str, float] = {}
     if tpl_hashes:
         try:
-            rate_rows = await _ch_q(
+            rate_rows = await _ch_q_chunked(
                 "SELECT template_hash, count() / 24.0 AS rate "
                 "FROM syslog_messages WHERE template_hash IN ({hashes:Array(String)}) "
                 "AND timestamp >= now() - INTERVAL 24 HOUR "
                 "GROUP BY template_hash",
-                {"hashes": tpl_hashes},
+                list_param="hashes",
+                values=tpl_hashes,
             )
             rate_map = {r["template_hash"]: round(r["rate"], 1) for r in rate_rows}
         except Exception:

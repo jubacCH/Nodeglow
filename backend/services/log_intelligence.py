@@ -869,7 +869,7 @@ async def refresh_noise_scores(db: AsyncSession):
 async def compute_severity_trends(db: AsyncSession):
     """Detect templates increasing in frequency or escalating severity.
     Updates trend_direction, trend_score, and severity_mode on LogTemplate."""
-    from services.clickhouse_client import query as ch_query
+    from services.clickhouse_client import query_chunked as ch_query_chunked
 
     templates = (await db.execute(
         select(LogTemplate).where(LogTemplate.count >= 5)
@@ -879,7 +879,7 @@ async def compute_severity_trends(db: AsyncSession):
 
     hashes = [t.template_hash for t in templates]
     # Hourly counts over last 48h per template + avg severity
-    rows = await ch_query(
+    rows = await ch_query_chunked(
         """SELECT template_hash,
                   toStartOfHour(timestamp) AS h,
                   count() AS cnt,
@@ -889,7 +889,8 @@ async def compute_severity_trends(db: AsyncSession):
              AND timestamp >= now() - INTERVAL 48 HOUR
            GROUP BY template_hash, h
            ORDER BY template_hash, h""",
-        {"hashes": hashes},
+        list_param="hashes",
+        values=hashes,
     )
 
     # Group by template_hash
@@ -1090,7 +1091,7 @@ async def detect_fleet_patterns(db: AsyncSession) -> list[dict]:
 
 async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
     """Detect new templates on stable hosts and severity upgrades."""
-    from services.clickhouse_client import query as ch_query
+    from services.clickhouse_client import query_chunked as ch_query_chunked
 
     now = datetime.utcnow()
     hour = now.hour
@@ -1120,14 +1121,15 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
 
     # Current hour: per-host new templates (templates not seen before on this host)
     host_keys = list(stable_hosts.keys())
-    rows = await ch_query(
+    rows = await ch_query_chunked(
         """SELECT source_ip, template_hash, min(severity) AS min_sev
            FROM syslog_messages
            WHERE timestamp >= now() - INTERVAL 1 HOUR
              AND source_ip IN ({ips:Array(String)})
              AND template_hash != ''
            GROUP BY source_ip, template_hash""",
-        {"ips": host_keys},
+        list_param="ips",
+        values=host_keys,
     )
 
     # Count distinct templates per host
@@ -1161,7 +1163,7 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
 
     if templates_with_mode:
         sev_hashes = [t.template_hash for t in templates_with_mode]
-        sev_rows = await ch_query(
+        sev_rows = await ch_query_chunked(
             """SELECT template_hash, min(severity) AS min_sev, count() AS cnt
                FROM syslog_messages
                WHERE template_hash IN ({hashes:Array(String)})
@@ -1169,7 +1171,8 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
                  AND severity <= 3
                GROUP BY template_hash
                HAVING cnt >= 3""",
-            {"hashes": sev_hashes},
+            list_param="hashes",
+            values=sev_hashes,
         )
         tpl_map = {t.template_hash: t for t in templates_with_mode}
         for r in sev_rows:

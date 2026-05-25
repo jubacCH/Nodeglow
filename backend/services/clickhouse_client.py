@@ -685,6 +685,25 @@ async def query_scalar(sql: str, params: dict | None = None) -> Any:
     return None
 
 
+async def query_chunked(
+    sql: str,
+    list_param: str,
+    values: list,
+    other_params: dict | None = None,
+    chunk_size: int = 1000,
+) -> list[dict]:
+    # ClickHouse rejects HTTP form fields > http_max_field_value_size (128 KiB default).
+    # An IN-list with thousands of items easily exceeds that, so split into chunks.
+    if not values:
+        return []
+    base = dict(other_params or {})
+    out: list[dict] = []
+    for i in range(0, len(values), chunk_size):
+        chunk_params = {**base, list_param: values[i : i + chunk_size]}
+        out.extend(await query(sql, chunk_params))
+    return out
+
+
 def _where_clauses(
     since: datetime,
     sev: int | None = None,
