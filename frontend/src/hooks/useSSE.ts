@@ -7,8 +7,11 @@ interface UseSSEOptions {
   maxMessages?: number;
 }
 
+/** Stable monotonic id assigned at parse time, used for React list keys. */
+export type SSEMessage<T> = T & { __sseId: number };
+
 interface UseSSEReturn<T> {
-  messages: T[];
+  messages: SSEMessage<T>[];
   isStreaming: boolean;
   start: () => void;
   stop: () => void;
@@ -20,10 +23,17 @@ export function useSSE<T = unknown>({
   enabled = false,
   maxMessages = 200,
 }: UseSSEOptions): UseSSEReturn<T> {
-  const [messages, setMessages] = useState<T[]>([]);
+  const [messages, setMessages] = useState<SSEMessage<T>[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic counter for stable list keys (array index is unstable because
+  // messages are prepended). Survives reconnects within the hook lifetime.
+  const seqRef = useRef(0);
+  // Mirror `enabled` in a ref so the onerror reconnect reads the current value
+  // instead of a stale closure captured at connect time.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
   const cleanup = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -53,8 +63,9 @@ export function useSSE<T = unknown>({
 
       try {
         const parsed = JSON.parse(event.data) as T;
+        const withId = { ...parsed, __sseId: seqRef.current++ } as SSEMessage<T>;
         setMessages((prev) => {
-          const next = [parsed, ...prev];
+          const next = [withId, ...prev];
           return next.length > maxMessages ? next.slice(0, maxMessages) : next;
         });
       } catch {
@@ -67,14 +78,14 @@ export function useSSE<T = unknown>({
       eventSourceRef.current = null;
       setIsStreaming(false);
 
-      // Auto-reconnect after 2s
+      // Auto-reconnect after 2s, but only if still enabled at that point.
       reconnectTimerRef.current = setTimeout(() => {
-        if (enabled) {
+        if (enabledRef.current) {
           connect();
         }
       }, 2000);
     };
-  }, [url, maxMessages, enabled, cleanup]);
+  }, [url, maxMessages, cleanup]);
 
   const start = useCallback(() => {
     connect();
