@@ -843,9 +843,9 @@ function LiveSyslogWidget() {
         </p>
       ) : (
         <div className="max-h-[200px] overflow-y-auto space-y-0">
-          {visible.map((msg, i) => (
+          {visible.map((msg) => (
             <div
-              key={`${msg.timestamp}-${i}`}
+              key={msg.__sseId}
               className="flex items-start gap-2 px-1 py-1 hover:bg-white/[0.06] transition-colors"
             >
               <span className="text-[10px] text-slate-600 font-mono whitespace-nowrap shrink-0 pt-0.5 w-12">

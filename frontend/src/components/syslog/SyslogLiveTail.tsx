@@ -90,9 +90,9 @@ export function SyslogLiveTail({ enabled, severity, host, app }: SyslogLiveTailP
           </div>
         ) : (
           <div className="divide-y divide-white/[0.03]">
-            {messages.map((msg, i) => (
+            {messages.map((msg) => (
               <div
-                key={`${msg.timestamp}-${i}`}
+                key={msg.__sseId}
                 className="px-4 py-2 hover:bg-white/[0.02] transition-colors flex items-start gap-3"
               >
                 <span className="text-xs text-slate-500 font-mono whitespace-nowrap shrink-0 pt-0.5">

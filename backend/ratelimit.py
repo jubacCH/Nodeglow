@@ -48,6 +48,37 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+# ── Failed-auth throttle (IP-scoped, username-independent) ────────────────────
+#
+# The per-username lockout in auth.py only bounds attempts against a *single*
+# account. An attacker can spray many usernames from one IP and stay under that
+# limit. This throttle caps total failed-auth attempts per source IP regardless
+# of the username, so credential-spraying from one host is bounded.
+#
+# NOTE: this counter is in-memory and therefore per-process. With multiple
+# workers (e.g. uvicorn/gunicorn --workers N) the effective limit is multiplied
+# by the worker count, and it resets on restart. For a hard, shared limit use a
+# central store (Redis/DB). For homelab single-worker deployments this is fine.
+_failed_auth_limiter = RateLimiter()
+
+# Max failed auth attempts per IP within the window before throttling.
+FAILED_AUTH_MAX_ATTEMPTS = 20
+FAILED_AUTH_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def failed_auth_throttled(request: Request) -> bool:
+    """Return True if this source IP has too many recent failed-auth attempts.
+
+    Call this BEFORE attempting authentication. It both checks and records the
+    attempt against the IP, so only call it on the auth path (one count per
+    login request). Returns True once the IP is over the limit.
+    """
+    ip = _get_client_ip(request)
+    return _failed_auth_limiter.is_limited(
+        f"failed_auth:{ip}", FAILED_AUTH_MAX_ATTEMPTS, FAILED_AUTH_WINDOW_SECONDS
+    )
+
+
 _429_HTML = (
     '<html><body style="background:#0b0d14;color:#e2e8f0;font-family:sans-serif;'
     'display:flex;align-items:center;justify-content:center;height:100vh;">'

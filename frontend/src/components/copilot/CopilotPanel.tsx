@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Sparkles, X, Send, AlertCircle } from 'lucide-react';
 import { useGlowStore } from '@/stores/glow';
+import { sanitizeHtml } from '@/lib/sanitize';
+import { getCsrfToken } from '@/lib/api';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -26,13 +28,6 @@ const SUGGESTIONS = [
   'Show error trends',
   'Which hosts need attention?',
 ];
-
-function getCsrfToken(): string {
-  if (typeof document === 'undefined') return '';
-  const match = document.cookie.match(/ng_csrf=([^;]+)/);
-  if (!match) return '';
-  return decodeURIComponent(match[1]);
-}
 
 export function GlowPanel() {
   const { isOpen, close } = useGlowStore();
@@ -235,7 +230,7 @@ export function GlowPanel() {
               }
             >
               {msg.role === 'assistant' ? (
-                <div className="whitespace-pre-wrap break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+                <div className="whitespace-pre-wrap break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(msg.content)) }} />
               ) : (
                 <div className="whitespace-pre-wrap break-words">{msg.content}</div>
               )}

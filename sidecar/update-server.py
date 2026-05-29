@@ -130,28 +130,78 @@ class UpdateHandler(BaseHTTPRequestHandler):
                 pass
         return {"update_available": behind > 0, "commits_behind": behind, "changelog": changelog}
 
+    def _git(self, *args, timeout=30):
+        """Run a git command in the repo, returning (rc, stdout, stderr)."""
+        r = subprocess.run(
+            ["git", *args],
+            capture_output=True, text=True, timeout=timeout, cwd=REPO_PATH,
+        )
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+    # SECURITY: This endpoint is host-root-equivalent. It runs `git pull` and
+    # `docker compose up -d --build` against the host Docker socket, so anyone
+    # who can reach it and presents the token can execute arbitrary code as root
+    # on the host (e.g. by landing a malicious compose/Dockerfile in the repo).
+    # It is reachable only over the internal docker network (port is `expose`d,
+    # not host-published) and MUST NEVER be host-published or exposed publicly.
+    EXPECTED_REF = "refs/heads/main"
+
     def _apply_update(self):
         if not os.path.isdir(f"{REPO_PATH}/.git"):
             return {"ok": False, "error": "Repository not mounted"}
         if not os.path.exists("/var/run/docker.sock"):
             return {"ok": False, "error": "Docker socket not available"}
         try:
-            r = subprocess.run(
-                ["git", "pull", "origin", "main"],
-                capture_output=True, text=True, timeout=60, cwd=REPO_PATH,
-            )
-            if r.returncode != 0:
-                return {"ok": False, "error": f"Git pull failed: {r.stderr.strip()[:200]}"}
-            pull_output = r.stdout.strip()
+            # 1. Refuse to operate on a dirty working tree — an unexpected local
+            #    modification could be silently rebuilt into the running stack.
+            rc, status_out, _ = self._git("status", "--porcelain", timeout=10)
+            if rc != 0:
+                return {"ok": False, "error": "Unable to read git status"}
+            if status_out:
+                return {"ok": False, "error": "Working tree is dirty, refusing to update"}
+
+            # 2. Verify HEAD is on the expected branch before pulling, so the
+            #    update cannot fast-forward an unexpected ref into production.
+            rc, head_ref, _ = self._git("symbolic-ref", "-q", "HEAD", timeout=10)
+            if rc != 0 or head_ref != self.EXPECTED_REF:
+                return {
+                    "ok": False,
+                    "error": f"HEAD is not on {self.EXPECTED_REF} (got {head_ref or 'detached'})",
+                }
+
+            # 3. Pull the expected branch only.
+            rc, pull_output, pull_err = self._git("pull", "origin", "main", timeout=60)
+            if rc != 0:
+                return {"ok": False, "error": f"Git pull failed: {pull_err[:200]}"}
+
+            # 4. Re-verify HEAD did not move to an unexpected ref and resolve the
+            #    commit SHA we are about to build, then log it for auditability.
+            rc, head_ref_after, _ = self._git("symbolic-ref", "-q", "HEAD", timeout=10)
+            if rc != 0 or head_ref_after != self.EXPECTED_REF:
+                return {
+                    "ok": False,
+                    "error": f"HEAD moved to unexpected ref after pull ({head_ref_after or 'detached'})",
+                }
+            rc, commit_sha, _ = self._git("rev-parse", "HEAD", timeout=10)
+            if rc != 0 or not commit_sha:
+                return {"ok": False, "error": "Unable to resolve HEAD commit after pull"}
         except Exception as e:
             return {"ok": False, "error": str(e)[:200]}
+
+        self.log_message("applying update: building commit %s on %s", commit_sha, self.EXPECTED_REF)
+
         # Fire-and-forget rebuild
         subprocess.Popen(
             ["docker", "compose", "-f", COMPOSE_FILE, "up", "-d", "--build",
              "--no-deps", "nodeglow", "frontend"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        return {"ok": True, "message": "Update started", "pull_output": pull_output}
+        return {
+            "ok": True,
+            "message": "Update started",
+            "commit": commit_sha,
+            "pull_output": pull_output,
+        }
 
 
 if __name__ == "__main__":

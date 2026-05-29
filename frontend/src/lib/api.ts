@@ -2,7 +2,7 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
-function getCsrfToken(): string {
+export function getCsrfToken(): string {
   if (typeof document === 'undefined') return '';
   const match = document.cookie.match(/ng_csrf=([^;]+)/);
   if (!match) return '';

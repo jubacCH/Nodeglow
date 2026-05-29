@@ -116,7 +116,7 @@ async fn main() {
         let count = update_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let checks_per_update = (300 / cfg.interval).max(1);
         if count % checks_per_update == 0 {
-            match updater::check_and_update(&api).await {
+            match updater::check_and_update(&api, &cfg).await {
                 Ok(true) => {
                     info!("Update applied, restarting...");
                     std::process::exit(0);

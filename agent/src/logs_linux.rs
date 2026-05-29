@@ -18,7 +18,7 @@ pub async fn collect_journal_logs() -> Vec<LogEntry> {
     ];
 
     // Use cursor for incremental collection
-    let cursor = JOURNAL_CURSOR.lock().unwrap().clone();
+    let cursor = JOURNAL_CURSOR.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(ref c) = cursor {
         args.push("--after-cursor".to_string());
         args.push(c.clone());
@@ -110,7 +110,7 @@ pub async fn collect_journal_logs() -> Vec<LogEntry> {
 
     // Save cursor for next iteration
     if let Some(c) = last_cursor {
-        *JOURNAL_CURSOR.lock().unwrap() = Some(c);
+        *JOURNAL_CURSOR.lock().unwrap_or_else(|e| e.into_inner()) = Some(c);
     }
 
     debug!("Collected {} journal entries", entries.len());

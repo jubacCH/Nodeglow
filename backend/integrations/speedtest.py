@@ -26,13 +26,27 @@ async def run_speedtest(server_id: str | None = None) -> dict:
 
     raw = await loop.run_in_executor(None, _run)
 
+    # Use .get() with defaults: speedtest-cli output shape can vary between
+    # versions, and a missing field should not raise KeyError on the whole result.
+    def _num(value, ndigits: int) -> float:
+        try:
+            return round(float(value), ndigits)
+        except (TypeError, ValueError):
+            return 0.0
+
+    server = raw.get("server", {})
+    if not isinstance(server, dict):
+        server = {}
+    server_name = server.get("name", "")
+    server_country = server.get("country", "")
+
     return {
-        "download_mbps": round(raw["download"] / 1_000_000, 2),
-        "upload_mbps": round(raw["upload"] / 1_000_000, 2),
-        "ping_ms": round(raw["ping"], 1),
-        "server_name": f"{raw['server']['name']}, {raw['server']['country']}",
-        "server_location": raw["server"].get("sponsor", ""),
-        "isp": raw.get("client", {}).get("isp", ""),
+        "download_mbps": round(_num(raw.get("download", 0), 6) / 1_000_000, 2),
+        "upload_mbps": round(_num(raw.get("upload", 0), 6) / 1_000_000, 2),
+        "ping_ms": _num(raw.get("ping", 0), 1),
+        "server_name": ", ".join(p for p in (server_name, server_country) if p),
+        "server_location": server.get("sponsor", ""),
+        "isp": raw.get("client", {}).get("isp", "") if isinstance(raw.get("client"), dict) else "",
         "timestamp": raw.get("timestamp", ""),
     }
 
