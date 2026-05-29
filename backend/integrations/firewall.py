@@ -34,10 +34,12 @@ class OPNsenseAPI:
             firmware: dict = {}
             status: dict = {}
             interfaces: dict = {}
-            try:
-                firmware = await self._get(client, "/api/core/firmware/info")
-            except Exception:
-                pass
+            # The firmware endpoint is the primary auth probe: if it returns an
+            # auth/transport error (401/403/5xx, connection failure), surface it so
+            # the snapshot fails loudly instead of reporting a green empty result.
+            firmware = await self._get(client, "/api/core/firmware/info")
+            # Secondary endpoints are best-effort: their absence on some
+            # versions/plans should not fail an otherwise-authenticated collect.
             try:
                 status = await self._get(client, "/api/core/system/status")
             except Exception:
@@ -76,12 +78,13 @@ class PfsenseAPI:
         async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20) as client:
             sys_info: dict = {}
             interfaces: dict = {}
-            try:
-                resp = await client.get(f"{self.base}/api/v1/system/info", auth=self._auth())
-                resp.raise_for_status()
-                sys_info = resp.json()
-            except Exception:
-                pass
+            # system/info is the primary auth probe: an auth/transport error here
+            # (401/403/5xx, connection failure) must fail the snapshot instead of
+            # producing a green empty result that hides a credential problem.
+            resp = await client.get(f"{self.base}/api/v1/system/info", auth=self._auth())
+            resp.raise_for_status()
+            sys_info = resp.json()
+            # Interfaces are best-effort and must not fail an authenticated collect.
             try:
                 resp = await client.get(f"{self.base}/api/v1/interface", auth=self._auth())
                 resp.raise_for_status()

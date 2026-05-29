@@ -21,7 +21,9 @@ class SynologyAPI:
         self.verify_ssl = verify_ssl
 
     async def _login(self, client: httpx.AsyncClient) -> str:
-        resp = await client.get(f"{self.base}/webapi/auth.cgi", params={
+        # POST so credentials go in the request body instead of the URL query
+        # string (which would leak account/passwd into access logs and proxies).
+        resp = await client.post(f"{self.base}/webapi/auth.cgi", data={
             "api": "SYNO.API.Auth", "version": "3", "method": "login",
             "account": self.username, "passwd": self.password,
             "session": "Nodeglow", "format": "sid",

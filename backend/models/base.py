@@ -63,4 +63,10 @@ def decrypt_value(value: str) -> str:
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
-        yield session
+        try:
+            yield session
+        except Exception:
+            # Roll back on error so the session is returned to the pool in a
+            # clean state — otherwise the next pooled use raises PendingRollbackError.
+            await session.rollback()
+            raise
