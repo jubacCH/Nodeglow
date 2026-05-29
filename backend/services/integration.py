@@ -101,7 +101,12 @@ async def update_config(
         cfg.config_json = encrypt_config(config_dict)
     if not isinstance(cluster_group, _Unset):
         cfg.cluster_group = cluster_group or None
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # Roll back so the session is left in a clean state for reuse/pooling.
+        await db.rollback()
+        raise
     return cfg
 
 
@@ -118,7 +123,12 @@ async def delete_config(db: AsyncSession, config_id: int) -> bool:
         )
     )
     await db.delete(cfg)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # Roll back so the session is left in a clean state for reuse/pooling.
+        await db.rollback()
+        raise
     return True
 
 

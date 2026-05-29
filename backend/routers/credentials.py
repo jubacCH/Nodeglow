@@ -12,6 +12,18 @@ from services.snmp import decrypt_credential, encrypt_credential
 
 router = APIRouter()
 
+
+def _require_admin(request: Request) -> bool:
+    """Return True (= blocked) if the current user is not an admin.
+
+    Credentials are decryptable secrets (SNMP/WinRM/SSH keys); their CRUD must
+    be admin-only. The middleware only blocks readonly *writes*, so editors
+    could otherwise create/update/delete and list secrets.
+    """
+    user = getattr(request.state, "current_user", None)
+    return getattr(user, "role", None) != "admin"
+
+
 # Credential type definitions for the UI
 CREDENTIAL_TYPES = {
     "snmp_v2c": {
@@ -54,6 +66,8 @@ CREDENTIAL_TYPES = {
 
 @router.post("/api/credentials")
 async def api_create_credential(request: Request, db: AsyncSession = Depends(get_db)):
+    if _require_admin(request):
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
     body = await request.json()
     name = (body.get("name") or "").strip()
     cred_type = (body.get("type") or "").strip()
@@ -83,6 +97,8 @@ async def api_create_credential(request: Request, db: AsyncSession = Depends(get
 @router.put("/api/credentials/{cred_id}")
 async def api_update_credential(cred_id: int, request: Request,
                                 db: AsyncSession = Depends(get_db)):
+    if _require_admin(request):
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
     body = await request.json()
     q = await db.execute(select(Credential).where(Credential.id == cred_id))
     cred = q.scalar_one_or_none()
@@ -107,15 +123,22 @@ async def api_update_credential(cred_id: int, request: Request,
 
 
 @router.delete("/api/credentials/{cred_id}")
-async def api_delete_credential(cred_id: int, db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(Credential).where(Credential.id == cred_id))
+async def api_delete_credential(cred_id: int, request: Request,
+                                db: AsyncSession = Depends(get_db)):
+    if _require_admin(request):
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    result = await db.execute(delete(Credential).where(Credential.id == cred_id))
     await db.commit()
+    if result.rowcount == 0:
+        return JSONResponse({"error": "Not found"}, status_code=404)
     return JSONResponse({"ok": True})
 
 
 @router.get("/api/credentials/list")
-async def api_list_credentials(db: AsyncSession = Depends(get_db)):
+async def api_list_credentials(request: Request, db: AsyncSession = Depends(get_db)):
     """List credentials (id + name + type only, no secrets)."""
+    if _require_admin(request):
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
     q = await db.execute(select(Credential).order_by(Credential.name))
     creds = [{"id": c.id, "name": c.name, "type": c.type} for c in q.scalars().all()]
     return JSONResponse({"credentials": creds})
