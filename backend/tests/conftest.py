@@ -22,6 +22,25 @@ def _skip_pg_only(ddl, target, bind, **kw):
     return bind.dialect.name != "sqlite"
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """Dispose the module-global async engine at session end.
+
+    aiosqlite runs every connection in a *non-daemon* worker thread. Any code
+    path that opens the global ``AsyncSessionLocal`` during a test (e.g. the
+    real ``notifications.notify`` reading settings) connects this engine, and
+    because it is never disposed the lingering worker thread blocks the
+    interpreter's shutdown join — pytest hangs after the tests pass.
+    """
+    import asyncio
+
+    from models.base import engine
+
+    try:
+        asyncio.run(engine.dispose())
+    except Exception:
+        pass
+
+
 @pytest.fixture
 async def db():
     """Provide a fresh in-memory SQLite database session per test."""

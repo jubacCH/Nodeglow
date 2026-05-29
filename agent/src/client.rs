@@ -5,10 +5,28 @@ use tracing::{debug, warn};
 use crate::collector::SystemMetrics;
 use crate::config::{Config, ServerConfig};
 
+/// Hard cap on update-binary download size to prevent OOM/DoS from a malicious
+/// or compromised server returning an unbounded body. 200 MiB.
+const MAX_UPDATE_BYTES: usize = 200 * 1024 * 1024;
+
 pub struct ApiClient {
     client: Client,
     base_url: String,
     token: String,
+}
+
+/// Build the shared HTTP client. TLS certificate validation is enforced by
+/// default; it is only disabled when `allow_insecure_tls` is explicitly set
+/// (config field / NODEGLOW_ALLOW_INSECURE_TLS), which is intended for testing.
+fn build_client(cfg: &Config) -> Client {
+    let mut builder = Client::builder().timeout(std::time::Duration::from_secs(15));
+
+    if cfg.allow_insecure_tls {
+        warn!("TLS certificate validation is DISABLED (allow_insecure_tls=true) — insecure, testing only");
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
+    builder.build().expect("Failed to create HTTP client")
 }
 
 #[derive(Debug, Serialize)]
@@ -38,32 +56,25 @@ pub struct EnrollResponse {
 #[derive(Debug, Deserialize)]
 pub struct VersionResponse {
     pub hash: String,
+    /// Optional hex-encoded ed25519 detached signature over the binary bytes.
+    /// Present only if the server has signing enabled (defense-in-depth on top
+    /// of the authenticated TLS channel + SHA-256 hash check).
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 impl ApiClient {
     pub fn new(cfg: &Config) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .danger_accept_invalid_certs(true)
-            .build()
-            .expect("Failed to create HTTP client");
-
         Self {
-            client,
+            client: build_client(cfg),
             base_url: cfg.server.trim_end_matches('/').to_string(),
             token: String::new(),
         }
     }
 
     pub fn with_token(cfg: &Config, token: &str) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .danger_accept_invalid_certs(true)
-            .build()
-            .expect("Failed to create HTTP client");
-
         Self {
-            client,
+            client: build_client(cfg),
             base_url: cfg.server.trim_end_matches('/').to_string(),
             token: token.to_string(),
         }
@@ -175,8 +186,8 @@ impl ApiClient {
         }
     }
 
-    /// Check latest agent version hash from server.
-    pub async fn get_version_hash(&self, platform: &str) -> anyhow::Result<String> {
+    /// Check latest agent version info (hash + optional signature) from server.
+    pub async fn get_version_info(&self, platform: &str) -> anyhow::Result<VersionResponse> {
         let resp = self
             .client
             .get(format!(
@@ -191,13 +202,14 @@ impl ApiClient {
         }
 
         let data: VersionResponse = resp.json().await?;
-        Ok(data.hash)
+        Ok(data)
     }
 
-    /// Download agent binary from server.
+    /// Download agent binary from server, enforcing a maximum size to avoid
+    /// an OOM/DoS from an unbounded response body.
     pub async fn download_agent(&self, platform: &str) -> anyhow::Result<Vec<u8>> {
         let url = format!("{}/agents/download/{}", self.base_url, platform);
-        let resp = self
+        let mut resp = self
             .client
             .get(&url)
             .timeout(std::time::Duration::from_secs(120))
@@ -208,7 +220,27 @@ impl ApiClient {
             anyhow::bail!("Download failed: {}", resp.status());
         }
 
-        let bytes = resp.bytes().await?;
-        Ok(bytes.to_vec())
+        // Reject early if the advertised length already exceeds the cap.
+        if let Some(len) = resp.content_length() {
+            if len > MAX_UPDATE_BYTES as u64 {
+                anyhow::bail!(
+                    "Update too large: Content-Length {len} exceeds limit {MAX_UPDATE_BYTES}"
+                );
+            }
+        }
+
+        // Stream the body with a running byte cap so a server that lies about
+        // (or omits) Content-Length still cannot exhaust memory.
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = resp.chunk().await? {
+            if buf.len() + chunk.len() > MAX_UPDATE_BYTES {
+                anyhow::bail!(
+                    "Update exceeded maximum download size of {MAX_UPDATE_BYTES} bytes, aborting"
+                );
+            }
+            buf.extend_from_slice(&chunk);
+        }
+
+        Ok(buf)
     }
 }

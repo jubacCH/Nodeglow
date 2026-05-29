@@ -16,6 +16,11 @@ if not DATABASE_URL:
     DATABASE_PATH = DATA_DIR / "nodeglow.db"
     DATABASE_URL = f"sqlite+aiosqlite:///{DATABASE_PATH}"
 
+# Optional Redis URL for shared, durable state (e.g. rate-limit counters).
+# When unset, state lives in-process (per-worker) exactly as before; when set,
+# limits are shared across workers/nodes. No connection is made at import time.
+REDIS_URL = os.getenv("REDIS_URL", "")
+
 
 # Sentinel value for get_secret_key(): True when the key was sourced from
 # the env var, False when it came from (or was just created in) the data

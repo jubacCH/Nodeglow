@@ -144,6 +144,9 @@ export interface Incident {
   acknowledged_by: string | null;
   postmortem?: string | null;
   postmortem_generated_at?: string | null;
+  feedback?: 'real' | 'noise' | null;
+  feedback_at?: string | null;
+  feedback_by?: string | null;
 }
 
 export interface IncidentEvent {

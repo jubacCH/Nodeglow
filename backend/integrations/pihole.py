@@ -93,10 +93,17 @@ class PiholeAPI:
         return parse_pihole_v6_data(raw, top_queries, top_blocked, local_dns)
 
     async def _try_v5(self, client: httpx.AsyncClient) -> dict:
-        """Attempt Pi-hole v5 API."""
+        """Attempt Pi-hole v5 API.
+
+        NOTE: The legacy Pi-hole v5 PHP API (/admin/api.php) only accepts the API
+        token via the `auth` GET query parameter — it does not read it from a POST
+        body or an Authorization header. The token therefore unavoidably appears in
+        the request URL (and any access logs) for v5. The v6 API (handled in
+        _try_v6) sends the session token in a header instead, which is preferred.
+        """
         params: dict = {"summaryRaw": ""}
         if self.api_key:
-            params["auth"] = self.api_key
+            params["auth"] = self.api_key  # v5-only: query param is the sole option
 
         resp = await client.get(f"{self.base}/admin/api.php", params=params)
         resp.raise_for_status()

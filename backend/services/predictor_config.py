@@ -12,7 +12,7 @@ from typing import Pattern
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_setting
+from database import get_setting, set_setting
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +98,40 @@ async def get_blacklist_regexes(db: AsyncSession) -> list[Pattern[str]]:
         except re.error as exc:
             log.warning("predictor blacklist regex %r invalid: %s — skipped", p, exc)
     return compiled
+
+
+async def add_to_blacklist(db: AsyncSession, pattern: str) -> None:
+    """Append ``pattern`` to the ``predictor_template_blacklist`` settings array.
+
+    Idempotent: a pattern already present is not duplicated. The pattern is
+    validated to compile as a regex before being stored; invalid patterns raise
+    ``re.error``. Callers feeding literal template text should pre-escape it with
+    ``re.escape``. When the setting is empty/missing, the persisted defaults are
+    used as the starting list so existing suppression is preserved.
+    """
+    if not pattern:
+        return
+    # Validate the pattern compiles; let re.error propagate to the caller.
+    re.compile(pattern, re.IGNORECASE)
+
+    raw = await get_setting(db, "predictor_template_blacklist", "")
+    patterns: list[str]
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, list) or not all(isinstance(p, str) for p in parsed):
+                raise ValueError("blacklist must be a JSON array of strings")
+            patterns = parsed
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.warning("predictor_template_blacklist malformed (%s) — resetting to defaults", exc)
+            patterns = list(DEFAULT_BLACKLIST_PATTERNS)
+    else:
+        patterns = list(DEFAULT_BLACKLIST_PATTERNS)
+
+    if pattern in patterns:
+        return
+    patterns.append(pattern)
+    await set_setting(db, "predictor_template_blacklist", json.dumps(patterns))
 
 
 def is_template_blacklisted(template_text: str, regexes: list[Pattern[str]]) -> bool:

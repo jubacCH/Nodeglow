@@ -40,7 +40,9 @@ pub async fn collect_metrics() -> anyhow::Result<SystemMetrics> {
             ifaces
                 .iter()
                 .filter(|i| i.name != "lo")
-                .fold((0u64, 0u64), |(rx, tx), i| (rx + i.rx_bytes, tx + i.tx_bytes))
+                .fold((0u64, 0u64), |(rx, tx), i| {
+                    (rx.saturating_add(i.rx_bytes), tx.saturating_add(i.tx_bytes))
+                })
         })
         .unwrap_or((0, 0));
 

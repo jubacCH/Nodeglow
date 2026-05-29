@@ -179,9 +179,14 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     now = datetime.utcnow()
     loop = asyncio.get_event_loop()
 
-    # ── Run psutil + logs in thread pool (non-blocking) ──────────────────
+    # ── Run psutil in thread pool (non-blocking) ─────────────────────────
     sysinfo_fut = loop.run_in_executor(None, _collect_system_info)
-    logs_fut = loop.run_in_executor(None, _collect_logs)
+
+    # App logs (journald tail) can contain secrets — only collect them for
+    # admins. Readonly/editor users get an empty list.
+    _user = getattr(request.state, "current_user", None)
+    _is_admin = getattr(_user, "role", None) == "admin"
+    logs_fut = loop.run_in_executor(None, _collect_logs) if _is_admin else None
 
     # ── Database stats + top tables (single query) ───────────────────────
     # Postgres now only holds config + state tables. Time-series ping data
@@ -509,7 +514,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
 
     # ── Await thread pool results ────────────────────────────────────────
     sysinfo = await sysinfo_fut
-    log_lines = await logs_fut
+    log_lines = await logs_fut if logs_fut is not None else []
 
     payload = {
         "application": sysinfo["app_info"],

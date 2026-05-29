@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Search, ExternalLink, CheckCircle, Plug } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { sanitizeSvg } from '@/lib/sanitize';
 
 interface IntegrationMeta {
   name: string;
@@ -125,7 +126,7 @@ function IntegrationCard({ integration: int, onConfigure }: { integration: Integ
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           {int.icon_svg ? (
-            <div className="w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center" dangerouslySetInnerHTML={{ __html: int.icon_svg }} />
+            <div className="w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center" dangerouslySetInnerHTML={{ __html: sanitizeSvg(int.icon_svg) }} />
           ) : (
             <div className="w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center text-sm font-bold text-[var(--ng-text-secondary)]">
               {int.display_name[0]}

@@ -1285,6 +1285,9 @@ async def get_incident(
         "acknowledged_by": incident.acknowledged_by,
         "postmortem": incident.postmortem,
         "postmortem_generated_at": incident.postmortem_generated_at.isoformat() if incident.postmortem_generated_at else None,
+        "feedback": incident.feedback,
+        "feedback_at": incident.feedback_at.isoformat() if incident.feedback_at else None,
+        "feedback_by": incident.feedback_by,
         "events": [
             {
                 "timestamp": e.timestamp.isoformat(),
@@ -1375,6 +1378,79 @@ async def regenerate_postmortem(
     except Exception:
         pass
     return {"ok": True, "message": "Postmortem generation started"}
+
+
+@router.post("/incidents/{incident_id}/feedback", summary="Label an incident real or noise")
+async def incident_feedback(
+    incident_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    """Record an operator verdict on an incident (closed feedback loop).
+
+    A 'noise' verdict on a learned_precursor incident that carries a
+    ``precursor_template`` adds that template (regex-escaped) to the predictor
+    blacklist so the noisy pattern stops firing.
+    """
+    import re as _re
+
+    body = await request.json()
+    verdict = (body or {}).get("verdict")
+    if verdict not in ("real", "noise"):
+        raise HTTPException(400, "verdict must be 'real' or 'noise'")
+
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+
+    incident.feedback = verdict
+    incident.feedback_at = datetime.utcnow()
+    incident.feedback_by = _key.name
+    incident.updated_at = datetime.utcnow()
+
+    db.add(IncidentEvent(
+        incident_id=incident_id,
+        event_type="feedback",
+        summary=f"Labeled '{verdict}' by {_key.name}",
+    ))
+
+    blacklisted = False
+    if (
+        verdict == "noise"
+        and (incident.rule or "").startswith("learned_precursor")
+        and incident.precursor_template
+    ):
+        from services import predictor_config
+        try:
+            await predictor_config.add_to_blacklist(
+                db, _re.escape(incident.precursor_template)
+            )
+            blacklisted = True
+        except Exception as exc:
+            logger.warning("Failed to blacklist precursor template: %s", exc)
+
+    await log_action(db, request, "incident.feedback", "incident", incident_id, incident.title)
+    await db.commit()
+    return {
+        "id": incident.id,
+        "rule": incident.rule,
+        "title": incident.title,
+        "status": incident.status,
+        "feedback": incident.feedback,
+        "feedback_at": incident.feedback_at.isoformat() if incident.feedback_at else None,
+        "feedback_by": incident.feedback_by,
+        "blacklisted": blacklisted,
+    }
+
+
+@router.get("/predictor/eval", summary="Predictor quality metrics from operator feedback")
+async def predictor_eval(
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    from services.predictor_eval import compute_eval
+    return await compute_eval(db)
 
 
 # ── Syslog ───────────────────────────────────────────────────────────────────

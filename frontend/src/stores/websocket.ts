@@ -12,6 +12,9 @@ interface WsState {
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let backoff = 1000;
+// Set while an intentional disconnect() is in flight so the onclose handler
+// does not schedule a reconnect (e.g. on unmount/logout).
+let intentionalDisconnect = false;
 
 export const useWsStore = create<WsState>((set, getState) => ({
   isConnected: false,
@@ -20,6 +23,9 @@ export const useWsStore = create<WsState>((set, getState) => ({
 
   connect: () => {
     if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+
+    // A fresh connect cancels any pending intentional-disconnect state.
+    intentionalDisconnect = false;
 
     // Clear any pending reconnect timer to avoid duplicate connections
     if (reconnectTimer) {
@@ -55,6 +61,8 @@ export const useWsStore = create<WsState>((set, getState) => ({
     ws.onclose = () => {
       set({ isConnected: false });
       ws = null;
+      // Do not reconnect if the socket was closed by an intentional disconnect.
+      if (intentionalDisconnect) return;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         backoff = Math.min(backoff * 2, 30000);
@@ -66,6 +74,9 @@ export const useWsStore = create<WsState>((set, getState) => ({
   },
 
   disconnect: () => {
+    // Mark the disconnect as intentional so onclose does not reconnect, and
+    // clear the pending reconnect timer to fully stop the reconnect loop.
+    intentionalDisconnect = true;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
