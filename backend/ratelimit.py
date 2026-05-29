@@ -1,45 +1,40 @@
-"""Simple in-memory rate limiter for FastAPI."""
-import time
-from collections import defaultdict
+"""Rate limiter for FastAPI, backed by shared_state.
+
+Counters live in :mod:`services.shared_state`, which transparently uses Redis
+when ``REDIS_URL`` is configured (shared across workers/nodes, survives the
+window across restarts) and an identical in-memory sliding window otherwise.
+With no ``REDIS_URL`` the behaviour is exactly the same as the original
+in-process limiter.
+
+All public names and signatures are unchanged so existing decorated routes and
+``auth.py`` keep working without modification.
+"""
 from functools import wraps
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from services import shared_state
+
 
 class RateLimiter:
-    """Token-bucket rate limiter keyed by client IP."""
+    """Sliding-window rate limiter keyed by client IP.
 
-    def __init__(self):
-        # {key: [timestamps]}
-        self._hits: dict[str, list[float]] = defaultdict(list)
-        self._last_cleanup = time.monotonic()
+    Thin wrapper over :mod:`services.shared_state`. Retained for backward
+    compatibility: the check-then-record semantics are identical to before — a
+    key at or above ``max_requests`` is limited and the over-limit attempt is
+    NOT recorded.
+    """
 
     def is_limited(self, key: str, max_requests: int, window_seconds: int) -> bool:
         """Check if key has exceeded max_requests in the last window_seconds."""
-        now = time.monotonic()
-        # Periodic cleanup every 5 minutes
-        if now - self._last_cleanup > 300:
-            self._cleanup(now, window_seconds)
-        cutoff = now - window_seconds
-        hits = self._hits[key]
-        # Remove expired entries for this key
-        self._hits[key] = hits = [t for t in hits if t > cutoff]
-        if len(hits) >= max_requests:
+        if shared_state.window_count_sync(key, window_seconds) >= max_requests:
             return True
-        hits.append(now)
+        shared_state.incr_window_sync(key, window_seconds)
         return False
 
-    def _cleanup(self, now: float, default_window: int):
-        """Remove stale keys to prevent memory growth."""
-        self._last_cleanup = now
-        cutoff = now - default_window * 2
-        stale = [k for k, v in self._hits.items() if not v or v[-1] < cutoff]
-        for k in stale:
-            del self._hits[k]
 
-
-# Global instance
+# Global instance (kept for any external importers).
 _limiter = RateLimiter()
 
 
@@ -55,10 +50,9 @@ def _get_client_ip(request: Request) -> str:
 # limit. This throttle caps total failed-auth attempts per source IP regardless
 # of the username, so credential-spraying from one host is bounded.
 #
-# NOTE: this counter is in-memory and therefore per-process. With multiple
-# workers (e.g. uvicorn/gunicorn --workers N) the effective limit is multiplied
-# by the worker count, and it resets on restart. For a hard, shared limit use a
-# central store (Redis/DB). For homelab single-worker deployments this is fine.
+# Counters are stored via shared_state: with REDIS_URL set the limit is shared
+# across workers/nodes and survives restarts within the window; otherwise it is
+# in-memory and per-process (fine for single-worker homelab deployments).
 _failed_auth_limiter = RateLimiter()
 
 # Max failed auth attempts per IP within the window before throttling.
@@ -72,6 +66,8 @@ def failed_auth_throttled(request: Request) -> bool:
     Call this BEFORE attempting authentication. It both checks and records the
     attempt against the IP, so only call it on the auth path (one count per
     login request). Returns True once the IP is over the limit.
+
+    Synchronous by design — call sites invoke it without ``await``.
     """
     ip = _get_client_ip(request)
     return _failed_auth_limiter.is_limited(
@@ -102,13 +98,16 @@ def rate_limit(max_requests: int = 5, window_seconds: int = 60, html: bool = Fal
             if request:
                 ip = _get_client_ip(request)
                 key = f"{func.__module__}.{func.__name__}:{ip}"
-                if _limiter.is_limited(key, max_requests, window_seconds):
+                # Check-then-record, matching the original semantics: an
+                # over-limit attempt is rejected and NOT counted.
+                if await shared_state.window_count(key, window_seconds) >= max_requests:
                     if html:
                         return HTMLResponse(_429_HTML, status_code=429)
                     return JSONResponse(
                         {"error": "Too many requests. Please try again later."},
                         status_code=429,
                     )
+                await shared_state.incr_window(key, window_seconds)
             return await func(*args, **kwargs)
         return wrapper
     return decorator
