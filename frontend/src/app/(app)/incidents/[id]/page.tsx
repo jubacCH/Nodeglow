@@ -11,7 +11,7 @@ import { get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import type { Incident, IncidentEvent } from '@/types';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
-import { ArrowLeft, CheckCircle, Eye, FileText, Zap, Search, RefreshCw } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Eye, FileText, Zap, Search, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useState } from 'react';
 import Link from 'next/link';
 
@@ -117,6 +117,16 @@ export default function IncidentDetailPage() {
     }
   }
 
+  async function submitFeedback(verdict: 'real' | 'noise') {
+    try {
+      await post(`/api/v1/incidents/${incidentId}/feedback`, { verdict });
+      refetch();
+      toast(verdict === 'noise' ? 'Marked as noise — pattern suppressed' : 'Marked as real', 'success');
+    } catch {
+      toast('Failed to submit feedback', 'error');
+    }
+  }
+
   return (
     <div>
       <Breadcrumbs items={[{ label: 'Alerts', href: '/alerts' }, { label: data?.title ?? `Incident #${incidentId}` }]} />
@@ -156,6 +166,39 @@ export default function IncidentDetailPage() {
               {data.resolved_at && (
                 <span className="text-xs text-emerald-400">
                   Resolved: {new Date(data.resolved_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+
+            {/* Operator feedback loop */}
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-white/[0.06] flex-wrap">
+              <span className="text-xs text-slate-400 mr-1">War dieser Alert nützlich?</span>
+              <button
+                type="button"
+                onClick={() => submitFeedback('real')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  data.feedback === 'real'
+                    ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40'
+                    : 'bg-white/[0.04] text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-300'
+                }`}
+              >
+                <ThumbsUp size={13} /> Echt
+              </button>
+              <button
+                type="button"
+                onClick={() => submitFeedback('noise')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  data.feedback === 'noise'
+                    ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40'
+                    : 'bg-white/[0.04] text-slate-400 hover:bg-amber-500/10 hover:text-amber-300'
+                }`}
+              >
+                <ThumbsDown size={13} /> Rauschen
+              </button>
+              {data.feedback_by && (
+                <span className="text-[10px] text-slate-500 ml-1">
+                  von {data.feedback_by}
+                  {data.feedback_at ? ` · ${new Date(data.feedback_at).toLocaleString()}` : ''}
                 </span>
               )}
             </div>

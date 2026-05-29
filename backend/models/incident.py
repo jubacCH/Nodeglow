@@ -23,6 +23,14 @@ class Incident(Base):
     postmortem = Column(Text, nullable=True)
     postmortem_generated_at = Column(DateTime, nullable=True)
 
+    # ── Operator feedback loop (Phase 3) ───────────────────────────────────
+    feedback = Column(String(16), nullable=True)          # 'real' | 'noise' | NULL
+    feedback_at = Column(DateTime, nullable=True)
+    feedback_by = Column(String(128), nullable=True)
+    # Precursor template text for learned_precursor incidents, so 'noise'
+    # feedback can map the incident back to the noisy template and blacklist it.
+    precursor_template = Column(Text, nullable=True)
+
     events = relationship("IncidentEvent", back_populates="incident",
                           cascade="all, delete-orphan", order_by="IncidentEvent.timestamp")
 
@@ -30,6 +38,7 @@ class Incident(Base):
         Index("ix_incident_status", "status"),
         Index("ix_incident_rule_hash", "rule", "host_ids_hash"),
         Index("ix_incident_updated", "updated_at"),
+        Index("ix_incident_feedback", "feedback"),
     )
 
 
