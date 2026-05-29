@@ -1,20 +1,70 @@
 """
 Background scheduler – generic integration collection + ping checks + cleanup.
 """
+import asyncio
 import logging
+import os
+import socket
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import delete, select
 
+import config
 from database import AsyncSessionLocal, PingHost
 from models.integration import IntegrationConfig
 from services import integration as int_svc
+from services import shared_state
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
+
+# ── Scheduler leadership (multi-worker / HA safety) ──────────────────────────
+# Without a leader lock every uvicorn worker / replica would start its own
+# scheduler and run correlation, ping, etc. concurrently → duplicate incidents
+# and duplicate work. When REDIS_URL is set, all instances contend for a single
+# Redis lease and only the holder runs jobs. Without Redis (the default,
+# single-process deployment) there is exactly one process which is always the
+# leader, so behaviour is unchanged.
+_SCHEDULER_LEADER_LOCK = "nodeglow:scheduler:leader"
+_LEADER_TTL_SECONDS = 30
+_LEADER_RENEW_SECONDS = 10
+_instance_id = f"{socket.gethostname()}:{os.getpid()}"
+_leader_task: "asyncio.Task | None" = None
+_is_leader = False
+
+
+def _apply_leadership(leader: bool) -> None:
+    """Resume or pause the scheduler on a leadership transition (idempotent)."""
+    global _is_leader
+    if leader and not _is_leader:
+        scheduler.resume()
+        _is_leader = True
+        logger.info("Acquired scheduler leadership — jobs running (instance=%s)", _instance_id)
+    elif not leader and _is_leader:
+        scheduler.pause()
+        _is_leader = False
+        logger.warning("Lost scheduler leadership — jobs paused (instance=%s)", _instance_id)
+
+
+async def _leadership_loop():
+    """Periodically acquire/renew the Redis lease; resume jobs only while leader."""
+    while True:
+        try:
+            leader = await shared_state.try_acquire_leader(
+                _SCHEDULER_LEADER_LOCK, _instance_id, _LEADER_TTL_SECONDS
+            )
+            _apply_leadership(leader)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # Preserve current leadership state on transient errors: never grant
+            # leadership to everyone (split-brain) nor stop a healthy leader. A
+            # genuinely dead leader frees the lease via its TTL.
+            logger.error("Scheduler leadership loop error: %s", e)
+        await asyncio.sleep(_LEADER_RENEW_SECONDS)
 
 
 # ── Generic integration collection ───────────────────────────────────────────
@@ -1182,7 +1232,16 @@ async def start_scheduler():
                       hour=ai_summary_hour, minute=0,
                       id="daily_ai_summary", replace_existing=True)
 
-    scheduler.start()
+    if getattr(config, "REDIS_URL", ""):
+        # HA mode: start paused; the leadership loop resumes jobs once this
+        # instance wins the Redis lease, and pauses them if it loses it.
+        global _leader_task
+        scheduler.start(paused=True)
+        _leader_task = asyncio.create_task(_leadership_loop())
+        logger.info("Scheduler started in leader-election mode (instance=%s)", _instance_id)
+    else:
+        # Single-process deployment: always leader, run jobs immediately.
+        scheduler.start()
 
     # Seed default SNMP OIDs
     try:
@@ -1196,4 +1255,10 @@ async def start_scheduler():
 
 
 def stop_scheduler():
+    global _leader_task
+    if _leader_task is not None:
+        _leader_task.cancel()
+        _leader_task = None
+    # The Redis lease (if any) is left to expire via its TTL, which hands
+    # leadership to a standby within _LEADER_TTL_SECONDS.
     scheduler.shutdown(wait=False)
