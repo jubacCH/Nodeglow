@@ -57,6 +57,13 @@ def _resolve_role(entry, config: LdapConfig) -> str:
 
 def _ldap_authenticate(config: LdapConfig, username: str, password: str) -> LdapUser | None:
     """Synchronous LDAP bind + search. Runs in thread pool."""
+    # Refuse empty/whitespace-only passwords. LDAP simple bind treats an empty
+    # password as an "unauthenticated bind" which succeeds against many
+    # directories without verifying the user — an authentication bypass.
+    if not password or not password.strip():
+        logger.info("LDAP auth refused empty password for user: %s", username)
+        return None
+
     use_ssl = config.use_ssl or config.server.startswith("ldaps://")
     server = Server(config.server, use_ssl=use_ssl, get_info=ALL, connect_timeout=10)
 

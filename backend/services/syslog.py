@@ -358,9 +358,12 @@ async def _rdns_resolve_loop():
         if len(_rdns_cache) > _RDNS_CACHE_MAX:
             _rdns_cache.clear()
         _rdns_cache_ts = now
-        # Collect unique source IPs from recent buffer entries that had no host_id
+        # Collect unique source IPs from recent buffer entries that had no host_id.
+        # Snapshot the shared buffer under the lock — other tasks reassign/mutate it.
         ips_to_resolve = set()
-        for entry in _buffer:
+        async with _buffer_lock:
+            snapshot = list(_buffer)
+        for entry in snapshot:
             if not entry.get("host_id") and entry.get("source_ip"):
                 ips_to_resolve.add(entry["source_ip"])
         # Also resolve IPs we haven't seen before
@@ -470,6 +473,16 @@ async def _flush_buffer():
         await insert_batch(cleaned)
     except Exception as e:
         log.error("Failed to flush syslog buffer to ClickHouse (%d msgs): %s", len(cleaned), e)
+        # Re-prepend the failed batch so the next flush retries it instead of
+        # losing it on a transient ClickHouse error. Respect the hard cap by
+        # dropping the oldest messages if the combined buffer would overflow.
+        _buffer = batch + _buffer
+        if len(_buffer) > _BUFFER_MAX:
+            dropped = len(_buffer) - _BUFFER_MAX
+            _buffer = _buffer[dropped:]
+            log.warning(
+                "Syslog retry buffer overflow: dropped %d oldest messages", dropped
+            )
 
 
 async def _flush_loop():

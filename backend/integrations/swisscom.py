@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 class InternetBoxAPI:
     """Async client for Swisscom Internet-Box /ws/ REST API."""
 
-    def __init__(self, host: str, password: str):
+    def __init__(self, host: str, password: str, verify_ssl: bool = False):
         if not host.startswith("http"):
             host = f"https://{host}"
         self.base = host.rstrip("/")
         self.password = password
+        self.verify_ssl = verify_ssl
         self._context: str | None = None
 
     async def _login(self, client: httpx.AsyncClient) -> str:
@@ -68,8 +69,9 @@ class InternetBoxAPI:
 
     async def fetch_all(self) -> dict:
         """Collect all data from the Internet-Box."""
-        # verify=False: Internet-Box uses self-signed cert on local network
-        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+        # verify_ssl defaults to False because the Internet-Box uses a self-signed
+        # cert on the local network, but it is overridable via the config field.
+        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0) as client:
             self._context = await self._login(client)
 
             # ── Device Info ──
@@ -187,8 +189,8 @@ class InternetBoxAPI:
     async def health_check(self) -> bool:
         """Quick login test."""
         try:
-            # verify=False: Internet-Box uses self-signed cert on local network
-            async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+            # verify_ssl defaults to False (self-signed cert) but is overridable.
+            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0) as client:
                 await self._login(client)
                 return True
         except Exception:
@@ -214,12 +216,19 @@ class SwisscomIntegration(BaseIntegration):
             key="password", label="Admin Password",
             field_type="password", encrypted=True,
         ),
+        # Default False: Swisscom routers ship self-signed certs. Overridable for
+        # setups behind a reverse proxy with a valid certificate.
+        ConfigField(
+            key="verify_ssl", label="Verify SSL", field_type="checkbox",
+            required=False, default=False,
+        ),
     ]
 
     def _api(self) -> InternetBoxAPI:
         return InternetBoxAPI(
             host=self.config.get("host", "192.168.1.1"),
             password=self.config.get("password", ""),
+            verify_ssl=self.config.get("verify_ssl", False),
         )
 
     async def collect(self) -> CollectorResult:

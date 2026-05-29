@@ -24,8 +24,10 @@ from urllib.parse import urlparse
 
 from integrations import get_registry, get_integration
 from integrations._base import BaseIntegration
+from models.api_key import ApiKey
 from models.base import get_db
 from ratelimit import rate_limit
+from routers.api_v1 import require_admin
 from services import integration as int_svc
 from services import snapshot as snap_svc
 
@@ -351,6 +353,7 @@ async def deploy_agent_to_lxcs(
     config_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
 ):
     """Deploy Nodeglow agent to all running LXCs via SSH → pct exec.
 
