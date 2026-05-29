@@ -475,26 +475,32 @@ class ProxmoxIntegration(BaseIntegration):
         cluster_name = data.get("cluster_name", config.get("host", "Proxmox"))
         await import_proxmox_hosts(cluster_name, data, db)
 
-        # Sync backup jobs from collected data
+        # Sync backup jobs from collected data.
+        #
+        # We need this integration's DB config_id for sync_proxmox_backups, but the
+        # on_snapshot hook only receives the decrypted `config` dict (no DB id). The
+        # host to match on is therefore taken directly from `config`. We fetch the
+        # candidate rows in a single query (instead of select-ids + per-row db.get,
+        # which was an N+1) and decrypt lazily, breaking on the first host match so
+        # we run at most one expensive PBKDF2 decrypt per non-matching row up to the
+        # match — not a full decrypt of every row before doing anything.
         try:
             from services.backup_monitor import sync_proxmox_backups
-            # Find config_id from the DB using the host URL
+            from services.integration import decrypt_config
             from models.integration import IntegrationConfig
             from sqlalchemy import select
+
+            own_host = config.get("host")
             result = await db.execute(
-                select(IntegrationConfig.id).where(
+                select(IntegrationConfig).where(
                     IntegrationConfig.type == "proxmox",
                     IntegrationConfig.enabled == True,
                 )
             )
-            for row in result.all():
-                from services.integration import decrypt_config
-                cfg = await db.get(IntegrationConfig, row.id)
-                if cfg:
-                    cfg_dict = decrypt_config(cfg.config_json)
-                    if cfg_dict.get("host") == config.get("host"):
-                        await sync_proxmox_backups(db, row.id, data)
-                        break
+            for cfg in result.scalars().all():
+                if decrypt_config(cfg.config_json).get("host") == own_host:
+                    await sync_proxmox_backups(db, cfg.id, data)
+                    break
         except Exception as exc:
             logger.warning("Backup sync in on_snapshot failed: %s", exc)
 

@@ -72,8 +72,8 @@ pub async fn collect_metrics() -> anyhow::Result<SystemMetrics> {
     for (name, data) in networks.list() {
         let rx = data.total_received();
         let tx = data.total_transmitted();
-        total_rx += rx;
-        total_tx += tx;
+        total_rx = total_rx.saturating_add(rx);
+        total_tx = total_tx.saturating_add(tx);
         net_interfaces.push(NetInterface {
             name: name.clone(),
             rx_bytes: rx,

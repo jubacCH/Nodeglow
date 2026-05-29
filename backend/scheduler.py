@@ -587,7 +587,7 @@ async def check_disk_space():
                 db.add(IncidentEvent(
                     incident_id=existing.id,
                     event_type="resolved",
-                    message=f"Disk usage back to {used_pct}% ({free_gb} GB free)",
+                    summary=f"Disk usage back to {used_pct}% ({free_gb} GB free)",
                 ))
                 await db.commit()
                 logger.info("Disk space incident resolved: %.1f%% used", used_pct)
@@ -614,7 +614,7 @@ async def check_disk_space():
             db.add(IncidentEvent(
                 incident_id=existing.id,
                 event_type="disk_warning",
-                message=title,
+                summary=title,
             ))
         else:
             inc = Incident(
@@ -629,7 +629,7 @@ async def check_disk_space():
             db.add(IncidentEvent(
                 incident_id=inc.id,
                 event_type="created",
-                message=title,
+                summary=title,
             ))
 
         await db.commit()

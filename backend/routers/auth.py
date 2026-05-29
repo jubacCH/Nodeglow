@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Session, User, get_db, get_current_user
 from models.settings import _hash_token, _hash_token_legacy, get_setting, set_setting
-from ratelimit import rate_limit
+from ratelimit import rate_limit, failed_auth_throttled
 from services.audit import log_action
 
 logger = logging.getLogger(__name__)
@@ -163,9 +163,23 @@ async def login(
     body: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    # IP-scoped failed-auth throttle — bounds username-spraying from one host,
+    # independent of the per-username lockout below. Counts this attempt.
+    if failed_auth_throttled(request):
+        return JSONResponse({"error": "Too many attempts. Try again later."}, status_code=429)
+
     # Account lockout check (DB-persisted, survives restarts)
     if await _is_locked_out(db, body.username):
         return JSONResponse({"error": "Account temporarily locked. Try again later."}, status_code=429)
+
+    # Reject empty/whitespace-only passwords before any auth attempt. An empty
+    # password against an LDAP server triggers an unauthenticated bind, which
+    # most directories accept — bypassing authentication. Treat it exactly like
+    # a wrong password (record the failed attempt, return generic 401) so the
+    # timing/behaviour matches a normal credential failure.
+    if not body.password or not body.password.strip():
+        await _record_failed_attempt(db, body.username)
+        return JSONResponse({"error": "Invalid username or password"}, status_code=401)
 
     # Try LDAP first (if enabled)
     ldap_user, _ = await _try_ldap_login(db, body.username, body.password)

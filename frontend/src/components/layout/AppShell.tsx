@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from './Sidebar';
 import { GlowPanel } from '@/components/copilot/CopilotPanel';
 import { ToastContainer } from '@/components/ui/Toast';
@@ -19,15 +19,28 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const fetchUser = useAuthStore((s) => s.fetchUser);
+  const user = useAuthStore((s) => s.user);
+  const isLoading = useAuthStore((s) => s.isLoading);
   const connect = useWsStore((s) => s.connect);
+  const disconnect = useWsStore((s) => s.disconnect);
   const { sidebarPosition, accentColor, colorMode, density, fontSize } = useThemeStore();
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
 
   useEffect(() => {
     fetchUser();
     connect();
-  }, [fetchUser, connect]);
+    // Tear down the socket + reconnect loop on unmount/logout to avoid leaks.
+    return () => disconnect();
+  }, [fetchUser, connect, disconnect]);
+
+  // Redirect to /login once auth state resolves and there is no user.
+  useEffect(() => {
+    if (!isLoading && !user) {
+      router.replace('/login');
+    }
+  }, [isLoading, user, router]);
 
   // Close mobile sidebar on route change
   useEffect(() => {
@@ -42,6 +55,16 @@ export function AppShell({ children }: AppShellProps) {
     root.style.fontSize = `${fontSize}px`;
     root.setAttribute('data-theme', colorMode);
   }, [accentColor, fontSize, colorMode]);
+
+  // Do not render protected app children until auth state is resolved.
+  // While loading, or when unauthenticated (redirect pending), show a spinner.
+  if (isLoading || !user) {
+    return (
+      <div className="flex h-screen items-center justify-center" style={{ background: 'var(--ng-bg)' }}>
+        <div className="h-6 w-6 rounded-full border-2 border-sky-500/30 border-t-sky-400 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className={cn(

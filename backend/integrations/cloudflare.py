@@ -111,8 +111,13 @@ class CloudflareAPI:
             total_all = 0
 
             for zone in zones:
-                zid = zone["id"]
-                zname = zone["name"]
+                # Guard against malformed zone records: a single bad entry must
+                # not abort the whole fetch. A zone without an id is unusable.
+                zid = zone.get("id")
+                if not zid:
+                    log.warning("Skipping Cloudflare zone without id: %s", zone)
+                    continue
+                zname = zone.get("name", "")
                 zstatus = zone.get("status", "unknown")
                 zplan = zone.get("plan", {}).get("name", "Unknown")
                 ssl_mode = zone.get("ssl", {}).get("mode", "unknown") if isinstance(zone.get("ssl"), dict) else "unknown"
@@ -237,19 +242,20 @@ class CloudflareIntegration(BaseIntegration):
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts = []
         for zone in data.get("zones", []):
+            zname = zone.get("name", "?")
             if zone.get("status") != "active":
                 alerts.append(Alert(
                     severity="warning",
-                    title=f"Zone {zone['name']} is {zone.get('status', 'unknown')}",
+                    title=f"Zone {zname} is {zone.get('status', 'unknown')}",
                     detail=f"Zone status: {zone.get('status')}",
-                    entity=f"zone: {zone['name']}",
+                    entity=f"zone: {zname}",
                 ))
             threats = zone.get("analytics", {}).get("threats", 0)
             if threats > 100:
                 alerts.append(Alert(
                     severity="warning",
-                    title=f"High threat count on {zone['name']}",
+                    title=f"High threat count on {zname}",
                     detail=f"{threats} threats in last 24h",
-                    entity=f"zone: {zone['name']}",
+                    entity=f"zone: {zname}",
                 ))
         return alerts
