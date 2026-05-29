@@ -724,7 +724,7 @@ async def _rule_precursor_observed(
                 if dedup_id
                 else f"learned_precursor_{pp.precedes_event}"
             )
-            await _find_or_create_incident(
+            incident = await _find_or_create_incident(
                 db,
                 rule=incident_rule,
                 title=f"Predicted: {event_label} ({confidence_pct}% confidence)",
@@ -738,6 +738,10 @@ async def _rule_precursor_observed(
                     f"{confidence_pct}% confidence)."
                 ),
             )
+            # Persist the matched template text so 'noise' feedback can map back
+            # to it and blacklist the noisy pattern.
+            if incident is not None and tpl_text and not incident.precursor_template:
+                incident.precursor_template = tpl_text
 
 
 # ── Auto-Resolve ────────────────────────────────────────────────────────────
