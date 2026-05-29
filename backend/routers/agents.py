@@ -18,6 +18,7 @@ from database import AsyncSessionLocal, PingHost, get_setting, set_setting
 from ratelimit import rate_limit
 from models.agent import Agent
 from models.agent_install_token import AgentInstallToken
+from services import agent_signing
 from services.websocket import broadcast_agent_metric
 
 
@@ -567,6 +568,8 @@ async def install_linux(request: Request):
     # without a token query-param we emit a placeholder that will visibly
     # fail at enrollment time instead of silently using something valid.
     enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
+    # Embed the update-signing public key so the agent verifies signed updates.
+    update_public_key = agent_signing.public_key_hex()
 
     script = f'''#!/bin/bash
 set -e
@@ -633,7 +636,8 @@ cat > "$CONFIG_FILE" << CONF
 {{
   "server": "$SERVER",
   "token": "$TOKEN",
-  "interval": 30
+  "interval": 30,
+  "update_public_key": "{update_public_key}"
 }}
 CONF
 
@@ -703,6 +707,8 @@ async def install_windows(request: Request):
         scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
         server_url = f"{scheme}://{request.url.netloc}"
     enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
+    # Embed the update-signing public key so the agent verifies signed updates.
+    update_public_key = agent_signing.public_key_hex()
 
     script = f'''# ── Nodeglow Agent Installer for Windows ─────────────────────────────────────
 $ErrorActionPreference = "Stop"
@@ -773,7 +779,8 @@ Write-Host "  [5/8] Writing configuration..."
 {{
   "server": "$Server",
   "token": "$Token",
-  "interval": 30
+  "interval": 30,
+  "update_public_key": "{update_public_key}"
 }}
 "@ | Set-Content -Path "$InstallDir\\config.json" -Encoding ASCII -Force
 
@@ -917,10 +924,11 @@ async def agent_download(request: Request, platform: str):
 # ── API: Agent version check (for auto-update) ────────────────────────────────
 
 _agent_file_cache: dict[str, tuple[str, float]] = {}  # platform -> (hash, mtime)
+_agent_sig_cache: dict[str, tuple[str, float]] = {}    # platform -> (signature, mtime)
 
 
-def _get_agent_hash(platform: str) -> str:
-    """Get SHA256 hash of the current agent binary/script. Cached by mtime."""
+def _agent_binary_path(platform: str) -> Path | None:
+    """Resolve the file served by agent_download for a platform, or None."""
     if platform == "windows":
         path = Path("static/nodeglow-agent.exe")
     else:
@@ -928,8 +936,13 @@ def _get_agent_hash(platform: str) -> str:
         path = Path("static/nodeglow-agent-linux")
         if not path.exists():
             path = Path("static/nodeglow-agent-linux.py")
+    return path if path.exists() else None
 
-    if not path.exists():
+
+def _get_agent_hash(platform: str) -> str:
+    """Get SHA256 hash of the current agent binary/script. Cached by mtime."""
+    path = _agent_binary_path(platform)
+    if path is None:
         return ""
 
     mtime = path.stat().st_mtime
@@ -942,12 +955,45 @@ def _get_agent_hash(platform: str) -> str:
     return h
 
 
+def _get_agent_signature(platform: str) -> str:
+    """Detached ed25519 signature (hex) over the served binary. Cached by mtime.
+
+    Signs the exact bytes agent_download returns so the agent can verify the
+    download against its embedded public key. Empty string if no binary exists.
+    """
+    path = _agent_binary_path(platform)
+    if path is None:
+        return ""
+
+    mtime = path.stat().st_mtime
+    cached = _agent_sig_cache.get(platform)
+    if cached and cached[1] == mtime:
+        return cached[0]
+
+    sig = agent_signing.sign_bytes(path.read_bytes())
+    _agent_sig_cache[platform] = (sig, mtime)
+    return sig
+
+
 @router.get("/api/agent/version/{platform}")
 async def agent_version(platform: str):
-    """Returns the current agent version hash. Agents poll this to check for updates."""
+    """Returns the current agent version hash + ed25519 signature.
+
+    Agents poll this to check for updates; the signature lets agents that have
+    a configured update_public_key verify the binary before applying it.
+    """
     if platform not in ("windows", "linux"):
         return JSONResponse({"error": "Invalid platform"}, status_code=400)
-    return {"hash": _get_agent_hash(platform)}
+    return {
+        "hash": _get_agent_hash(platform),
+        "signature": _get_agent_signature(platform),
+    }
+
+
+@router.get("/api/agent/update-public-key")
+async def agent_update_public_key():
+    """Public half of the agent-update signing key (hex), for agents to embed."""
+    return {"public_key": agent_signing.public_key_hex()}
 
 
 # ── API: List agents (JSON) ─────────────────────────────────────────────────
