@@ -145,7 +145,9 @@ class RedfishAPI:
         raise last_exc or RuntimeError("No valid path found")
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+        # Client-level timeout so the chained fallback path walks (multiple
+        # sequential requests) cannot stack into an unbounded total wait.
+        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0) as client:
             try:
                 root = await self._get(client, "/redfish/v1/")
                 system_link = (root.get("Systems", {}) or {}).get("@odata.id")
@@ -201,7 +203,7 @@ class RedfishAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0) as client:
                 await self._get(client, "/redfish/v1/")
             return True
         except Exception:

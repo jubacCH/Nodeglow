@@ -418,8 +418,11 @@ async def _rule_syslog_spike(db, min_cycles: int = 2):
         {"t": window_1h},
     ) or 0)
 
-    # Expected 5min rate = hourly / 12
-    baseline_5m = max(1, hourly_errors / 12)
+    # Expected 5min rate, computed over the prior 55min (the 11 five-minute
+    # buckets EXCLUDING the recent 5min). Including the recent window would let
+    # the current spike inflate its own baseline and suppress detection.
+    prior_errors = max(0, hourly_errors - recent_errors)
+    baseline_5m = max(1, prior_errors / 11)
 
     if recent_errors >= baseline_5m * 5:
         if not _track_rule_hit("syslog_spike", [0], min_cycles):
@@ -536,7 +539,10 @@ async def _rule_fleet_wide(db, min_cycles: int = 2):
         tpl_text = (tpl or th)[:80]
 
         severity = "critical" if host_count > 5 else "warning"
-        if not _track_rule_hit("fleet_wide_issue", [0], min_cycles):
+        # Per-template discriminator so each template tracks its own consecutive
+        # count — sharing one key would let min_cycles be reached within a single
+        # cycle when multiple templates match.
+        if not _track_rule_hit(f"fleet_wide_issue_{th[:8]}", [0], min_cycles):
             continue
         await _find_or_create_incident(
             db,
@@ -566,7 +572,9 @@ async def _rule_severity_trend(db, min_cycles: int = 2):
     )).scalars().all()
 
     for tpl in rising:
-        if not _track_rule_hit("severity_trend", [0], min_cycles):
+        # Per-template discriminator so each rising template tracks its own
+        # consecutive count rather than sharing one key.
+        if not _track_rule_hit(f"severity_trend_{tpl.template_hash[:8]}", [0], min_cycles):
             continue
         await _find_or_create_incident(
             db,
@@ -588,7 +596,11 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
     anomalies = await detect_content_anomalies(db)
     for anomaly in anomalies:
         if anomaly["type"] == "template_diversity_spike":
-            if not _track_rule_hit("content_anomaly_diversity", [0], min_cycles):
+            # Per-source discriminator so each source_ip tracks its own
+            # consecutive count rather than collapsing into one shared key.
+            if not _track_rule_hit(
+                f"content_anomaly_diversity_{anomaly['source_ip']}", [0], min_cycles
+            ):
                 continue
             await _find_or_create_incident(
                 db,
@@ -601,7 +613,12 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
                         f"(baseline: {anomaly['baseline']})",
             )
         elif anomaly["type"] == "severity_upgrade":
-            if not _track_rule_hit("content_anomaly_severity", [0], min_cycles):
+            # Per-template discriminator so each upgraded template tracks its own
+            # consecutive count rather than collapsing into one shared key.
+            _sev_th = anomaly.get("template_hash", "")[:8]
+            if not _track_rule_hit(
+                f"content_anomaly_severity_{_sev_th}", [0], min_cycles
+            ):
                 continue
             await _find_or_create_incident(
                 db,
@@ -698,9 +715,18 @@ async def _rule_precursor_observed(
             event_label = pp.precedes_event.replace("_", " ").title()
             tpl_preview = (tpl_text or "")[:80]
 
-            await _find_or_create_incident(
+            # When there is no host, host_ids=[] hashes to a constant value, so
+            # distinct predicted-event types would collapse into ONE incident.
+            # Make the rule name distinct per precedes_event to keep them apart.
+            # _auto_resolve matches rule names with startswith("learned_precursor").
+            incident_rule = (
+                "learned_precursor"
+                if dedup_id
+                else f"learned_precursor_{pp.precedes_event}"
+            )
+            incident = await _find_or_create_incident(
                 db,
-                rule="learned_precursor",
+                rule=incident_rule,
                 title=f"Predicted: {event_label} ({confidence_pct}% confidence)",
                 severity="warning",
                 host_ids=[dedup_id] if dedup_id else [],
@@ -712,18 +738,29 @@ async def _rule_precursor_observed(
                     f"{confidence_pct}% confidence)."
                 ),
             )
+            # Persist the matched template text so 'noise' feedback can map back
+            # to it and blacklist the noisy pattern.
+            if incident is not None and tpl_text and not incident.precursor_template:
+                incident.precursor_template = tpl_text
 
 
 # ── Auto-Resolve ────────────────────────────────────────────────────────────
 
-async def _auto_resolve(db):
-    """Auto-resolve incidents where all affected hosts are back online."""
+async def _auto_resolve(db) -> list[int]:
+    """Auto-resolve incidents where all affected hosts are back online.
+
+    Returns the ids of incidents that were resolved and should get a
+    post-mortem. The caller spawns the post-mortem tasks AFTER the surrounding
+    transaction commits — spawning them here would let the background task read
+    the incident before commit (or after a rollback) from a fresh session.
+    """
+    postmortem_ids: list[int] = []
     open_incidents = (await db.execute(
         select(Incident).where(Incident.status.in_(["open", "acknowledged"]))
     )).scalars().all()
 
     if not open_incidents:
-        return
+        return postmortem_ids
 
     # Get current offline host IDs
     offline_hosts = await _get_offline_hosts(db)
@@ -732,8 +769,9 @@ async def _auto_resolve(db):
     for incident in open_incidents:
         # Skip syslog/fleet/trend/content/precursor rules – auto-resolve after timeout
         if incident.rule in ("syslog_spike", "log_anomaly", "fleet_wide_issue",
-                             "severity_trend", "content_anomaly",
-                             "learned_precursor") or incident.rule.startswith("alert_rule_"):
+                             "severity_trend", "content_anomaly") \
+                or incident.rule.startswith("learned_precursor") \
+                or incident.rule.startswith("alert_rule_"):
             # Resolve if last update was > 10min ago (no new activity)
             if incident.updated_at < datetime.utcnow() - timedelta(minutes=10):
                 incident.status = "resolved"
@@ -752,11 +790,7 @@ async def _auto_resolve(db):
                     )
                 except Exception as exc:
                     log.warning("Failed to send resolve notification: %s", exc)
-                try:
-                    from services.postmortem import generate_postmortem
-                    asyncio.create_task(generate_postmortem(incident.id))
-                except Exception:
-                    pass
+                postmortem_ids.append(incident.id)
             continue
 
         if not incident.host_ids_hash:
@@ -825,17 +859,16 @@ async def _auto_resolve(db):
                 )
             except Exception as exc:
                 log.warning("Failed to send resolve notification: %s", exc)
-            try:
-                from services.postmortem import generate_postmortem
-                asyncio.create_task(generate_postmortem(incident.id))
-            except Exception:
-                pass
+            postmortem_ids.append(incident.id)
+
+    return postmortem_ids
 
 
 # ── Main entry point ────────────────────────────────────────────────────────
 
 async def run_correlation():
     """Run all correlation rules. Called every 60s by scheduler."""
+    postmortem_ids: list[int] = []
     async with AsyncSessionLocal() as db:
         try:
             # Load consecutive-failure settings
@@ -859,10 +892,21 @@ async def run_correlation():
             await _rule_severity_trend(db, min_cycles)
             await _rule_content_anomaly(db, min_cycles)
             await _rule_precursor_observed(db, min_cycles=min_cycles)
-            await _auto_resolve(db)
+            postmortem_ids = await _auto_resolve(db)
             _prune_stale_hits()
             await db.commit()
         except Exception as e:
             log.error("Correlation engine error: %s", e, exc_info=True)
             _current_cycle_hits.clear()
             await db.rollback()
+            return
+
+    # Spawn post-mortem tasks only after the transaction has committed, so the
+    # background task (fresh session) reads incidents that are durably persisted.
+    if postmortem_ids:
+        try:
+            from services.postmortem import generate_postmortem
+            for _incident_id in postmortem_ids:
+                asyncio.create_task(generate_postmortem(_incident_id))
+        except Exception:
+            log.warning("Failed to spawn post-mortem tasks", exc_info=True)

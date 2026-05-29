@@ -21,7 +21,11 @@ pub async fn collect_event_logs(channels: &str, levels: &str) -> Vec<LogEntry> {
     };
 
     let mut all_entries = Vec::new();
-    let mut timestamps = LAST_TIMESTAMPS.lock().unwrap().clone().unwrap_or_default();
+    let mut timestamps = LAST_TIMESTAMPS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default();
 
     for channel in &channels {
         let last_ts = timestamps.get(*channel).cloned();
@@ -34,30 +38,68 @@ pub async fn collect_event_logs(channels: &str, levels: &str) -> Vec<LogEntry> {
         all_entries.extend(entries);
     }
 
-    *LAST_TIMESTAMPS.lock().unwrap() = Some(timestamps);
+    *LAST_TIMESTAMPS.lock().unwrap_or_else(|e| e.into_inner()) = Some(timestamps);
 
     debug!("Collected {} event log entries", all_entries.len());
     all_entries
 }
 
+/// Validate a Windows event-log channel name. The channel list is influenced by
+/// server-pushed config, so it must never be interpolated into a PowerShell
+/// script unchecked. Allow only the characters used by real channel names:
+/// alphanumerics and `/ - _` and spaces (e.g. "Microsoft-Windows-Sysmon/Operational").
+fn is_valid_channel(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 256
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | ' '))
+}
+
+/// Validate that the `after` cursor is a parseable RFC3339/ISO-8601 timestamp.
+/// The cursor originates from a prior event's TimeCreated.ToString('o') output,
+/// but we re-validate before use so it can never inject script.
+fn is_valid_timestamp(ts: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(ts).is_ok()
+}
+
 async fn collect_channel(channel: &str, levels: &[u8], after: Option<&str>) -> Vec<LogEntry> {
-    // Build PowerShell filter
+    // Reject channel names that are not strictly whitelisted. This makes
+    // PowerShell script injection via a crafted channel name impossible.
+    if !is_valid_channel(channel) {
+        warn!("Skipping invalid event-log channel name");
+        return Vec::new();
+    }
+
+    // Level CSV is built from numeric u8 values, so it is injection-safe.
     let level_csv = levels.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",");
 
-    let time_filter = if let Some(ts) = after {
-        format!(
-            " -and $_.TimeCreated -gt [DateTime]::Parse('{}')",
-            ts
-        )
+    // Validate the `after` cursor parses as a timestamp before using it. Passing
+    // the value through the NODEGLOW_LOG_AFTER environment variable (read inside
+    // the script) keeps it out of the script body entirely.
+    let after_validated: Option<&str> = match after {
+        Some(ts) if is_valid_timestamp(ts) => Some(ts),
+        Some(_) => {
+            warn!("Ignoring invalid 'after' timestamp for event-log query");
+            None
+        }
+        None => None,
+    };
+
+    let time_filter = if after_validated.is_some() {
+        " -and $_.TimeCreated -gt [DateTime]::Parse($env:NODEGLOW_LOG_AFTER)".to_string()
     } else {
         // First run: last 5 minutes
         " -and $_.TimeCreated -gt (Get-Date).AddMinutes(-5)".to_string()
     };
 
+    // The channel name is passed via the NODEGLOW_LOG_CHANNEL environment
+    // variable rather than interpolated into the script body. Combined with the
+    // whitelist validation above, untrusted data never lands in code position.
     let ps_script = format!(
         r#"
         try {{
-            Get-WinEvent -FilterHashtable @{{LogName='{channel}'; Level={level_csv}}} -MaxEvents 100 -ErrorAction SilentlyContinue |
+            Get-WinEvent -FilterHashtable @{{LogName=$env:NODEGLOW_LOG_CHANNEL; Level={level_csv}}} -MaxEvents 100 -ErrorAction SilentlyContinue |
             Where-Object {{ $_ -ne $null{time_filter} }} |
             Select-Object TimeCreated, Level, ProviderName, Message |
             ForEach-Object {{
@@ -69,10 +111,13 @@ async fn collect_channel(channel: &str, levels: &[u8], after: Option<&str>) -> V
         "#
     );
 
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NoLogo", "-Command", &ps_script])
-        .output()
-        .await;
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NoLogo", "-Command", &ps_script])
+        .env("NODEGLOW_LOG_CHANNEL", channel);
+    if let Some(ts) = after_validated {
+        cmd.env("NODEGLOW_LOG_AFTER", ts);
+    }
+    let output = cmd.output().await;
 
     let Ok(output) = output else {
         warn!("PowerShell event log query failed for {channel}");

@@ -22,6 +22,11 @@ struct Cli {
     #[arg(long, env = "NODEGLOW_ENROLLMENT_KEY")]
     enrollment_key: Option<String>,
 
+    /// Allow connecting to servers with invalid/self-signed TLS certificates.
+    /// INSECURE — only for testing. Defaults to false (certificates are verified).
+    #[arg(long, env = "NODEGLOW_ALLOW_INSECURE_TLS")]
+    allow_insecure_tls: Option<bool>,
+
     /// Config file path
     #[arg(long, short)]
     config: Option<PathBuf>,
@@ -36,6 +41,14 @@ pub struct Config {
     pub interval: u64,
     #[serde(default)]
     pub enrollment_key: String,
+    /// When true, TLS certificate validation is disabled (INSECURE). Default false.
+    #[serde(default)]
+    pub allow_insecure_tls: bool,
+    /// Optional ed25519 public key (hex-encoded, 32 bytes) used to verify a
+    /// detached signature over downloaded update binaries. Empty = signature
+    /// verification disabled, fall back to the SHA-256 hash check only.
+    #[serde(default)]
+    pub update_public_key: String,
     #[serde(skip)]
     pub config_path: PathBuf,
 }
@@ -68,6 +81,8 @@ impl Config {
                 token: String::new(),
                 interval: default_interval(),
                 enrollment_key: String::new(),
+                allow_insecure_tls: false,
+                update_public_key: String::new(),
                 config_path: PathBuf::new(),
             }
         };
@@ -86,6 +101,9 @@ impl Config {
         }
         if let Some(k) = cli.enrollment_key {
             cfg.enrollment_key = k;
+        }
+        if let Some(insecure) = cli.allow_insecure_tls {
+            cfg.allow_insecure_tls = insecure;
         }
 
         if cfg.server.is_empty() {
@@ -111,6 +129,21 @@ impl Config {
         })?;
 
         std::fs::write(&self.config_path, data)?;
+
+        // The config file holds the enrollment bearer token. Restrict its
+        // permissions so other local users cannot read the credential.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            std::fs::set_permissions(&self.config_path, perms)?;
+        }
+        // On Windows the file inherits the parent directory ACL. Tightening the
+        // ACL (e.g. removing inherited entries, granting only the current user)
+        // requires WinAPI calls and is non-trivial; the agent typically runs as
+        // a service under a dedicated/system account, so the inherited ACL is
+        // relied upon here.
+
         Ok(())
     }
 }
