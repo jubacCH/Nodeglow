@@ -75,11 +75,8 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
   ]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const { data, isLoading, refetch, isFetching, dataUpdatedAt } = useHostTimeline(
-    hostId,
-    hours,
-    activeSources,
-  );
+  const { data, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } =
+    useHostTimeline(hostId, hours, activeSources);
 
   const toggleSource = (src: TimelineEventType) => {
     setActiveSources((prev) =>
@@ -175,6 +172,26 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
             <Skeleton key={i} className="h-12 w-full" />
           ))}
         </div>
+      ) : isError ? (
+        // A failed query must never look like a quiet host. On a monitoring
+        // product "no events" and "the query broke" lead to opposite actions.
+        <EmptyState
+          icon={AlertTriangle}
+          title="Timeline unavailable"
+          description={
+            error instanceof Error
+              ? `The timeline could not be loaded: ${error.message}`
+              : 'The timeline could not be loaded.'
+          }
+          action={
+            <button
+              onClick={() => refetch()}
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-white/[0.08] border border-white/[0.14] text-slate-100 hover:bg-white/[0.12] transition-colors"
+            >
+              Retry
+            </button>
+          }
+        />
       ) : activeSources.length === 0 ? (
         <EmptyState
           icon={AlertTriangle}

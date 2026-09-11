@@ -546,6 +546,10 @@ async def host_timeline(
         raise HTTPException(404, "Host not found")
 
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    # Postgres time columns are TIMESTAMP WITHOUT TIME ZONE holding naive UTC
+    # (the models default to datetime.utcnow). asyncpg refuses to bind an aware
+    # value against them, so the ORM query below needs the naive form.
+    since_naive = since.replace(tzinfo=None)
     wanted = {s.strip() for s in sources.split(",") if s.strip()}
     events: list[dict] = []
 
@@ -593,7 +597,7 @@ async def host_timeline(
             select(Incident)
             .join(IncidentEvent, IncidentEvent.incident_id == Incident.id)
             .where(
-                Incident.created_at >= since,
+                Incident.created_at >= since_naive,
                 IncidentEvent.summary.ilike(f"%{host.name}%"),
             )
             .order_by(Incident.created_at.desc())
