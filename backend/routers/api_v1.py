@@ -720,10 +720,14 @@ async def update_host(
             if field == "maintenance_until" and isinstance(val, str):
                 val = datetime.fromisoformat(val.replace("Z", "+00:00")).replace(tzinfo=None)
             setattr(host, field, val)
-    # Reset port_error state when check types change
+    # Reset port_error state when check types change. The scheduler's
+    # hysteresis streaks have to go with it — they describe the old check set,
+    # and a stale fail streak would re-latch the flag on the next cycle.
     if "check_type" in body and body["check_type"] != old_check_type:
         host.port_error = False
         host.check_detail = None
+        from scheduler import reset_port_error_state
+        reset_port_error_state(host.id)
     await db.commit()
     return {"ok": True, "id": host.id}
 
