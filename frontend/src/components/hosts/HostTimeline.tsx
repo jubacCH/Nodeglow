@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FileText,
   RefreshCw,
+  Settings2,
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -39,6 +40,7 @@ const SOURCE_META: Record<
   status: { label: 'Status', icon: Activity, color: 'text-sky-400' },
   incident: { label: 'Incidents', icon: Zap, color: 'text-amber-400' },
   syslog: { label: 'Syslog', icon: FileText, color: 'text-violet-400' },
+  change: { label: 'Changes', icon: Settings2, color: 'text-emerald-400' },
 };
 
 const SEVERITY_STYLES: Record<
@@ -73,6 +75,7 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
     'status',
     'incident',
     'syslog',
+    'change',
   ]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -120,7 +123,7 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
 
         {/* Source filter pills */}
         <div className="flex items-center gap-1.5">
-          {(['status', 'incident', 'syslog'] as TimelineEventType[]).map((src) => {
+          {(['status', 'incident', 'syslog', 'change'] as TimelineEventType[]).map((src) => {
             const meta = SOURCE_META[src];
             const active = activeSources.includes(src);
             const Icon = meta.icon;
