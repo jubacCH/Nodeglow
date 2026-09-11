@@ -519,7 +519,10 @@ async def host_timeline(
     host_id: int,
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
-    hours: int = Query(24, ge=1, le=720, description="Lookback window in hours"),
+    hours: int = Query(
+        24, ge=1, le=8760,
+        description="Lookback window in hours (max 8760 = 1 year)",
+    ),
     sources: str = Query(
         "status,incident,syslog,change",
         description="Comma-separated: status, incident, syslog, change",
