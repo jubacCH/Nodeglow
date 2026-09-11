@@ -31,6 +31,8 @@ const HOURS_OPTIONS: { value: number; label: string }[] = [
   { value: 24, label: '24h' },
   { value: 168, label: '7d' },
   { value: 720, label: '30d' },
+  { value: 2160, label: '90d' },
+  { value: 8760, label: '1y' },
 ];
 
 const SOURCE_META: Record<
@@ -314,6 +316,6 @@ function formatTime(ts: string): string {
 function hoursLabel(h: number): string {
   if (h <= 1) return 'hour';
   if (h <= 24) return `${h}h`;
-  if (h <= 168) return `${Math.round(h / 24)} days`;
+  if (h >= 8760) return 'year';
   return `${Math.round(h / 24)} days`;
 }

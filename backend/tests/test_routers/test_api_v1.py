@@ -196,8 +196,14 @@ async def test_host_timeline_hours_validation(client):
 
     resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=0")
     assert resp.status_code == 422
-    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=9999")
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=99999")
     assert resp.status_code == 422
+
+    # A full year is allowed: incidents and changes are kept indefinitely, so
+    # the window is worth opening even though ping data ages out at 30 days.
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=8760")
+    assert resp.status_code == 200
+    assert resp.json()["hours"] == 8760
 
 
 async def test_list_hosts_filter_enabled(client):
