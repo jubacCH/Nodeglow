@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Zap,
 } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { cn, timeAgo } from '@/lib/utils';
@@ -184,12 +185,9 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
               : 'The timeline could not be loaded.'
           }
           action={
-            <button
-              onClick={() => refetch()}
-              className="px-3 py-1.5 text-xs font-medium rounded-md bg-white/[0.08] border border-white/[0.14] text-slate-100 hover:bg-white/[0.12] transition-colors"
-            >
+            <Button size="sm" onClick={() => refetch()} disabled={isFetching}>
               Retry
-            </button>
+            </Button>
           }
         />
       ) : activeSources.length === 0 ? (
