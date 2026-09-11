@@ -705,10 +705,15 @@ async def host_timeline(
                 "details": {"kind": "created", "source": host.source},
             })
 
-    # Sort merged stream newest first and cap
+    # Cap per source before merging, so a noisy source cannot crowd the others
+    # out of the result, then sort the survivors newest first.
+    buckets: dict[str, list] = {}
+    for event in events:
+        buckets.setdefault(event["type"], []).append(event)
+    for bucket in buckets.values():
+        bucket.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    events = _apply_source_quota(buckets, limit)
     events.sort(key=lambda e: e.get("ts") or "", reverse=True)
-    if len(events) > limit:
-        events = events[:limit]
 
     return {
         "host_id": host_id,
@@ -746,6 +751,46 @@ async def create_host(
     await log_action(db, request, "host.create", "host", host.id, host.name)
     await db.commit()
     return {"id": host.id, "name": host.name, "hostname": host.hostname}
+
+
+def _apply_source_quota(buckets: dict[str, list], limit: int) -> list:
+    """Pick up to `limit` events without letting one source crowd out the rest.
+
+    Each source is expected newest-first. Every source with events gets an
+    equal share of the budget; whatever a source does not use is handed round
+    to the sources that have more. A single source therefore still gets the
+    whole budget, while a noisy one can never squeeze the others out.
+
+    Without this, merging everything and truncating by timestamp gave syslog
+    every slot — it alone can fill the limit and its rows are the newest — so
+    the incidents and changes a long window is opened for never survived.
+    """
+    active = {k: v for k, v in buckets.items() if v}
+    if not active:
+        return []
+
+    total = sum(len(v) for v in active.values())
+    if total <= limit:
+        return [e for v in active.values() for e in v]
+
+    share = limit // len(active)
+    taken = {k: v[:share] for k, v in active.items()}
+
+    # Hand the remaining slots round to whoever still has events left.
+    remaining = limit - sum(len(v) for v in taken.values())
+    while remaining > 0:
+        progressed = False
+        for key, source in active.items():
+            if remaining == 0:
+                break
+            if len(taken[key]) < len(source):
+                taken[key].append(source[len(taken[key])])
+                remaining -= 1
+                progressed = True
+        if not progressed:
+            break
+
+    return [e for v in taken.values() for e in v]
 
 
 # Human-readable titles for audited host actions. Anything not listed falls
