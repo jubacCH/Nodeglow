@@ -86,6 +86,7 @@ body {
 
   /* Semi-transparent white backgrounds → semi-transparent black */
   .bg-white\/\[0\.02\] { background-color: rgba(0, 0, 0, 0.02); }
+  .bg-white\/\[0\.03\] { background-color: rgba(0, 0, 0, 0.025); }
   .bg-white\/\[0\.04\] { background-color: rgba(0, 0, 0, 0.03); }
   .bg-white\/5,
   .bg-white\/\[0\.05\] { background-color: rgba(0, 0, 0, 0.03); }
@@ -95,6 +96,7 @@ body {
   .bg-white\/\[0\.14\] { background-color: rgba(0, 0, 0, 0.08); }
 
   /* Hover states */
+  .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(0, 0, 0, 0.035); }
   .hover\:bg-white\/\[0\.04\]:hover { background-color: rgba(0, 0, 0, 0.04); }
   .hover\:bg-white\/5:hover,
   .hover\:bg-white\/\[0\.05\]:hover { background-color: rgba(0, 0, 0, 0.04); }
@@ -110,6 +112,7 @@ body {
   .border-white\/10,
   .border-white\/\[0\.10\] { border-color: rgba(0, 0, 0, 0.10); }
   .border-white\/\[0\.12\] { border-color: rgba(0, 0, 0, 0.12); }
+  .border-white\/\[0\.14\] { border-color: rgba(0, 0, 0, 0.14); }
 
   /* Solid slate backgrounds — used on progress bars, toggles, and other
      elements that hardcoded a dark canvas color. Remap so light mode gets
@@ -126,6 +129,7 @@ body {
   /* Hover text */
   .hover\:text-slate-200:hover { color: #1E293B; }
   .hover\:text-slate-300:hover { color: #334155; }
+  .hover\:text-sky-300:hover { color: #0369A1; }
 
   /* Semantic status colors — darken slightly for light bg readability */
   .text-emerald-400 { color: #059669; }
@@ -142,6 +146,13 @@ body {
   .text-rose-400 { color: #E11D48; }
   .text-blue-400 { color: #2563EB; }
   .text-sky-300\/60 { color: rgba(2, 132, 199, 0.7); }
+
+  /* The 200/300 tints sit on tinted chips (bg-sky-500/20 and friends), which
+     stay pale in light mode. Keeping the dark-theme value there leaves the
+     label barely readable — the active timespan button was the visible case.
+     Go darker than the -400 remap so the contrast holds on the tint. */
+  .text-sky-300 { color: #0369A1; }
+  .text-sky-200 { color: #075985; }
 
   /* Gradient text stays vivid */
   .from-sky-400 { --tw-gradient-from: #0284C7; }
