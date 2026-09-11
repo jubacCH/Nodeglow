@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Zap,
 } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { cn, timeAgo } from '@/lib/utils';
@@ -75,11 +76,8 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
   ]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const { data, isLoading, refetch, isFetching, dataUpdatedAt } = useHostTimeline(
-    hostId,
-    hours,
-    activeSources,
-  );
+  const { data, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } =
+    useHostTimeline(hostId, hours, activeSources);
 
   const toggleSource = (src: TimelineEventType) => {
     setActiveSources((prev) =>
@@ -175,6 +173,23 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
             <Skeleton key={i} className="h-12 w-full" />
           ))}
         </div>
+      ) : isError ? (
+        // A failed query must never look like a quiet host. On a monitoring
+        // product "no events" and "the query broke" lead to opposite actions.
+        <EmptyState
+          icon={AlertTriangle}
+          title="Timeline unavailable"
+          description={
+            error instanceof Error
+              ? `The timeline could not be loaded: ${error.message}`
+              : 'The timeline could not be loaded.'
+          }
+          action={
+            <Button size="sm" onClick={() => refetch()} disabled={isFetching}>
+              Retry
+            </Button>
+          }
+        />
       ) : activeSources.length === 0 ? (
         <EmptyState
           icon={AlertTriangle}
