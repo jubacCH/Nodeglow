@@ -292,6 +292,18 @@ _port_fail_streak: dict[int, int] = {}
 _port_pass_streak: dict[int, int] = {}
 
 
+def reset_port_error_state(host_id: int) -> None:
+    """Forget the hysteresis streaks for one host.
+
+    Call this whenever the set of configured service checks changes. The
+    streaks describe a check configuration that no longer exists — leaving
+    them in place lets the next cycle latch port_error straight back on, which
+    is exactly what made unmonitoring a port appear to do nothing.
+    """
+    _port_fail_streak.pop(host_id, None)
+    _port_pass_streak.pop(host_id, None)
+
+
 @instrument_job("ping_checks")
 async def run_ping_checks():
     """Ping all enabled hosts concurrently and store results."""
@@ -419,19 +431,30 @@ async def run_ping_checks():
             host_obj = await db.get(PingHost, host.id)
             if host_obj:
                 has_service_check = any(k != "icmp" for k in (detail or {}).keys())
-                if online and has_service_check:
-                    if port_error:
-                        _port_pass_streak.pop(host.id, None)
-                        _port_fail_streak[host.id] = _port_fail_streak.get(host.id, 0) + 1
-                    else:
-                        _port_fail_streak.pop(host.id, None)
-                        _port_pass_streak[host.id] = _port_pass_streak.get(host.id, 0) + 1
-
-                latched = host_obj.port_error
-                if not latched and _port_fail_streak.get(host.id, 0) >= PORT_ERROR_SET_THRESHOLD:
-                    latched = True
-                elif latched and _port_pass_streak.get(host.id, 0) >= PORT_ERROR_CLEAR_THRESHOLD:
+                if not has_service_check:
+                    # Nothing but ICMP is configured, so there is no port that
+                    # could be in error. The streaks describe a check that no
+                    # longer runs — drop them with the flag. Keeping them was
+                    # what made unmonitoring a port look like it did nothing:
+                    # the stale fail streak re-latched port_error on the very
+                    # next cycle, seconds after the user cleared it.
+                    _port_fail_streak.pop(host.id, None)
+                    _port_pass_streak.pop(host.id, None)
                     latched = False
+                else:
+                    if online:
+                        if port_error:
+                            _port_pass_streak.pop(host.id, None)
+                            _port_fail_streak[host.id] = _port_fail_streak.get(host.id, 0) + 1
+                        else:
+                            _port_fail_streak.pop(host.id, None)
+                            _port_pass_streak[host.id] = _port_pass_streak.get(host.id, 0) + 1
+
+                    latched = host_obj.port_error
+                    if not latched and _port_fail_streak.get(host.id, 0) >= PORT_ERROR_SET_THRESHOLD:
+                        latched = True
+                    elif latched and _port_pass_streak.get(host.id, 0) >= PORT_ERROR_CLEAR_THRESHOLD:
+                        latched = False
                 host_obj.port_error = latched
                 host_obj.check_detail = _json.dumps(detail) if detail else None
 
