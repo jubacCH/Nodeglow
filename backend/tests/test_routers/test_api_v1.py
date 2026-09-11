@@ -104,7 +104,11 @@ async def test_host_timeline_empty_sources(client):
     })
     host_id = create.json()["id"]
 
-    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=24")
+    # The ClickHouse-backed sources only — "change" is excluded on purpose,
+    # since a freshly created host always has its creation event.
+    resp = await client.get(
+        f"/api/v1/hosts/{host_id}/timeline?hours=24&sources=status,incident,syslog"
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["host_id"] == host_id
@@ -112,6 +116,11 @@ async def test_host_timeline_empty_sources(client):
     assert body["hours"] == 24
     assert body["events"] == []
     assert set(body["sources"]) == {"status", "incident", "syslog"}
+
+    # The default source set includes change, which carries the creation.
+    default = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=24")
+    assert set(default.json()["sources"]) == {"status", "incident", "syslog", "change"}
+    assert [e["details"]["kind"] for e in default.json()["events"]] == ["host.create"]
 
 
 async def test_host_timeline_source_filter(client):
@@ -373,3 +382,102 @@ async def test_backup_info(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "total_rows" in data or "tables" in data
+
+
+async def test_host_update_is_audited_with_field_diff(client):
+    """Editing a host records which fields changed, and from what to what.
+
+    Without this the timeline can show that a host changed but not what about
+    it changed, which is the part that makes the entry worth reading.
+    """
+    import json
+
+    from database import AsyncSessionLocal
+    from models.audit import AuditLog
+    from sqlalchemy import select
+
+    create = await client.post("/api/v1/hosts", json={
+        "name": "audit-host",
+        "hostname": "10.0.0.50",
+        "check_type": "icmp",
+    })
+    host_id = create.json()["id"]
+
+    resp = await client.patch(f"/api/v1/hosts/{host_id}", json={
+        "name": "audit-host-renamed",
+        "check_type": "icmp,tcp",
+        "hostname": "10.0.0.50",          # unchanged — must not appear in the diff
+    })
+    assert resp.status_code == 200
+
+    async with AsyncSessionLocal() as s:
+        rows = (await s.execute(
+            select(AuditLog).where(AuditLog.action == "host.update")
+        )).scalars().all()
+
+    assert len(rows) == 1, "the edit was not audited"
+    entry = rows[0]
+    assert entry.target_type == "host"
+    assert entry.target_id == host_id
+
+    changes = json.loads(entry.details)["changes"]
+    assert changes["name"] == {"from": "audit-host", "to": "audit-host-renamed"}
+    assert changes["check_type"] == {"from": "icmp", "to": "icmp,tcp"}
+    assert "hostname" not in changes, "unchanged fields must stay out of the diff"
+
+
+async def test_host_timeline_shows_creation_and_changes(client):
+    """The change source carries host creation plus audited edits."""
+    create = await client.post("/api/v1/hosts", json={
+        "name": "change-host",
+        "hostname": "10.0.0.51",
+        "check_type": "icmp",
+    })
+    host_id = create.json()["id"]
+
+    await client.patch(f"/api/v1/hosts/{host_id}", json={"name": "change-host-v2"})
+
+    resp = await client.get(
+        f"/api/v1/hosts/{host_id}/timeline?hours=24&sources=change"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sources"] == ["change"]
+
+    kinds = [e["details"].get("kind") for e in body["events"]]
+    assert "host.create" in kinds, "host creation must appear"
+    assert "host.update" in kinds, "the audited edit must appear"
+    assert kinds.count("host.create") == 1, "creation must not be listed twice"
+
+    edit = next(e for e in body["events"] if e["details"].get("kind") == "host.update")
+    assert edit["type"] == "change"
+    assert edit["details"]["changes"]["name"]["to"] == "change-host-v2"
+
+
+async def test_host_timeline_falls_back_to_created_at(client):
+    """A host with no audit trail still shows when it appeared.
+
+    Every host in production predates audit logging, so without this fallback
+    the change source would be empty for all of them.
+    """
+    from database import AsyncSessionLocal
+    from models.audit import AuditLog
+    from sqlalchemy import delete
+
+    create = await client.post("/api/v1/hosts", json={
+        "name": "legacy-host",
+        "hostname": "10.0.0.52",
+        "check_type": "icmp",
+    })
+    host_id = create.json()["id"]
+
+    # Drop the audit trail to mimic a host created before logging existed.
+    async with AsyncSessionLocal() as s:
+        await s.execute(delete(AuditLog).where(AuditLog.target_id == host_id))
+        await s.commit()
+
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=24&sources=change")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert [e["details"]["kind"] for e in events] == ["created"]
+    assert events[0]["title"] == "Host created"

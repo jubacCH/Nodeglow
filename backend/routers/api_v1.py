@@ -521,8 +521,8 @@ async def host_timeline(
     _key: ApiKey = Depends(require_api_key),
     hours: int = Query(24, ge=1, le=720, description="Lookback window in hours"),
     sources: str = Query(
-        "status,incident,syslog",
-        description="Comma-separated: status, incident, syslog",
+        "status,incident,syslog,change",
+        description="Comma-separated: status, incident, syslog, change",
     ),
     severity_max: int = Query(
         4, ge=0, le=7,
@@ -536,6 +536,7 @@ async def host_timeline(
     - `status`  — ping success transitions (online↔offline flips) from CH ping_checks
     - `incident` — correlation incidents whose events reference this host name
     - `syslog` — syslog messages ≤ severity_max matching host_id/hostname/source_ip
+    - `change` — host creation plus audited configuration edits
 
     Response rows share a common shape: {ts, type, severity, title, summary,
     details{}}. Newest first. Useful for root-cause analysis — scan the few
@@ -658,6 +659,49 @@ async def host_timeline(
                 },
             })
 
+    # ── Configuration changes (Postgres) ────────────────────────────────────
+    if "change" in wanted:
+        aq = await db.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.target_type == "host",
+                AuditLog.target_id == host_id,
+                AuditLog.timestamp >= since_naive,
+            )
+            .order_by(AuditLog.timestamp.desc())
+            .limit(limit)
+        )
+        audit_rows = aq.scalars().all()
+        for row in audit_rows:
+            try:
+                detail = json.loads(row.details) if row.details else {}
+            except ValueError:
+                detail = {}
+            changes = detail.get("changes") or {}
+            events.append({
+                "ts": row.timestamp.isoformat() if row.timestamp else None,
+                "type": "change",
+                "severity": "info",
+                "title": _CHANGE_TITLES.get(row.action, row.action),
+                "summary": _change_summary(row.username, changes),
+                "details": {"kind": row.action, "by": row.username, **detail},
+            })
+
+        # Fall back to the host row for creation, so hosts that predate audit
+        # logging still show when they appeared — that is every host today.
+        # Skip it when the audit trail already carries the event, or a host
+        # created from now on would be listed twice.
+        logged_creation = any(r.action == "host.create" for r in audit_rows)
+        if not logged_creation and host.created_at and host.created_at >= since_naive:
+            events.append({
+                "ts": host.created_at.isoformat(),
+                "type": "change",
+                "severity": "info",
+                "title": "Host created",
+                "summary": f"Added as {host.hostname}" if host.hostname else None,
+                "details": {"kind": "created", "source": host.source},
+            })
+
     # Sort merged stream newest first and cap
     events.sort(key=lambda e: e.get("ts") or "", reverse=True)
     if len(events) > limit:
@@ -701,6 +745,37 @@ async def create_host(
     return {"id": host.id, "name": host.name, "hostname": host.hostname}
 
 
+# Human-readable titles for audited host actions. Anything not listed falls
+# back to the raw action string, so a new action shows up rather than vanishing.
+_CHANGE_TITLES = {
+    "host.create": "Host created",
+    "host.update": "Host settings changed",
+    "host.delete": "Host deleted",
+    "maintenance.toggle": "Maintenance toggled",
+    "host.monitor.port": "Port monitoring enabled",
+    "host.unmonitor.port": "Port monitoring disabled",
+    "host.monitor.ssl": "SSL monitoring enabled",
+    "host.unmonitor.ssl": "SSL monitoring disabled",
+}
+
+
+def _change_summary(username: str | None, changes: dict) -> str | None:
+    """One line naming who changed what, e.g. 'julian · name, check_type'."""
+    who = username or "system"
+    if not changes:
+        return who
+    return f"{who} · {', '.join(sorted(changes))}"
+
+
+def _audit_value(value):
+    """Make a field value safe to store in the audit log's JSON details."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
 @router.patch("/hosts/{host_id}", summary="Update a host")
 async def update_host(
     host_id: int,
@@ -713,12 +788,19 @@ async def update_host(
         raise HTTPException(404, "Host not found")
     body = await request.json()
     old_check_type = host.check_type
+    # Record what actually changed, so the host timeline can show the edit
+    # rather than just the fact that an edit happened. Fields present in the
+    # body but unchanged are left out — they are noise, not history.
+    changes: dict[str, dict] = {}
     for field in ("name", "hostname", "check_type", "port", "latency_threshold_ms",
                   "enabled", "maintenance", "maintenance_until"):
         if field in body:
             val = body[field]
             if field == "maintenance_until" and isinstance(val, str):
                 val = datetime.fromisoformat(val.replace("Z", "+00:00")).replace(tzinfo=None)
+            before = getattr(host, field)
+            if before != val:
+                changes[field] = {"from": _audit_value(before), "to": _audit_value(val)}
             setattr(host, field, val)
     # Reset port_error state when check types change. The scheduler's
     # hysteresis streaks have to go with it — they describe the old check set,
@@ -728,6 +810,10 @@ async def update_host(
         host.check_detail = None
         from scheduler import reset_port_error_state
         reset_port_error_state(host.id)
+
+    if changes:
+        await log_action(db, request, "host.update", "host", host.id, host.name,
+                         details={"changes": changes})
     await db.commit()
     return {"ok": True, "id": host.id}
 
