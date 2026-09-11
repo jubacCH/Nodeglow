@@ -427,6 +427,17 @@ async def get_discovered_ports(host_id: int, db: AsyncSession = Depends(get_db))
     ]
 
 
+def _reset_port_streaks(host_id: int) -> None:
+    """Clear the scheduler's port-error hysteresis for this host.
+
+    Imported lazily: scheduler pulls in the routers at startup, so a module
+    level import here would close the cycle.
+    """
+    from scheduler import reset_port_error_state
+
+    reset_port_error_state(host_id)
+
+
 @router.patch("/api/{host_id}/discovered-ports/{port_id}")
 async def update_discovered_port(host_id: int, port_id: int, request: Request,
                                   db: AsyncSession = Depends(get_db)):
@@ -457,6 +468,7 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         if host.port is None or host.port == 0:
             host.port = dp.port
         dp.status = "monitored"
+        _reset_port_streaks(host.id)
 
     elif action == "unmonitor_port":
         # Remove tcp from check types
@@ -466,6 +478,7 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         host.port_error = False
         host.check_detail = None
         dp.status = "new"
+        _reset_port_streaks(host.id)
 
     elif action == "dismiss_port":
         dp.status = "dismissed"
@@ -478,6 +491,7 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         if dp.ssl_expiry_days is not None:
             host.ssl_expiry_days = dp.ssl_expiry_days
         dp.ssl_status = "monitored"
+        _reset_port_streaks(host.id)
 
     elif action == "unmonitor_ssl":
         # Remove https from check types
@@ -487,6 +501,7 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         host.port_error = False
         host.check_detail = None
         dp.ssl_status = "new"
+        _reset_port_streaks(host.id)
 
     elif action == "dismiss_ssl":
         dp.ssl_status = "dismissed"
