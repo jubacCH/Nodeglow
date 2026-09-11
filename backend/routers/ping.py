@@ -14,6 +14,7 @@ from utils.ping import check_host
 from database import PingHost, get_db
 from models.discovered_port import DiscoveredPort
 from models.agent import Agent
+from services.audit import log_action
 
 router = APIRouter(prefix="/hosts")
 
@@ -469,6 +470,8 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
             host.port = dp.port
         dp.status = "monitored"
         _reset_port_streaks(host.id)
+        await log_action(db, request, "host.monitor.port", "host", host.id,
+                         host.name, details={"port": dp.port})
 
     elif action == "unmonitor_port":
         # Remove tcp from check types
@@ -479,6 +482,8 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         host.check_detail = None
         dp.status = "new"
         _reset_port_streaks(host.id)
+        await log_action(db, request, "host.unmonitor.port", "host", host.id,
+                         host.name, details={"port": dp.port})
 
     elif action == "dismiss_port":
         dp.status = "dismissed"
@@ -492,6 +497,8 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
             host.ssl_expiry_days = dp.ssl_expiry_days
         dp.ssl_status = "monitored"
         _reset_port_streaks(host.id)
+        await log_action(db, request, "host.monitor.ssl", "host", host.id,
+                         host.name, details={"port": dp.port})
 
     elif action == "unmonitor_ssl":
         # Remove https from check types
@@ -502,6 +509,8 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         host.check_detail = None
         dp.ssl_status = "new"
         _reset_port_streaks(host.id)
+        await log_action(db, request, "host.unmonitor.ssl", "host", host.id,
+                         host.name, details={"port": dp.port})
 
     elif action == "dismiss_ssl":
         dp.ssl_status = "dismissed"
