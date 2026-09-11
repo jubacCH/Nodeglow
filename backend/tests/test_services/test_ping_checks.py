@@ -108,3 +108,45 @@ async def test_ping_job_reports_failures_as_rows(icmp_only_hosts):
     assert rows[1]["success"] is True
     assert rows[2]["success"] is False
     assert rows[2]["latency_ms"] is None
+
+
+async def test_port_error_clears_when_service_check_is_removed():
+    """Unmonitoring the last service check must let the port error go.
+
+    Regression: the hysteresis streaks live in module-level dicts. Taking the
+    port out of monitoring cleared host.port_error, but left the fail streak
+    behind, and the latch below evaluated that streak on every cycle whether or
+    not a service check had actually run. The next cycle — within 60s — put the
+    flag straight back. Production showed a host on check_type=icmp, detail
+    {"icmp": true}, still flagged port_error.
+    """
+    import scheduler
+
+    host = FakePingHost(1, "enshrouded")
+    # The host was failing its port check before the user unmonitored it.
+    scheduler._port_fail_streak[host.id] = scheduler.PORT_ERROR_SET_THRESHOLD
+    scheduler._port_pass_streak.pop(host.id, None)
+
+    async def fake_check_host(_host):
+        # ICMP only — no service check is configured any more.
+        return True, False, 5.0, {"icmp": True}
+
+    try:
+        with patch.object(scheduler, "AsyncSessionLocal", _session_factory([host])), \
+             patch("utils.ping.check_host", new=fake_check_host), \
+             patch("services.clickhouse_client.insert_ping_checks", new=AsyncMock()), \
+             patch("services.clickhouse_client.get_latest_ping_per_host",
+                   new=AsyncMock(return_value={})):
+            await scheduler.run_ping_checks()
+
+        assert host.port_error is False, (
+            "a stale fail streak re-latched port_error even though no service "
+            "check is configured"
+        )
+        assert scheduler._port_fail_streak.get(host.id, 0) == 0, (
+            "the stale streak must be dropped, or re-enabling the port would "
+            "flag it as failing immediately"
+        )
+    finally:
+        scheduler._port_fail_streak.pop(host.id, None)
+        scheduler._port_pass_streak.pop(host.id, None)
