@@ -19,6 +19,7 @@ from starlette.responses import HTMLResponse
 
 from models.base import Base as ModelsBase
 from database import Base as DbBase
+from tests.conftest import install_naive_datetime_guard
 
 
 class FakeUser:
@@ -42,6 +43,8 @@ async def client():
     import models.syslog  # noqa: F401
     import models.credential  # noqa: F401
     import models.snmp  # noqa: F401
+
+    install_naive_datetime_guard(DbBase, ModelsBase)
 
     # SQLite compat: replace TSVECTOR, remove GIN indexes
     from sqlalchemy.dialects.postgresql import TSVECTOR

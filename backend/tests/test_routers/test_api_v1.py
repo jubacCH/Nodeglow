@@ -128,6 +128,54 @@ async def test_host_timeline_source_filter(client):
     assert resp.json()["sources"] == ["status"]
 
 
+async def test_host_timeline_includes_matching_incident(client):
+    """An incident naming the host shows up in its timeline.
+
+    Regression: the lookback bound was built with datetime.now(timezone.utc)
+    while incidents.created_at is TIMESTAMP WITHOUT TIME ZONE. SQLite accepted
+    the comparison, asyncpg rejected it, and every production request for this
+    endpoint returned 500 while the suite stayed green.
+    """
+    from datetime import datetime, timedelta
+
+    from database import AsyncSessionLocal
+    from models.incident import Incident, IncidentEvent
+
+    create = await client.post("/api/v1/hosts", json={
+        "name": "incident-host",
+        "hostname": "10.0.0.45",
+        "check_type": "icmp",
+    })
+    host_id = create.json()["id"]
+
+    now = datetime.utcnow()
+    async with AsyncSessionLocal() as s:
+        inc = Incident(
+            rule="host_down_syslog",
+            title="incident-host unreachable",
+            severity="critical",
+            status="open",
+            created_at=now - timedelta(minutes=5),
+        )
+        s.add(inc)
+        await s.flush()
+        s.add(IncidentEvent(
+            incident_id=inc.id,
+            event_type="host_down",
+            summary="incident-host stopped responding",
+            timestamp=now - timedelta(minutes=5),
+        ))
+        await s.commit()
+        incident_id = inc.id
+
+    resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=24&sources=incident")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert [e["details"]["incident_id"] for e in events] == [incident_id]
+    assert events[0]["type"] == "incident"
+    assert events[0]["severity"] == "critical"
+
+
 async def test_host_timeline_hours_validation(client):
     """Lookback window is clamped to 1..720 hours."""
     create = await client.post("/api/v1/hosts", json={
