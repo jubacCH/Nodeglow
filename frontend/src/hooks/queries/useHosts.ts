@@ -56,7 +56,7 @@ export function useHostHistory(id: number, hours = 24) {
   });
 }
 
-export type TimelineEventType = 'status' | 'incident' | 'syslog';
+export type TimelineEventType = 'status' | 'incident' | 'syslog' | 'change';
 export type TimelineSeverity = 'critical' | 'error' | 'warning' | 'info';
 
 export interface TimelineEvent {
