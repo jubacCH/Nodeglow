@@ -145,6 +145,7 @@ _NAV_KEYS = (
     "proxmox", "unifi", "unas", "pihole", "adguard", "portainer",
     "truenas", "synology", "firewall", "hass", "gitea", "phpipam",
     "speedtest", "ups", "redfish", "swisscom", "cloudflare", "npm",
+    "technitium",
 )
 
 

@@ -26,6 +26,7 @@ import { RedfishDetail } from '@/components/integrations/RedfishDetail';
 import { SwisscomDetail } from '@/components/integrations/SwisscomDetail';
 import { CloudflareDetail } from '@/components/integrations/CloudflareDetail';
 import { NpmDetail } from '@/components/integrations/NpmDetail';
+import { TechnitiumDetail } from '@/components/integrations/TechnitiumDetail';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
@@ -50,6 +51,7 @@ const detailComponents: Record<string, React.ComponentType<{ data: any; configId
   swisscom: SwisscomDetail,
   cloudflare: CloudflareDetail,
   npm: NpmDetail,
+  technitium: TechnitiumDetail,
 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

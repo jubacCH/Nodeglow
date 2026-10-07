@@ -64,6 +64,7 @@ const integrationTypes = [
   { slug: 'synology', label: 'Synology' },
   { slug: 'pihole', label: 'Pi-hole' },
   { slug: 'adguard', label: 'AdGuard' },
+  { slug: 'technitium', label: 'Technitium DNS' },
   { slug: 'firewall', label: 'Firewall' },
   { slug: 'hass', label: 'Home Assistant' },
   { slug: 'gitea', label: 'Gitea' },

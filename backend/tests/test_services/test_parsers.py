@@ -215,3 +215,62 @@ def test_adguard_zero_queries():
 
     assert data["blocked_pct"] == 0.0
     assert data["status"] == "stopped"
+
+
+# ── Technitium DNS ────────────────────────────────────────────────────────────
+
+from integrations.technitium import TechnitiumIntegration, parse_technitium_data
+
+_TECHNITIUM_STATS = {
+    "stats": {"totalQueries": 322, "totalServerFailure": 4, "totalNxDomain": 18, "totalBlocked": 4,
+              "totalClients": 7, "zones": 72, "cachedEntries": 96, "blockListZones": 194890},
+    "topClients": [{"name": "10.10.20.60", "hits": 240, "rateLimited": False}],
+    "topDomains": [{"name": "host.example.com", "hits": 7}],
+    "topBlockedDomains": [{"name": "doubleclick.net", "hits": 2}],
+}
+_TECHNITIUM_SETTINGS = {"version": "15.6", "enableBlocking": True, "dnsServerDomain": "dns2.dns.example.com",
+                        "blockListNextUpdatedOn": "2026-10-08T17:49:21Z"}
+_TECHNITIUM_UPDATE = {"updateAvailable": False, "currentVersion": "15.6"}
+
+
+def _technitium_cluster(*nodes):
+    return {"clusterInitialized": True, "clusterDomain": "dns.example.com", "clusterNodes": [
+        {"name": n, "type": t, "state": s, "version": v, "ipAddresses": ["10.0.0.1"]} for n, t, s, v in nodes]}
+
+
+def test_technitium_parser_healthy_cluster():
+    cluster = _technitium_cluster(("dns1", "Secondary", "Connected", "15.6"), ("dns2", "Primary", "Self", "15.6"))
+    data = parse_technitium_data(_TECHNITIUM_STATS, _TECHNITIUM_SETTINGS, cluster, _TECHNITIUM_UPDATE)
+
+    assert data["queries_today"] == 322
+    assert data["blocked_pct"] == 1.2
+    assert data["domains_blocked"] == 194890
+    assert data["top_queries"] == [{"domain": "host.example.com", "count": 7}]
+    assert data["top_clients"] == [{"client": "10.10.20.60", "count": 240}]
+    assert data["status"] == "enabled"
+    assert data["cluster_nodes_unhealthy"] == 0
+    assert data["cluster_version_mismatch"] is False
+    assert TechnitiumIntegration().parse_alerts(data) == []
+
+
+def test_technitium_parser_unhealthy_node_and_update():
+    cluster = _technitium_cluster(("dns1", "Secondary", "Unreachable", "15.5"), ("dns2", "Primary", "Self", "15.6"))
+    update = {"updateAvailable": True, "updateVersion": "15.7", "currentVersion": "15.6"}
+    settings = dict(_TECHNITIUM_SETTINGS, enableBlocking=False)
+    data = parse_technitium_data(_TECHNITIUM_STATS, settings, cluster, update)
+
+    assert data["cluster_nodes_unhealthy"] == 1
+    assert data["cluster_unhealthy_names"] == ["dns1"]
+    assert data["cluster_version_mismatch"] is True
+    assert data["update_available"] is True and data["update_version"] == "15.7"
+    assert data["status"] == "disabled"
+    severities = sorted(a.severity for a in TechnitiumIntegration().parse_alerts(data))
+    assert severities == ["critical", "info", "warning", "warning"]
+
+
+def test_technitium_parser_standalone_no_queries():
+    """A non-clustered server with no traffic must not divide by zero or report cluster trouble."""
+    data = parse_technitium_data({"stats": {}}, {}, {"clusterInitialized": False}, {})
+    assert data["blocked_pct"] == 0.0
+    assert data["cluster_initialized"] is False
+    assert data["cluster_nodes"] == [] and data["cluster_nodes_unhealthy"] == 0

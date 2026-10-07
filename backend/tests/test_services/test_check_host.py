@@ -82,6 +82,93 @@ async def test_check_host_legacy_tcp_format():
 
 
 @pytest.mark.asyncio
+async def test_check_host_dns_token():
+    """'dns:NAME' asks the host itself to resolve NAME; a failure is a port_error."""
+    from utils.ping import check_host
+
+    host = FakeHost(hostname="10.0.0.2", check_type="icmp,dns:internal.example.com")
+    with (
+        patch("utils.ping.ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+        patch("utils.ping.check_dns", new_callable=AsyncMock, return_value=(False, None)) as dns,
+    ):
+        online, port_error, latency, detail = await check_host(host)
+    dns.assert_awaited_once_with("10.0.0.2", "internal.example.com")
+    assert online is True
+    assert port_error is True
+    assert detail["dns:internal.example.com"] is False
+
+
+class _FakeDnsServer:
+    """Answers every query on a local UDP port with the given rcode / answer count."""
+    def __init__(self, rcode=0, ancount=1, reply=True):
+        self.rcode, self.ancount, self.reply = rcode, ancount, reply
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        import struct
+        if not self.reply:
+            return
+        qid = struct.unpack("!H", data[:2])[0]
+        flags = 0x8180 | self.rcode  # QR, RD, RA
+        header = struct.pack("!HHHHHH", qid, flags, 1, self.ancount, 0, 0)
+        self.transport.sendto(header + data[12:], addr)
+
+    def error_received(self, exc):
+        pass
+
+    def connection_lost(self, exc):
+        pass
+
+
+async def _serve(proto):
+    import asyncio
+    loop = asyncio.get_running_loop()
+    transport, _ = await loop.create_datagram_endpoint(lambda: proto, local_addr=("127.0.0.1", 0))
+    return transport, transport.get_extra_info("sockname")[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rcode,ancount,expected", [
+    (0, 1, True),    # NOERROR with an answer
+    (0, 0, False),   # NOERROR but empty (NODATA)
+    (3, 0, False),   # NXDOMAIN
+    (2, 0, False),   # SERVFAIL
+])
+async def test_check_dns_against_local_server(rcode, ancount, expected):
+    from utils.ping import check_dns
+
+    transport, port = await _serve(_FakeDnsServer(rcode=rcode, ancount=ancount))
+    try:
+        ok, latency = await check_dns("127.0.0.1", "host.example.com", port=port, timeout=2)
+    finally:
+        transport.close()
+    assert ok is expected
+    assert (latency is not None) is expected
+
+
+@pytest.mark.asyncio
+async def test_check_dns_timeout():
+    from utils.ping import check_dns
+
+    transport, port = await _serve(_FakeDnsServer(reply=False))
+    try:
+        ok, latency = await check_dns("127.0.0.1", "host.example.com", port=port, timeout=0.3)
+    finally:
+        transport.close()
+    assert (ok, latency) == (False, None)
+
+
+def test_build_dns_query_wire_format():
+    from utils.ping import build_dns_query
+
+    q = build_dns_query("a.example.com.", 0x1234)
+    assert q[:12] == bytes.fromhex("123401000001000000000000")
+    assert q[12:] == b"\x01a\x07example\x03com\x00" + bytes.fromhex("00010001")
+
+
+@pytest.mark.asyncio
 async def test_check_host_offline_no_port_error():
     """When ICMP fails, port_error should be False even if services fail too."""
     from utils.ping import check_host

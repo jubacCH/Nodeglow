@@ -18,7 +18,7 @@ export const colors = {
     proxmox: '#E57000', unifi: '#0559C9', unas: '#06B6D4', pihole: '#DC2626',
     adguard: '#10B981', portainer: '#0DB7ED', truenas: '#475569', synology: '#2563EB',
     firewall: '#EA580C', hass: '#F59E0B', gitea: '#16A34A', phpipam: '#9333EA',
-    speedtest: '#3B82F6', ups: '#EAB308', redfish: '#7C3AED',
+    speedtest: '#3B82F6', ups: '#EAB308', redfish: '#7C3AED', technitium: '#0D9488',
   },
 } as const;
 

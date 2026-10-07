@@ -1,11 +1,13 @@
 """
-Ping/HTTP/TCP/SSL utilities for host monitoring.
+Ping/HTTP/TCP/DNS/SSL utilities for host monitoring.
 """
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 import ssl
+import struct
 import subprocess
 import time
 from datetime import datetime
@@ -79,6 +81,58 @@ async def check_tcp(hostname: str, port: int, timeout: float = 3.0) -> tuple[boo
         return False, None
 
 
+# ── DNS ───────────────────────────────────────────────────────────────────────
+
+def build_dns_query(qname: str, qid: int) -> bytes:
+    """Recursive A query for qname in DNS wire format."""
+    header = struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 0)  # RD set, one question
+    labels = b"".join(bytes([len(p)]) + p.encode("idna") for p in qname.rstrip(".").split(".") if p)
+    return header + labels + b"\x00" + struct.pack("!HH", 1, 1)  # QTYPE A, QCLASS IN
+
+
+def dns_response_ok(data: bytes, qid: int) -> bool:
+    """True if data answers query qid with NOERROR and at least one answer record."""
+    if len(data) < 12:
+        return False
+    rid, flags, _qd, ancount, _ns, _ar = struct.unpack("!HHHHHH", data[:12])
+    return rid == qid and bool(flags & 0x8000) and (flags & 0x000F) == 0 and ancount > 0
+
+
+async def check_dns(server: str, qname: str, port: int = 53,
+                    timeout: float = 3.0) -> tuple[bool, float | None]:
+    """Ask a DNS server to resolve qname (A) over UDP. Returns (success, latency_ms).
+
+    Success needs a NOERROR answer with records, so a server that is up but returns
+    SERVFAIL/NXDOMAIN for a name it should know counts as failed.
+    """
+    loop = asyncio.get_running_loop()
+    qid = random.randint(0, 0xFFFF)
+    answer: asyncio.Future[bytes] = loop.create_future()
+
+    class _Proto(asyncio.DatagramProtocol):
+        def datagram_received(self, data, addr):
+            if not answer.done() and len(data) >= 2 and struct.unpack("!H", data[:2])[0] == qid:
+                answer.set_result(data)
+
+        def error_received(self, exc):
+            if not answer.done():
+                answer.set_exception(exc)
+
+    transport = None
+    try:
+        start = time.perf_counter()
+        transport, _ = await loop.create_datagram_endpoint(_Proto, remote_addr=(server, port))
+        transport.sendto(build_dns_query(qname, qid))
+        data = await asyncio.wait_for(answer, timeout=timeout)
+        latency = round((time.perf_counter() - start) * 1000, 2)
+        return (True, latency) if dns_response_ok(data, qid) else (False, None)
+    except (OSError, asyncio.TimeoutError, UnicodeError):
+        return False, None
+    finally:
+        if transport is not None:
+            transport.close()
+
+
 # ── SSL expiry ─────────────────────────────────────────────────────────────────
 
 async def get_ssl_expiry_days(hostname: str, port: int = 443) -> int | None:
@@ -134,6 +188,9 @@ async def _check_single(host: "PingHost", ct: str) -> tuple[bool, float | None]:
         else:
             port = host.port or 80
         return await check_tcp(target, port)
+    # DNS — "dns:NAME" asks the host (as a DNS server) to resolve NAME
+    if ct.startswith("dns:") and ct[4:]:
+        return await check_dns(target, ct[4:])
     return await ping_host(target)
 
 
