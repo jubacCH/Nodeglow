@@ -1,49 +1,65 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import { HEALTH_LABEL, toHealthState, type HealthState, type LegacyStatus } from '@/lib/status';
 
-interface StatusDotProps {
-  status: 'online' | 'offline' | 'maintenance' | 'unknown' | 'disabled' | 'error';
-  pulse?: boolean;
+export interface StatusDotProps {
+  /** Design-system state, or one of the legacy names (online, offline …). */
+  status: HealthState | LegacyStatus;
   size?: 'sm' | 'md' | 'lg';
+  /**
+   * Glow for down (strong) and warning (soft). On by default; healthy,
+   * maintenance and unknown never glow regardless of this flag.
+   */
+  glow?: boolean;
+  /** Slow breathing halo for a *critical, unacknowledged* state. Dark mode
+   *  only; disabled by prefers-reduced-motion. */
+  breathe?: boolean;
+  /** @deprecated Use `breathe`. */
+  pulse?: boolean;
+  /** Screen-reader text. Defaults to the state label; pass "" when a visible
+   *  label sits next to the dot. */
+  label?: string;
   className?: string;
 }
 
-const dotColors: Record<StatusDotProps['status'], string> = {
-  online: 'bg-emerald-400',
-  offline: 'bg-red-400',
-  error: 'bg-orange-400',
-  maintenance: 'bg-amber-400',
-  unknown: 'bg-slate-500',
-  disabled: 'bg-slate-600',
+const size = { sm: 'h-[6px] w-[6px]', md: 'h-[8px] w-[8px]', lg: 'h-[10px] w-[10px]' } as const;
+
+const fill: Record<HealthState, string> = {
+  ok: 'bg-ok',
+  degraded: 'bg-degraded',
+  warning: 'bg-warning',
+  down: 'bg-down',
+  maint: 'bg-maint',
+  // Hollow ring: "no light = no data".
+  unknown: 'bg-transparent shadow-[inset_0_0_0_1.5px_var(--ng-st-unknown)]',
 };
 
-const glowColors: Record<StatusDotProps['status'], string> = {
-  online: 'shadow-emerald-400/50',
-  offline: 'shadow-red-400/50',
-  error: 'shadow-orange-400/50',
-  maintenance: 'shadow-amber-400/50',
-  unknown: '',
-  disabled: '',
-};
-
-const sizeClasses = {
-  sm: 'w-2 h-2',
-  md: 'w-3 h-3',
-  lg: 'w-3.5 h-3.5',
-};
-
-export function StatusDot({ status, pulse, size = 'md', className }: StatusDotProps) {
+/**
+ * Small status indicator. Colour + shape: unknown is a hollow ring,
+ * maintenance is a muted grey-blue (never amber), down and warning glow.
+ */
+export function StatusDot({ status, size: s = 'md', glow = true, breathe, pulse, label, className }: StatusDotProps) {
+  const state = toHealthState(status);
+  const disabled = status === 'disabled';
+  const sr = label ?? (disabled ? 'Disabled' : HEALTH_LABEL[state]);
+  const wantsBreathe = (breathe ?? pulse) && state === 'down';
   return (
-    <span
-      className={cn(
-        'inline-block rounded-full shrink-0',
-        sizeClasses[size],
-        dotColors[status],
-        pulse && (status === 'offline' || status === 'error') && 'animate-pulse',
-        pulse && glowColors[status] && `shadow-[0_0_6px_2px] ${glowColors[status]}`,
-        className,
+    <span className="relative inline-flex shrink-0" role={sr ? 'img' : undefined} aria-label={sr || undefined} aria-hidden={sr ? undefined : true}>
+      <span
+        className={cn(
+          'block rounded-full',
+          size[s],
+          fill[state],
+          disabled && 'opacity-60',
+          glow && state === 'down' && 'shadow-glow-dot-crit',
+          glow && state === 'warning' && 'shadow-glow-dot-warn',
+          className,
+        )}
+      />
+      {wantsBreathe && glow && (
+        <span aria-hidden="true" className="pointer-events-none absolute inset-0 animate-breathe rounded-full shadow-glow-dot-crit" />
       )}
-    />
+    </span>
   );
 }
