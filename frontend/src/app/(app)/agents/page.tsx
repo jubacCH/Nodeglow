@@ -1,76 +1,30 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Cpu, Eye, EyeOff, Monitor, Plus, Radio, Terminal, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { StatusDot } from '@/components/ui/StatusDot';
+import { Card } from '@/components/ui/Card';
+import { StatusPill } from '@/components/ui/StatusPill';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
+import { Button, IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Switch } from '@/components/ui/Field';
+import { Modal } from '@/components/ui/Modal';
+import { SegmentedControl } from '@/components/ui/Tabs';
+import { CopyButton } from '@/components/ui/CopyButton';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryState, formatAsOf } from '@/components/ui/QueryState';
+import { TableContainer, Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
 import { useAgents } from '@/hooks/queries/useAgents';
 import { useHostsV1 } from '@/hooks/queries/useHosts';
-import { get, del, patch } from '@/lib/api';
+import { get, del, patch, apiErrorMessage } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
-import { useQueryClient } from '@tanstack/react-query';
-import { Plus, X, Copy, Check, Terminal, Monitor, Trash2, Tag, Cpu, Radio, Server } from 'lucide-react';
-import { EmptyState } from '@/components/ui/EmptyState';
 import { timeAgo } from '@/lib/utils';
-import Link from 'next/link';
-
-function MetricBar({ label, value }: { label: string; value: number | null }) {
-  const pct = value ?? 0;
-  const color = pct >= 90 ? 'bg-red-400' : pct >= 75 ? 'bg-amber-400' : 'bg-emerald-400';
-  return (
-    <div>
-      <div className="flex justify-between text-xs mb-1">
-        <span className="text-slate-500">{label}</span>
-        <span className="text-slate-300 font-mono">{value != null ? `${Math.round(value)}%` : '--'}</span>
-      </div>
-      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function copyText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
-  } else {
-    fallbackCopy(text);
-  }
-}
-
-function fallbackCopy(text: string) {
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.position = 'fixed';
-  ta.style.opacity = '0';
-  document.body.appendChild(ta);
-  ta.select();
-  document.execCommand('copy');
-  document.body.removeChild(ta);
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        copyText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-      className="p-1.5 rounded hover:bg-white/10 transition-colors text-slate-400 hover:text-slate-200"
-      title="Copy"
-    >
-      {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-    </button>
-  );
-}
+import type { Agent } from '@/types';
+import { UsageBar, agentState } from './_components/agentStatus';
 
 interface EnrollmentInfo {
   enrollment_key: string;
@@ -79,93 +33,104 @@ interface EnrollmentInfo {
   install_windows: string;
 }
 
-function AddAgentDialog({ onClose }: { onClose: () => void }) {
-  const [info, setInfo] = useState<EnrollmentInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'linux' | 'windows'>('linux');
+function mask(secret: string) {
+  if (secret.length <= 4) return '••••••••';
+  return `${'•'.repeat(Math.min(16, secret.length - 4))}${secret.slice(-4)}`;
+}
 
-  useEffect(() => {
-    get<EnrollmentInfo>('/api/enrollment-info')
-      .then(setInfo)
-      .finally(() => setLoading(false));
-  }, []);
+function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [platform, setPlatform] = useState<'linux' | 'windows'>('linux');
+  const [showKey, setShowKey] = useState(false);
+  const query = useQuery({
+    queryKey: ['enrollment-info'],
+    queryFn: () => get<EnrollmentInfo>('/api/enrollment-info'),
+    enabled: open,
+    staleTime: 60_000,
+  });
 
   return (
-    <GlassCard className="p-6 mb-6 border border-sky-500/20">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-medium text-slate-200">Add New Agent</h3>
-        <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-slate-200">
-          <X size={16} aria-hidden="true" />
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="space-y-3">
-          <Skeleton className="h-4 w-48" />
-          <Skeleton className="h-20 w-full" />
-        </div>
-      ) : info ? (
-        <div className="space-y-4">
-          <p className="text-sm text-slate-400">
-            Run one of the following commands on the target machine to install and register the agent automatically.
-          </p>
-
-          <div className="flex gap-1 border-b border-white/[0.06]">
-            <button
-              onClick={() => setTab('linux')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
-                tab === 'linux' ? 'accent-text border-b-2 border-current' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Terminal size={12} /> Linux
-            </button>
-            <button
-              onClick={() => setTab('windows')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
-                tab === 'windows' ? 'accent-text border-b-2 border-current' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Monitor size={12} /> Windows
-            </button>
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title="Add agent"
+      description="Run one of these commands on the target machine. The agent installs itself and enrols against this server."
+      footer={<Button variant="secondary" onClick={onClose}>Done</Button>}
+    >
+      <QueryState
+        query={query}
+        errorTitle="Could not load the install command"
+        loading={
+          <div className="space-y-3" aria-busy="true" aria-label="Loading">
+            <Skeleton className="h-7 w-48" />
+            <Skeleton className="h-20 w-full" />
           </div>
-
-          <div className="relative">
-            <pre className="bg-black/40 border border-white/[0.06] rounded-lg p-4 pr-10 text-sm font-mono text-emerald-400 overflow-x-auto whitespace-pre-wrap break-all">
-              {tab === 'linux' ? info.install_linux : info.install_windows}
-            </pre>
-            <div className="absolute top-2 right-2">
-              <CopyButton text={tab === 'linux' ? info.install_linux : info.install_windows} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Server URL</label>
-              <code className="text-xs text-slate-300 font-mono bg-white/[0.04] px-2 py-1 rounded block truncate">
-                {info.server_url}
-              </code>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Enrollment Key</label>
-              <div className="flex items-center gap-1">
-                <code className="text-xs text-slate-300 font-mono bg-white/[0.04] px-2 py-1 rounded flex-1 truncate">
-                  {info.enrollment_key}
-                </code>
-                <CopyButton text={info.enrollment_key} />
+        }
+      >
+        {(info) => {
+          const command = platform === 'linux' ? info.install_linux : info.install_windows;
+          return (
+            <div className="space-y-4">
+              <SegmentedControl
+                label="Target platform"
+                value={platform}
+                onChange={setPlatform}
+                options={[
+                  { value: 'linux', label: <><Terminal size={13} aria-hidden="true" /> Linux</> },
+                  { value: 'windows', label: <><Monitor size={13} aria-hidden="true" /> Windows</> },
+                ]}
+              />
+              <div className="relative">
+                <pre
+                  aria-label={`${platform === 'linux' ? 'Linux' : 'Windows'} install command`}
+                  className="overflow-x-auto whitespace-pre-wrap break-all rounded-ctl border border-border bg-surface-2 p-4 pr-10 font-mono text-meta text-fg"
+                >
+                  {command}
+                </pre>
+                <div className="absolute right-2 top-2">
+                  <CopyButton text={command} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-4 pt-1 sm:grid-cols-2">
+                <div className="min-w-0">
+                  <p className="ng-label">Server URL</p>
+                  <code className="block truncate rounded-chip bg-surface-2 px-2 py-1 font-mono text-meta text-fg">
+                    {info.server_url}
+                  </code>
+                </div>
+                <div className="min-w-0">
+                  <p className="ng-label">Enrollment key</p>
+                  <div className="flex items-center gap-1">
+                    <code
+                      className="block flex-1 truncate rounded-chip bg-surface-2 px-2 py-1 font-mono text-meta text-fg"
+                      aria-label={showKey ? 'Enrollment key' : 'Enrollment key (hidden)'}
+                    >
+                      {showKey ? info.enrollment_key : mask(info.enrollment_key)}
+                    </code>
+                    <IconButton
+                      size="sm"
+                      aria-label={showKey ? 'Hide enrollment key' : 'Show enrollment key'}
+                      aria-pressed={showKey}
+                      onClick={() => setShowKey((v) => !v)}
+                    >
+                      {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+                    </IconButton>
+                    <CopyButton text={info.enrollment_key} />
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      ) : (
-        <p className="text-sm text-red-400">Failed to load enrollment info</p>
-      )}
-    </GlassCard>
+          );
+        }}
+      </QueryState>
+    </Modal>
   );
 }
 
 export default function AgentsPage() {
-  useEffect(() => { document.title = 'Agents | Nodeglow'; }, []);
-  const { data: agents, isLoading } = useAgents();
+  useEffect(() => { document.title = 'Agents & probes | Nodeglow'; }, []);
+  const agentsQuery = useAgents();
+  const { data: agents } = agentsQuery;
   const { data: hosts } = useHostsV1();
   const [showAdd, setShowAdd] = useState(false);
   const toast = useToastStore((s) => s.show);
@@ -181,9 +146,7 @@ export default function AgentsPage() {
     }
   }
 
-  async function handleDelete(agentId: number, name: string, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
+  async function handleDelete(agentId: number, name: string) {
     const ok = await confirm({ title: 'Decommission agent', description: `Decommission agent "${name}"? This will also remove its associated host and all snapshots.`, confirmLabel: 'Decommission', variant: 'danger' });
     if (!ok) return;
     try {
@@ -195,139 +158,168 @@ export default function AgentsPage() {
     }
   }
 
-  async function handleToggleProbe(agentId: number, name: string, currentlyProbe: boolean, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    setTogglingProbe(agentId);
+  async function handleToggleProbe(agent: Agent, next: boolean) {
+    setTogglingProbe(agent.id);
     try {
-      await patch(`/api/v1/agents/${agentId}`, { is_probe: !currentlyProbe });
-      qc.invalidateQueries({ queryKey: ['agents'] });
+      const res = await patch<{ is_probe?: boolean }>(`/api/v1/agents/${agent.id}`, { is_probe: next });
+      // Verify the server actually stored the change (audit F-07): check the
+      // PATCH response if it carries the field, otherwise the refreshed list.
+      let applied: boolean | undefined = res && typeof res === 'object' && 'is_probe' in res ? !!res.is_probe : undefined;
+      const fresh = await get<Agent[]>('/api/v1/agents');
+      qc.setQueryData(['agents'], fresh);
+      if (applied === undefined) applied = !!fresh.find((a) => a.id === agent.id)?.is_probe;
+      if (applied !== next) {
+        toast(`Probe mode for ${agent.name} was not saved by the server`, 'error');
+        return;
+      }
       toast(
-        currentlyProbe
-          ? `${name} is no longer a probe`
-          : `${name} now checks hosts in its network as a probe`,
+        next ? `${agent.name} now checks hosts in its network as a probe` : `${agent.name} is no longer a probe`,
         'success',
       );
-    } catch {
-      toast('Failed to update probe mode', 'error');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Failed to update probe mode'), 'error');
     } finally {
       setTogglingProbe(null);
     }
   }
 
+  const list = agents ?? [];
+  const online = list.filter((a) => agentState(a).status === 'ok').length;
+  const offline = list.filter((a) => agentState(a).status === 'down').length;
+  const probes = list.filter((a) => a.is_probe).length;
+  const asOf = formatAsOf(agentsQuery.dataUpdatedAt);
+
   return (
     <div>
       <PageHeader
-        title="Agents"
-        description="Deployed monitoring agents"
+        title="Agents & probes"
+        description={
+          agents
+            ? `${list.length} agent${list.length === 1 ? '' : 's'} · ${online} online${offline ? ` · ${offline} offline` : ''}${probes ? ` · ${probes} probe${probes === 1 ? '' : 's'}` : ''}${asOf ? ` · updated ${asOf}` : ''}`
+            : 'Deployed monitoring agents and remote probes'
+        }
         actions={
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            <Plus size={16} />
-            Add Agent
+          <Button onClick={() => setShowAdd(true)}>
+            <Plus size={16} aria-hidden="true" />
+            Add agent
           </Button>
         }
       />
 
-      {showAdd && <AddAgentDialog onClose={() => setShowAdd(false)} />}
+      <AddAgentDialog open={showAdd} onClose={() => setShowAdd(false)} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {isLoading &&
-          Array.from({ length: 6 }).map((_, i) => (
-            <GlassCard key={i} className="p-4">
-              <div className="flex items-center gap-3 mb-4">
-                <Skeleton className="h-5 w-5 rounded-full" />
-                <Skeleton className="h-5 w-32" />
-              </div>
-              <div className="space-y-3">
-                <Skeleton className="h-3 w-full" />
-                <Skeleton className="h-3 w-full" />
-                <Skeleton className="h-3 w-full" />
-              </div>
-            </GlassCard>
-          ))}
-        {agents?.map((agent) => {
-          const detailHref = agent.host_id ? `/hosts/${agent.host_id}` : `/agents/${agent.id}`;
-          return (
-            <Link key={agent.id} href={detailHref}>
-              <GlassCard className="p-4 hover:bg-white/[0.06] transition-colors cursor-pointer">
-                <div className="flex items-center gap-3 mb-4">
-                  <StatusDot status={agent.online ? 'online' : 'offline'} pulse={!agent.online} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-slate-200 truncate">{agent.name}</p>
-                    <p className="text-xs text-slate-500 font-mono truncate">{agent.hostname ?? '--'}</p>
-                  </div>
-                  <Badge>{agent.platform ?? '?'}</Badge>
-                  {agent.agent_version && (
-                    <Badge className="bg-white/[0.04] text-slate-400 border-white/[0.06]">
-                      <Tag size={10} /> v{agent.agent_version}
-                    </Badge>
-                  )}
-                  {agent.is_probe && (
-                    <Badge className="bg-violet-500/10 text-violet-300 border-violet-500/30">
-                      <Radio size={10} /> Probe
-                    </Badge>
-                  )}
-                  <button
-                    onClick={(e) => handleDelete(agent.id, agent.name, e)}
-                    className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-white/[0.06] transition-colors"
-                    title="Decommission"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  <MetricBar label="CPU" value={agent.cpu_pct} />
-                  <MetricBar label="Memory" value={agent.mem_pct} />
-                  <MetricBar label="Disk" value={agent.disk_pct} />
-                </div>
-                {agent.last_seen && (
-                  <p className="text-xs text-slate-500 mt-3" title={new Date(agent.last_seen).toLocaleString()}>
-                    Last seen: {timeAgo(agent.last_seen)}
-                  </p>
-                )}
-                {/* Probe mode: lets this agent check hosts in its own network
-                    without the core reaching into it directly. */}
-                <div className="mt-3 pt-3 border-t border-white/[0.06] flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Radio size={13} className={agent.is_probe ? 'text-violet-400' : 'text-slate-500'} />
-                    <span className="text-xs text-slate-400">Probe mode</span>
-                    {agent.is_probe && (
-                      <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                        <Server size={11} />
-                        {hostCountByProbe.get(agent.id) ?? 0} host{(hostCountByProbe.get(agent.id) ?? 0) === 1 ? '' : 's'}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={!!agent.is_probe}
-                    onClick={(e) => handleToggleProbe(agent.id, agent.name, !!agent.is_probe, e)}
-                    disabled={togglingProbe === agent.id}
-                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors disabled:opacity-50 ${agent.is_probe ? 'bg-violet-500' : 'bg-slate-600'}`}
-                  >
-                    <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${agent.is_probe ? 'translate-x-4' : 'translate-x-0'}`} />
-                  </button>
-                </div>
-              </GlassCard>
-            </Link>
-          );
-        })}
-        {!isLoading && (!agents || agents.length === 0) && (
-          <GlassCard className="col-span-full">
+      <Card padding="none">
+        <QueryState
+          query={agentsQuery}
+          loading={
+            <div className="space-y-3 p-5" aria-busy="true" aria-label="Loading agents">
+              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+            </div>
+          }
+          empty={
             <EmptyState
               icon={Cpu}
               title="No agents registered"
               description="Install the Nodeglow agent on a Linux or Windows host to collect CPU, memory, disk, and network metrics. Agents auto-enrol against this server."
               action={
                 <Button size="sm" onClick={() => setShowAdd(true)}>
-                  <Terminal size={14} /> Show install command
+                  <Terminal size={14} aria-hidden="true" /> Show install command
                 </Button>
               }
             />
-          </GlassCard>
-        )}
-      </div>
+          }
+        >
+          {(rows) => (
+            <TableContainer>
+              <Table className="min-w-[980px]">
+                <THead>
+                  <Tr>
+                    <Th>Status</Th>
+                    <Th>Agent</Th>
+                    <Th>Platform</Th>
+                    <Th className="w-[120px]">CPU</Th>
+                    <Th className="w-[120px]">Memory</Th>
+                    <Th className="w-[120px]">Disk</Th>
+                    <Th>Last seen</Th>
+                    <Th>Probe mode</Th>
+                    <Th><span className="sr-only">Actions</span></Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {rows.map((agent) => {
+                    const st = agentState(agent);
+                    const stale = st.status !== 'ok';
+                    const detailHref = agent.host_id ? `/hosts/${agent.host_id}` : `/agents/${agent.id}`;
+                    const hostCount = hostCountByProbe.get(agent.id) ?? 0;
+                    return (
+                      <Tr key={agent.id}>
+                        <Td><StatusPill status={st.status}>{st.label}</StatusPill></Td>
+                        <Td className="max-w-[260px]">
+                          <Link href={detailHref} className="block truncate font-medium text-fg hover:text-accent">
+                            {agent.name}
+                          </Link>
+                          <span className="block truncate font-mono text-meta text-fg-3">{agent.hostname ?? '—'}</span>
+                        </Td>
+                        <Td>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <Badge>{agent.platform ?? 'Unknown'}</Badge>
+                            {agent.agent_version && <Badge>v{agent.agent_version}</Badge>}
+                          </div>
+                        </Td>
+                        <Td><UsageBar label="CPU" value={agent.cpu_pct} stale={stale} /></Td>
+                        <Td><UsageBar label="Memory" value={agent.mem_pct} stale={stale} /></Td>
+                        <Td><UsageBar label="Disk" value={agent.disk_pct} stale={stale} /></Td>
+                        <Td muted className="whitespace-nowrap">
+                          {agent.last_seen ? (
+                            <time dateTime={agent.last_seen} title={new Date(agent.last_seen).toLocaleString()}>
+                              {timeAgo(agent.last_seen)}
+                            </time>
+                          ) : (
+                            <span className="text-fg-3">Never</span>
+                          )}
+                        </Td>
+                        <Td>
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={!!agent.is_probe}
+                              onChange={(v) => handleToggleProbe(agent, v)}
+                              disabled={togglingProbe === agent.id}
+                              aria-label={`Probe mode for ${agent.name}`}
+                            />
+                            {agent.is_probe && (
+                              st.status === 'ok' ? (
+                                <span className="inline-flex items-center gap-1 whitespace-nowrap text-meta text-fg-2">
+                                  <Radio size={12} aria-hidden="true" />
+                                  <span className="num">{hostCount}</span> host{hostCount === 1 ? '' : 's'}
+                                </span>
+                              ) : (
+                                // A silent probe leaves its hosts unobserved: they are "no data", never healthy.
+                                <StatusPill status="unknown" size="sm">
+                                  {hostCount} host{hostCount === 1 ? '' : 's'} unobserved
+                                </StatusPill>
+                              )
+                            )}
+                          </div>
+                        </Td>
+                        <Td className="text-right">
+                          <IconButton
+                            size="sm"
+                            aria-label={`Decommission ${agent.name}`}
+                            title="Decommission"
+                            onClick={() => handleDelete(agent.id, agent.name)}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                          </IconButton>
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableContainer>
+          )}
+        </QueryState>
+      </Card>
       {ConfirmDialogElement}
     </div>
   );
