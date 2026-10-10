@@ -1,5 +1,7 @@
 /** API client for Nodeglow backend */
 
+import { loginHref } from './redirect';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export function getCsrfToken(): string {
@@ -43,8 +45,11 @@ export async function api<T = unknown>(
   });
 
   if (res.status === 401) {
-    if (typeof window !== 'undefined') {
-      window.location.href = '/login';
+    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      // Come back to where the session ran out after logging in again.
+      window.location.href = loginHref(
+        window.location.pathname + window.location.search + window.location.hash,
+      );
     }
     throw new ApiError(401, 'Unauthorized');
   }
