@@ -315,9 +315,16 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         for hid in sparklines_by_host:
             sparklines_by_host[hid] = sparklines_by_host[hid][-60:]
 
+    # The unified, probe-aware state (services.host_state): a host behind a
+    # silent probe or without a recent result counts as unknown, not online.
+    from services import host_state as hs
+    host_state_map = await hs.host_states(db, hosts, now, latest=latest_by_host)
+
     for host in hosts:
         latest_row = latest_by_host.get(host.id)
         latest_success = bool(latest_row.get("success")) if latest_row else None
+        if host_state_map[host.id].state == hs.STATE_UNKNOWN:
+            latest_success = None
         latest_latency = latest_row.get("latency_ms") if latest_row else None
         latest_ts = latest_row.get("timestamp") if latest_row else None
 
@@ -1313,6 +1320,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             "sparkline": s["sparkline"],
             "effective_threshold": s["effective_threshold"],
             "health_score": s["health_score"],
+            **host_state_map[s["host"].id].fields(),
         }
 
     def _incident_dict(inc):
@@ -1344,6 +1352,10 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "online_count": online_count,
         "offline_count": offline_count,
         "total_count": len(active_stats),
+        # Unified host states (B-01): counts for every state incl. unknown and
+        # maintenance, plus the most common reasons per state.
+        "host_state_counts": hs.counts(host_state_map.values()),
+        "host_state_reasons": hs.reasons_by_state(host_state_map.values()),
         "integration_health": integration_health,
         "active_incidents": active_incident_count,
         "syslog_stats": {
