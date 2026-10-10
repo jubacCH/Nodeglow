@@ -24,7 +24,15 @@ class PingHost(Base):
     ssl_expiry_days      = Column(Integer, nullable=True)
     port_error           = Column(Boolean, default=False)
     check_detail         = Column(Text, nullable=True)
-    ip_address           = Column(String, nullable=True)
+    # JSON {check label: reason} for the checks that failed in the last cycle,
+    # e.g. {"https": "status 503"}. Kept apart from check_detail, whose
+    # {label: bool} shape the correlation engine and the UI rely on.
+    check_errors         = Column(Text, nullable=True)
+    # JSON options for http/https checks (method, path, expected status,
+    # keywords, timeout, redirects, TLS verification). NULL = the defaults,
+    # which match how HTTP checks behaved before the options existed.
+    http_options         = Column(Text, nullable=True)
+    ip_address          = Column(String, nullable=True)
     source               = Column(String, default="manual", index=True)
     source_detail        = Column(String, nullable=True)
     mac_address          = Column(String, nullable=True)
