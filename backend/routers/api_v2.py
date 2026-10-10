@@ -32,6 +32,21 @@ def _session_user_id(request: Request) -> int:
     return int(user_id)
 
 
+# ── Edition + feature flags ──────────────────────────────────────────────────
+
+
+@router.get("/features", summary="Edition and the features this installation offers")
+async def features():
+    """``{edition: "community"|"enterprise", features: {name: bool}}``.
+
+    The UI shows enterprise features only when their flag is true. A flag says
+    the feature is *installed*; whether it is switched on (e.g. the AI opt-in)
+    is reported by the feature's own status endpoint (/api/v1/ai/status).
+    """
+    from extensions import registry
+    return registry.feature_payload()
+
+
 # ── Dashboard + summary ──────────────────────────────────────────────────────
 
 

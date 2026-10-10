@@ -20,6 +20,9 @@ the number of hits observed in the current window; ``window_count`` reads the
 current count without recording.
 
 Nothing here connects to anything at import time.
+
+The scheduler leader lock that used to live here is an enterprise feature
+(``ee/backend/nodeglow_ee/ha/``); it reuses the client via :func:`redis_client`.
 """
 import logging
 import threading
@@ -39,10 +42,6 @@ _lock = threading.Lock()
 _hits: dict[str, list[float]] = {}
 _last_cleanup = 0.0
 
-# In-memory leader locks: {lock_name: (holder_id, expiry_time)}. Used when no
-# Redis is configured (single process → always its own leader).
-_leaders: dict[str, tuple[str, float]] = {}
-
 # Lazily-created singleton Redis client.
 _redis_client = None
 _redis_lock = threading.Lock()
@@ -56,11 +55,10 @@ def set_clock(fn):
 
 def reset():
     """Clear all in-memory state and reset the clock (test helper)."""
-    global _hits, _last_cleanup, _clock, _redis_client, _leaders
+    global _hits, _last_cleanup, _clock, _redis_client
     with _lock:
         _hits = {}
         _last_cleanup = 0.0
-        _leaders = {}
     _clock = time.monotonic
     _redis_client = None
 
@@ -87,6 +85,21 @@ def _get_redis():
                 _redis_url(), encoding="utf-8", decode_responses=True
             )
     return _redis_client
+
+
+def redis_url() -> str:
+    """Public: the configured Redis URL, or "" when Redis is not in use.
+
+    Other modules that share this Redis connection (e.g. the enterprise
+    scheduler leader lock) use this and :func:`redis_client` rather than
+    creating their own client.
+    """
+    return _redis_url()
+
+
+def redis_client():
+    """Public: the shared lazily-created ``redis.asyncio`` client."""
+    return _get_redis()
 
 
 # ── In-memory primitives (the canonical, original behaviour) ──────────────────
@@ -241,66 +254,3 @@ def window_count_sync(key: str, window_seconds: int) -> int:
             log.warning("shared_state: Redis count (sync) failed, falling back to memory: %s", e)
     return _mem_count(key, window_seconds)
 
-
-# ── Leader lock ───────────────────────────────────────────────────────────────
-#
-# A single-holder lease used to elect one process to run scheduled jobs. Unlike
-# the rate limiter this MUST NOT fail open: silently granting leadership to every
-# process on a Redis error would cause split-brain (duplicate scheduled jobs). On
-# a Redis error the public API raises and the caller keeps its current state.
-
-# Atomic "acquire if free/expired, or renew if I already hold it" + "release if
-# I hold it", as Lua so the check-and-set is a single round trip.
-_ACQUIRE_LUA = (
-    "local v = redis.call('GET', KEYS[1]) "
-    "if v == false or v == ARGV[1] then "
-    "  redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) return 1 "
-    "else return 0 end"
-)
-_RELEASE_LUA = (
-    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-    "  return redis.call('DEL', KEYS[1]) else return 0 end"
-)
-
-
-def _mem_acquire_leader(lock_name: str, instance_id: str, ttl_seconds: int) -> bool:
-    now = _clock()
-    with _lock:
-        cur = _leaders.get(lock_name)
-        if cur is None or cur[1] <= now or cur[0] == instance_id:
-            _leaders[lock_name] = (instance_id, now + ttl_seconds)
-            return True
-        return False
-
-
-def _mem_release_leader(lock_name: str, instance_id: str) -> None:
-    with _lock:
-        cur = _leaders.get(lock_name)
-        if cur is not None and cur[0] == instance_id:
-            del _leaders[lock_name]
-
-
-async def try_acquire_leader(lock_name: str, instance_id: str, ttl_seconds: int) -> bool:
-    """Acquire or renew leadership of ``lock_name`` for ``instance_id``.
-
-    Returns True if this instance holds the lease (just acquired or renewed),
-    False if another live instance holds it. Raises on a Redis error so the
-    caller can preserve its current leadership state (never fail open).
-    """
-    if _redis_url():
-        client = _get_redis()
-        res = await client.eval(_ACQUIRE_LUA, 1, lock_name, instance_id, int(ttl_seconds * 1000))
-        return bool(int(res))
-    return _mem_acquire_leader(lock_name, instance_id, ttl_seconds)
-
-
-async def release_leader(lock_name: str, instance_id: str) -> None:
-    """Release ``lock_name`` if held by ``instance_id`` (best effort)."""
-    if _redis_url():
-        try:
-            client = _get_redis()
-            await client.eval(_RELEASE_LUA, 1, lock_name, instance_id)
-        except Exception as e:
-            log.warning("shared_state: leader release failed: %s", e)
-        return
-    _mem_release_leader(lock_name, instance_id)

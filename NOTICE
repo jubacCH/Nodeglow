@@ -1,0 +1,24 @@
+Nodeglow
+Copyright (c) 2026 Julian Bachmann and the Nodeglow contributors
+
+SPDX-License-Identifier: AGPL-3.0-only (everything outside the ee/ directory)
+                         LicenseRef-Nodeglow-Enterprise (the ee/ directory)
+
+This NOTICE covers all components of the repository, including those that
+carry no package metadata of their own: the Python backend (backend/), the
+update sidecar (sidecar/), the Python agents (backend/static/*.py), the
+ClickHouse configuration (clickhouse/), the Docker and Compose files, and the
+documentation (docs/).
+
+The Nodeglow core is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by the
+Free Software Foundation, version 3 of the License only. It is distributed in
+the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+the GNU Affero General Public License in LICENSE for more details.
+
+The ee/ directory is licensed separately under the Nodeglow Enterprise
+License (ee/LICENSE).
+
+See LICENSING.md for the overview, and THIRD_PARTY_NOTICES.md for the
+licenses of third-party components.

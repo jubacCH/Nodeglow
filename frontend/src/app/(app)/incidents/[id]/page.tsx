@@ -19,6 +19,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '@/components/ui/Table';
 import { Tag } from '@/components/ui/Tag';
 import { aiUnavailableMessage, useAiStatus, type AiStatus } from '@/hooks/queries/useAiStatus';
+import { ENTERPRISE_NOTES, hasFeature, lacksFeature, useFeatures } from '@/hooks/queries/useFeatures';
 import { useIncidentAction } from '@/hooks/queries/useAlerts';
 import { apiErrorMessage, get, post } from '@/lib/api';
 import {
@@ -126,9 +127,13 @@ export default function IncidentDetailPage() {
   const incidentId = Number(id);
   const toast = useToastStore((s) => s.show);
   const canEdit = useIsEditor();
-  const { data: aiStatus } = useAiStatus();
+  const { data: features } = useFeatures();
+  // AI postmortems are an enterprise feature; unknown flags (still loading)
+  // count as installed so the first poll is not lost.
+  const postmortemInstalled = !lacksFeature(features, 'ai_postmortem');
+  const { data: aiStatus } = useAiStatus(hasFeature(features, 'ai_postmortem'));
   // No AI, no postmortem on its way: stop polling for one.
-  const aiAvailable = aiStatus?.available ?? true;
+  const aiAvailable = postmortemInstalled && (aiStatus?.available ?? true);
   const action = useIncidentAction();
   const [feedbackBusy, setFeedbackBusy] = useState(false);
 
@@ -273,6 +278,7 @@ export default function IncidentDetailPage() {
                   generatedAt={inc.postmortem_generated_at}
                   onRegenerate={() => query.refetch()}
                   aiStatus={aiStatus}
+                  installed={postmortemInstalled}
                 />
               )}
 
@@ -331,13 +337,15 @@ function TimelineCard({ events, total }: { events: TimelineEvent[]; total?: numb
 /* ---------- Postmortem ---------- */
 
 function PostmortemSection({
-  incidentId, postmortem, generatedAt, onRegenerate, aiStatus,
+  incidentId, postmortem, generatedAt, onRegenerate, aiStatus, installed,
 }: {
   incidentId: number;
   postmortem?: string | null;
   generatedAt?: string | null;
   onRegenerate: () => void;
   aiStatus?: AiStatus;
+  /** False in the community edition: no generation, only a stored draft is shown. */
+  installed: boolean;
 }) {
   const toast = useToastStore((s) => s.show);
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
@@ -359,7 +367,7 @@ function PostmortemSection({
   }
 
   const isFailed = postmortem?.startsWith('[Generation failed]');
-  const regen = (label: string) => canEdit && (
+  const regen = (label: string) => canEdit && installed && (
     <Button size="sm" variant="secondary" onClick={handleRegenerate} disabled={regenerating || aiUnavailable}
       title={aiUnavailable ? 'AI features are off (Settings → AI)' : undefined}>
       <RefreshCw size={13} aria-hidden="true" className={regenerating ? 'animate-spin' : ''} /> {label}
@@ -374,7 +382,9 @@ function PostmortemSection({
         meta={generatedAt && !isFailed ? `Generated ${formatDateTime(generatedAt)}` : undefined}
         actions={postmortem ? regen(isFailed ? 'Retry' : 'Regenerate') : undefined}
       />
-      {aiUnavailable && !postmortem ? (
+      {!installed && (!postmortem || isFailed) ? (
+        <p className="text-ui text-fg-2" data-testid="postmortem-enterprise">{ENTERPRISE_NOTES.ai_postmortem}</p>
+      ) : aiUnavailable && !postmortem ? (
         <p className="text-ui text-fg-2" data-testid="postmortem-ai-disabled">
           {aiUnavailableMessage(aiStatus, isAdmin)}{' '}
           {isAdmin && <Link href="/settings?tab=ai" className="text-accent hover:underline">Open AI settings</Link>}

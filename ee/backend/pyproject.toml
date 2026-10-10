@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nodeglow-ee"
+version = "0.1.0"
+description = "Nodeglow Enterprise features (HA scheduler, AI features)"
+license = { text = "LicenseRef-Nodeglow-Enterprise" }
+requires-python = ">=3.12"
+# Runs inside the Nodeglow backend process and imports its modules; it has no
+# dependencies of its own beyond backend/requirements.txt.
+dependencies = []
+
+[project.entry-points."nodeglow.plugins"]
+ee = "nodeglow_ee:plugin"
+
+[tool.setuptools.packages.find]
+include = ["nodeglow_ee*"]

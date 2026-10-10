@@ -4,7 +4,8 @@ Splitting the original 845-line settings.py into focused modules:
 - general.py       : /json, /save, /phpipam/*, /geoip/download
 - notifications.py : /notifications/*, /digest/save
 - api_keys.py      : /api-keys/*
-- ai.py            : /ai/save, /ai/test-summary, /ai/usage
+- ai.py            : /ai/config, /ai/save, /ai/test-connection, /ai/usage
+                     (/ai/test-summary is enterprise: ee/backend/nodeglow_ee/ai)
 - ldap.py          : /ldap/save, /ldap/test
 
 main.py imports `routers.settings` exactly as before; the public `router`

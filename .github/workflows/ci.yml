@@ -29,7 +29,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # Core + enterprise (ee/backend/tests is collected via pytest.ini).
       - name: Run tests
+        run: pytest -q
+
+      # The open-core promise: the core passes on its own. The loader ignores
+      # ee/ and the ee tests skip themselves.
+      - name: Run tests without ee (community edition)
+        env:
+          NODEGLOW_DISABLE_EE: "1"
         run: pytest -q
 
   lint:
@@ -50,6 +58,9 @@ jobs:
       - name: Ruff (backend)
         working-directory: backend
         run: ruff check --output-format github .
+
+      - name: Ruff (ee backend)
+        run: ruff check --config backend/ruff.toml --output-format github ee/backend
 
       - name: Ruff (sidecar)
         run: ruff check --config backend/ruff.toml --output-format github sidecar

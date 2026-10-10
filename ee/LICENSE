@@ -1,0 +1,144 @@
+================================================================================
+DRAFT — PENDING LEGAL REVIEW
+
+This license text is a draft prepared by the project owner, who is not a
+lawyer. It has not yet been reviewed by legal counsel and may change before it
+is finalised. Until then, contact the Licensor before relying on it for
+anything beyond evaluation, development or testing.
+================================================================================
+
+                        Nodeglow Enterprise License
+                           Version 0.1 (draft)
+
+Copyright (c) 2026 Julian Bachmann. All rights reserved.
+[TODO(owner): replace with the legal entity once the company exists.]
+
+This license applies to all files in the "ee/" directory of the Nodeglow
+repository and to any file elsewhere that states it is covered by the
+Nodeglow Enterprise License (together, the "Software"). It does not apply to
+files outside "ee/" that are licensed under the GNU Affero General Public
+License v3.0; see LICENSING.md at the root of the repository.
+
+1. Definitions
+
+   "Licensor" means Julian Bachmann, or the legal entity to which he assigns
+   the rights in the Software.
+
+   "You" means the individual or legal entity exercising rights under this
+   license, together with its affiliates where they act under a single
+   Subscription.
+
+   "Subscription" means a valid, current agreement with the Licensor (or an
+   authorised reseller) that entitles You to use the Software in Production,
+   including a valid license key where the Software requires one, and that
+   specifies the scope of that entitlement (for example the number of tenants,
+   monitored hosts, users or instances).
+
+   "Production" means any use of the Software other than Development and
+   Testing, including use to monitor systems that You or Your customers rely
+   on, and use to provide services to third parties.
+
+   "Development and Testing" means use of the Software solely to develop,
+   test, evaluate, demonstrate internally, or troubleshoot the Software or
+   Your integration with it, in a non-production environment, without
+   processing live data of third parties.
+
+   "Modification" means any change, addition or derivative work of the
+   Software made by or for You.
+
+2. Grant for Development and Testing
+
+   Subject to this license, the Licensor grants You a non-exclusive,
+   non-transferable, non-sublicensable, royalty-free, worldwide license to
+   copy, install, run and modify the Software for Development and Testing.
+   No Subscription is required for Development and Testing.
+
+3. Grant for Production use
+
+   You may use the Software in Production only if, and only to the extent
+   that, You hold a Subscription that covers that use. Production use beyond
+   the scope of Your Subscription (for example more tenants, hosts or
+   instances than licensed) requires a corresponding Subscription.
+
+4. Modifications
+
+   You may make Modifications to the Software for Your own use, within the
+   limits of Sections 2 and 3. Modifications remain subject to this license.
+   As between You and the Licensor, the Licensor owns all rights in the
+   Software, and You own the rights in Your Modifications, provided that You
+   may use Your Modifications only together with the Software and only as
+   permitted by this license. If You submit Modifications to the Licensor,
+   the Contributor License Agreement (CLA.md) applies to them.
+
+5. Restrictions
+
+   Except as expressly permitted above, You may not:
+
+   a. copy, distribute, sell, rent, lease, sublicense, or otherwise make the
+      Software or any Modification available to third parties, in source or
+      binary form, including as part of another product;
+   b. provide the Software or its functionality to third parties as a hosted
+      or managed service, unless Your Subscription expressly permits it;
+   c. remove, disable, circumvent or work around any license key check,
+      feature gating, usage limitation or other protection mechanism in the
+      Software, or enable functionality that Your Subscription does not cover;
+   d. remove or alter any license, copyright or other proprietary notice in
+      the Software.
+
+   Viewing the source code in a public repository does not by itself grant
+   any right beyond this license.
+
+6. Third-party and open source components
+
+   The Software may use components that are licensed under their own terms,
+   including the AGPL-3.0-licensed Nodeglow core. Nothing in this license
+   limits Your rights under those terms for those components.
+
+7. Fees
+
+   Fees for Subscriptions are set out in the applicable order or agreement.
+   This license grants no right to a Subscription free of charge.
+
+8. Term and termination
+
+   This license applies for as long as You comply with it. It terminates
+   automatically if You breach it and do not cure the breach within thirty
+   (30) days of written notice. Your right to Production use ends when Your
+   Subscription expires or is terminated, unless it is renewed. On
+   termination, You must stop using the Software in Production and, upon
+   request, delete copies used for Production. Sections 5, 9, 10 and 11
+   survive termination.
+
+9. No warranty
+
+   EXCEPT AS EXPRESSLY AGREED IN A SEPARATE WRITTEN AGREEMENT, THE SOFTWARE IS
+   PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+   INCLUDING THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+   PURPOSE AND NON-INFRINGEMENT.
+
+10. Limitation of liability
+
+   TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, AND EXCEPT AS EXPRESSLY
+   AGREED IN A SEPARATE WRITTEN AGREEMENT, THE LICENSOR SHALL NOT BE LIABLE
+   FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR EXEMPLARY DAMAGES,
+   OR FOR LOSS OF PROFITS, DATA OR BUSINESS, ARISING OUT OF OR IN CONNECTION
+   WITH THE SOFTWARE OR THIS LICENSE, HOWEVER CAUSED. LIABILITY FOR GROSS
+   NEGLIGENCE, WILFUL MISCONDUCT, OR ANY LIABILITY THAT CANNOT BE EXCLUDED
+   UNDER APPLICABLE LAW REMAINS UNAFFECTED.
+
+11. General
+
+   a. A separate written agreement between You and the Licensor (such as a
+      subscription or enterprise agreement) prevails over this license where
+      they conflict.
+   b. If any provision is held unenforceable, the remaining provisions remain
+      in effect, and the unenforceable provision shall be replaced by a valid
+      one that comes closest to its intent.
+   c. This license is governed by the laws of Switzerland, excluding its
+      conflict-of-law rules and the UN Convention on Contracts for the
+      International Sale of Goods. Place of jurisdiction is the registered
+      seat of the Licensor.
+      [TODO(legal review): confirm governing law and venue.]
+   d. The Licensor reserves all rights not expressly granted.
+
+Contact for Subscriptions: see LICENSING.md.

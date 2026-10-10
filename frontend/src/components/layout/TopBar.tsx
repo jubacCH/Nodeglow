@@ -11,6 +11,7 @@ import { useUiStore } from '@/stores/ui';
 import { useWsStore } from '@/stores/websocket';
 import { useGlowStore } from '@/stores/glow';
 import { useAiStatus } from '@/hooks/queries/useAiStatus';
+import { hasFeature, useFeatures } from '@/hooks/queries/useFeatures';
 import { IconButton } from '@/components/ui/Button';
 import { Kbd } from '@/components/ui/Kbd';
 import { Popover, PopoverItem } from '@/components/ui/Popover';
@@ -133,10 +134,13 @@ function ThemeToggle() {
 
 function GlowToggle() {
   const user = useAuthStore((s) => s.user);
-  const { data: ai } = useAiStatus(!!user);
+  const { data: features } = useFeatures(!!user);
+  const installed = hasFeature(features, 'ai_assistant');
+  const { data: ai } = useAiStatus(!!user && installed);
   const isOpen = useGlowStore((s) => s.isOpen);
   const toggle = useGlowStore((s) => s.toggle);
-  if (!ai?.available) return null;
+  // Glow is an enterprise feature: no button at all where it is not installed.
+  if (!installed || !ai?.available) return null;
   return (
     <Tooltip content="Glow assistant" side="bottom">
       <IconButton aria-label="Glow assistant" aria-pressed={isOpen} onClick={toggle} className={isOpen ? 'bg-accent-soft text-accent' : 'text-fg-2'}>
