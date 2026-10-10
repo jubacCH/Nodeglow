@@ -18,9 +18,10 @@ license key; redistribution is not permitted.
 | **AI postmortems** — drafted when an incident is resolved (manually or by correlation), regenerated via `POST /api/v1/incidents/{id}/postmortem` | `nodeglow_ee.ai.postmortem`, `.postmortem_api` | incident-resolved hook, router |
 | **AI daily summary** — daily job and `POST /settings/ai/test-summary` | `nodeglow_ee.ai.daily_summary` | scheduler hook, router |
 
-Planned: multi-tenancy and the MSP portal, SSO (SAML / OIDC) + SCIM, custom
-RBAC, on-call escalation, SLA reports per customer, audit export / SIEM and
-long audit retention.
+Planned: multi-tenancy and the MSP portal (design and first phases in
+progress: [`docs/specs/2026-10-10-multi-tenancy-design.md`](../docs/specs/2026-10-10-multi-tenancy-design.md)),
+SSO (SAML / OIDC) + SCIM, custom RBAC, on-call escalation, SLA reports per
+customer, audit export / SIEM and long audit retention.
 
 Everything else — including the building blocks these features use (data
 model, collectors, alerting, the extension points themselves) — belongs in the
@@ -110,7 +111,10 @@ says which one is running.
 `ee/backend` to `/opt/nodeglow-ee` and sets `NODEGLOW_EE_PATH`, so the image
 built by `docker compose build` or the update sidecar contains every feature.
 A plain `docker build backend/` (no `ee` context) falls back to an empty stage
-and produces a community image.
+and produces a community image. The release workflow builds both: the
+published `nodeglow-backend` image contains `ee/`,
+`nodeglow-backend-community` does not
+([docs/INSTALL.md](../docs/INSTALL.md#editions-and-images)).
 
 ## Extension points (`backend/extensions.py`)
 

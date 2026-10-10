@@ -41,7 +41,8 @@ Features intended for businesses and service providers live in `ee/`.
 
 **Planned for `ee/`:**
 
-- multi-tenancy and the MSP portal
+- multi-tenancy and the MSP portal (design and first phases in progress, see
+  [`docs/specs/2026-10-10-multi-tenancy-design.md`](docs/specs/2026-10-10-multi-tenancy-design.md))
 - SSO via SAML / OIDC, and SCIM provisioning
 - custom roles (RBAC beyond admin / editor / read-only)
 - on-call schedules and escalation
@@ -88,7 +89,8 @@ offered for use of the core without the AGPL obligations (dual licensing).
 Contact: the repository owner, [@jubacCH on GitHub](https://github.com/jubacCH).
 
 <!-- TODO(owner): add a dedicated licensing email address, e.g. licensing@<domain>. -->
-**TODO:** a dedicated licensing email address will be published here.
+A dedicated licensing e-mail address will be published here; until then,
+please get in touch through GitHub.
 
 ## Contributions
 
