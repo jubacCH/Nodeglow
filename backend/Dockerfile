@@ -5,6 +5,15 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
+# ── Enterprise features (ee/) ────────────────────────────────────────────────
+# The build context is ./backend, which does not contain ../ee. Compose passes
+# the repository's ee/ directory as the named build context "ee"
+# (additional_contexts in docker-compose.yml), which replaces this stage. A
+# plain `docker build backend/` has no such context and gets this empty stage
+# instead: a community-edition image. Either way the copy below succeeds.
+FROM python:3.12-slim AS ee
+RUN mkdir -p /backend
+
 # ── Runtime stage ────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
@@ -62,7 +71,11 @@ COPY --from=builder /install /usr/local
 RUN groupadd -r nodeglow && useradd -r -g nodeglow -d /app -s /sbin/nologin nodeglow
 
 COPY . .
-RUN chown -R nodeglow:nodeglow /app
+# ee/backend → /opt/nodeglow-ee; ee_loader finds the nodeglow_ee package there.
+# Empty for a community build (see the "ee" stage above).
+COPY --from=ee /backend /opt/nodeglow-ee
+RUN rm -rf /opt/nodeglow-ee/tests && chown -R nodeglow:nodeglow /app /opt/nodeglow-ee
+ENV NODEGLOW_EE_PATH=/opt/nodeglow-ee
 
 # Embed build version (set via --build-arg or defaults to "dev")
 ARG GIT_COMMIT=dev

@@ -51,6 +51,12 @@ services:
   nodeglow:
     build:
       context: ./backend
+      # Enterprise features (ee/, Nodeglow Enterprise License) are built into
+      # the same image: the Dockerfile copies this context to /opt/nodeglow-ee.
+      # Remove this entry, or set NODEGLOW_DISABLE_EE=1 at runtime, for a
+      # community-edition image/instance. Needs Docker Compose >= 2.17.
+      additional_contexts:
+        ee: ./ee
       args:
         # Opt in to bundling the proprietary Ookla speedtest CLI. Leave unset
         # for anything you distribute: Ookla's licence restricts redistribution
