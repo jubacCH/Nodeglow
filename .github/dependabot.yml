@@ -19,6 +19,11 @@ updates:
       - dependency-name: fastapi
         versions: [">=0.137"]
       - dependency-name: "opentelemetry-*"
+      # 1.x replaced the thread-pool async client with aiohttp (extra
+      # [async]) and broke production on 2026-10-10; upgrade deliberately,
+      # tested against a real ClickHouse.
+      - dependency-name: clickhouse-connect
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /frontend
