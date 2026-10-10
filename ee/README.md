@@ -55,6 +55,8 @@ ee/
     ├── pyproject.toml       package "nodeglow-ee"; entry point nodeglow.plugins → nodeglow_ee:plugin
     ├── nodeglow_ee/
     │   ├── __init__.py      EnterprisePlugin.register(registry), the single entry point
+    │   ├── licensing.py     license format, offline verification, keygen/issue/verify CLI
+    │   ├── license_runtime.py  license source + cache, feature gates, /settings/license
     │   ├── ha/              leader_lock.py (Redis / in-memory lease), coordinator.py
     │   └── ai/              glow.py, postmortem.py, postmortem_api.py, daily_summary.py,
     │                        context.py (prompt context), common.py
@@ -121,11 +123,15 @@ and produces a community image.
 | `set_scheduler_coordinator(obj)` | if `obj.wants_control()`, `await obj.start(scheduler)` replaces `scheduler.start()`; `obj.stop()` runs on shutdown |
 | `on_incident_resolved(async fn(incident_id))` | spawned after a manual or automatic resolve has committed |
 | `enable_feature(name)` | flag reported by `GET /api/v2/features` |
+| `set_license_provider(async fn())` | gates the reported flags; returns `{"license": summary, "active": {name: bool}}` |
 
 `GET /api/v2/features` (session or API key) returns
 `{"edition": "community" | "enterprise", "features": {"ha_scheduler": bool,
-"ai_assistant": bool, "ai_postmortem": bool, "ai_daily_summary": bool}}`.
-A flag means *installed*; whether a feature is switched on (e.g. the AI
+"ai_assistant": bool, "ai_postmortem": bool, "ai_daily_summary": bool},
+"installed": {...}, "license": {...} | null}`. A flag in `features` means
+*usable*: installed and licensed. `installed` is the same map without the
+license check; `license` is the summary (status, message, expiry) and `null`
+in the community edition. Whether a feature is switched on (e.g. the AI
 opt-in) is reported by its own status endpoint.
 
 ## Adding an enterprise feature
@@ -136,7 +142,10 @@ opt-in) is reported by its own status endpoint.
    `DEFAULT_FEATURES` if the UI needs a flag.
 2. Put the logic in a subpackage of `nodeglow_ee` with a
    `register(registry)` function and call it from `EnterprisePlugin.register`
-   in `nodeglow_ee/__init__.py`.
+   in `nodeglow_ee/__init__.py`. Add its flag name to
+   `licensing.KNOWN_FEATURES` and gate it: endpoints start with
+   `if refused := await license_runtime.blocked("<flag>"): return refused`,
+   jobs and hooks with `if not await license_runtime.is_active("<flag>"): return`.
 3. Tests go in `ee/backend/tests/`; they may use the core fixtures (`db`,
    `tests.test_routers.conftest.make_client`).
 4. UI: build it in `frontend/` and gate it with `useFeatures()` /
@@ -144,15 +153,64 @@ opt-in) is reported by its own status endpoint.
 5. Run the backend suite twice: `python -m pytest -q` and
    `NODEGLOW_DISABLE_EE=1 python -m pytest -q`.
 
-## License keys — TODO
+## License keys
 
-Not implemented yet: the enterprise code registers unconditionally when it is
-present. The intended design: `EnterprisePlugin.register` verifies a signed
-license key (Ed25519, offline-verifiable; the public key ships with `ee/`)
-before registering anything, and re-checks periodically. Without a valid key
-the enterprise features stay inactive outside development/testing mode, and
-the core keeps working unchanged. The terms in [`LICENSE`](LICENSE) apply
-regardless of enforcement.
+Production use of `ee/` needs a license key. Operators: see
+[`docs/OPERATIONS.md` → Enterprise license](../docs/OPERATIONS.md#enterprise-license).
+The terms in [`LICENSE`](LICENSE) apply regardless of enforcement.
+
+**Format** (`nodeglow_ee/licensing.py`). A JSON envelope
+`{"format": "nodeglow-license/1", "kid", "payload", "signature"}`, usually
+passed around base64 encoded on one line. `payload` is the base64 of the
+license JSON: `license_id`, `customer`, `edition` (`"enterprise"`),
+`features` (flag names, `"*"` = all, including future ones), `max_tenants`
+(`null` = unlimited), `issued_at`, `expires_at`, optional `install_id`. The
+Ed25519 signature covers `"nodeglow-license/1\n" + kid + "\n" + payload
+bytes`, so neither the key id nor a byte of the payload can change. It is
+verified offline (same primitive as agent update signing,
+`services/agent_signing.py`) against `TRUSTED_KEYS`, a map of key id →
+public key embedded in the package. Rotation = add a key id, retire the old
+one later. There is deliberately no way to trust another key at runtime.
+
+**Source** (`nodeglow_ee/license_runtime.py`). `NODEGLOW_LICENSE` (the key or
+a file path) wins; otherwise the `ee_license` row of the `settings` table,
+written by `POST /settings/license` (admin only, audit-logged as
+`license.install`; `DELETE` → `license.remove`; `GET` shows the details and
+the installation ID). Each process caches it for 60 s, so an upload reaches
+all workers within a minute, without a restart.
+
+**Enforcement.** The plugin always registers — routers, hooks, coordinator —
+and every feature asks the license when it is used:
+
+| State | Features | `/api/v2/features` |
+|---|---|---|
+| `missing`, `invalid` | inactive: endpoints `402` (`code: license_missing` / `license_invalid`), jobs and hooks skip, HA runs single-instance | every flag `false`, `installed` `true` |
+| `valid` | per the license's feature list (`402 feature_not_licensed` otherwise) | licensed flags `true` |
+| `grace` (14 days after `expires_at`) | still working, admin banner | as `valid` |
+| `expired` (after grace) | refused (`402 license_expired`); data already produced stays readable through the core (stored postmortems); HA leader election keeps running (`EXPIRY_EXEMPT`) because stopping it would duplicate every job | AI flags `false`, `ha_scheduler` `true` |
+
+Monitoring is never gated. HA is decided once, when the scheduler starts: the
+license hook (`on_scheduler_start`) runs first and the coordinator's
+`wants_control()` reads its result.
+
+**Issuing** (vendor side, also for the owner's own installations — there is
+no bypass):
+
+```bash
+cd ee/backend
+python -m nodeglow_ee.licensing keygen --out-dir ~/nodeglow-license-keys --kid ng-2026-10
+python -m nodeglow_ee.licensing issue --signing-key ~/nodeglow-license-keys/ng-2026-10.private.pem \
+  --kid ng-2026-10 --customer "ACME AG" --expires 2027-12-31 --features all [--max-tenants 10] \
+  [--install-id ngi_…] --out acme-license.txt
+python -m nodeglow_ee.licensing verify acme-license.txt
+```
+
+The private key can also come from `NODEGLOW_LICENSE_SIGNING_KEY` (PEM text
+or path). It never goes into the repository or onto a Nodeglow server.
+
+**Tests** sign their licenses with a key generated per run and trust it only
+in memory (`tests/ee_license_helpers.py`, autouse fixture `ee_license` in
+`tests/conftest.py`).
 
 **Agent.** The Rust agent stays entirely in the core; it has no enterprise
 variant.

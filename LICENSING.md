@@ -56,8 +56,15 @@ only those. The commercial part is the backend logic in `ee/`. See
 
 The source is visible, and you may use it for development and testing.
 Running it in production requires a valid Nodeglow Enterprise subscription or
-license key. License keys are not enforced yet (see `ee/README.md`); the
-license terms apply regardless. See [`ee/LICENSE`](ee/LICENSE).
+license key. See [`ee/LICENSE`](ee/LICENSE).
+
+**License keys.** The enterprise features check a signed license key,
+verified offline on the server (no phone-home). Without a valid key they stay
+inactive and the core works unchanged; when a key expires, monitoring keeps
+running and nothing is deleted — after a 14-day grace period only the
+enterprise features stop. The license terms apply regardless of what the code
+enforces. How it works: [`ee/README.md`](ee/README.md#license-keys);
+installing a key: [`docs/OPERATIONS.md`](docs/OPERATIONS.md#enterprise-license).
 
 **Running without `ee/`:** delete the directory, build without it, or set
 `NODEGLOW_DISABLE_EE=1`. The result is the community edition: every core
