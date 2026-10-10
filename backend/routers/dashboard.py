@@ -26,6 +26,122 @@ def select_baseline_indices(total: int, budget: int, keep_newest: int) -> list[i
     return select_sample_indices(total, budget, keep_newest)
 
 
+# ── Anomaly baseline cache ───────────────────────────────────────────────────
+#
+# Even sampled, the baseline still meant ~120 snapshots, 11 MB of JSON, fetched
+# and parsed on every request: ~100 ms on production, the bulk of the section.
+# Only three fields per guest are ever used, and a snapshot row never changes
+# once written. So each historical snapshot is parsed once per process and only
+# the extracted (guest id, cpu, mem) triples are kept.
+#
+# The sample positions move with the window, so one request may pick snapshots
+# the previous one did not. Entries are kept for every snapshot still inside the
+# window, not only the sampled ones, so the cache fills up within a few window
+# shifts and from then on a request fetches only the snapshot that arrived since
+# the last one. Worst case (cold cache) costs what the uncached version did.
+#
+# Keyed by cluster, then snapshot id; the timestamp is stored alongside and has
+# to match, so a reused id (restored database, a fresh SQLite in tests) can never
+# be served stale data.
+
+GuestMetrics = list[tuple[object, object, object]]
+_baseline_cache: dict[int, dict[int, tuple[datetime, GuestMetrics]]] = {}
+
+
+def extract_guest_metrics(data: dict) -> GuestMetrics:
+    """The (id, cpu_pct, mem_used_gb) of every guest in a proxmox snapshot."""
+    out: GuestMetrics = []
+    for g in data.get("vms", []) + data.get("containers", []):
+        gid = g.get("id")
+        if gid is not None:
+            out.append((gid, g.get("cpu_pct", 0), g.get("mem_used_gb", 0)))
+    return out
+
+
+async def load_guest_baseline(db, cluster_id: int, since: datetime, before: datetime) -> dict:
+    """Per-guest cpu/mem series from a sample of the cluster's snapshots in
+    ``[since, before)``, oldest first: ``{guest_id: {"cpu": [...], "mem": [...]}}``.
+    """
+    hist = (await db.execute(
+        select(Snapshot.id, Snapshot.timestamp)
+        .where(
+            Snapshot.entity_type == "proxmox",
+            Snapshot.entity_id == cluster_id,
+            Snapshot.ok == True,
+            Snapshot.timestamp >= since,
+            Snapshot.timestamp < before,
+        )
+        .order_by(Snapshot.timestamp)
+    )).all()
+
+    wanted = [
+        hist[i] for i in select_baseline_indices(
+            len(hist), BASELINE_SAMPLE_BUDGET, BASELINE_KEEP_NEWEST
+        )
+    ]
+
+    cached = _baseline_cache.get(cluster_id, {})
+    missing = [
+        sid for sid, ts in wanted
+        if sid not in cached or cached[sid][0] != ts
+    ]
+    fetched: dict[int, tuple[datetime, GuestMetrics]] = {}
+    if missing:
+        rows = (await db.execute(
+            select(Snapshot.id, Snapshot.timestamp, Snapshot.data_json)
+            .where(Snapshot.id.in_(missing))
+        )).all()
+        for sid, ts, data_json in rows:
+            fetched[sid] = (ts, extract_guest_metrics(json.loads(data_json)))
+
+    # Rebuild rather than mutate: drops whatever has left the window.
+    in_window = {sid: ts for sid, ts in hist}
+    fresh = {
+        sid: entry for sid, entry in cached.items()
+        if in_window.get(sid) == entry[0]
+    }
+    fresh.update(fetched)
+    _baseline_cache[cluster_id] = fresh
+
+    series: dict = defaultdict(lambda: {"cpu": [], "mem": []})
+    for sid, _ts in wanted:
+        entry = fresh.get(sid)
+        if entry is None:
+            continue
+        for gid, cpu, mem in entry[1]:
+            series[gid]["cpu"].append(cpu)
+            series[gid]["mem"].append(mem)
+    return series
+
+
+async def latest_incident_summaries(db, incident_ids: list[int]) -> dict[int, str]:
+    """Summary of the newest event per incident, ignoring acknowledged/resolved.
+
+    One correlated LIMIT 1 per incident, served by ix_incident_event_ts. The
+    previous version loaded every event of the ten incidents (20k ORM rows on
+    production, 85-180 ms) to keep the first of each.
+    """
+    from models.incident import Incident, IncidentEvent
+
+    if not incident_ids:
+        return {}
+    newest = (
+        select(IncidentEvent.summary)
+        .where(
+            IncidentEvent.incident_id == Incident.id,
+            IncidentEvent.event_type.notin_(["acknowledged", "resolved"]),
+        )
+        .order_by(IncidentEvent.timestamp.desc(), IncidentEvent.id.desc())
+        .limit(1)
+        .correlate(Incident)
+        .scalar_subquery()
+    )
+    rows = (await db.execute(
+        select(Incident.id, newest).where(Incident.id.in_(incident_ids))
+    )).all()
+    return {inc_id: summary for inc_id, summary in rows if summary is not None}
+
+
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -39,7 +155,6 @@ from database import (
 )
 from models.integration import IntegrationConfig, Snapshot
 from integrations import get_meta as _int_meta
-from services import integration as int_svc
 from services import snapshot as snap_svc
 from services import predictions as pred_svc
 from services import health as health_svc
@@ -259,20 +374,21 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     all_configs = all_configs_result.scalars().all()
     all_snaps_cache = await snap_svc.get_latest_batch_all(db)
 
+    # Several sections read the same latest snapshots (proxmox three times,
+    # unifi twice); each payload is parsed once per request.
+    _parsed_snaps: dict[int, dict] = {}
+
+    def _snap_data(snap) -> dict:
+        key = id(snap)
+        if key not in _parsed_snaps:
+            _parsed_snaps[key] = json.loads(snap.data_json)
+        return _parsed_snaps[key]
+
     _cp("proxmox")
     # ── Proxmox clusters ──────────────────────────────────────────────────────
-    px_configs = [c for c in all_configs if c.type == "proxmox"]
-
-    class _PxCluster:
-        def __init__(self, cfg):
-            self.id = cfg.id
-            self.name = cfg.name
-            try:
-                d = int_svc.decrypt_config(cfg.config_json)
-                self.host = d.get("host", "")
-            except Exception:
-                self.host = ""
-    proxmox_clusters = [_PxCluster(c) for c in px_configs]
+    # Only id and name are needed. The config used to be decrypted here for a
+    # host field nothing read, at ~50 ms of key derivation per cluster.
+    proxmox_clusters = [c for c in all_configs if c.type == "proxmox"]
 
     anomaly_threshold = float(await get_setting(db, "anomaly_threshold", "2.0"))
 
@@ -280,57 +396,20 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     anomalies:  list[dict] = []
     warnings:   list[dict] = []
 
-    px_snapshots = await snap_svc.get_latest_batch(db, "proxmox")
+    # Same max(id)-per-entity lookup as get_latest_batch, already loaded above.
+    px_snapshots = all_snaps_cache.get("proxmox", {})
 
     for cluster in proxmox_clusters:
         latest_snap = px_snapshots.get(cluster.id)
         if not latest_snap or not latest_snap.ok or not latest_snap.data_json:
             continue
-        latest_data = json.loads(latest_snap.data_json)
+        latest_data = _snap_data(latest_snap)
 
         guests_now = latest_data.get("vms", []) + latest_data.get("containers", [])
 
-        # Historical snapshots for anomaly baseline.
-        #
-        # Two queries on purpose: the ids alone are cheap, while data_json runs
-        # to ~100 kB per row. Loading the whole window meant 2830 rows and
-        # 140 MB of JSON parsed per request. Only the sampled subset is fetched
-        # with its payload.
-        hist_ids = [
-            row[0] for row in (await db.execute(
-                select(Snapshot.id)
-                .where(
-                    Snapshot.entity_type == "proxmox",
-                    Snapshot.entity_id == cluster.id,
-                    Snapshot.ok == True,
-                    Snapshot.timestamp >= window_24h,
-                    Snapshot.timestamp < latest_snap.timestamp,
-                )
-                .order_by(Snapshot.timestamp)
-            )).all()
-        ]
-
-        wanted = [
-            hist_ids[i] for i in select_baseline_indices(
-                len(hist_ids), BASELINE_SAMPLE_BUDGET, BASELINE_KEEP_NEWEST
-            )
-        ]
-
-        hist_rows = (await db.execute(
-            select(Snapshot.data_json)
-            .where(Snapshot.id.in_(wanted))
-            .order_by(Snapshot.timestamp)
-        )).all() if wanted else []
-
-        # Build per-guest time series from the sampled snapshots
-        hist: dict[int, dict] = defaultdict(lambda: {"cpu": [], "mem": []})
-        for row in hist_rows:
-            snap_data = json.loads(row[0])
-            for g in snap_data.get("vms", []) + snap_data.get("containers", []):
-                gid = g.get("id")
-                if gid is not None:
-                    hist[gid]["cpu"].append(g.get("cpu_pct", 0))
-                    hist[gid]["mem"].append(g.get("mem_used_gb", 0))
+        # Historical snapshots for the anomaly baseline: a sample of the last
+        # 24 h, parsed once per snapshot and cached (see load_guest_baseline).
+        hist = await load_guest_baseline(db, cluster.id, window_24h, latest_snap.timestamp)
 
         # Stddev floors to prevent micro-fluctuations from triggering anomalies
         CPU_STD_FLOOR = 3.0
@@ -461,7 +540,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         snap = px_snapshots.get(cluster.id)
         if not snap or not snap.ok or not snap.data_json:
             continue
-        d = json.loads(snap.data_json)
+        d = _snap_data(snap)
         for node_info in d.get("nodes", []):
             px_node_names.add(node_info.get("node", ""))
         for g in d.get("vms", []) + d.get("containers", []):
@@ -491,12 +570,12 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 
     unifi_configs = [c for c in all_configs if c.type == "unifi"]
     if unifi_configs:
-        unifi_snaps = await snap_svc.get_latest_batch(db, "unifi")
+        unifi_snaps = all_snaps_cache.get("unifi", {})
         for ucfg in unifi_configs:
             usnap = unifi_snaps.get(ucfg.id)
             if not usnap or not usnap.ok or not usnap.data_json:
                 continue
-            ud = json.loads(usnap.data_json)
+            ud = _snap_data(usnap)
             devices = ud.get("devices", [])
             gw_ph_id = None
             sw_ph_ids: list[int] = []
@@ -555,7 +634,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         pass
 
     # Active incidents
-    from models.incident import Incident, IncidentEvent
+    from models.incident import Incident
     # A count, not len() of a limited query: that capped the tile at 5.
     active_incident_count = (await db.execute(
         select(func.count(Incident.id))
@@ -675,7 +754,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                 u_snap = all_snaps_cache.get("unifi", {}).get(ucfg.id)
                 if not u_snap or not u_snap.ok or not u_snap.data_json:
                     continue
-                u_d = json.loads(u_snap.data_json)
+                u_d = _snap_data(u_snap)
                 st_latest = u_d.get("speedtest_latest")
                 if st_latest:
                     speedtest_data = {
@@ -731,7 +810,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             snap = px_snaps.get(cfg.id)
             if not snap or not snap.ok or not snap.data_json:
                 continue
-            sd = json.loads(snap.data_json)
+            sd = _snap_data(snap)
             for node in sd.get("nodes", []):
                 total = node.get("disk_total_gb", 0)
                 if total <= 0:
@@ -748,15 +827,24 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    # Agent disks (from latest agent_metrics in ClickHouse)
+    # Latest agent_metrics per enabled agent, shared by the disk and container
+    # sections below (both used to run the same ClickHouse query).
+    from models.agent import Agent
+    from services.clickhouse_client import get_latest_agent_metrics
+    # On failure both sections simply go without agent data, as before.
+    enabled_agents: list = []
+    agent_snaps: dict[int, dict] = {}
     try:
-        from models.agent import Agent
-        from services.clickhouse_client import get_latest_agent_metrics
         agents_q = await db.execute(select(Agent).where(Agent.enabled == True))
         enabled_agents = agents_q.scalars().all()
-        snaps = await get_latest_agent_metrics([a.id for a in enabled_agents])
+        agent_snaps = await get_latest_agent_metrics([a.id for a in enabled_agents])
+    except Exception:
+        enabled_agents, agent_snaps = [], {}
+
+    # Agent disks (from latest agent_metrics in ClickHouse)
+    try:
         for a in enabled_agents:
-            snap = snaps.get(a.id)
+            snap = agent_snaps.get(a.id)
             data_json = snap.get("data_json") if snap else None
             if not data_json:
                 continue
@@ -832,14 +920,9 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         _cp("containers_portainer_done")
         # Agent Docker containers (from latest CH snapshot per agent)
         try:
-            from models.agent import Agent
-            from services.clickhouse_client import get_latest_agent_metrics
-            agents_q = await db.execute(select(Agent).where(Agent.enabled == True))
-            enabled_agents = agents_q.scalars().all()
-            snaps = await get_latest_agent_metrics([a.id for a in enabled_agents])
             _cp("containers_query_done")
             for a in enabled_agents:
-                snap = snaps.get(a.id)
+                snap = agent_snaps.get(a.id)
                 data_json = snap.get("data_json") if snap else None
                 if not data_json:
                     continue
@@ -960,18 +1043,9 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         )).scalars().all()
         # Fetch latest meaningful event summary per incident
         if recent_incidents:
-            inc_ids = [inc.id for inc in recent_incidents]
-            ev_rows = (await db.execute(
-                select(IncidentEvent)
-                .where(
-                    IncidentEvent.incident_id.in_(inc_ids),
-                    IncidentEvent.event_type.notin_(["acknowledged", "resolved"]),
-                )
-                .order_by(IncidentEvent.timestamp.desc())
-            )).scalars().all()
-            for ev in ev_rows:
-                if ev.incident_id not in incident_summary_map:
-                    incident_summary_map[ev.incident_id] = ev.summary
+            incident_summary_map = await latest_incident_summaries(
+                db, [inc.id for inc in recent_incidents]
+            )
     except Exception:
         pass
 
