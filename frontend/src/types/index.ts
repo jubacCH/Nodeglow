@@ -95,6 +95,20 @@ export interface Agent {
   probe_interval_seconds?: number | null;
 }
 
+/** Last reported state of one watched service on an agent. */
+export interface AgentServiceState {
+  name: string;
+  /** null = the agent has not reported this service yet. */
+  state: 'running' | 'stopped' | 'not_found' | 'unknown' | null;
+  start_type: string | null;
+  /** When the current state was first seen (ISO, UTC). */
+  since: string | null;
+  /** Consecutive reports the service was stopped / missing. */
+  fail_count: number;
+  /** Whether an incident is open for it. */
+  alerted: boolean;
+}
+
 export interface AgentSnapshot {
   agent_id: number;
   timestamp: string;
