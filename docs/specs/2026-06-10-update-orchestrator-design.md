@@ -3,6 +3,12 @@
 **Date:** 2026-06-10
 **Status:** Implemented and verified in production 2026-08-27
 
+> **Note (2026-10-10):** historical design record. This describes the
+> git-mode updater. Release installs use the later image mode (signed GHCR
+> releases, `NODEGLOW_UPDATE_MODE=image`) — current documentation:
+> [docs/OPERATIONS.md → Updating](../OPERATIONS.md#updating) and
+> [docs/INSTALL.md → Upgrading](../INSTALL.md#upgrading).
+
 ## Problem
 
 The self-update feature (sidecar `POST /apply`) runs `git pull` + `docker compose up
