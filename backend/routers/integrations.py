@@ -488,7 +488,13 @@ async def deploy_agent_to_lxcs(
     # Detect Nodeglow's LXC IP — find the PingHost for this Nodeglow instance
     # (Docker-internal IPs like 172.18.x.x are NOT reachable from LXCs)
     from models.ping import PingHost
-    nodeglow_ip = await get_setting(db, "nodeglow_ip", "")
+    from urllib.parse import urlparse
+    # The configured agent server URL (Settings → General) wins; the legacy
+    # nodeglow_ip setting and the hostname heuristic remain as fallbacks.
+    agent_server_url = (await get_setting(db, "agent_server_url", "") or "").strip().rstrip("/")
+    nodeglow_ip = urlparse(agent_server_url).hostname if agent_server_url else ""
+    if not nodeglow_ip:
+        nodeglow_ip = await get_setting(db, "nodeglow_ip", "")
     if not nodeglow_ip:
         # Find by source_detail matching this Proxmox config, hostname containing "monitoring" or "nodeglow"
         ph_result = await db.execute(
@@ -504,10 +510,14 @@ async def deploy_agent_to_lxcs(
                 nodeglow_ip = socket.gethostbyname(ph.hostname)
             except Exception:
                 nodeglow_ip = ph.hostname
-        if not nodeglow_ip:
-            nodeglow_ip = "10.10.30.52"
+    if not nodeglow_ip:
+        return JSONResponse(
+            {"error": "Nodeglow's address for agents is unknown. Set the agent server URL "
+                      "under Settings → General and try again."},
+            status_code=400,
+        )
 
-    nodeglow_url = f"http://{nodeglow_ip}:8000"
+    nodeglow_url = agent_server_url or f"http://{nodeglow_ip}:8000"
 
     # Exclude the Nodeglow LXC itself
     _self_names = set()
