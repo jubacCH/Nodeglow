@@ -18,8 +18,8 @@ design-tokens/tokens.json ──(npm run build:tokens, läuft auch in dev/build)
                                                                          └──▶ src/styles/tokens.gen.ts    Namen + Rohwerte für JS
 ```
 
-- Jeder Schlüssel wird zur CSS-Variable `--ng-<name>`. `{name}` im Wert ist eine Referenz und wird zu `var(--ng-name)`; so folgen abgeleitete Tokens (Soft-Töne, Glow, Aliase) automatisch dem Theme.
-- `theme.dark` gilt auf `:root` (Default), `theme.light` auf `[data-theme="light"]`. `shared` (abgeleitete und themeunabhängige Tokens) und `alias` werden auf `:root, [data-theme]` geschrieben, damit ein Teilbaum mit eigenem `data-theme` (z. B. Toast, Tooltip: immer dunkel) korrekt rechnet.
+- Jeder Schlüssel wird zur CSS-Variable `--ng-<name>`. `{name}` im Wert ist eine Referenz und wird zu `var(--ng-name)`; so folgen abgeleitete Tokens (Soft-Töne, Glow) automatisch dem Theme.
+- `theme.dark` gilt auf `:root` (Default), `theme.light` auf `[data-theme="light"]`. `shared` (abgeleitete und themeunabhängige Tokens) wird auf `:root, [data-theme]` geschrieben, damit ein Teilbaum mit eigenem `data-theme` (z. B. Toast, Tooltip: immer dunkel) korrekt rechnet.
 - Das Build-Skript prüft: beide Themes haben dieselben Schlüssel, jede Referenz existiert.
 - `contrast.pairs` in der JSON listet die Text/Hintergrund-Paare, die `src/styles/tokens.test.ts` (Teil von `npx vitest run`) in beiden Themes nach WCAG prüft. Tabelle ausgeben: `npm run check:contrast`.
 
@@ -28,7 +28,7 @@ design-tokens/tokens.json ──(npm run build:tokens, läuft auch in dev/build)
 - Aktives Theme = `data-theme="dark|light"` auf `<html>`. Kein `className="dark"`, keine Slate-Klassen am `<body>`.
 - **Kein Aufblitzen:** `THEME_INIT_SCRIPT` (`src/lib/theme.ts`) läuft inline im `<head>` von `app/layout.tsx`, liest den persistierten Theme-Store (`localStorage["ng-theme"]`) und setzt `data-theme`, `color-scheme` und die Schriftgrösse vor dem ersten Paint.
 - `<ThemeController>` (in `Providers`) hält danach alles synchron: Store-Änderungen, `prefers-color-scheme`, andere Tabs.
-- Store `useThemeStore` (`stores/theme.ts`): `colorMode: 'dark' | 'light' | 'system'` (Default **dark**; „system“ folgt dem Betriebssystem), `toggleColorMode()`, `fontSize` (Root-Schriftgrösse, Default 14 px), `density`. `accentColor` und `sidebarPosition` sind veraltet und wirkungslos.
+- Store `useThemeStore` (`stores/theme.ts`): `colorMode: 'dark' | 'light' | 'system'` (Default **dark**; „system“ folgt dem Betriebssystem), `toggleColorMode()`, `fontSize` (Root-Schriftgrösse, Default 14 px), `density`. (Die wirkungslosen `accentColor`/`sidebarPosition` sind entfernt.)
 - Für JS/Canvas: `useResolvedTheme()` (`lib/useResolvedTheme.ts`) liefert das tatsächlich angewandte Theme und rendert bei jedem Wechsel neu.
 
 ---
@@ -99,9 +99,9 @@ Abweichungen vom Prototyp (wegen WCAG AA, siehe 2.5): `text-3` dunkel `#6E7380 �
 | Display: Seitentitel, grosse Zahlen | Sora 500 (Zahlen) / 600 (Titel), Laufweite −0.03 … −0.045em | `font-display` |
 | Mono: IPs, Regelnamen, Logs | JetBrains Mono 400/500 | `font-mono` |
 
-Geladen über `next/font/google` (selbst gehostet, `display: swap`), Variablen `--font-sora`, `--font-inter-tight`, `--font-jetbrains-mono`; die Tokens `--ng-font-*` enthalten Fallback-Stacks. Inter (alt) ist entfernt.
+Selbst gehostet aus den npm-Paketen `@fontsource-variable/{inter-tight,sora,jetbrains-mono}` über `next/font/local` (`src/app/fonts.ts`, `display: swap`) — der Build braucht kein Netz (kein `next/font/google` mehr). Pro Familie zwei Faces mit den Google-`unicode-range`s: latin (vorgeladen) und latin-ext (nur bei Bedarf geladen). Variablen `--font-sora(-ext)`, `--font-inter-tight(-ext)`, `--font-jetbrains-mono(-ext)`; die Tokens `--ng-font-*` reihen latin → latin-ext → Fallback-Stack. Inter (alt) ist entfernt.
 
-Schriftgrössen in `rem` relativ zur Benutzer-Schriftgrösse (Default 14 px = `1rem`). Die Namen kollidieren nicht mit `text-xs/sm/base`, damit alte Seiten unverändert bleiben:
+Schriftgrössen in `rem` relativ zur Benutzer-Schriftgrösse (Default 14 px = `1rem`). Die Namen kollidieren nicht mit `text-xs/sm/base`:
 
 | Klasse | px bei 14 px | Einsatz |
 |---|---|---|
@@ -179,6 +179,8 @@ Bewusste Ausnahmen: `st-unknown` als Grafik liegt unter 3:1 („kein Licht = kei
 
 ### 3.2 Migrationstabelle `slate-*` / Hartcodes → semantisch
 
+Die Migration ist abgeschlossen (Stand 10.10.2026); die Tabelle bleibt als Referenz, falls alter Code (Branches, Snippets) nachgezogen werden muss.
+
 | Alt | Neu |
 |---|---|
 | `text-white`, `text-slate-50/100/200` | `text-fg` |
@@ -214,7 +216,7 @@ Bewusste Ausnahmen: `st-unknown` als Grafik liegt unter 3:1 („kein Licht = kei
 | eigene Tab-Leisten (`useState<Tab>`) | `Tabs` + `TabPanel` (Panels) oder `NavTabs` (URLs) |
 | `<label>` + `<input className="ng-input">` ohne `htmlFor` | `<Field label><Input/></Field>` |
 
-Übergangsschicht: `globals.css` enthält am Ende eine „Legacy bridge“, die im Light Mode die häufigsten `slate`/`white/x`-Klassen auf Tokens abbildet, und `tokens.json → alias` hält alte Variablennamen (`--ng-text-primary`, `--ng-card-bg`, `--ng-glass-*`, `--accent` …) am Leben. Beides wird gelöscht, wenn alle Seiten migriert sind — neuer Code nutzt sie nicht.
+Übergangsschicht — **erledigt (10.10.2026)**: Die „Legacy bridge“ am Ende von `globals.css` (Light-Mode-Abbildung der `slate`/`white/x`-Klassen), die Alias-Tokens in `tokens.json → alias` (`--ng-text-primary`, `--ng-card-bg`, `--ng-glass-*` …), der Export `ngColors`, die Hilfsklassen `.glass-card`, `.glass-elevated`, `.nav-active`, `.accent-text`, `.accent-bg`, `.stat-card-hover` und die Komponente `GlassCard` sind gelöscht. `slate-*`, `white/x`, Hex-Werte und die alten Variablennamen funktionieren damit nicht mehr (im Light Mode sähen sie falsch aus) — nur noch die semantischen Klassen verwenden.
 
 ---
 
@@ -245,7 +247,6 @@ Bewusste Ausnahmen: `st-unknown` als Grafik liegt unter 3:1 („kein Licht = kei
 | `NodeglowMark`, `Wordmark`, `Lockup` | `NodeglowMark.tsx` | Zeichen aus E3 (Knoten, Halo, Orbit, Satellit), `mono` für einfarbig, Wortmarke mit leuchtendem „o“. |
 | `CommandPalette` / `CommandPaletteHost` | | Ctrl/Cmd+K oder Suchknopf in der Kopfzeile (`useUiStore().setPaletteOpen`). Seiten aus der Navigations-Registry, Hosts, Integrationen, Aktionen. |
 | `KeyboardShortcuts` | | `g` + Taste aus der Registry (`g d` Overview, `g n`/`g a` Incidents, `g r` Regeln, `g h` Hosts, `g o` Topologie, `g l`/`g s` Logs, `g i` Settings, `g t` Systemstatus), `?` Hilfe. |
-| `GlassCard` | | **veraltet**, rendert jetzt eine E3-Karte. |
 
 Hilfen: `lib/status.ts` (Vokabular, `toHealthState`, `glows`, `STATE_FILL/TEXT/SOFT/VAR`, `describeSegments`), `lib/chart-theme.ts` (`useChartTheme`, `buildEChartsTheme`, `readToken`, `resolveCssColor`), `lib/navigation.ts` (Registry, `findActive`, `visibleSections`, `shortcutRoutes`).
 
@@ -312,7 +313,7 @@ Jeder Zustand hat **Farbe und Form und Text**. Status nie nur über Farbe.
 ## 8. Seite migrieren — Checkliste für Phase F
 
 1. **Kopf**: `PageHeader` (Titel, eine Zeile Beschreibung mit Frische, max. eine Primäraktion). Keine eigene Tab-Leiste für Bereichsnavigation — die Shell zeigt die Sub-Navigation.
-2. **Flächen**: `GlassCard`/`glass-card`/Inline-`style` → `Card` + `CardHeader`. Kein `backdrop-blur`, keine Verläufe, keine Schatten auf Karten.
+2. **Flächen**: Inline-`style`/eigene Kartenflächen → `Card` + `CardHeader`. Kein `backdrop-blur`, keine Verläufe, keine Schatten auf Karten.
 3. **Farben**: alle `slate-*`, `white/x`, `sky/emerald/red/amber-*`, Hex-Werte und `var(--ng-…)`-Inline-Styles nach Tabelle 3.2 ersetzen. Suche: `rg "slate-|white/|sky-|emerald-|amber-|red-|#[0-9A-Fa-f]{6}|style=\{\{" <datei>`.
 4. **Status**: über `lib/status.ts` mappen und `StatusDot`/`StatusPill` verwenden. Unbekannt nie grün, Wartung nie Amber. Glow nur über die Komponenten bzw. `Card glow`.
 5. **Typo**: `text-micro … text-h1`; Zahlen `.num`/`BigNumber`; Mono nur für technische Bezeichner. Nichts unter 11 px.
@@ -324,4 +325,4 @@ Jeder Zustand hat **Farbe und Form und Text**. Status nie nur über Farbe.
 11. **A11y**: sichtbarer Fokus nicht entfernen, Icon-Buttons mit `aria-label`, Bewegung nur bei Zustandswechsel.
 12. **Prüfen**: dunkel **und** hell, 1440 px und 400 px (kein horizontales Scrollen der Seite), `npx tsc --noEmit`, `npm run lint`, `npx vitest run`, `npm run build`.
 
-Wenn alle Seiten migriert sind: Legacy-Bridge am Ende von `globals.css` und `tokens.json → alias` löschen, `GlassCard` entfernen.
+Alle Seiten sind migriert; Legacy-Bridge, `tokens.json → alias` und `GlassCard` sind entfernt (siehe 3.2).

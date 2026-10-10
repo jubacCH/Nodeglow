@@ -5,14 +5,14 @@
  *   src/styles/tokens.gen.ts   typed token names + raw values for JS consumers
  *
  * Value syntax: `{name}` is a reference to another token and becomes
- * `var(--ng-name)`, so derived tokens (accent-soft, glow, aliases) follow the
+ * `var(--ng-name)`, so derived tokens (accent-soft, glow) follow the
  * active theme automatically.
  *
  * Selectors:
  *   :root, [data-theme="dark"]   dark theme (default)
  *   [data-theme="light"]         light theme (set on <html> before first paint,
  *                                see src/lib/theme-script.ts)
- *   :root, [data-theme]          shared + alias tokens; repeated on every themed
+ *   :root, [data-theme]          shared tokens; repeated on every themed
  *                                element so derived values recompute in subtrees
  *
  * No dependencies on purpose.
@@ -33,14 +33,13 @@ const strip = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !k.sta
 const dark = strip(tokens.theme.dark);
 const light = strip(tokens.theme.light);
 const shared = strip(tokens.shared);
-const alias = strip(tokens.alias);
 
 // ── validation ─────────────────────────────────────────────────────────────
-const known = new Set([...Object.keys(dark), ...Object.keys(shared), ...Object.keys(alias)]);
+const known = new Set([...Object.keys(dark), ...Object.keys(shared)]);
 const errors = [];
 for (const k of Object.keys(dark)) if (!(k in light)) errors.push(`light theme is missing "${k}"`);
 for (const k of Object.keys(light)) if (!(k in dark)) errors.push(`dark theme is missing "${k}"`);
-for (const [group, obj] of Object.entries({ dark, light, shared, alias })) {
+for (const [group, obj] of Object.entries({ dark, light, shared })) {
   for (const [k, v] of Object.entries(obj)) {
     for (const m of String(v).matchAll(/\{([a-z0-9-]+)\}/g)) {
       if (!known.has(m[1])) errors.push(`${group}.${k} references unknown token {${m[1]}}`);
@@ -72,9 +71,6 @@ const css = [
   block('[data-theme="light"]', light),
   '',
   block(':root,\n[data-theme]', shared),
-  '',
-  '/* Legacy aliases (pre-E3 names). New code uses the semantic names above. */',
-  block(':root,\n[data-theme]', alias),
   '',
 ].join('\n');
 
@@ -111,22 +107,6 @@ const ts = [
   ' *  readToken() from lib/chart-theme so the value follows the active theme. */',
   `export const ngTokensRaw = ${json({ dark, light, shared })} as const;`,
   '',
-  '/** @deprecated Pre-E3 palette (dark values). Use lib/chart-theme (runtime, theme-aware). */',
-  `export const ngColors = ${json({
-    bg: dark.bg,
-    surface: dark.surface,
-    elevated: dark['surface-2'],
-    border: dark.line,
-    primary: dark.accent,
-    accent: dark.accent,
-    success: dark['st-ok'],
-    warning: dark['st-warning'],
-    critical: dark['st-down'],
-    'text-primary': dark.text,
-    'text-secondary': dark['text-2'],
-    'text-muted': dark['text-3'],
-  })} as const;`,
-  '',
   `export const ngRadius = ${json({
     card: shared.radius,
     sm: shared['radius-sm'],
@@ -145,4 +125,4 @@ const ts = [
 ].join('\n');
 writeFileSync(TS_OUT, ts);
 
-console.log(`✓ tokens built — ${themeNames.length} theme tokens × 2, ${sharedNames.length} shared, ${Object.keys(alias).length} aliases`);
+console.log(`✓ tokens built — ${themeNames.length} theme tokens × 2, ${sharedNames.length} shared`);
