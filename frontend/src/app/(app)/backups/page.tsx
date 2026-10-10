@@ -1,16 +1,23 @@
 'use client';
 
-import React from 'react';
-import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { StatusDot } from '@/components/ui/StatusDot';
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, post } from '@/lib/api';
-import { RefreshCw, ChevronDown, ChevronUp, AlertTriangle, XCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { AlertTriangle, Archive, Clock, RefreshCw, XCircle } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { Tag } from '@/components/ui/Tag';
+import { Button, buttonClasses } from '@/components/ui/Button';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { BigNumber } from '@/components/ui/BigNumber';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { SidePanel } from '@/components/ui/SidePanel';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryState, QueryErrorState, formatAsOf } from '@/components/ui/QueryState';
+import { TableContainer, Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import { get, post, apiErrorMessage } from '@/lib/api';
+import type { HealthState } from '@/lib/status';
+import { useToastStore } from '@/stores/toast';
 
 /* ─── Types ─── */
 
@@ -100,23 +107,14 @@ function formatRelativeTime(isoDate: string | null): string {
 
 /* ─── Status helpers ─── */
 
-type StatusDotStatus = 'online' | 'offline' | 'maintenance' | 'unknown' | 'disabled' | 'error';
-
-function statusDotStatus(status: string): StatusDotStatus {
+/** Backup state; "unknown" (no run recorded) is never shown as healthy. */
+function jobState(status: string, enabled = true): { status: HealthState | 'disabled'; label: string } {
+  if (!enabled) return { status: 'disabled', label: 'Disabled' };
   switch (status) {
-    case 'ok': return 'online';
-    case 'warning': return 'maintenance';
-    case 'failed': return 'offline';
-    default: return 'unknown';
-  }
-}
-
-function statusSeverity(status: string): 'info' | 'warning' | 'critical' {
-  switch (status) {
-    case 'ok': return 'info';
-    case 'warning': return 'warning';
-    case 'failed': return 'critical';
-    default: return 'info';
+    case 'ok': return { status: 'ok', label: 'OK' };
+    case 'warning': return { status: 'warning', label: 'Warning' };
+    case 'failed': return { status: 'down', label: 'Failed' };
+    default: return { status: 'unknown', label: 'No data' };
   }
 }
 
@@ -132,23 +130,25 @@ const statusSortOrder: Record<string, number> = {
 export default function BackupsPage() {
   useEffect(() => { document.title = 'Backups | Nodeglow'; }, []);
   const qc = useQueryClient();
+  const toast = useToastStore((s) => s.show);
   const [syncing, setSyncing] = useState(false);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<BackupJob | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const query = useQuery({
     queryKey: ['backups'],
     queryFn: () => get<BackupsData>('/api/backups'),
   });
+  const { data } = query;
 
   const { data: compliance } = useQuery({
     queryKey: ['backups-compliance'],
     queryFn: () => get<ComplianceData>('/api/backups/compliance'),
   });
 
-  const summary = data?.summary ?? { total: 0, healthy: 0, warning: 0, failed: 0, unknown: 0 };
-  const jobs = [...(data?.jobs ?? [])].sort(
+  const summary = data?.summary;
+  const jobs = useMemo(() => [...(data?.jobs ?? [])].sort(
     (a, b) => (statusSortOrder[a.effective_status] ?? 9) - (statusSortOrder[b.effective_status] ?? 9),
-  );
+  ), [data]);
 
   async function syncNow() {
     setSyncing(true);
@@ -156,272 +156,261 @@ export default function BackupsPage() {
       await post('/api/backups/sync');
       qc.invalidateQueries({ queryKey: ['backups'] });
       qc.invalidateQueries({ queryKey: ['backups-compliance'] });
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Backup sync failed'), 'error');
     } finally {
       setSyncing(false);
     }
   }
 
-  function toggle(id: number) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  const hasComplianceIssues =
-    (compliance?.overdue?.length ?? 0) > 0 ||
-    (compliance?.failed?.length ?? 0) > 0 ||
-    (compliance?.never_run?.length ?? 0) > 0;
+  const failed = compliance?.failed ?? [];
+  const overdue = compliance?.overdue ?? [];
+  const neverRun = compliance?.never_run ?? [];
+  const hasComplianceIssues = failed.length + overdue.length + neverRun.length > 0;
+  const asOf = formatAsOf(query.dataUpdatedAt);
 
   return (
     <div>
       <PageHeader
-        title="Backup Monitoring"
-        description="Track backup health across infrastructure"
+        title="Backups"
+        description={`Backup health across infrastructure, from connected integrations${asOf ? ` · updated ${asOf}` : ''}`}
         actions={
-          <Button variant="ghost" size="sm" onClick={syncNow} disabled={syncing}>
-            <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />
-            {syncing ? 'Syncing...' : 'Sync Now'}
+          <Button variant="secondary" size="sm" onClick={syncNow} loading={syncing}>
+            {!syncing && <RefreshCw size={14} aria-hidden="true" />}
+            {syncing ? 'Syncing…' : 'Sync now'}
           </Button>
         }
       />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <GlassCard className="p-4 text-center">
-          <p className="text-2xl font-semibold text-emerald-400">{summary.healthy}</p>
-          <p className="text-xs text-slate-400 mt-1">Healthy</p>
-        </GlassCard>
-        <GlassCard className="p-4 text-center">
-          <p className={`text-2xl font-semibold ${summary.warning > 0 ? 'text-amber-400' : 'text-slate-500'}`}>
-            {summary.warning}
-          </p>
-          <p className="text-xs text-slate-400 mt-1">Warning / Overdue</p>
-        </GlassCard>
-        <GlassCard className="p-4 text-center">
-          <p className={`text-2xl font-semibold ${summary.failed > 0 ? 'text-red-400' : 'text-slate-500'}`}>
-            {summary.failed}
-          </p>
-          <p className="text-xs text-slate-400 mt-1">Failed</p>
-        </GlassCard>
-        <GlassCard className="p-4 text-center">
-          <p className="text-2xl font-semibold text-slate-100">{summary.total}</p>
-          <p className="text-xs text-slate-400 mt-1">Total Jobs</p>
-        </GlassCard>
+      <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-5">
+        <Card padding="sm">
+          <BigNumber size="sm" value={summary?.failed} state={summary?.failed ? 'down' : undefined} label="Failed" />
+        </Card>
+        <Card padding="sm">
+          <BigNumber size="sm" value={summary?.warning} state={summary?.warning ? 'warning' : undefined} label="Warning / overdue" />
+        </Card>
+        <Card padding="sm">
+          <BigNumber size="sm" value={summary?.healthy} label="Healthy" />
+        </Card>
+        <Card padding="sm">
+          <BigNumber size="sm" value={summary?.unknown} label="No data" />
+        </Card>
+        <Card padding="sm" className="col-span-2 md:col-span-1">
+          <BigNumber size="sm" value={summary?.total} label="Total jobs" />
+        </Card>
       </div>
 
-      {/* Compliance alerts */}
       {hasComplianceIssues && (
-        <div className="space-y-3 mb-6">
-          {(compliance?.failed ?? []).map((job) => (
-            <GlassCard key={`fail-${job.id}`} className="p-4 border-l-4 border-red-500/60">
-              <div className="flex items-start gap-3">
-                <XCircle size={18} className="text-red-400 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-red-400">{job.name}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">
+        <Card
+          as="section"
+          aria-labelledby="backup-attention"
+          className="mb-4"
+          glow={failed.length ? 'crit' : overdue.length ? 'warn' : undefined}
+        >
+          <CardHeader
+            title="Needs attention"
+            titleId="backup-attention"
+            meta={`${failed.length + overdue.length + neverRun.length} job${failed.length + overdue.length + neverRun.length === 1 ? '' : 's'}`}
+          />
+          <ul className="divide-y divide-border">
+            {failed.map((job) => (
+              <li key={`fail-${job.id}`} className="flex items-start gap-3 py-2.5">
+                <XCircle size={16} className="mt-0.5 shrink-0 text-down" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="text-ui font-medium text-fg">{job.name} <span className="font-normal text-down">failed</span></p>
+                  <p className="mt-0.5 break-words text-meta text-fg-2">
                     Target: {job.target_name}
-                    {job.last_error && <span className="text-red-400/80"> &mdash; {job.last_error}</span>}
+                    {job.last_error && <span className="text-down"> — {job.last_error}</span>}
                   </p>
                 </div>
-              </div>
-            </GlassCard>
-          ))}
-          {(compliance?.overdue ?? []).map((job) => (
-            <GlassCard key={`overdue-${job.id}`} className="p-4 border-l-4 border-amber-500/60">
-              <div className="flex items-start gap-3">
-                <AlertTriangle size={18} className="text-amber-400 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-amber-400">{job.name}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">
+              </li>
+            ))}
+            {overdue.map((job) => (
+              <li key={`overdue-${job.id}`} className="flex items-start gap-3 py-2.5">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="text-ui font-medium text-fg">{job.name} <span className="font-normal text-warning">overdue</span></p>
+                  <p className="mt-0.5 text-meta text-fg-2">
                     Target: {job.target_name}
                     {job.hours_since_last != null && (
-                      <span className="text-amber-400/80"> &mdash; {job.hours_since_last}h since last run (expected every {job.expected_frequency_hours}h)</span>
+                      <> — {job.hours_since_last}h since last run (expected every {job.expected_frequency_hours}h)</>
                     )}
                   </p>
                 </div>
-              </div>
-            </GlassCard>
-          ))}
-          {(compliance?.never_run ?? []).map((job) => (
-            <GlassCard key={`never-${job.id}`} className="p-4 border-l-4 border-slate-500/60">
-              <div className="flex items-start gap-3">
-                <AlertTriangle size={18} className="text-slate-400 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-slate-300">{job.name}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Target: {job.target_name} &mdash; Never executed
-                  </p>
+              </li>
+            ))}
+            {neverRun.map((job) => (
+              <li key={`never-${job.id}`} className="flex items-start gap-3 py-2.5">
+                <Clock size={16} className="mt-0.5 shrink-0 text-fg-3" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="text-ui font-medium text-fg">{job.name} <span className="font-normal text-fg-2">never ran</span></p>
+                  <p className="mt-0.5 text-meta text-fg-2">Target: {job.target_name} — no backup has been recorded</p>
                 </div>
-              </div>
-            </GlassCard>
-          ))}
-        </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
 
-      {/* Jobs table */}
-      <GlassCard>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06]">
-                <th className="w-8 px-2 py-3" />
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Status</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Target</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Source</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Storage</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Last Run</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Duration</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Size</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Frequency</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading &&
-                Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i} className="border-b border-white/[0.06]">
-                    <td className="px-2 py-3" />
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-36" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-24" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16 ml-auto" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16 ml-auto" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-12 ml-auto" /></td>
-                  </tr>
-                ))}
-              {jobs.map((job) => {
-                const isExpanded = expanded.has(job.id);
-                return (
-                  <React.Fragment key={job.id}>
-                    <tr
-                      className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer"
-                      onClick={() => toggle(job.id)}
-                    >
-                      <td className="px-2 py-3 text-slate-500">
-                        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <StatusDot status={statusDotStatus(job.effective_status)} />
-                          <Badge variant="severity" severity={statusSeverity(job.effective_status)}>
-                            {job.effective_status}
-                          </Badge>
-                          {!job.enabled && (
-                            <span className="text-[10px] text-slate-500 uppercase">disabled</span>
+      <Card padding="none">
+        <QueryState
+          query={{ ...query, data: data ? jobs : undefined }}
+          errorTitle="Could not load backup jobs"
+          loading={
+            <div className="space-y-3 p-5" aria-busy="true" aria-label="Loading backup jobs">
+              {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+            </div>
+          }
+          empty={
+            <EmptyState
+              icon={Archive}
+              title="No backup jobs found"
+              description="Backups are read from integrations such as Proxmox. Connect one to start monitoring backups."
+              action={<Link href="/integration/store" className={buttonClasses({ variant: 'secondary', size: 'sm' })}>Browse integrations</Link>}
+            />
+          }
+        >
+          {(rows) => (
+            <TableContainer>
+              <Table className="min-w-[900px]">
+                <THead>
+                  <Tr>
+                    <Th>Status</Th>
+                    <Th>Target</Th>
+                    <Th>Source</Th>
+                    <Th>Storage</Th>
+                    <Th>Last run</Th>
+                    <Th numeric>Duration</Th>
+                    <Th numeric>Size</Th>
+                    <Th numeric>Frequency</Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {rows.map((job) => {
+                    const st = jobState(job.effective_status, job.enabled);
+                    return (
+                      <Tr key={job.id} selected={selected?.id === job.id}>
+                        <Td><StatusPill status={st.status}>{st.label}</StatusPill></Td>
+                        <Td className="max-w-[280px] py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setSelected(job)}
+                            className="block max-w-full truncate text-left font-medium text-fg hover:text-accent"
+                            aria-label={`Backup history for ${job.target_name}`}
+                          >
+                            {job.target_name}
+                            {job.target_vmid != null && <span className="ml-1.5 text-meta font-normal text-fg-3">VM {job.target_vmid}</span>}
+                          </button>
+                          <span className="block truncate text-meta text-fg-3">{job.name}</span>
+                        </Td>
+                        <Td><Tag>{job.source_type}</Tag></Td>
+                        <Td muted className="text-meta">{job.storage_name || '—'}</Td>
+                        <Td className="whitespace-nowrap">
+                          {job.last_run_at ? (
+                            <time dateTime={job.last_run_at} title={new Date(job.last_run_at).toLocaleString()} className="text-fg-2">
+                              {formatRelativeTime(job.last_run_at)}
+                            </time>
+                          ) : (
+                            <span className="text-fg-3">Never</span>
                           )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div>
-                          <span className="text-slate-200">{job.target_name}</span>
-                          {job.target_vmid != null && (
-                            <span className="ml-1.5 text-xs text-slate-500">VM {job.target_vmid}</span>
-                          )}
-                        </div>
-                        <p className="text-xs text-slate-500 mt-0.5">{job.name}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] font-medium text-slate-300 uppercase">
-                          {job.source_type}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-400 text-xs">{job.storage_name || '—'}</td>
-                      <td className="px-4 py-3">
-                        <span className="text-slate-300 text-xs">{formatRelativeTime(job.last_run_at)}</span>
-                        {job.overdue && (
-                          <span className="ml-1.5 text-[10px] text-amber-400 font-medium">OVERDUE</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-slate-400">
-                        {formatDuration(job.last_duration_sec)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-xs text-slate-400">
-                        {formatBytes(job.last_size_bytes)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-xs text-slate-400">
-                        {job.expected_frequency_hours}h
-                      </td>
-                    </tr>
-                    {isExpanded && (
-                      <tr key={`detail-${job.id}`} className="border-b border-white/[0.06]">
-                        <td colSpan={9} className="p-0">
-                          <JobHistory jobId={job.id} />
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-              {!isLoading && jobs.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-sm text-slate-500">
-                    No backup jobs found. Configure integrations to start monitoring backups.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </GlassCard>
+                          {job.overdue && <StatusPill status="warning" size="sm" className="ml-1.5">Overdue</StatusPill>}
+                        </Td>
+                        <Td numeric muted>{formatDuration(job.last_duration_sec)}</Td>
+                        <Td numeric muted>{formatBytes(job.last_size_bytes)}</Td>
+                        <Td numeric muted>{job.expected_frequency_hours}h</Td>
+                      </Tr>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableContainer>
+          )}
+        </QueryState>
+      </Card>
+
+      <SidePanel
+        open={selected !== null}
+        onClose={() => setSelected(null)}
+        title={selected?.target_name ?? 'Backup job'}
+        ariaLabel={`Backup history ${selected?.target_name ?? ''}`}
+        meta={selected ? `${selected.name} · ${selected.source_type} · every ${selected.expected_frequency_hours}h` : undefined}
+      >
+        {selected && (
+          <>
+            {selected.last_error && (
+              <p role="alert" className="mb-4 break-words rounded-ctl border border-down/30 bg-down-soft px-3 py-2 text-meta text-down">
+                Last error: {selected.last_error}
+              </p>
+            )}
+            <JobHistory jobId={selected.id} />
+          </>
+        )}
+      </SidePanel>
     </div>
   );
 }
 
-/* ─── Inline history detail ─── */
+/* ─── History detail ─── */
 
 function JobHistory({ jobId }: { jobId: number }) {
-  const { data: raw, isLoading } = useQuery<{ entries: HistoryEntry[] }>({
+  const query = useQuery<{ entries: HistoryEntry[] }>({
     queryKey: ['backup-history', jobId],
     queryFn: () => get(`/api/backups/${jobId}/history`),
     staleTime: 5 * 60_000,
   });
-  const data = raw?.entries;
+  const data = query.data?.entries;
 
-  if (isLoading) {
+  if (query.isLoading) {
     return (
-      <div className="px-6 py-4 bg-white/[0.02] space-y-2">
-        <Skeleton className="h-4 w-64" />
-        <Skeleton className="h-4 w-48" />
-        <Skeleton className="h-4 w-56" />
+      <div className="space-y-2" aria-busy="true" aria-label="Loading history">
+        <Skeleton className="h-6 w-full" />
+        <Skeleton className="h-6 w-full" />
+        <Skeleton className="h-6 w-3/4" />
       </div>
     );
+  }
+
+  if (query.isError && !data) {
+    return <QueryErrorState compact error={query.error} onRetry={query.refetch} title="Could not load history" />;
   }
 
   if (!data || data.length === 0) {
-    return (
-      <div className="px-6 py-4 bg-white/[0.02]">
-        <p className="text-sm text-slate-500">No history available for this job.</p>
-      </div>
-    );
+    return <EmptyState compact title="No history yet" description="No runs have been recorded for this job." />;
   }
 
   return (
-    <div className="px-6 py-4 bg-white/[0.02]">
-      <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-3">
-        Recent Backup History
-      </h4>
-      <div className="space-y-2">
-        {data.slice(0, 10).map((entry, i) => (
-          <div key={i} className="flex items-center gap-4 text-xs">
-            <StatusDot status={statusDotStatus(entry.status)} />
-            <span className="text-slate-400 w-32 shrink-0">{formatRelativeTime(entry.timestamp)}</span>
-            <Badge variant="severity" severity={statusSeverity(entry.status)}>
-              {entry.status}
-            </Badge>
-            <span className="font-mono text-slate-400">{formatDuration(entry.duration_sec)}</span>
-            <span className="font-mono text-slate-400">{formatBytes(entry.size_bytes)}</span>
-            {entry.error && (
-              <span className="text-red-400 truncate max-w-xs" title={entry.error}>
-                {entry.error}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
+    <section aria-labelledby="backup-history-title">
+      <h3 id="backup-history-title" className="mb-2 text-ui font-medium text-fg">Recent runs</h3>
+      <TableContainer>
+        <Table density="compact">
+          <THead>
+            <Tr>
+              <Th>Status</Th>
+              <Th>When</Th>
+              <Th numeric>Duration</Th>
+              <Th numeric>Size</Th>
+            </Tr>
+          </THead>
+          <TBody>
+            {data.slice(0, 10).map((entry, i) => {
+              const st = jobState(entry.status);
+              return (
+                <Tr key={i}>
+                  <Td>
+                    <StatusPill status={st.status} size="sm">{st.label}</StatusPill>
+                  </Td>
+                  <Td muted className="whitespace-nowrap">
+                    <time dateTime={entry.timestamp} title={new Date(entry.timestamp).toLocaleString()}>{formatRelativeTime(entry.timestamp)}</time>
+                    {entry.error && <span className="block max-w-[220px] truncate text-micro text-down" title={entry.error}>{entry.error}</span>}
+                  </Td>
+                  <Td numeric muted>{formatDuration(entry.duration_sec)}</Td>
+                  <Td numeric muted>{formatBytes(entry.size_bytes)}</Td>
+                </Tr>
+              );
+            })}
+          </TBody>
+        </Table>
+      </TableContainer>
+    </section>
   );
 }
