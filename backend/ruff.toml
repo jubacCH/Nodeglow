@@ -1,0 +1,29 @@
+# Ruff lint configuration for the backend.
+#
+# This is a ratchet, not a style guide: the rule set only contains checks that
+# catch real bugs (syntax errors, undefined names, broken comparisons) plus
+# unused imports. It passes on the current code; widen it one rule family at a
+# time, fixing the findings in the same change.
+#
+# Run locally:  python -m ruff check .   (from backend/)
+
+target-version = "py312"
+line-length = 120
+extend-exclude = ["static", "templates"]
+
+[lint]
+select = [
+    "E9",    # syntax / IO errors
+    "F63",   # invalid comparisons (`is` with literals, ...)
+    "F7",    # misplaced statements (return outside function, ...)
+    "F82",   # undefined names
+    "F401",  # unused imports
+]
+
+[lint.per-file-ignores]
+# Tests import fixtures/helpers for side effects and keep spare imports around.
+"tests/**" = ["F401"]
+# TODO(ratchet): drop these once the unused imports are removed. They live in
+# files other work is touching right now, so they are ignored instead of fixed.
+"models/__init__.py" = ["F401"]
+"routers/api_v1.py" = ["F401"]

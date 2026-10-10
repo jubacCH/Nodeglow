@@ -18,7 +18,6 @@ from orchestrator import (  # noqa: E402
     DEFAULT_STEPS,
     STEP_NAMES,
     StepError,
-    UpdateState,
     idle_state,
     list_backups,
     prune_backups,
