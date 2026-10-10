@@ -110,15 +110,71 @@ async def scan_all_hosts():
     return {"ok": True}
 
 
-@app.get("/health")
-async def health():
+_READY_CHECK_TIMEOUT = 3.0  # seconds per dependency; probes must answer fast
+
+
+async def _check_postgres() -> bool:
+    import asyncio
     from sqlalchemy import text as sa_text
-    try:
+
+    async def _ping():
         async with AsyncSessionLocal() as db:
             await db.execute(sa_text("SELECT 1"))
+
+    try:
+        await asyncio.wait_for(_ping(), timeout=_READY_CHECK_TIMEOUT)
+        return True
+    except (OSError, SQLAlchemyError, asyncio.TimeoutError):
+        return False
+    except Exception:
+        return False
+
+
+async def _check_clickhouse() -> bool:
+    import asyncio
+    from services import clickhouse_client as _ch
+    try:
+        # get_client() retries with back-off on a cold start; bound it so a
+        # probe never hangs for the whole retry ladder.
+        await asyncio.wait_for(_ch.query_scalar("SELECT 1"), timeout=_READY_CHECK_TIMEOUT)
+        return True
+    except Exception:
+        return False
+
+
+@app.get("/livez")
+async def livez():
+    """Liveness: the process is up and serving. No dependency checks — a
+    database outage must not make an orchestrator restart a healthy process."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz():
+    """Readiness: Postgres and ClickHouse both answer. 503 otherwise."""
+    from fastapi.responses import JSONResponse
+    pg_ok = await _check_postgres()
+    ch_ok = await _check_clickhouse()
+    ok = pg_ok and ch_ok
+    return JSONResponse(
+        {
+            "status": "ok" if ok else "error",
+            "db": "connected" if pg_ok else "connection failed",
+            "clickhouse": "connected" if ch_ok else "connection failed",
+        },
+        status_code=200 if ok else 503,
+    )
+
+
+@app.get("/health")
+async def health():
+    """Backwards-compatible health check (Postgres only, same body as before).
+    Now answers 503 instead of 200 when the database is unreachable, so a
+    monitor that only looks at the status code sees the outage."""
+    from fastapi.responses import JSONResponse
+    if await _check_postgres():
         return {"status": "ok", "db": "connected"}
-    except (OSError, SQLAlchemyError):
-        return {"status": "error", "db": "connection failed"}
+    return JSONResponse({"status": "error", "db": "connection failed"}, status_code=503)
 
 
 @app.get("/metrics")
@@ -239,36 +295,49 @@ async def tasks_api():
         }
 
 
+_MUTATING_METHODS = ("POST", "PUT", "DELETE", "PATCH")
+
+# Paths that skip the middleware's auth entirely. Each one authenticates by
+# other means (agent/install tokens, the login itself) or is a probe.
+_AUTH_SKIP_EXACT = ("/health", "/livez", "/readyz", "/metrics")
+_AUTH_SKIP_PREFIXES = (
+    "/static/", "/api/agent/", "/api/auth/",
+    "/api/docs", "/api/redoc", "/api/openapi",
+    "/ws/", "/install/", "/agents/download/",
+)
+
+# Mutations a read-only user may still perform: only on their own account.
+# (Login/logout live under /api/auth/, which never reaches the role check.)
+_READONLY_MUTATION_ALLOWLIST = frozenset({"/users/me/password"})
+
+
 @app.middleware("http")
 async def inject_globals(request: Request, call_next):
+    path = request.url.path
     # Skip auth entirely for these paths
-    _skip = (
-        request.url.path.startswith("/static/") or request.url.path == "/health"
-        or request.url.path == "/metrics"
-        or request.url.path.startswith("/api/agent/")
-        or request.url.path.startswith("/api/auth/")
-        or request.url.path.startswith("/api/docs") or request.url.path.startswith("/api/redoc")
-        or request.url.path.startswith("/api/openapi")
-        or request.url.path.startswith("/ws/")
-        or request.url.path.startswith("/install/") or request.url.path.startswith("/agents/download/")
-    )
-    if _skip:
+    if path in _AUTH_SKIP_EXACT or path.startswith(_AUTH_SKIP_PREFIXES):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
-    is_api = request.url.path.startswith("/api/")
+    is_api = path.startswith("/api/")
+    is_api_v1 = path.startswith("/api/v1/")
+    is_mutating = request.method in _MUTATING_METHODS
 
     # Generate CSRF token for this request (sets cookie on first visit)
     from csrf import generate_csrf_token, set_csrf_cookie, validate_csrf, csrf_error_response
     generate_csrf_token(request)
 
+    # A request carrying X-API-Key is authenticated by that key ONLY — the
+    # session cookie is never consulted for it (see below). That is what makes
+    # skipping CSRF for it safe: a forged cross-site request riding on the
+    # victim's cookie gains nothing when the cookie is ignored.
+    has_api_key = bool(request.headers.get("X-API-Key"))
+
     # CSRF protection for state-changing methods
     # Skip for: API-key-authenticated requests, /api/v1/ (has own API key auth layer).
     # Header-only — query-string keys are rejected by the auth layer anyway.
-    has_api_key = bool(request.headers.get("X-API-Key"))
-    is_api_v1 = request.url.path.startswith("/api/v1/")
-    if request.method in ("POST", "PUT", "DELETE", "PATCH") and not has_api_key and not is_api_v1:
+    if is_mutating and not has_api_key and not is_api_v1:
         content_type = request.headers.get("content-type", "")
         form_data = None
         if "form" in content_type:
@@ -278,7 +347,7 @@ async def inject_globals(request: Request, call_next):
         if not validate_csrf(request, form_data):
             return csrf_error_response(request)
 
-    is_public = request.url.path.startswith("/setup")
+    is_public = path.startswith("/setup")
 
     if not is_public:
         from database import is_setup_complete as _is_setup, get_current_user, AsyncSessionLocal as _ASL
@@ -289,14 +358,21 @@ async def inject_globals(request: Request, call_next):
                     return _JSON({"error": "Setup not complete"}, status_code=503)
                 from fastapi.responses import RedirectResponse as _RR
                 return _RR(url="/setup", status_code=302)
-        async with _ASL() as auth_db:
-            user = await get_current_user(request, auth_db)
+        user = None
+        if not has_api_key:
+            async with _ASL() as auth_db:
+                user = await get_current_user(request, auth_db)
         if user is None:
-            # /api/v1/ has its own auth (API key) — let it through
-            if is_api and not request.url.path.startswith("/api/v1/"):
+            if is_api_v1 and has_api_key:
+                # The route's require_api_key dependency validates the key.
+                request.state.current_user = None
+                return await call_next(request)
+            if is_api:
+                # Includes /api/v1/* without a key: refused here even when a
+                # route forgot its auth dependency (defence in depth).
                 return _JSON({"error": "Unauthorized"}, status_code=401)
             # Non-API HTML routes: redirect unauthenticated users to login
-            if not is_api and request.url.path not in ("/login", "/favicon.ico"):
+            if path not in ("/login", "/favicon.ico"):
                 from fastapi.responses import RedirectResponse as _RR
                 return _RR(url="/login", status_code=302)
             request.state.current_user = None
@@ -304,11 +380,12 @@ async def inject_globals(request: Request, call_next):
             return response
         request.state.current_user = user
         role = getattr(user, "role", "admin") or "admin"
-        if is_api:
-            if request.url.path.startswith("/api/users") \
-                    and role != "admin" and request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        if is_mutating:
+            if path.startswith("/api/users") and role != "admin":
                 return _JSON({"error": "Admin access required"}, status_code=403)
-            if role == "readonly" and request.method in ("POST", "PUT", "DELETE", "PATCH"):
+            # Read-only means read-only on every path, not only under /api/:
+            # the frontend also proxies /rules/*, /settings/*, /hosts/api/* …
+            if role == "readonly" and path not in _READONLY_MUTATION_ALLOWLIST:
                 return _JSON({"error": "Read-only access"}, status_code=403)
     else:
         request.state.current_user = None

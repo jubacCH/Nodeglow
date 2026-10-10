@@ -117,6 +117,9 @@ async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) 
 
                 if dirty:
                     await db.commit()
+                # Lets the audit log attribute actions to the key: an
+                # API-key request has no session user.
+                request.state.api_key = api_key
                 return api_key
         raise HTTPException(status_code=401, detail="Invalid or disabled API key.")
 

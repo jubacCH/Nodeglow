@@ -6,17 +6,27 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.alert_rule import AlertRule
+from models.api_key import ApiKey
 from models.base import get_db
+from routers.api_v1 import require_api_key, require_editor
 from services import rules as rules_svc
+from services.audit import log_action
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Every route here needs an identity. The /api/v1/* ones are let through the
+# HTTP middleware only with an X-API-Key header or a session, and this router
+# must check either itself — require_api_key does both. Mutations need editor.
 
 
 # ── Page ─────────────────────────────────────────────────────────────────────
 
 @router.get("/api/v1/rules")
-async def rules_list(db: AsyncSession = Depends(get_db)):
+async def rules_list(
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
     all_rules = await rules_svc.get_all_rules(db)
     sources = await rules_svc.get_source_options(db)
     operators = [
@@ -43,7 +53,11 @@ async def rules_list(db: AsyncSession = Depends(get_db)):
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
 @router.post("/rules/add")
-async def add_rule(request: Request, db: AsyncSession = Depends(get_db)):
+async def add_rule(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
     form = await request.form()
     # Collect notify_channels from checkboxes (multi-value form field)
     channels = form.getlist("notify_channels") if hasattr(form, "getlist") else []
@@ -68,28 +82,49 @@ async def add_rule(request: Request, db: AsyncSession = Depends(get_db)):
         enabled=True,
     )
     db.add(rule)
+    await db.flush()
+    await log_action(db, request, "rule.create", "rule", rule.id, rule.name)
     await db.commit()
     return RedirectResponse(url="/rules?saved=1", status_code=303)
 
 
 @router.post("/api/v1/rules/{rule_id}/toggle")
-async def toggle_rule(rule_id: int, db: AsyncSession = Depends(get_db)):
+async def toggle_rule(
+    request: Request,
+    rule_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
     rule = await rules_svc.get_rule(db, rule_id)
     if not rule:
         return JSONResponse({"error": "Not found"}, status_code=404)
     rule.enabled = not rule.enabled
+    await log_action(db, request, "rule.toggle", "rule", rule.id, rule.name,
+                     details={"enabled": rule.enabled})
     await db.commit()
     return JSONResponse({"ok": True, "enabled": rule.enabled})
 
 
 @router.post("/api/v1/rules/{rule_id}/delete")
-async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_rule(
+    request: Request,
+    rule_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
     await rules_svc.delete_rule(db, rule_id)
+    await log_action(db, request, "rule.delete", "rule", rule_id)
+    await db.commit()
     return JSONResponse({"ok": True})
 
 
 @router.post("/rules/{rule_id}/edit")
-async def edit_rule(request: Request, rule_id: int, db: AsyncSession = Depends(get_db)):
+async def edit_rule(
+    request: Request,
+    rule_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
     rule = await rules_svc.get_rule(db, rule_id)
     if not rule:
         return RedirectResponse(url="/rules", status_code=303)
@@ -111,6 +146,7 @@ async def edit_rule(request: Request, rule_id: int, db: AsyncSession = Depends(g
     rule.message_template = str(form.get("message_template", "")).strip() or None
     rule.cooldown_minutes = int(form.get("cooldown_minutes", 5))
     rule.required_consecutive = int(form.get("required_consecutive", 2))
+    await log_action(db, request, "rule.update", "rule", rule.id, rule.name)
     await db.commit()
     return RedirectResponse(url="/rules?saved=1", status_code=303)
 
