@@ -304,9 +304,11 @@ export function TopologyMap({ trees, orphans }: { trees: TreeNode[]; orphans: To
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const padding = 40;
-    const scale = Math.min((rect.width - padding * 2) / totalW, (HEIGHT - padding * 2) / totalH, 1.5);
+    const fit = Math.min((rect.width - padding * 2) / totalW, (HEIGHT - padding * 2) / totalH, 1.5);
+    // Below ~60 % labels are unreadable: keep them legible and let the user pan.
+    const scale = Math.max(fit, 0.6);
     setZoom(scale);
-    setPan({ x: (rect.width - totalW * scale) / 2, y: padding });
+    setPan({ x: scale > fit ? padding : (rect.width - totalW * scale) / 2, y: padding });
   }, [totalW, totalH]);
 
   useEffect(() => { fitView(); }, [fitView]);

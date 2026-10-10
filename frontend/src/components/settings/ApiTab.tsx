@@ -189,7 +189,7 @@ export function ApiTab() {
           }
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table>
                 <THead>
                   <Tr>
