@@ -7,7 +7,11 @@ import { cn } from '@/lib/utils';
 import { useThemeStore } from '@/stores/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useGlowStore } from '@/stores/glow';
-import { useDashboard, useNavCounts } from '@/hooks/queries/useDashboard';
+import {
+  useNavCounts, useSystemSummary, useHostSearch, useCachedOfflineCount,
+} from '@/hooks/queries/useDashboard';
+import { useIntegrations } from '@/hooks/queries/useIntegrations';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
   Bot, Scan, Radio, ShieldCheck, KeyRound, ChevronDown,
@@ -95,17 +99,22 @@ export function Sidebar() {
   const [search, setSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const { data: dashData } = useDashboard();
+  // Lightweight sources only — the full /api/dashboard payload stays on the
+  // dashboard page instead of being polled from every page via the sidebar.
   const { data: navCounts } = useNavCounts();
+  const { data: summary } = useSystemSummary();
+  const { data: integrations } = useIntegrations(undefined, { refetchInterval: 60_000 });
+  const offlineCount = useCachedOfflineCount();
+  const debouncedSearch = useDebouncedValue(search, 200);
+  const { data: hostHits } = useHostSearch(debouncedSearch, searchFocused);
 
   // Badge counts for nav items
   const navBadges: Record<string, { count: number; color: string }> = {};
-  if (dashData) {
-    const offlineCount = dashData.offline_count ?? 0;
-    if (offlineCount > 0) navBadges['/hosts'] = { count: offlineCount, color: 'bg-red-500/20 text-red-400' };
-    const activeInc = dashData.active_incidents ?? 0;
-    if (activeInc > 0) navBadges['/alerts'] = { count: activeInc, color: 'bg-red-500/20 text-red-400' };
+  if (offlineCount && offlineCount > 0) {
+    navBadges['/hosts'] = { count: offlineCount, color: 'bg-red-500/20 text-red-400' };
   }
+  const openIncidents = summary?.incidents?.open ?? 0;
+  if (openIncidents > 0) navBadges['/alerts'] = { count: openIncidents, color: 'bg-red-500/20 text-red-400' };
   if (navCounts) {
     const taskCount = navCounts.tasks ?? 0;
     if (taskCount > 0) navBadges['/tasks'] = { count: taskCount, color: 'bg-amber-500/20 text-amber-400' };
@@ -152,11 +161,13 @@ export function Sidebar() {
   // if any is unknown → unknown, else ok. Drives the small dot next to each
   // integration entry in the sidebar.
   const integrationHealthByType: Record<string, 'ok' | 'error' | 'unknown'> = {};
-  if (dashData?.integration_health) {
-    for (const ih of dashData.integration_health) {
+  if (integrations) {
+    for (const ih of integrations) {
+      if (!ih.enabled) continue;
       const prev = integrationHealthByType[ih.type];
       const next: 'ok' | 'error' | 'unknown' =
-        ih.ok === true ? 'ok' : ih.ok === false ? 'error' : 'unknown';
+        ih.status === 'ok' || ih.status === 'standby' ? 'ok'
+          : ih.status === 'error' ? 'error' : 'unknown';
       if (prev === 'error' || next === 'error') {
         integrationHealthByType[ih.type] = 'error';
       } else if (prev === 'unknown' || next === 'unknown') {
@@ -167,24 +178,20 @@ export function Sidebar() {
     }
   }
 
-  // Build dynamic search items from dashboard data (hosts + integration instances)
+  // Dynamic search items: hosts come from the server-side search endpoint,
+  // integration instances from the (already loaded) integrations list.
   const dynamicSearchItems = (() => {
     const items: { label: string; href: string; category?: string }[] = [];
-    if (dashData) {
-      for (const hs of dashData.host_stats ?? []) {
-        items.push({
-          label: hs.host.name || hs.host.hostname,
-          href: `/hosts/${hs.host.id}`,
-          category: 'Host',
-        });
-      }
-      for (const ih of dashData.integration_health ?? []) {
-        items.push({
-          label: `${ih.name} (${ih.label})`,
-          href: ih.single_instance ? `/integration/${ih.type}` : `/integration/${ih.type}/${ih.config_id}`,
-          category: 'Integration',
-        });
-      }
+    for (const h of hostHits ?? []) {
+      items.push({ label: h.name || h.hostname, href: `/hosts/${h.id}`, category: 'Host' });
+    }
+    for (const ih of integrations ?? []) {
+      const typeLabel = integrationTypes.find((t) => t.slug === ih.type)?.label ?? ih.type;
+      items.push({
+        label: `${ih.name} (${typeLabel})`,
+        href: `/integration/${ih.type}/${ih.id}`,
+        category: 'Integration',
+      });
     }
     return items;
   })();
@@ -195,8 +202,9 @@ export function Sidebar() {
     const pageResults = allSearchItems
       .filter((item) => item.label.toLowerCase().includes(q))
       .map((item) => ({ ...item, category: 'Page' }));
+    // Host hits are already filtered server-side (name or hostname).
     const dynResults = dynamicSearchItems
-      .filter((item) => item.label.toLowerCase().includes(q));
+      .filter((item) => item.category === 'Host' || item.label.toLowerCase().includes(q));
     return [...pageResults, ...dynResults].slice(0, 12);
   })();
 
