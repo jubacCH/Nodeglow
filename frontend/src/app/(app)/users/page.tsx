@@ -1,18 +1,22 @@
 'use client';
 
-import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Button } from '@/components/ui/Button';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { Modal } from '@/components/ui/Modal';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, post, patch, del, apiErrorBody, apiErrorMessage } from '@/lib/api';
-import { useIsAdmin, useUser } from '@/stores/auth';
-import { Plus, Trash2, Key, ShieldOff } from 'lucide-react';
+import { KeyRound, Plus, ShieldOff, Trash2, Users } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Button, IconButton } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useEffect, useState } from 'react';
-import { useToastStore } from '@/stores/toast';
+import { Field, Input, Select } from '@/components/ui/Field';
+import { Modal } from '@/components/ui/Modal';
+import { QueryState } from '@/components/ui/QueryState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '@/components/ui/Table';
+import { Tag } from '@/components/ui/Tag';
 import { useConfirm } from '@/hooks/useConfirm';
+import { apiErrorBody, apiErrorMessage, del, get, patch, post } from '@/lib/api';
+import { useIsAdmin, useUser } from '@/stores/auth';
+import { useToastStore } from '@/stores/toast';
 
 interface UserInfo {
   id: number;
@@ -24,6 +28,13 @@ interface UserInfo {
 }
 
 const ROLES = ['admin', 'editor', 'readonly'] as const;
+const ROLE_HINT = 'Admin: everything incl. settings and users · Editor: change monitoring objects · Read-only: view only';
+
+function ErrorNote({ children }: { children: string }) {
+  return (
+    <p role="alert" className="rounded-ctl border border-down/30 bg-down-soft px-3 py-2 text-ui text-down">{children}</p>
+  );
+}
 
 export default function UsersPage() {
   useEffect(() => { document.title = 'Users | Nodeglow'; }, []);
@@ -43,8 +54,11 @@ export default function UsersPage() {
   const [error, setError] = useState('');
   const toast = useToastStore((s) => s.show);
   const { confirm, ConfirmDialogElement } = useConfirm();
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const currentPwRef = useRef<HTMLInputElement>(null);
+  const newPwRef = useRef<HTMLInputElement>(null);
 
-  const { data: users, isLoading } = useQuery({
+  const users = useQuery({
     queryKey: ['users'],
     queryFn: () => get<UserInfo[]>('/api/users'),
     enabled: isAdmin,
@@ -52,7 +66,13 @@ export default function UsersPage() {
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] });
 
-  async function handleCreate() {
+  function closeAdd() {
+    setShowAdd(false);
+    setError('');
+  }
+
+  async function handleCreate(e?: FormEvent) {
+    e?.preventDefault();
     setError('');
     if (!newUser.username.trim() || !newUser.password) {
       setError('Username and password required');
@@ -64,8 +84,9 @@ export default function UsersPage() {
       setShowAdd(false);
       setNewUser({ username: '', password: '', role: 'readonly' });
       refresh();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to create user');
+      toast('User created', 'success');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create user');
     } finally {
       setSaving(false);
     }
@@ -81,11 +102,16 @@ export default function UsersPage() {
     }
   }
 
-  async function handleDelete(userId: number) {
-    const ok = await confirm({ title: 'Delete user', description: 'Delete this user? This action cannot be undone.', confirmLabel: 'Delete', variant: 'danger' });
+  async function handleDelete(u: UserInfo) {
+    const ok = await confirm({
+      title: 'Delete user',
+      description: `Delete "${u.username}"? They are signed out and cannot log in again. This cannot be undone.`,
+      confirmLabel: 'Delete user',
+      variant: 'danger',
+    });
     if (!ok) return;
     try {
-      await del(`/api/users/${userId}`);
+      await del(`/api/users/${u.id}`);
       refresh();
       toast('User deleted', 'success');
     } catch {
@@ -100,7 +126,8 @@ export default function UsersPage() {
     setPwError('');
   }
 
-  async function handleResetPassword() {
+  async function handleResetPassword(e?: FormEvent) {
+    e?.preventDefault();
     if (!resetPwUser || !newPw) return;
     if (resetIsSelf && !currentPw) {
       setPwError('Enter your current password.');
@@ -115,12 +142,12 @@ export default function UsersPage() {
       );
       openResetPassword(null);
       toast(resetIsSelf ? 'Password changed' : 'Password reset', 'success');
-    } catch (e) {
-      const body = apiErrorBody(e);
+    } catch (err) {
+      const body = apiErrorBody(err);
       setPwError(
         body?.code === 'current_password_required'
           ? (body.error || 'Your current password is missing or wrong.')
-          : apiErrorMessage(e, 'Failed to reset password'),
+          : apiErrorMessage(err, 'Failed to reset password'),
       );
     } finally {
       setSaving(false);
@@ -130,14 +157,14 @@ export default function UsersPage() {
   if (!isAdmin) {
     return (
       <div>
-        <PageHeader title="Users" description="User management" />
-        <GlassCard>
+        <PageHeader title="Users" description="Accounts and roles" />
+        <Card>
           <EmptyState
             icon={ShieldOff}
             title="Admin access required"
             description="You need an admin role to manage users. Contact your administrator to request access."
           />
-        </GlassCard>
+        </Card>
       </div>
     );
   }
@@ -146,183 +173,166 @@ export default function UsersPage() {
     <div>
       <PageHeader
         title="Users"
-        description="User management"
+        description={users.data ? `${users.data.length} account${users.data.length === 1 ? '' : 's'} · local and LDAP` : 'Accounts and roles'}
         actions={
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            <Plus size={16} /> Add User
+          <Button onClick={() => setShowAdd(true)}>
+            <Plus size={16} aria-hidden="true" /> Add user
           </Button>
         }
       />
 
-      <GlassCard>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06]">
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Username</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Role</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Created</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <tr key={i} className="border-b border-white/[0.06]">
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-32" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-24" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16 ml-auto" /></td>
-                  </tr>
-                ))}
-              {users?.map((u) => {
-                return (
-                  <tr key={u.id} className="border-b border-white/[0.06] hover:bg-white/[0.06]">
-                    <td className="px-4 py-3 text-slate-200 font-medium">
-                      <span className="flex items-center gap-2">
-                        {u.display_name || u.username}
-                        {u.auth_source === 'ldap' && (
-                          <span className="px-1.5 py-0.5 rounded bg-violet-500/15 text-[10px] font-medium text-violet-400">LDAP</span>
-                        )}
-                      </span>
-                      {u.display_name && u.display_name !== u.username && (
-                        <span className="text-[10px] text-slate-500">{u.username}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <select
-                        value={u.role}
-                        onChange={(e) => handleRoleChange(u.id, e.target.value)}
-                        className="bg-[var(--ng-surface)] border border-white/[0.08] rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r} className="bg-[var(--ng-surface)] text-[var(--ng-text-primary)]">{r}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-500">
-                      {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => openResetPassword(u)}
-                          className="p-1.5 rounded-md text-slate-400 hover:text-sky-400 hover:bg-white/[0.06] transition-colors"
-                          title={me?.id === u.id ? 'Change my password' : 'Reset password'}
-                          aria-label={me?.id === u.id ? 'Change my password' : `Reset password for ${u.username}`}
-                        >
-                          <Key size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(u.id)}
-                          className="p-1.5 rounded-md text-slate-400 hover:text-red-400 hover:bg-white/[0.06] transition-colors"
-                          title="Delete user"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </GlassCard>
-
-      {/* Add User Modal */}
-      <Modal open={showAdd} onClose={() => { setShowAdd(false); setError(''); }} title="Add User">
-        <div className="space-y-4">
-          {error && (
-            <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">{error}</p>
+      <Card padding="none">
+        <QueryState
+          query={users}
+          errorTitle="Could not load users"
+          loading={
+            <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading">
+              {[0, 1, 2].map((i) => <Skeleton key={i} className="h-9 w-full" />)}
+            </div>
+          }
+          empty={<EmptyState icon={Users} title="No users" description="Add the first account to give someone access." />}
+        >
+          {(rows) => (
+            <TableContainer>
+              <Table>
+                <THead>
+                  <Tr>
+                    <Th className="pl-5">User</Th>
+                    <Th>Role</Th>
+                    <Th className="max-sm:hidden">Created</Th>
+                    <Th className="pr-5 text-right"><span className="sr-only">Actions</span></Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {rows.map((u) => {
+                    const self = me?.id === u.id;
+                    return (
+                      <Tr key={u.id}>
+                        <Td className="py-2 pl-5">
+                          <span className="flex min-w-0 flex-wrap items-center gap-2">
+                            <span className="font-medium">{u.display_name || u.username}</span>
+                            {u.auth_source === 'ldap' && <Tag>LDAP</Tag>}
+                            {self && <Tag>You</Tag>}
+                          </span>
+                          {u.display_name && u.display_name !== u.username && (
+                            <span className="block font-mono text-meta text-fg-3">{u.username}</span>
+                          )}
+                        </Td>
+                        <Td>
+                          <Select
+                            aria-label={`Role of ${u.username}`}
+                            value={u.role}
+                            onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                            className="h-[30px] min-h-0 w-[130px] py-0 text-meta"
+                          >
+                            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                          </Select>
+                        </Td>
+                        <Td muted className="num text-meta max-sm:hidden">
+                          {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
+                        </Td>
+                        <Td className="pr-5">
+                          <div className="flex items-center justify-end gap-1">
+                            <IconButton
+                              size="sm"
+                              onClick={() => openResetPassword(u)}
+                              title={self ? 'Change my password' : 'Reset password'}
+                              aria-label={self ? 'Change my password' : `Reset password for ${u.username}`}
+                            >
+                              <KeyRound size={14} aria-hidden="true" />
+                            </IconButton>
+                            <IconButton
+                              size="sm"
+                              onClick={() => handleDelete(u)}
+                              title="Delete user"
+                              aria-label={`Delete user ${u.username}`}
+                              className="hover:text-down"
+                            >
+                              <Trash2 size={14} aria-hidden="true" />
+                            </IconButton>
+                          </div>
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableContainer>
           )}
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Username</label>
-            <input
-              type="text"
+        </QueryState>
+      </Card>
+      <p className="mt-3 text-meta text-fg-3">{ROLE_HINT}</p>
+
+      {/* Add user */}
+      <Modal open={showAdd} onClose={closeAdd} title="Add user" initialFocus={usernameRef}>
+        <form onSubmit={handleCreate} className="space-y-4" noValidate>
+          {error && <ErrorNote>{error}</ErrorNote>}
+          <Field label="Username" required>
+            <Input
+              ref={usernameRef}
+              autoComplete="off"
               value={newUser.username}
               onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
-              className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-              autoFocus
             />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Password</label>
-            <input
+          </Field>
+          <Field label="Password" required>
+            <Input
               type="password"
+              autoComplete="new-password"
               value={newUser.password}
               onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-              className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
             />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Role</label>
-            <select
-              value={newUser.role}
-              onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
-              className="w-full px-3 py-2 rounded-md bg-[var(--ng-surface)] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r} className="bg-[var(--ng-surface)] text-[var(--ng-text-primary)]">{r}</option>
-              ))}
-            </select>
-          </div>
+          </Field>
+          <Field label="Role" hint={ROLE_HINT}>
+            <Select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}>
+              {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+            </Select>
+          </Field>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => { setShowAdd(false); setError(''); }}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={handleCreate} disabled={saving}>
-              {saving ? 'Creating...' : 'Create User'}
-            </Button>
+            <Button variant="ghost" size="sm" onClick={closeAdd}>Cancel</Button>
+            <Button type="submit" size="sm" loading={saving}>Create user</Button>
           </div>
-        </div>
+        </form>
       </Modal>
 
-      {/* Reset Password Modal */}
+      {/* Reset / change password */}
       <Modal
         open={!!resetPwUser}
         onClose={() => openResetPassword(null)}
-        title={resetIsSelf ? 'Change my password' : `Reset Password — ${resetPwUser?.username}`}
+        title={resetIsSelf ? 'Change my password' : `Reset password — ${resetPwUser?.username ?? ''}`}
+        initialFocus={resetIsSelf ? currentPwRef : newPwRef}
       >
-        <div className="space-y-4">
-          {pwError && (
-            <p role="alert" className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">{pwError}</p>
-          )}
+        <form onSubmit={handleResetPassword} className="space-y-4" noValidate>
+          {pwError && <ErrorNote>{pwError}</ErrorNote>}
           {resetIsSelf && (
-            <div>
-              <label htmlFor="current-password" className="block text-xs text-slate-400 mb-1">Current Password</label>
-              <input
+            <Field label="Current password">
+              <Input
+                ref={currentPwRef}
                 id="current-password"
                 type="password"
                 value={currentPw}
                 onChange={(e) => setCurrentPw(e.target.value)}
                 autoComplete="current-password"
-                className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                autoFocus
               />
-            </div>
+            </Field>
           )}
-          <div>
-            <label htmlFor="new-password" className="block text-xs text-slate-400 mb-1">New Password</label>
-            <input
+          <Field label="New password">
+            <Input
+              ref={newPwRef}
               id="new-password"
               type="password"
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
               autoComplete="new-password"
-              className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-              autoFocus={!resetIsSelf}
             />
-          </div>
+          </Field>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => openResetPassword(null)}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={handleResetPassword} disabled={saving || !newPw || (resetIsSelf && !currentPw)}>
-              {saving ? 'Saving...' : resetIsSelf ? 'Change Password' : 'Reset Password'}
+            <Button variant="ghost" size="sm" onClick={() => openResetPassword(null)}>Cancel</Button>
+            <Button type="submit" size="sm" loading={saving} disabled={saving || !newPw || (resetIsSelf && !currentPw)}>
+              {resetIsSelf ? 'Change password' : 'Reset password'}
             </Button>
           </div>
-        </div>
+        </form>
       </Modal>
       {ConfirmDialogElement}
     </div>
