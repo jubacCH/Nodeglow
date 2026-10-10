@@ -1180,20 +1180,26 @@ async def run_daily_ai_summary():
             return
 
         # Which channels should receive the summary (default: all)
-        channels_csv = await get_setting(db, "daily_ai_summary_channels", "telegram,discord,webhook,email")
+        from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
+        from notification_channels import load_config as load_channel_config
+        from services.channel_secrets import reveal
+        channels_csv = (await get_setting(db, "daily_ai_summary_channels", "")
+                        or DAILY_SUMMARY_DEFAULT_CHANNELS)
         selected = {c.strip() for c in channels_csv.split(",") if c.strip()}
 
-        tg_token = await get_setting(db, "telegram_bot_token", "")
+        tg_token = reveal(await get_setting(db, "telegram_bot_token", ""))
         tg_chat = await get_setting(db, "telegram_chat_id", "")
-        dc_webhook = await get_setting(db, "discord_webhook_url", "")
-        wh_url = await get_setting(db, "webhook_url", "")
-        wh_secret = await get_setting(db, "webhook_secret", "")
+        dc_webhook = reveal(await get_setting(db, "discord_webhook_url", ""))
+        wh_url = reveal(await get_setting(db, "webhook_url", ""))
+        wh_secret = reveal(await get_setting(db, "webhook_secret", ""))
         smtp_host = await get_setting(db, "smtp_host", "")
         smtp_user = await get_setting(db, "smtp_user", "")
         smtp_pw_enc = await get_setting(db, "smtp_password", "")
         smtp_to = await get_setting(db, "smtp_to", "")
         smtp_port = int(await get_setting(db, "smtp_port", "587"))
         smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
+        from database import decrypt_value as _decrypt
+        channel_cfg = await load_channel_config(db, get_setting, _decrypt)
 
     # Telegram
     if "telegram" in selected and tg_token and tg_chat:
@@ -1248,6 +1254,16 @@ async def run_daily_ai_summary():
         except Exception as exc:
             logger.error("Daily AI summary Email failed: %s", exc)
             await _log_notification("email", title, summary[:200], "info", "failed", str(exc))
+
+    # Teams / Slack / ntfy
+    from notification_channels import send_to_selected
+    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary):
+        if exc is None:
+            await _log_notification(ch, title, summary[:200], "info", "sent")
+            sent = True
+        else:
+            logger.error("Daily AI summary %s failed: %s", ch, exc)
+            await _log_notification(ch, title, summary[:200], "info", "failed", str(exc))
 
     # ── Mark as sent (duplicate protection) ───────────────────────────────
     if sent:
