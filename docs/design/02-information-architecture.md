@@ -610,18 +610,25 @@ Skizze (Desktop, 1440 px):
 
 ### 7.2 Die acht Dashboard-Fragen
 
-Die acht Fragen aus dem Brief sind hier als Arbeitsformulierung festgehalten (sie liegen nicht im Repository). Bei Abweichungen vom Original gilt das Mapping sinngemäss.
+Die acht Fragen aus dem Brief, mit der Fläche, die sie beantwortet, und den Daten dahinter.
 
-| # | Frage | Ebene | Antwortende Fläche | Daten heute (Endpoint) | Lücke → Backend |
+| # | Frage (Brief) | Ebene | Antwortende Fläche | Daten heute (Endpoint) | Lücke → Backend |
 |---|---|---|---|---|---|
-| 1 | Ist gerade alles in Ordnung? | E1 | Statussatz + Host-Statusleiste | `/api/dashboard` (`online_count`, `offline_count`, `host_stats`), `/api/v1/status` | Einheitlicher, probe-bewusster Status mit Zählern je Zustand inkl. Wartung/Unbekannt (B-01, B-02) |
-| 2 | Was braucht jetzt meine Aufmerksamkeit, und kümmert sich schon jemand? | E2 | Offene Incidents, Objekte mit Problemen | `/api/v1/incidents?status=…` (Limit 50), `host_stats` | Multi-Status-Filter und Gesamtzahl (B-04), betroffene Hosts (B-05), Zuständigkeit (B-11) |
-| 3 | Was hat sich seit meinem letzten Besuch geändert? | E2 | „Seit Ihrem letzten Besuch“ | — | Changes-Endpoint und „letzter Besuch“ je Benutzer (B-08, B-10) |
-| 4 | Wie gross ist die Auswirkung (welche Hosts, Standorte)? | E2/E3 | Betroffene Objekte je Incident, Standortkacheln | Topologie `/api/v1/topology`; Incident nur `host_ids_hash` | `host_ids` am Incident (B-05), Standorte (B-14) |
-| 5 | Kann ich den Daten trauen? | E1 | Datenquellen-Zeile, Verbindungsstatus | `integration_health`, `/api/system/status`, Self-Check-Incidents | Probe-Liste mit Frische (B-03), Syslog-Empfangsstatus als Kennzahl, Frische je Integration (B-02) |
-| 6 | Was ist geplant oder bewusst unterdrückt? | E3 | Wartung aktiv/heute | `/api/v1/maintenance-windows`, `/api/v1/hosts?status=maintenance` | Unterdrückte Incidents während Wartung (B-13, optional) |
-| 7 | Was wird bald zum Problem? | E4 | „Bald kritisch“ | `ssl_certs`, `storage_pools.days_until_full` (`/api/dashboard`), `/api/v1/syslog/intelligence` (Trends, Precursors) | Baseline-Reife (B-12); weitere Prognosen [Zukunft] |
-| 8 | Wie entwickelt sich die Zuverlässigkeit? | E4 | Verfügbarkeit vs. Ziel, Incident-Trend, Alert-Qualität | `heatmap_data`, `uptime_ranking`, `incident_trend`, `/api/v1/predictor/eval` | Verfügbarkeitsziel als Einstellung, Verfügbarkeit ohne Wartungszeiten (B-15); SLA-Berichte [ee] |
+| 1 | Ist meine Infrastruktur aktuell gesund? | E1 | Statussatz + Host-Statusleiste | `/api/dashboard` (`online_count`, `offline_count`, `host_stats`), `/api/v1/status` | Einheitlicher, probe-bewusster Status mit Zählern je Zustand inkl. Wartung/Unbekannt (B-01, B-02) |
+| 2 | Welche kritischen Probleme existieren? | E2 | „Braucht Aufmerksamkeit“, nach Schwere sortiert | `/api/v1/incidents?status=…` (Limit 50), `host_stats` | Multi-Status-Filter und Gesamtzahl (B-04) |
+| 3 | Welche Systeme oder Services sind betroffen? | E2/E3 | Betroffene Objekte je Incident, Topologie-Ast | Topologie `/api/v1/topology`; Incident nur `host_ids_hash` | `host_ids` am Incident (B-05), Standorte (B-14) |
+| 4 | Was hat sich seit meinem letzten Besuch verändert? | E2 | „Seit Ihrem letzten Besuch“ | — | Changes-Endpoint und „letzter Besuch“ je Benutzer (B-08, B-10) |
+| 5 | Welche Incidents benötigen Aufmerksamkeit? | E2 | Offene/unquittierte Incidents mit Dauer und Zuständigkeit | `/api/v1/incidents`, Ack-Status | Zuständigkeit und Notizen (B-11) |
+| 6 | Welche Probleme hängen möglicherweise zusammen? | E2/E4 | Beziehungen mit Label (Confirmed / Rule-based / Suspected / Not available yet) | Korrelationsregeln (`services/correlation.py`), Topologie-Parents, Baselines | Beziehungen und Label als eigenes Feld am Incident; Herkunft der Parent-Links (siehe Konzepte B und C) |
+| 7 | Welche Systeme entwickeln sich negativ? | E4 | „Risiken & Trends“: Kapazität, Zertifikate, Baseline-Abweichungen | `ssl_certs`, `storage_pools.days_until_full` (`/api/dashboard`), `/api/v1/syslog/intelligence` (Trends, Precursors) | Baseline-Reife (B-12); weitere Prognosen [Zukunft] |
+| 8 | Was muss ich als Nächstes tun? | E2 | „Nächster Schritt“ je Eintrag, jeweils mit der Datenquelle, aus der er abgeleitet ist | Regelname, betroffene Objekte, Log-Muster | Regelbasierte Schritt-Vorlagen je Incident-Typ; keine KI-Behauptungen ohne Opt-in |
+
+Zwei weitere Fragen, die ein Monitoring-Dashboard zusätzlich beantworten muss:
+
+| Frage | Ebene | Fläche | Daten heute | Lücke |
+|---|---|---|---|---|
+| Kann ich den Daten trauen? | E1 | Datenquellen-Zeile, Verbindungs- und Frischestatus | `integration_health`, `/api/system/status`, Self-Check-Incidents | Probe-Liste mit Frische (B-03), Frische je Integration (B-02) |
+| Was ist geplant oder bewusst unterdrückt? | E3 | Wartung aktiv/heute | `/api/v1/maintenance-windows`, `/api/v1/hosts?status=maintenance` | Unterdrückte Incidents während Wartung (B-13, optional) |
 
 ### 7.3 Was das Dashboard nicht mehr enthält
 
