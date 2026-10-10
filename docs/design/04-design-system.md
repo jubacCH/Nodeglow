@@ -99,7 +99,7 @@ Abweichungen vom Prototyp (wegen WCAG AA, siehe 2.5): `text-3` dunkel `#6E7380 �
 | Display: Seitentitel, grosse Zahlen | Sora 500 (Zahlen) / 600 (Titel), Laufweite −0.03 … −0.045em | `font-display` |
 | Mono: IPs, Regelnamen, Logs | JetBrains Mono 400/500 | `font-mono` |
 
-Geladen über `next/font/google` (selbst gehostet, `display: swap`), Variablen `--font-sora`, `--font-inter-tight`, `--font-jetbrains-mono`; die Tokens `--ng-font-*` enthalten Fallback-Stacks. Inter (alt) ist entfernt.
+Selbst gehostet aus den npm-Paketen `@fontsource-variable/{inter-tight,sora,jetbrains-mono}` über `next/font/local` (`src/app/fonts.ts`, `display: swap`) — der Build braucht kein Netz (kein `next/font/google` mehr). Pro Familie zwei Faces mit den Google-`unicode-range`s: latin (vorgeladen) und latin-ext (nur bei Bedarf geladen). Variablen `--font-sora(-ext)`, `--font-inter-tight(-ext)`, `--font-jetbrains-mono(-ext)`; die Tokens `--ng-font-*` reihen latin → latin-ext → Fallback-Stack. Inter (alt) ist entfernt.
 
 Schriftgrössen in `rem` relativ zur Benutzer-Schriftgrösse (Default 14 px = `1rem`). Die Namen kollidieren nicht mit `text-xs/sm/base`, damit alte Seiten unverändert bleiben:
 

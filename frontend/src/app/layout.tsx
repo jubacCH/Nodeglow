@@ -1,33 +1,9 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter_Tight, JetBrains_Mono, Sora } from 'next/font/google';
 import { Providers } from '@/components/Providers';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { ngTokensRaw } from '@/styles/tokens.gen';
+import { fontVariables } from './fonts';
 import './globals.css';
-
-// Fonts per concept E3: Sora for display text and big numbers, Inter Tight
-// for UI and body, JetBrains Mono for rule names, logs and addresses. The CSS
-// variables feed --ng-font-* in tokens.gen.css (fallback stacks included).
-const interTight = Inter_Tight({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-inter-tight',
-  display: 'swap',
-});
-
-const sora = Sora({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-sora',
-  display: 'swap',
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500'],
-  variable: '--font-jetbrains-mono',
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   title: {
@@ -59,7 +35,7 @@ export default function RootLayout({
       lang="en"
       data-theme="dark"
       suppressHydrationWarning
-      className={`${interTight.variable} ${sora.variable} ${jetbrainsMono.variable}`}
+      className={fontVariables}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
