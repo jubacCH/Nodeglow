@@ -45,7 +45,7 @@ const nextConfig = {
       // Self-hosted Geist/Inter fonts served from /_next.
       "font-src 'self' data:",
       `connect-src ${connectSrc}`,
-      // Three.js / echarts may use blob workers.
+      // echarts may use blob workers.
       "worker-src 'self' blob:",
       "frame-ancestors 'none'",
       "base-uri 'self'",

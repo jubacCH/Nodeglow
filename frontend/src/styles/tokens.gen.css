@@ -144,9 +144,9 @@
   --ng-radius-chip: 5px;
   --ng-radius-lg: 12px;
   --ng-radius-pill: 9999px;
-  --ng-font-ui: var(--font-inter-tight), "Inter Tight", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --ng-font-display: var(--font-sora), "Sora", var(--font-inter-tight), "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-  --ng-font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --ng-font-ui: var(--font-inter-tight), var(--font-inter-tight-ext), "Inter Tight", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --ng-font-display: var(--font-sora), var(--font-sora-ext), "Sora", var(--font-inter-tight), var(--font-inter-tight-ext), "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --ng-font-mono: var(--font-jetbrains-mono), var(--font-jetbrains-mono-ext), "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   --ng-fs-micro: 0.7857rem;
   --ng-fs-meta: 0.8571rem;
   --ng-fs-ui: 0.9286rem;
@@ -176,36 +176,4 @@
   --ng-z-palette: 75;
   --ng-z-tooltip: 80;
   --ng-z-toast: 90;
-}
-
-/* Legacy aliases (pre-E3 names). New code uses the semantic names above. */
-:root,
-[data-theme] {
-  --ng-text-primary: var(--ng-text);
-  --ng-text-secondary: var(--ng-text-2);
-  --ng-text-muted: var(--ng-text-3);
-  --ng-text-tertiary: var(--ng-text-3);
-  --ng-primary: var(--ng-accent);
-  --ng-elevated: var(--ng-surface-2);
-  --ng-success: var(--ng-st-ok);
-  --ng-warning: var(--ng-st-warning);
-  --ng-critical: var(--ng-st-down);
-  --ng-card-bg: var(--ng-surface);
-  --ng-card-bg-elevated: var(--ng-surface-2);
-  --ng-card-border: var(--ng-border);
-  --ng-card-border-hover: var(--ng-border-2);
-  --ng-card-radius: var(--ng-radius);
-  --ng-card-shadow: none;
-  --ng-card-shadow-hover: none;
-  --ng-glass-bg: var(--ng-surface);
-  --ng-glass-border: var(--ng-border);
-  --ng-glass-bg-elevated: var(--ng-surface-2);
-  --ng-glass-border-elevated: var(--ng-border-2);
-  --ng-surface-container: var(--ng-surface);
-  --ng-surface-container-lowest: var(--ng-bg);
-  --ng-accent-bg: var(--ng-accent-soft);
-  --ng-accent-border: color-mix(in srgb, var(--ng-accent) 40%, transparent);
-  --ng-body-gradient: none;
-  --ng-radius-card: var(--ng-radius);
-  --ng-radius-button: var(--ng-radius-ctl);
 }
