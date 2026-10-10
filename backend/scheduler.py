@@ -25,7 +25,14 @@ logger = logging.getLogger(__name__)
 # name resolved from outside returns the site's WAN address or a CDN edge, and
 # the check would then measure a different machine entirely.
 AUTHORITATIVE_ADDRESS_SOURCES = frozenset({"proxmox", "unifi"})
-scheduler = AsyncIOScheduler()
+# APScheduler's defaults are hostile to a busy single event loop: a run that
+# starts more than 1 s late (misfire_grace_time=1) is silently skipped, and
+# without coalescing a backlog of missed runs fires back to back. One instance
+# per job, missed runs collapsed into one, and a minute of grace. Daily/weekly
+# cron jobs get an hour of grace where they are registered.
+JOB_DEFAULTS = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 60}
+CRON_MISFIRE_GRACE_SECONDS = 3600
+scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS)
 
 # ── Scheduler leadership (multi-worker / HA safety) ──────────────────────────
 # Without a leader lock every uvicorn worker / replica would start its own
@@ -1426,6 +1433,11 @@ async def start_scheduler():
     async with AsyncSessionLocal() as db:
         ping_interval = int(await get_setting(db, "ping_interval", "60"))
         integration_interval = int(await get_setting(db, "proxmox_interval", "60"))
+        # Read here, inside the session: these used to be read further down
+        # through `db` after its context had already closed.
+        digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
+        digest_hour = int(await get_setting(db, "digest_hour", "9"))
+        ai_summary_hour = int(await get_setting(db, "daily_ai_summary_hour", "8"))
 
     scheduler.add_job(run_ping_checks, "interval", seconds=ping_interval,
                       id="ping_checks", replace_existing=True)
@@ -1436,7 +1448,8 @@ async def start_scheduler():
     scheduler.add_job(update_ssl_expiry, "interval", hours=6,
                       id="ssl_expiry", replace_existing=True)
     scheduler.add_job(cleanup_old_results, "cron", hour=3, minute=0,
-                      id="cleanup", replace_existing=True)
+                      id="cleanup", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
     scheduler.add_job(run_log_intelligence, "interval", seconds=30,
                       id="log_intelligence", replace_existing=True)
     # Fleet-wide passes scan every template; keep them off the 30s tick.
@@ -1476,9 +1489,11 @@ async def start_scheduler():
     scheduler.add_job(run_backup_compliance, "interval", hours=1,
                       id="backup_compliance", replace_existing=True)
     scheduler.add_job(cleanup_legacy_api_keys, "cron", hour=3, minute=30,
-                      id="legacy_api_key_cleanup", replace_existing=True)
+                      id="legacy_api_key_cleanup", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
-                      id="ch_cleanup", replace_existing=True)
+                      id="ch_cleanup", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     # DNS resolution + host dedup (every 30 minutes)
     scheduler.add_job(resolve_host_dns, "interval", minutes=30,
@@ -1487,20 +1502,20 @@ async def start_scheduler():
     # GeoIP database update (Tuesdays at 03:00 — MaxMind updates weekly on Tuesdays)
     scheduler.add_job(update_geoip, "cron",
                       day_of_week="tue", hour=3, minute=0,
-                      id="geoip_update", replace_existing=True)
+                      id="geoip_update", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     # Weekly digest email (default: Monday 9:00, configurable)
-    digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
-    digest_hour = int(await get_setting(db, "digest_hour", "9"))
     scheduler.add_job(run_weekly_digest, "cron",
                       day_of_week=digest_day, hour=digest_hour, minute=0,
-                      id="weekly_digest", replace_existing=True)
+                      id="weekly_digest", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     # Daily AI summary (default: 08:00, configurable)
-    ai_summary_hour = int(await get_setting(db, "daily_ai_summary_hour", "8"))
     scheduler.add_job(run_daily_ai_summary, "cron",
                       hour=ai_summary_hour, minute=0,
-                      id="daily_ai_summary", replace_existing=True)
+                      id="daily_ai_summary", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     if getattr(config, "REDIS_URL", ""):
         # HA mode: start paused; the leadership loop resumes jobs once this
