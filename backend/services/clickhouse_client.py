@@ -87,6 +87,25 @@ _PHASE3_ALTERS = [
     # of ORDER BY, because prepending a sort key needs a full table rewrite and
     # every existing row is legitimately probe 0.
     "ALTER TABLE ping_checks ADD COLUMN IF NOT EXISTS probe_id UInt32 DEFAULT 0",
+    # syslog_aggregated and its materialized view were never read by anything,
+    # but the view ran a GROUP BY over every syslog insert block and the target
+    # table kept 90 days of rows. The view goes first, so no insert can hit a
+    # dropped target. Both are metadata operations, not mutations.
+    "DROP VIEW IF EXISTS syslog_aggregated_mv",
+    "DROP TABLE IF EXISTS syslog_aggregated",
+    # syslog_messages has row-level TTL rules (TTL ... WHERE severity = ...) on
+    # monthly partitions. With ttl_only_drop_parts = 1 a part is only removed
+    # once EVERY row in it has expired, i.e. effectively when the 90-day
+    # error rows of the whole month expire — debug/info rows configured for
+    # 1-3 days lived for months. With 0, TTL merges delete the expired rows.
+    # Cost: background TTL merges rewrite parts (at most every
+    # merge_with_ttl_timeout, default 4 h per partition); the first ones after
+    # this change rewrite most of the current and previous month once. The
+    # ALTER itself is a metadata change and returns immediately.
+    # The time-series tables keep ttl_only_drop_parts = 1: their TTL is a
+    # single whole-row expression on daily partitions, where dropping whole
+    # parts is exact to the day and free.
+    "ALTER TABLE syslog_messages MODIFY SETTING ttl_only_drop_parts = 0",
 ]
 
 _schemas_applied = False
@@ -94,6 +113,11 @@ _schemas_applied = False
 CLICKHOUSE_URL = os.environ.get(
     "CLICKHOUSE_URL", "http://nodeglow:nodeglow@clickhouse:8123/nodeglow"
 )
+
+# HTTP compression for inserts and results: "lz4" (default), "zstd", or
+# "none" to switch it off.
+_compression_env = os.environ.get("NODEGLOW_CLICKHOUSE_COMPRESSION", "lz4").strip().lower()
+CLICKHOUSE_COMPRESSION: str | bool = False if _compression_env in ("", "none", "0", "false", "off") else _compression_env
 
 _client = None
 _client_lock = asyncio.Lock()
@@ -112,7 +136,9 @@ async def get_client():
             try:
                 _client = await clickhouse_connect.get_async_client(
                     dsn=CLICKHOUSE_URL,
-                    compress=False,
+                    # lz4 ships with clickhouse-connect; cheap on CPU, and it
+                    # shrinks both syslog insert batches and large results.
+                    compress=CLICKHOUSE_COMPRESSION,
                     query_limit=0,
                     connect_timeout=10,
                     send_receive_timeout=30,
