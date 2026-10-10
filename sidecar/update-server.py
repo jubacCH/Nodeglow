@@ -14,6 +14,14 @@ cannot be driven to pull arbitrary code + rebuild containers.
 Update runs are orchestrated by :mod:`orchestrator`: preflight, backup, pull,
 build, migrate, restart. One run at a time; a second ``POST /apply`` while a
 run is active returns 409.
+
+Two update modes, chosen by ``NODEGLOW_UPDATE_MODE``:
+
+* ``git`` (default) — the installation is a git checkout; updates pull
+  ``origin/main`` and build the images on the host.
+* ``image`` — the installation runs published release images
+  (docker-compose.release.yml); updates install the newest release from the
+  registry after verifying its cosign signatures. See :mod:`image_update`.
 """
 import gzip
 import hmac
@@ -27,6 +35,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from datetime import datetime, timedelta
 
+import image_update
 from orchestrator import (
     CmdResult,
     Ctx,
@@ -71,6 +80,25 @@ _backup_status = {"schedule": None, "enabled": False, "next_at": None,
 
 def _log(msg: str) -> None:
     print(f"[update-sidecar] {msg}", flush=True)
+
+
+UPDATE_MODES = ("git", "image")
+
+
+def update_mode() -> str:
+    """``git`` or ``image``; anything else falls back to git with a warning."""
+    mode = os.environ.get("NODEGLOW_UPDATE_MODE", "").strip().lower() or "git"
+    if mode not in UPDATE_MODES:
+        _log(f"WARNING: unknown NODEGLOW_UPDATE_MODE={mode!r}, using git")
+        return "git"
+    return mode
+
+
+def default_runner(ctx):
+    """The update sequence for the configured mode."""
+    if update_mode() == "image":
+        return run_update(ctx, steps=image_update.image_steps())
+    return run_update(ctx)
 
 
 def _run_cmd(argv, timeout=60, cwd=None) -> CmdResult:
@@ -280,7 +308,7 @@ def current_status() -> dict:
 # host (e.g. by landing a malicious compose/Dockerfile in the repo). It is
 # reachable only over the internal docker network (port is `expose`d, not
 # host-published) and MUST NEVER be host-published or exposed publicly.
-def start_run(runner=run_update):
+def start_run(runner=None):
     """Start an update run in a worker thread. 409 if one is already active."""
     global _run_thread, _run_state
 
@@ -290,6 +318,7 @@ def start_run(runner=run_update):
         if _backup_status["running"]:
             return 409, {"ok": False, "error": "A scheduled backup is running; retry in a few minutes"}
 
+        runner = runner or default_runner
         run_id = time.strftime("%Y-%m-%dT%H-%M-%S")
         ctx = build_ctx(run_id)
         _run_state = None
@@ -427,6 +456,9 @@ class UpdateHandler(BaseHTTPRequestHandler):
         print(f"[update-sidecar] {fmt % args}")
 
     def _get_version(self):
+        if update_mode() == "image":
+            version = image_update.current_version(REPO_PATH)
+            return {"commit": version or "unknown", "version": version, "mode": "image"}
         try:
             r = subprocess.run(
                 ["git", "rev-parse", "--short", "HEAD"],
@@ -435,9 +467,11 @@ class UpdateHandler(BaseHTTPRequestHandler):
             commit = r.stdout.strip() if r.returncode == 0 else "unknown"
         except Exception:
             commit = "unknown"
-        return {"commit": commit, "version": read_version(REPO_PATH)}
+        return {"commit": commit, "version": read_version(REPO_PATH), "mode": "git"}
 
     def _check_updates(self):
+        if update_mode() == "image":
+            return image_update.check_for_updates(REPO_PATH)
         if not os.path.isdir(f"{REPO_PATH}/.git"):
             return {"error": "Repository not mounted", "update_available": False}
         try:
@@ -482,5 +516,5 @@ if __name__ == "__main__":
     _alias_project_dir(_resolve_host_project_dir())
     start_backup_scheduler()
     server = HTTPServer(("0.0.0.0", port), UpdateHandler)
-    print(f"[update-sidecar] listening on :{port}")
+    print(f"[update-sidecar] listening on :{port} (update mode: {update_mode()})")
     server.serve_forever()

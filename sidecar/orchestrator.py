@@ -25,7 +25,7 @@ import json
 import os
 import re
 from collections import namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Callable
 
@@ -129,6 +129,13 @@ class Ctx:
     # (./data, ./clickhouse/*.xml) and .env resolve to HOST paths. Empty keeps
     # the legacy behaviour (paths relative to compose_file).
     project_dir: str = ""
+    # Extra environment for every compose call, e.g. NODEGLOW_VERSION of the
+    # release being installed (image mode). The shell environment overrides
+    # .env in compose, so the new version is used before .env is rewritten.
+    compose_env: dict = field(default_factory=dict)
+    # Scratch space shared between the steps of one run (image mode: target
+    # version, image references, verified digests).
+    plan: dict = field(default_factory=dict)
 
 
 def idle_state() -> dict:
@@ -214,6 +221,10 @@ def _compose(ctx: Ctx, *args, timeout: int) -> CmdResult:
     symlink, see update-server.py) gives compose the host's view instead.
     """
     head = ["docker", "compose", "-p", ctx.compose_project]
+    if ctx.compose_env:
+        # `env K=V docker compose ...`: the injected run_cmd takes no env
+        # argument, and coreutils' env is in every image this runs in.
+        head = ["env", *(f"{k}={v}" for k, v in sorted(ctx.compose_env.items())), *head]
     if ctx.project_dir:
         head += ["--project-directory", ctx.project_dir]
     return ctx.run_cmd(
