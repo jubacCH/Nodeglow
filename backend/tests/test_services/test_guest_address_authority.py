@@ -5,9 +5,9 @@ Recording the address was not enough on its own. A separate DNS pass also sets
 first won. For guests whose names resolve outside the LAN, DNS won and stored
 an address belonging to a different machine:
 
-    enshrouded.b8n.ch  → 178.192.27.12   (the site's WAN address)
-    castaway.b8n.ch    → 178.192.27.12
-    menue.b8n.ch       → 188.114.97.12   (a Cloudflare edge)
+    game.example.com  → 203.0.113.12   (the site's WAN address)
+    wiki.example.com    → 203.0.113.12
+    menu.example.com       → 198.51.100.12   (a Cloudflare edge)
 
 The first two read as down while answering in 0.2 ms internally. The third read
 as *up* — the CDN edge answers ICMP whether or not the container behind it is
@@ -26,12 +26,12 @@ from scheduler import AUTHORITATIVE_ADDRESS_SOURCES
 
 # The address public DNS returns for these names: the site's WAN interface,
 # which does not answer ICMP from inside the LAN.
-WAN = "178.192.27.12"
+WAN = "203.0.113.12"
 # What Proxmox reports for the same guest.
 INTERNAL = "10.10.30.70"
 
 
-def _cluster(ip=INTERNAL, vmid=134, name="enshrouded.b8n.ch"):
+def _cluster(ip=INTERNAL, vmid=134, name="game.example.com"):
     return {
         "cluster_name": "prxmxcl01",
         "nodes": [],
@@ -45,7 +45,7 @@ def _cluster(ip=INTERNAL, vmid=134, name="enshrouded.b8n.ch"):
 async def test_guest_config_overwrites_an_address_dns_supplied(db):
     """The exact production row, and the fix that corrects it."""
     db.add(PingHost(
-        name="enshrouded.b8n.ch", hostname="enshrouded.b8n.ch",
+        name="game.example.com", hostname="game.example.com",
         ip_address=WAN, check_type="icmp", enabled=True,
         source="proxmox", source_detail="prxmxcl01:134",
     ))
@@ -54,7 +54,7 @@ async def test_guest_config_overwrites_an_address_dns_supplied(db):
     await import_proxmox_hosts("prxmxcl01", _cluster(), db)
 
     host = (await db.execute(
-        PingHost.__table__.select().where(PingHost.name == "enshrouded.b8n.ch")
+        PingHost.__table__.select().where(PingHost.name == "game.example.com")
     )).first()
     assert host.ip_address == INTERNAL
 
@@ -63,7 +63,7 @@ async def test_a_new_guest_is_registered_with_its_address(db):
     await import_proxmox_hosts("prxmxcl01", _cluster(), db)
 
     host = (await db.execute(
-        PingHost.__table__.select().where(PingHost.name == "enshrouded.b8n.ch")
+        PingHost.__table__.select().where(PingHost.name == "game.example.com")
     )).first()
     assert host.ip_address == INTERNAL
 
@@ -71,7 +71,7 @@ async def test_a_new_guest_is_registered_with_its_address(db):
 async def test_a_guest_without_a_static_address_keeps_what_it_had(db):
     """DHCP guests report no address; overwriting with nothing would be a loss."""
     db.add(PingHost(
-        name="enshrouded.b8n.ch", hostname="enshrouded.b8n.ch",
+        name="game.example.com", hostname="game.example.com",
         ip_address="10.10.30.99", check_type="icmp", enabled=True,
         source="proxmox", source_detail="prxmxcl01:134",
     ))
@@ -80,7 +80,7 @@ async def test_a_guest_without_a_static_address_keeps_what_it_had(db):
     await import_proxmox_hosts("prxmxcl01", _cluster(ip=None), db)
 
     host = (await db.execute(
-        PingHost.__table__.select().where(PingHost.name == "enshrouded.b8n.ch")
+        PingHost.__table__.select().where(PingHost.name == "game.example.com")
     )).first()
     assert host.ip_address == "10.10.30.99"
 
@@ -88,7 +88,7 @@ async def test_a_guest_without_a_static_address_keeps_what_it_had(db):
 async def test_a_manual_host_that_is_really_a_guest_is_adopted(db):
     """Matching by name means it *is* that guest, so it gets the guest's address."""
     db.add(PingHost(
-        name="enshrouded.b8n.ch", hostname="enshrouded.b8n.ch",
+        name="game.example.com", hostname="game.example.com",
         ip_address=WAN, check_type="icmp", enabled=True,
         source="manual", source_detail=None,
     ))
@@ -97,7 +97,7 @@ async def test_a_manual_host_that_is_really_a_guest_is_adopted(db):
     await import_proxmox_hosts("prxmxcl01", _cluster(), db)
 
     host = (await db.execute(
-        PingHost.__table__.select().where(PingHost.name == "enshrouded.b8n.ch")
+        PingHost.__table__.select().where(PingHost.name == "game.example.com")
     )).first()
     assert host.source == "proxmox"
     assert host.ip_address == INTERNAL

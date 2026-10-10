@@ -22,7 +22,7 @@ _NET_IP_RE = re.compile(r"\bip=([0-9]{1,3}(?:\.[0-9]{1,3}){3})/")
 def extract_ipv4(net_config: str | None) -> str | None:
     """Pull the static IPv4 out of a Proxmox netN line.
 
-    Reads e.g. "name=eth0,bridge=vmbr0,ip=10.10.30.70/24,..." -> "10.10.30.70".
+    Reads e.g. "name=eth0,bridge=vmbr0,ip=192.0.2.70/24,..." -> "192.0.2.70".
     Returns None for DHCP or anything unparseable, leaving the caller to fall
     back to the hostname.
     """
