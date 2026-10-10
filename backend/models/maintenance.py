@@ -10,9 +10,10 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 
 from models.base import Base
+from models.tenant import TenantScoped
 
 
-class MaintenanceWindow(Base):
+class MaintenanceWindow(TenantScoped, Base):
     __tablename__ = "maintenance_windows"
 
     id               = Column(Integer, primary_key=True, autoincrement=True)

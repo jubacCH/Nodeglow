@@ -4,9 +4,10 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 
 from models.base import Base
+from models.tenant import TenantScoped
 
 
-class ApiKey(Base):
+class ApiKey(TenantScoped, Base):
     __tablename__ = "api_keys"
 
     id = Column(Integer, primary_key=True, autoincrement=True)

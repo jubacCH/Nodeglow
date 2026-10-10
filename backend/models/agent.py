@@ -8,11 +8,13 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, func
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk, tenant_parent_unique
 
 
-class Agent(Base):
+class Agent(TenantScoped, Base):
     """A registered agent host that reports metrics."""
     __tablename__ = "agents"
+    __tenant_index__ = False  # covered by uq_agents_tenant_id_id
     id         = Column(Integer, primary_key=True, autoincrement=True)
     name       = Column(String(128), nullable=False)
     hostname   = Column(String(256), nullable=True)
@@ -37,7 +39,11 @@ class Agent(Base):
     service_states = Column(Text, nullable=True)
     last_seen  = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    site_id    = Column(Integer, nullable=True)
 
     __table_args__ = (
-        Index("ix_agents_hostname_lower", func.lower(hostname), unique=True),
+        # Hostnames are unique per tenant: two customers may both run "srv01".
+        Index("ix_agents_hostname_lower", "tenant_id", func.lower(hostname), unique=True),
+        tenant_parent_unique("agents"),
+        tenant_fk("site_id", "sites", name="fk_agents_site"),
     )

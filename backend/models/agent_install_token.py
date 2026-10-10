@@ -10,9 +10,10 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk
 
 
-class AgentInstallToken(Base):
+class AgentInstallToken(TenantScoped, Base):
     """One-off enrollment credential issued to provision an agent."""
     __tablename__ = "agent_install_tokens"
 
@@ -34,3 +35,9 @@ class AgentInstallToken(Base):
     last_used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_by = Column(String(64), nullable=True)
+    # The site an agent enrolled with this token lands in.
+    site_id = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        tenant_fk("site_id", "sites", name="fk_agent_install_tokens_site"),
+    )
