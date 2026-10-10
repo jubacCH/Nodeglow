@@ -13,10 +13,10 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, bindparam, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
@@ -423,45 +423,87 @@ async def flush_templates(db: AsyncSession):
     _template_counts = defaultdict(int)
     _new_templates = {}
 
-    now = datetime.utcnow()
+    try:
+        await _write_template_batch(db, counts, new_tpls, datetime.utcnow())
+        await db.commit()
+    except Exception:
+        # Hand the batch back so a transient database error delays these
+        # counts instead of losing them.
+        for h, c in counts.items():
+            _template_counts[h] += c
+        for h, v in new_tpls.items():
+            _new_templates.setdefault(h, v)
+        raise
 
-    # Insert new templates
-    for h, (template, example, tags) in new_tpls.items():
-        existing = (await db.execute(
-            select(LogTemplate).where(LogTemplate.template_hash == h)
-        )).scalar_one_or_none()
 
-        if not existing:
-            tpl = LogTemplate(
-                template_hash=h,
-                template=template,
-                example=example,
-                count=counts.get(h, 1),
-                first_seen=now,
-                last_seen=now,
-                tags=",".join(tags),
-                noise_score=10,  # new = interesting
-            )
-            db.add(tpl)
-            await db.flush()
-            _template_cache[h] = tpl.id
-            log.info("New log template: %s (tags: %s)", template[:80], ",".join(tags) or "none")
-        else:
-            _template_cache[h] = existing.id
+async def _write_template_batch(
+    db: AsyncSession,
+    counts: dict[str, int],
+    new_tpls: dict[str, tuple[str, str, list[str]]],
+    now: datetime,
+) -> None:
+    """Persist one flush worth of template counts in a handful of statements.
 
-    # Update counts for existing templates
-    for h, count in counts.items():
-        if h not in new_tpls:  # new ones already have their count
+    The old path issued one SELECT (and maybe an INSERT) per new template and
+    one UPDATE per seen template — tens of thousands of round trips every 30 s
+    on a busy fleet. Now:
+
+    * new templates: one multi-row INSERT ... ON CONFLICT (template_hash)
+      DO UPDATE per chunk, adding the count and keeping the later last_seen,
+      with RETURNING to fill the id cache. A hash another writer (or an earlier
+      run) already inserted just has its count added — no lookup needed.
+    * known templates: one executemany UPDATE per chunk.
+    """
+    if new_tpls:
+        insert, dialect = _dialect_insert(db)
+        greatest = func.greatest if dialect == "postgresql" else func.max
+        rows = [
+            {
+                "template_hash": h,
+                "template": template,
+                "example": example,
+                "count": counts.get(h, 1),
+                "first_seen": now,
+                "last_seen": now,
+                "tags": ",".join(tags)[:256],
+                "noise_score": 10,  # new = interesting
+                "avg_rate_per_hour": 0.0,
+                "trend_direction": "stable",
+                "trend_score": 0.0,
+            }
+            for h, (template, example, tags) in new_tpls.items()
+        ]
+        inserted = 0
+        for chunk in _chunks(rows, _UPSERT_CHUNK):
+            stmt = insert(LogTemplate).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["template_hash"],
+                set_={
+                    "count": LogTemplate.count + stmt.excluded.count,
+                    "last_seen": greatest(LogTemplate.last_seen, stmt.excluded.last_seen),
+                },
+            ).returning(LogTemplate.id, LogTemplate.template_hash, LogTemplate.first_seen)
+            for tpl_id, tpl_hash, first_seen in (await db.execute(stmt)).all():
+                _template_cache[tpl_hash] = tpl_id
+                if first_seen == now:
+                    inserted += 1
+                    template, _, tags = new_tpls[tpl_hash]
+                    log.debug("New log template: %s (tags: %s)", template[:80], ",".join(tags) or "none")
+        if inserted:
+            log.info("Stored %d new log template(s)", inserted)
+
+    known = [(h, c) for h, c in counts.items() if h not in new_tpls]
+    if known:
+        tbl = LogTemplate.__table__
+        stmt = (
+            update(tbl)
+            .where(tbl.c.template_hash == bindparam("b_hash"))
+            .values(count=tbl.c.count + bindparam("b_count"), last_seen=bindparam("b_now"))
+        )
+        for chunk in _chunks(known, _UPSERT_CHUNK):
             await db.execute(
-                update(LogTemplate)
-                .where(LogTemplate.template_hash == h)
-                .values(
-                    count=LogTemplate.count + count,
-                    last_seen=now,
-                )
+                stmt, [{"b_hash": h, "b_count": c, "b_now": now} for h, c in chunk]
             )
-
-    await db.commit()
 
 
 async def load_template_cache(db: AsyncSession):
@@ -473,82 +515,298 @@ async def load_template_cache(db: AsyncSession):
 
 
 # ── Baseline Computation (periodic) ──────────────────────────────────────────
+#
+# One HostBaseline row per (host_key, hour_of_day, day_of_week) holds a running
+# estimate of how many messages a source sends in that hour of the day.
+#
+# * day_of_week 0-6 is the weekday slot. It gets one sample a week.
+# * day_of_week BASELINE_ANY_DAY (7) is an hour-of-day slot shared by every
+#   day. It gets seven samples a week, so it is usable after three days instead
+#   of three weeks, and serves as the fallback while the weekday slot is young.
+#
+# The old implementation recomputed everything every 30 s from a 7-day GROUP BY
+# over raw syslog, keyed by (dow, hour) — which yields at most one or two
+# samples per slot. Every consumer requires sample_count >= 3, so none of the
+# volume or content anomaly rules could ever fire.
+#
+# Now each completed hour is folded in exactly once (progress is persisted in
+# the settings table, so a restart neither skips nor double-counts an hour)
+# with an exponentially weighted mean and variance: the first samples form a
+# plain running mean (weight 1/n, identical to Welford), later ones weigh
+# BASELINE_ALPHA_MIN, so the estimate follows slow drift and a decommissioned
+# source fades out instead of alerting "silent" forever.
+#
+# Hours are bucketed on received_at (ingest time). A device whose clock runs
+# behind would otherwise deliver its messages into an hour that was already
+# folded in, and its baseline would read as zero.
 
-async def compute_baselines(db: AsyncSession):
+BASELINE_ANY_DAY = 7
+BASELINE_MIN_SAMPLES = 3
+BASELINE_ALPHA_MIN = 0.2
+# On first run (or after downtime) at most this many completed hours are folded
+# in. Short on purpose: the syslog TTL already removes debug/noisy rows after
+# one to two days, so older hours would be undercounted.
+BASELINE_BACKFILL_HOURS = 24
+# An hour is "completed" this long after it ends, so the syslog write buffer
+# has flushed its last messages.
+BASELINE_SETTLE_SECONDS = 120
+BASELINE_STATE_KEY = "log_baseline_done_through"
+_UPSERT_CHUNK = 1000
+
+# In-memory mirror of the persisted progress, so the 30 s tick costs nothing
+# until the next hour completes.
+_baseline_done_through: Optional[datetime] = None
+
+
+def ewma_update(
+    mean: float, var: float, n: int, x: float, alpha_min: float = BASELINE_ALPHA_MIN,
+) -> tuple[float, float, int]:
+    """Fold sample ``x`` into an exponentially weighted (mean, variance, n).
+
+    Weight is 1/n until that falls below ``alpha_min`` — exact running mean and
+    population variance for the first samples — then constant.
     """
-    Compute per-host hourly baselines from the last 7 days of syslog data.
+    n += 1
+    a = max(1.0 / n, alpha_min)
+    diff = x - mean
+    mean = mean + a * diff
+    var = (1.0 - a) * (var + a * diff * diff)
+    return mean, var, n
+
+
+def _floor_hour(dt: datetime) -> datetime:
+    return dt.replace(minute=0, second=0, microsecond=0)
+
+
+def baseline_hours_due(done_through: Optional[datetime], now: datetime) -> list[datetime]:
+    """Start times of the completed hours not yet folded into the baselines."""
+    latest = _floor_hour(now - timedelta(seconds=BASELINE_SETTLE_SECONDS)) - timedelta(hours=1)
+    earliest = latest - timedelta(hours=BASELINE_BACKFILL_HOURS - 1)
+    if done_through is None:
+        start = earliest
+    else:
+        start = max(done_through + timedelta(hours=1), earliest)
+    hours: list[datetime] = []
+    h = start
+    while h <= latest:
+        hours.append(h)
+        h += timedelta(hours=1)
+    return hours
+
+
+def _dialect_insert(db: AsyncSession):
+    """Return (insert construct with ON CONFLICT support, dialect name)."""
+    name = db.get_bind().dialect.name
+    if name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    elif name == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    else:  # pragma: no cover - only Postgres (prod) and SQLite (tests) exist
+        raise NotImplementedError(f"upsert not supported on {name}")
+    return insert, name
+
+
+def _chunks(seq: list, size: int):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
+async def _upsert_baselines(db: AsyncSession, values: list[dict]) -> None:
+    """Bulk INSERT ... ON CONFLICT (host_key, hour_of_day, day_of_week) DO UPDATE.
+
+    Only the rate statistics are overwritten on conflict; the template
+    diversity columns belong to compute_template_diversity.
+    """
+    if not values:
+        return
+    insert, _ = _dialect_insert(db)
+    for chunk in _chunks(values, _UPSERT_CHUNK):
+        stmt = insert(HostBaseline).values(chunk)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["host_key", "hour_of_day", "day_of_week"],
+            set_={
+                "avg_rate": stmt.excluded.avg_rate,
+                "std_rate": stmt.excluded.std_rate,
+                "sample_count": stmt.excluded.sample_count,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        await db.execute(stmt)
+
+
+async def _load_baseline_progress(db: AsyncSession) -> Optional[datetime]:
+    from models.settings import get_setting
+
+    raw = await get_setting(db, BASELINE_STATE_KEY, "")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) -> int:
+    """Fold every completed, not yet processed hour into the volume baselines.
+
+    Cheap no-op until an hour completes. Returns the number of hours folded in.
     Uses source_ip as host_key.
     """
-    now = datetime.utcnow()
-    week_ago = now - timedelta(days=7)
+    global _baseline_done_through
+    now = now or datetime.utcnow()
+    if _baseline_done_through is not None and not baseline_hours_due(_baseline_done_through, now):
+        return 0
 
-    # Get hourly counts per source_ip from ClickHouse
-    from services.clickhouse_client import query as ch_query
-    ch_rows = await ch_query(
-        """SELECT source_ip,
-                  toDayOfWeek(timestamp) - 1 AS dow,
-                  toHour(timestamp)          AS hour,
-                  count()                    AS cnt
-           FROM syslog_messages
-           WHERE timestamp >= {t:DateTime64(3)}
-           GROUP BY source_ip, dow, hour""",
-        {"t": week_ago},
+    # Re-read the persisted progress whenever there is work: another instance
+    # may have been leader in between.
+    done_through = await _load_baseline_progress(db)
+    hours = baseline_hours_due(done_through, now)
+    if not hours:
+        if done_through is not None:
+            _baseline_done_through = done_through
+        return 0
+
+    from services import clickhouse_client as ch
+
+    start, end = hours[0], hours[-1] + timedelta(hours=1)
+    since_sql, params = ch.received_since_clause(start, param="start")
+    params["end"] = end
+    ch_rows = await ch.query(
+        f"""SELECT source_ip,
+                   toUnixTimestamp(toStartOfHour(received_at)) AS hour_ts,
+                   count() AS cnt
+            FROM syslog_messages
+            WHERE {since_sql}
+              AND received_at < {{end:DateTime64(3)}}
+            GROUP BY source_ip, hour_ts""",
+        params,
     )
 
-    if not ch_rows:
-        return
-
-    # Wrap to match original field access pattern
-    class _Row:
-        def __init__(self, d):
-            self.source_ip = d["source_ip"]
-            self.dow = d["dow"]
-            self.hour = d["hour"]
-            self.cnt = d["cnt"]
-
-    rows = [_Row(r) for r in ch_rows]
-    if not rows:
-        return
-
-    # Group: (source_ip, dow, hour) -> [counts across weeks]
-    grouped: dict[tuple, list] = defaultdict(list)
-    for row in rows:
-        key = (row.source_ip, int(row.dow), int(row.hour))
-        grouped[key].append(row.cnt)
-
-    # Upsert baselines
-    for (host_key, dow, hour), counts in grouped.items():
-        if not counts:
+    counts: dict[datetime, dict[str, int]] = defaultdict(dict)
+    first_hour: dict[str, datetime] = {}
+    for r in ch_rows:
+        ip = r.get("source_ip")
+        if not ip:
             continue
-        avg = sum(counts) / len(counts)
-        std = (sum((c - avg) ** 2 for c in counts) / len(counts)) ** 0.5 if len(counts) > 1 else 0
+        h = datetime.fromtimestamp(int(r["hour_ts"]), tz=timezone.utc).replace(tzinfo=None)
+        counts[h][ip] = counts[h].get(ip, 0) + int(r["cnt"])
+        if ip not in first_hour or h < first_hour[ip]:
+            first_hour[ip] = h
 
-        existing = (await db.execute(
-            select(HostBaseline).where(
-                HostBaseline.host_key == host_key,
-                HostBaseline.hour_of_day == hour,
-                HostBaseline.day_of_week == dow,
-            )
-        )).scalar_one_or_none()
+    if done_through is None:
+        # First run of the incremental scheme: whatever the rows hold was
+        # computed by the old full-recompute algorithm and is not a running
+        # estimate. Start the rate statistics over; keep template diversity.
+        await db.execute(
+            update(HostBaseline).values(avg_rate=0.0, std_rate=0.0, sample_count=0)
+        )
 
-        if existing:
-            existing.avg_rate = avg
-            existing.std_rate = std
-            existing.sample_count = len(counts)
-            existing.updated_at = now
-        else:
-            db.add(HostBaseline(
-                host_key=host_key,
-                hour_of_day=hour,
-                day_of_week=dow,
-                avg_rate=avg,
-                std_rate=std,
-                sample_count=len(counts),
-                updated_at=now,
-            ))
+    # Sources that already have a baseline get a sample every hour — zero when
+    # they were silent, which is what makes silence detectable. New sources
+    # start at the first hour they were seen.
+    known = {
+        k for (k,) in (await db.execute(select(HostBaseline.host_key).distinct())).all()
+        if k and not k.startswith("host:")
+    }
 
-    await db.commit()
-    log.info("Baselines computed for %d host-hour combinations", len(grouped))
+    written = 0
+    for hour in hours:
+        hour_counts = counts.get(hour, {})
+        sources = sorted(known | {ip for ip, fh in first_hour.items() if fh <= hour})
+        if not sources:
+            continue
+        dow, hod = hour.weekday(), hour.hour
+        existing = {
+            (r.host_key, r.day_of_week): r
+            for r in (await db.execute(
+                select(
+                    HostBaseline.host_key, HostBaseline.day_of_week,
+                    HostBaseline.avg_rate, HostBaseline.std_rate, HostBaseline.sample_count,
+                ).where(
+                    HostBaseline.hour_of_day == hod,
+                    HostBaseline.day_of_week.in_([dow, BASELINE_ANY_DAY]),
+                )
+            )).all()
+        }
+        values: list[dict] = []
+        for ip in sources:
+            x = float(hour_counts.get(ip, 0))
+            for slot in (dow, BASELINE_ANY_DAY):
+                prev = existing.get((ip, slot))
+                if prev is not None:
+                    state = (prev.avg_rate or 0.0, (prev.std_rate or 0.0) ** 2, prev.sample_count or 0)
+                else:
+                    state = (0.0, 0.0, 0)
+                mean, var, n = ewma_update(*state, x)
+                values.append({
+                    "host_key": ip,
+                    "hour_of_day": hod,
+                    "day_of_week": slot,
+                    "avg_rate": mean,
+                    "std_rate": var ** 0.5,
+                    "sample_count": n,
+                    "avg_template_count": 0.0,
+                    "std_template_count": 0.0,
+                    "updated_at": now,
+                })
+        await _upsert_baselines(db, values)
+        written += len(values)
+        known.update(sources)
+
+    from models.settings import set_setting
+
+    # set_setting commits: the baseline rows and the progress marker land in
+    # the same transaction, so an hour is never folded in twice.
+    await set_setting(db, BASELINE_STATE_KEY, hours[-1].isoformat())
+    _baseline_done_through = hours[-1]
+    log.info(
+        "Baselines: folded %d hour(s) up to %s into %d slot rows",
+        len(hours), hours[-1].isoformat(), written,
+    )
+    return len(hours)
+
+
+def pick_baseline(
+    weekday_slot: Optional[HostBaseline],
+    any_day_slot: Optional[HostBaseline],
+    min_samples: int = BASELINE_MIN_SAMPLES,
+) -> Optional[HostBaseline]:
+    """Prefer the weekday-specific slot; fall back to the hour-of-day slot."""
+    for b in (weekday_slot, any_day_slot):
+        if b is not None and (b.sample_count or 0) >= min_samples:
+            return b
+    return None
+
+
+async def load_effective_baselines(
+    db: AsyncSession,
+    now: Optional[datetime] = None,
+    require_templates: bool = False,
+) -> dict[str, HostBaseline]:
+    """{host_key: usable baseline for the current hour}, one query.
+
+    ``require_templates`` additionally requires learned template diversity
+    (avg_template_count > 0) on the chosen slot.
+    """
+    now = now or datetime.utcnow()
+    dow = now.weekday()
+    rows = (await db.execute(
+        select(HostBaseline).where(
+            HostBaseline.hour_of_day == now.hour,
+            HostBaseline.day_of_week.in_([dow, BASELINE_ANY_DAY]),
+        )
+    )).scalars().all()
+    by_key: dict[str, dict[int, HostBaseline]] = defaultdict(dict)
+    for b in rows:
+        if require_templates and not (b.avg_template_count or 0) > 0:
+            continue
+        by_key[b.host_key][b.day_of_week] = b
+    out: dict[str, HostBaseline] = {}
+    for key, slots in by_key.items():
+        chosen = pick_baseline(slots.get(dow), slots.get(BASELINE_ANY_DAY))
+        if chosen is not None:
+            out[key] = chosen
+    return out
 
 
 async def detect_baseline_anomalies(db: AsyncSession) -> list[dict]:
@@ -556,65 +814,50 @@ async def detect_baseline_anomalies(db: AsyncSession) -> list[dict]:
     Check current hour's message rate against learned baselines.
     Returns list of anomaly dicts.
     """
+    from services import clickhouse_client as ch
+
     now = datetime.utcnow()
-    hour = now.hour
-    dow = now.weekday()  # 0=Mon
-    window_start = now.replace(minute=0, second=0, microsecond=0)
+    window_start = _floor_hour(now)
 
-    # Current hour counts per source_ip from ClickHouse
-    from services.clickhouse_client import query as ch_query
-
-    class _CRow:
-        def __init__(self, d):
-            self.source_ip = d["source_ip"]
-            self.cnt = d["cnt"]
-
-    ch_current = await ch_query(
-        "SELECT source_ip, count() AS cnt FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)} GROUP BY source_ip",
-        {"t": window_start},
-    )
-    current_counts = [_CRow(r) for r in ch_current]
-
-    if not current_counts:
+    baseline_map = {
+        k: b for k, b in (await load_effective_baselines(db, now)).items()
+        if not k.startswith("host:")
+    }
+    if not baseline_map:
         return []
 
-    # Load baselines for this hour/dow
-    baselines = (await db.execute(
-        select(HostBaseline).where(
-            HostBaseline.hour_of_day == hour,
-            HostBaseline.day_of_week == dow,
-        )
-    )).scalars().all()
-    baseline_map = {b.host_key: b for b in baselines}
+    current_counts = await ch.count_syslog_received_by_source(window_start)
 
     anomalies = []
-    for row in current_counts:
-        baseline = baseline_map.get(row.source_ip)
-        if not baseline or baseline.sample_count < 3:
+    for source_ip, cnt in current_counts.items():
+        baseline = baseline_map.get(source_ip)
+        if not baseline:
             continue
 
         # z-score: how many std devs above normal
         if baseline.std_rate > 0:
-            z = (row.cnt - baseline.avg_rate) / baseline.std_rate
-        elif row.cnt > baseline.avg_rate * 3:
+            z = (cnt - baseline.avg_rate) / baseline.std_rate
+        elif cnt > baseline.avg_rate * 3:
             z = 5.0  # no variance but way above average
         else:
             continue
 
         if z >= 3.0:  # 3 sigma = significant
             anomalies.append({
-                "source_ip": row.source_ip,
-                "current_count": row.cnt,
+                "source_ip": source_ip,
+                "current_count": cnt,
                 "expected": round(baseline.avg_rate, 1),
                 "z_score": round(z, 1),
                 "type": "rate_spike",
             })
 
-        # Also detect silence (host normally sends logs but now silent)
+    # Also detect silence (host normally sends logs but now silent). This must
+    # run even when nothing at all arrived this hour — that is the loudest
+    # silence there is.
+    minutes_elapsed = max(1, now.minute + now.second / 60)
     for host_key, baseline in baseline_map.items():
-        if baseline.avg_rate > 10 and baseline.sample_count >= 3:
-            current = next((r.cnt for r in current_counts if r.source_ip == host_key), 0)
-            minutes_elapsed = max(1, now.minute + now.second / 60)
+        if baseline.avg_rate > 10:
+            current = current_counts.get(host_key, 0)
             projected_rate = current * (60.0 / minutes_elapsed)
             if projected_rate < baseline.avg_rate * 0.1:  # <10% of normal
                 anomalies.append({
@@ -1021,32 +1264,32 @@ async def compute_template_diversity(db: AsyncSession):
     # One query for every baseline in this hour/day slot rather than one per
     # host. The per-host lookup made this the second-heaviest index consumer in
     # the database, and the cost grew with fleet size for no reason: the rows
-    # are all in the same slot.
+    # are all in the same slot. Both the weekday slot and the any-day slot are
+    # updated, so content detection has the same fallback as volume detection.
     host_keys = [r["source_ip"] for r in rows]
     baselines = (await db.execute(
         select(HostBaseline).where(
             HostBaseline.host_key.in_(host_keys),
             HostBaseline.hour_of_day == hour,
-            HostBaseline.day_of_week == dow,
+            HostBaseline.day_of_week.in_([dow, BASELINE_ANY_DAY]),
         )
     )).scalars().all()
-    by_host = {b.host_key: b for b in baselines}
+    by_host: dict[str, list[HostBaseline]] = defaultdict(list)
+    for b in baselines:
+        by_host[b.host_key].append(b)
 
     alpha = 0.3
     for r in rows:
-        baseline = by_host.get(r["source_ip"])
-        if not baseline:
-            continue
-
-        # Exponential moving average for template diversity
-        baseline.avg_template_count = (
-            alpha * r["diversity"] + (1 - alpha) * baseline.avg_template_count
-        )
-        # Update std using Welford's online algorithm (simplified)
-        diff = r["diversity"] - baseline.avg_template_count
-        baseline.std_template_count = max(
-            1.0, (1 - alpha) * baseline.std_template_count + alpha * abs(diff)
-        )
+        for baseline in by_host.get(r["source_ip"], ()):
+            # Exponential moving average for template diversity
+            baseline.avg_template_count = (
+                alpha * r["diversity"] + (1 - alpha) * (baseline.avg_template_count or 0.0)
+            )
+            # Update std using Welford's online algorithm (simplified)
+            diff = r["diversity"] - baseline.avg_template_count
+            baseline.std_template_count = max(
+                1.0, (1 - alpha) * (baseline.std_template_count or 0.0) + alpha * abs(diff)
+            )
 
     await db.commit()
     log.info("Template diversity computed for %d hosts", len(rows))
@@ -1280,18 +1523,25 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
 async def run_intelligence():
     """Fast path – flush buffered templates and refresh host baselines.
 
-    Runs on the short scheduler tick. Both passes touch only the templates seen
-    since the last run, so their cost scales with traffic, not with the size of
-    the template table.
+    Runs on the short scheduler tick. The template flush touches only the
+    templates seen since the last run; the baseline pass is a no-op until an
+    hour completes and then folds in just that hour. Each runs in its own
+    session so a failure in one does not discard the other's work.
     """
     from models.base import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
         try:
             await flush_templates(db)
+        except Exception as e:
+            log.error("Template flush error: %s", e, exc_info=True)
+            await db.rollback()
+
+    async with AsyncSessionLocal() as db:
+        try:
             await compute_baselines(db)
         except Exception as e:
-            log.error("Intelligence engine error: %s", e, exc_info=True)
+            log.error("Baseline computation error: %s", e, exc_info=True)
             await db.rollback()
 
 
