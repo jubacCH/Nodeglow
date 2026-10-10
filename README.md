@@ -10,6 +10,19 @@ FastAPI backend, a Next.js UI and an update sidecar) on a single Linux host.
 It is Open Core: the core is AGPL-3.0, a few enterprise features are
 source-available under a commercial license (see [Editions](#editions)).
 
+![Overview during an outage: health ring, incidents, topology with the affected branch glowing](docs/screenshots/overview-dark.png)
+
+<details>
+<summary>More screenshots (demo data)</summary>
+
+| | |
+|---|---|
+| ![Overview, light theme](docs/screenshots/overview-light.png) | ![Hosts with the unified state](docs/screenshots/hosts.png) |
+| ![Incidents with affected hosts](docs/screenshots/incidents.png) | ![Topology tree](docs/screenshots/topology.png) |
+| ![Logs](docs/screenshots/logs.png) | |
+
+</details>
+
 ---
 
 ## Features

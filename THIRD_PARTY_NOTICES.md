@@ -54,7 +54,7 @@ CI.
 | speedtest-cli | 2.1.3 | Apache-2.0 |
 | alembic | 1.20.0 | MIT |
 | psutil | 7.2.2 | BSD-3-Clause |
-| clickhouse-connect | 1.10.0 | Apache-2.0 |
+| clickhouse-connect | 0.8.9 | Apache-2.0 |
 | maxminddb | 3.2.0 | Apache-2.0 |
 | anthropic | 1.13.0 | MIT |
 | ldap3 | 2.9.1 | LGPL-3.0 |

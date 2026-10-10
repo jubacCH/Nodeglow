@@ -10,7 +10,8 @@ Thanks for helping. Bug reports, fixes, integrations and docs are all welcome.
   issue describing the idea first, so we can agree on the approach before you
   invest the time.
 - **Security issues:** do not open a public issue. Use GitHub's private
-  vulnerability reporting ("Security" tab → "Report a vulnerability").
+  vulnerability reporting ("Security" tab → "Report a vulnerability"); see
+  [SECURITY.md](SECURITY.md).
 
 ## Licensing of contributions
 
