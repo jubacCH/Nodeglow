@@ -12,14 +12,14 @@ failed ({"https": "status 503"}), so the UI and incidents can say more than
 ``maintenance_windows`` holds recurring (weekly) and one-off windows that put
 hosts into maintenance without touching the per-host flag.
 
-Revision ID: 037_http_checks_maintenance
-Revises: 036_agent_services
+Revision ID: 036
+Revises: 035
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "037_http_checks_maintenance"
-down_revision = "036_agent_services"
+revision = "036"
+down_revision = "035"
 branch_labels = None
 depends_on = None
 

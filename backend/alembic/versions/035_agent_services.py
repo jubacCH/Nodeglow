@@ -6,13 +6,13 @@ service together with its failure streak, so incident evaluation survives a
 backend restart. NULL for every existing row: nothing changes until an agent
 that knows the feature reports.
 
-Revision ID: 036_agent_services
+Revision ID: 035
 Revises: 034
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "036_agent_services"
+revision = "035"
 down_revision = "034"
 branch_labels = None
 depends_on = None
