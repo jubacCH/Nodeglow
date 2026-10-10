@@ -47,7 +47,7 @@ interface AiUsageBucket {
 const inputCls = 'ng-input max-w-sm';
 const selectSmCls = 'w-full max-w-[180px] px-2 py-1.5 rounded-md bg-[var(--ng-surface)] border border-white/[0.06] text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-colors [&>option]:text-[var(--ng-text-primary)]';
 const checkboxCls = 'rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50';
-const ALL_CHANNELS = ['telegram', 'discord', 'webhook', 'email'] as const;
+const ALL_CHANNELS = ['telegram', 'discord', 'webhook', 'email', 'teams', 'slack', 'ntfy'] as const;
 
 /* ---------- Usage card ---------- */
 

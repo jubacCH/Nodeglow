@@ -51,11 +51,12 @@ interface SettingsData {
   predictor_min_confidence: string;
   predictor_min_occurrences: string;
   predictor_template_blacklist: string;  // JSON-stringified array of regex strings
-  telegram_bot_token: string;
   telegram_chat_id: string;
-  discord_webhook_url: string;
-  webhook_url: string;
-  webhook_secret: string;
+  // Channel secrets are write-only: the backend only says whether one is set.
+  telegram_bot_token_has_value?: boolean;
+  discord_webhook_url_has_value?: boolean;
+  webhook_url_has_value?: boolean;
+  webhook_secret_has_value?: boolean;
   smtp_host: string;
   smtp_port: string;
   smtp_user: string;
@@ -348,6 +349,8 @@ export default function SettingsPage() {
   const [discordWebhook, setDiscordWebhook] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
+  // Secrets marked for removal on the next save.
+  const [clearSecrets, setClearSecrets] = useState<Set<string>>(new Set());
   const [smtpHost, setSmtpHost] = useState('');
   const [smtpPort, setSmtpPort] = useState('');
   const [smtpUser, setSmtpUser] = useState('');
@@ -430,11 +433,12 @@ export default function SettingsPage() {
     setPredictorMinConfidence(s.predictor_min_confidence || '0.8');
     setPredictorMinOccurrences(s.predictor_min_occurrences || '3');
     setPredictorTemplateBlacklist(s.predictor_template_blacklist || '[]');
-    setTelegramToken(s.telegram_bot_token);
+    setTelegramToken('');
     setTelegramChat(s.telegram_chat_id);
-    setDiscordWebhook(s.discord_webhook_url);
-    setWebhookUrl(s.webhook_url);
-    setWebhookSecret(s.webhook_secret);
+    setDiscordWebhook('');
+    setWebhookUrl('');
+    setWebhookSecret('');
+    setClearSecrets(new Set());
     setSmtpHost(s.smtp_host);
     setSmtpPort(s.smtp_port);
     setSmtpUser(s.smtp_user);
@@ -625,17 +629,37 @@ export default function SettingsPage() {
     saveSettingsMut.mutate(buildAllSettingsParams());
   }
 
+  type LegacySecretKey = 'telegram_bot_token' | 'discord_webhook_url' | 'webhook_url' | 'webhook_secret';
+
+  function secretLabel(label: string, key: LegacySecretKey) {
+    const stored = !!settings?.[`${key}_has_value`];
+    return (
+      <StoredSecretLabel
+        label={label}
+        stored={stored}
+        cleared={clearSecrets.has(key)}
+        onClear={(v) => {
+          const next = new Set(clearSecrets);
+          if (v) next.add(key); else next.delete(key);
+          setClearSecrets(next);
+        }}
+      />
+    );
+  }
+
   function buildNotificationParams(): URLSearchParams {
     const params = new URLSearchParams();
     params.set('notify_enabled', notifyEnabled ? 'on' : '0');
     params.set('notify_grace_minutes', graceMinutes);
     params.set('correlation_min_failures', corrMinFailures);
     params.set('correlation_min_cycles', corrMinCycles);
+    // Legacy channel secrets: blank keeps the stored value, *_clear removes it.
     params.set('telegram_bot_token', telegramToken);
     params.set('telegram_chat_id', telegramChat);
     params.set('discord_webhook_url', discordWebhook);
     params.set('webhook_url', webhookUrl);
     params.set('webhook_secret', webhookSecret);
+    for (const key of clearSecrets) params.set(`${key}_clear`, '1');
     params.set('smtp_host', smtpHost);
     params.set('smtp_port', smtpPort);
     params.set('smtp_user', smtpUser);
@@ -1142,13 +1166,14 @@ export default function SettingsPage() {
             ]} />
             <div className="space-y-3">
               <div>
-                <label className="ng-label">Bot Token</label>
+                {secretLabel('Bot Token', 'telegram_bot_token')}
                 <input
                   type="password"
                   value={telegramToken}
                   onChange={(e) => setTelegramToken(e.target.value)}
                   className={inputCls}
-                  placeholder="123456:ABC-DEF..."
+                  disabled={clearSecrets.has('telegram_bot_token')}
+                  placeholder={settings?.telegram_bot_token_has_value ? 'Leave blank to keep' : '123456:ABC-DEF...'}
                 />
               </div>
               <div>
@@ -1193,13 +1218,14 @@ export default function SettingsPage() {
             ]} />
             <div className="space-y-3">
               <div>
-                <label className="ng-label">Webhook URL</label>
+                {secretLabel('Webhook URL', 'discord_webhook_url')}
                 <input
-                  type="text"
+                  type="password"
                   value={discordWebhook}
                   onChange={(e) => setDiscordWebhook(e.target.value)}
                   className={inputCls}
-                  placeholder="https://discord.com/api/webhooks/..."
+                  disabled={clearSecrets.has('discord_webhook_url')}
+                  placeholder={settings?.discord_webhook_url_has_value ? 'Leave blank to keep' : 'https://discord.com/api/webhooks/...'}
                 />
               </div>
               <div>
@@ -1227,23 +1253,25 @@ export default function SettingsPage() {
             </div>
             <div className="space-y-3">
               <div>
-                <label className="ng-label">URL</label>
+                {secretLabel('URL', 'webhook_url')}
                 <input
-                  type="text"
+                  type="password"
                   value={webhookUrl}
                   onChange={(e) => setWebhookUrl(e.target.value)}
                   className={inputCls}
-                  placeholder="https://example.com/webhook"
+                  disabled={clearSecrets.has('webhook_url')}
+                  placeholder={settings?.webhook_url_has_value ? 'Leave blank to keep' : 'https://example.com/webhook'}
                 />
               </div>
               <div>
-                <label className="ng-label">Secret</label>
+                {secretLabel('Secret', 'webhook_secret')}
                 <input
                   type="password"
                   value={webhookSecret}
                   onChange={(e) => setWebhookSecret(e.target.value)}
                   className={inputCls}
-                  placeholder="Optional signing secret"
+                  disabled={clearSecrets.has('webhook_secret')}
+                  placeholder={settings?.webhook_secret_has_value ? 'Leave blank to keep' : 'Optional signing secret'}
                 />
               </div>
               <div>
