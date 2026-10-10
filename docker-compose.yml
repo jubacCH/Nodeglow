@@ -100,6 +100,8 @@ services:
       # flow is still accepted alongside per-install tokens. Leave unset on
       # new deployments.
       NODEGLOW_ALLOW_SHARED_ENROLLMENT: ${NODEGLOW_ALLOW_SHARED_ENROLLMENT:-}
+      # "1" runs the community edition even though ee/ is built in.
+      NODEGLOW_DISABLE_EE: ${NODEGLOW_DISABLE_EE:-}
       # Logging: LOG_LEVEL=DEBUG|INFO|WARNING|ERROR, LOG_FORMAT=text|json.
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}
