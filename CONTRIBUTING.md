@@ -49,14 +49,25 @@ plug in through `backend/extensions.py`, loaded by `backend/ee_loader.py`. See
 
 ## Development setup
 
-See the [README](README.md) for running the stack with Docker Compose.
+See the [README](README.md#run-from-source) for running the stack from a
+checkout with Docker Compose, and [docs/README.md](docs/README.md) for the
+documentation index.
 
 | Part | Location | Stack |
 |---|---|---|
-| Backend | `backend/` | Python 3.12, FastAPI, SQLAlchemy, Alembic |
-| Frontend | `frontend/` | Next.js, React, TypeScript, Tailwind |
+| Backend | `backend/` | Python 3.12, FastAPI, SQLAlchemy 2, Alembic (migrations in `backend/alembic/versions/`) |
+| Enterprise plugin | `ee/backend/` | Python, loaded through `backend/extensions.py` — see [ee/README.md](ee/README.md) |
+| Frontend | `frontend/` | Next.js 15, React 19, TypeScript, Tailwind, Node 22 — see [frontend/README.md](frontend/README.md) |
 | Agent | `agent/` | Rust (stable, MSRV in `Cargo.toml`) |
-| Sidecar | `sidecar/` | Python update orchestrator |
+| Sidecar | `sidecar/` | Python update orchestrator (git and image mode) |
+
+UI changes follow the design system in
+[docs/design/04-design-system.md](docs/design/04-design-system.md); new pages
+are registered in `frontend/src/lib/navigation.ts`. Changed environment
+variables belong in the
+[configuration reference](docs/OPERATIONS.md#configuration-reference), changed
+API behaviour in [docs/API.md](docs/API.md), user-visible changes in the
+`[Unreleased]` section of [CHANGELOG.md](CHANGELOG.md).
 
 ## Tests and checks
 
@@ -114,5 +125,6 @@ pull requests focused — unrelated cleanups go in a separate pull request.
 ## Pull requests
 
 - Describe what changed and why, and how you tested it.
-- Include screenshots for UI changes.
+- Include screenshots for UI changes — with demo data, never real hostnames,
+  IP addresses or credentials.
 - Keep the PR up to date with `main`; the maintainer may squash on merge.
