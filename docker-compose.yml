@@ -1,3 +1,10 @@
+# Nodeglow — source/development compose file: builds every image from this
+# checkout. Installations that run from a git checkout (and update via
+# `git pull` + build, NODEGLOW_UPDATE_MODE=git) use this file.
+#
+# To install a published release instead (pulls signed images from GHCR, no
+# build, also air-gapped), use docker-compose.release.yml via scripts/install.sh
+# — see docs/INSTALL.md. Keep both files in step.
 services:
   db:
     image: postgres:16-alpine
@@ -125,6 +132,9 @@ services:
       - backups:/backups
     environment:
       UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with backend)}
+      # This file builds from git, so the updater pulls + builds (git mode).
+      # docker-compose.release.yml sets "image" instead.
+      NODEGLOW_UPDATE_MODE: git
       # Postgres container to dump. Leave unset: the sidecar finds the `db`
       # service of the running compose project via its labels (this also works
       # for the legacy stack started as project "vigil"). Set it only if that
