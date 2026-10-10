@@ -65,16 +65,16 @@ export function ExportButton({ data, filename, columns }: ExportButtonProps) {
         Export
       </Button>
       {open && (
-        <div className="absolute right-0 mt-1 z-50 w-32 rounded-md border shadow-xl overflow-hidden" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border)' }}>
+        <div className="absolute right-0 mt-1 z-popover w-36 overflow-hidden rounded-card border border-border-2 bg-surface p-1 shadow-overlay">
           <button
             onClick={exportCSV}
-            className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.06] transition-colors"
+            className="w-full rounded-ng-sm px-2.5 py-2 text-left text-ui text-fg hover:bg-surface-2 transition-colors"
           >
             CSV
           </button>
           <button
             onClick={exportJSON}
-            className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.06] transition-colors"
+            className="w-full rounded-ng-sm px-2.5 py-2 text-left text-ui text-fg hover:bg-surface-2 transition-colors"
           >
             JSON
           </button>

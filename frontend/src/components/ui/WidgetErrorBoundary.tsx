@@ -37,16 +37,16 @@ export class WidgetErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div className="h-full min-h-[120px] flex flex-col items-center justify-center gap-2 p-4 text-center">
-          <AlertTriangle size={18} className="text-amber-400" />
-          <p className="text-xs text-slate-300">
+          <AlertTriangle size={18} className="text-warning" aria-hidden="true" />
+          <p className="text-meta text-fg">
             {this.props.label ? `${this.props.label} failed to render` : 'Widget failed to render'}
           </p>
-          <p className="text-[10px] font-mono text-slate-500 max-w-full truncate">
+          <p className="text-micro font-mono text-fg-3 max-w-full truncate">
             {this.state.error.message}
           </p>
           <button
             onClick={this.reset}
-            className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-md border border-white/[0.12] text-slate-300 hover:bg-white/[0.06] hover:text-white transition-colors"
+            className="mt-1 inline-flex items-center gap-1.5 px-2.5 h-[28px] text-meta font-medium rounded-ng-sm border border-border-2 bg-surface-2 text-fg hover:bg-surface-3 transition-colors"
           >
             <RotateCcw size={11} /> Retry
           </button>

@@ -1,5 +1,17 @@
 import { type ClassValue, clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
+
+// Teach tailwind-merge the design-system scale (tailwind.config.ts) so that
+// e.g. `text-meta` (size) and `text-fg-2` (colour) do not cancel each other.
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [{ text: ['micro', 'meta', 'ui', 'body', 'lead', 'h3', 'h1', 'num-sm', 'num', 'num-lg'] }],
+      shadow: [{ shadow: ['overlay', 'ng-sm', 'glow-crit', 'glow-warn', 'glow-dot-crit', 'glow-dot-warn', 'accent-glow'] }],
+      rounded: [{ rounded: ['card', 'ctl', 'chip', 'ng-sm', 'ng-lg', 'pill'] }],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -21,10 +33,10 @@ export function formatLatency(ms: number | null): string {
 }
 
 export function uptimeColor(pct: number | null): string {
-  if (pct === null) return 'text-slate-500';
-  if (pct >= 99.9) return 'text-emerald-400';
-  if (pct >= 95) return 'text-amber-400';
-  return 'text-red-400';
+  if (pct === null) return 'text-fg-3';
+  if (pct >= 99.9) return 'text-ok';
+  if (pct >= 95) return 'text-degraded';
+  return 'text-down';
 }
 
 export function timeAgo(dateStr: string | null | undefined): string {
@@ -45,9 +57,9 @@ export function timeAgo(dateStr: string | null | undefined): string {
 
 export function severityColor(severity: 'critical' | 'warning' | 'info' | string): string {
   switch (severity) {
-    case 'critical': return 'bg-red-500/20 text-red-400 border-red-500/30';
-    case 'warning': return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
-    case 'info': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-    default: return 'bg-slate-500/20 text-slate-400 border-slate-500/30';
+    case 'critical': return 'bg-down-soft text-down border-down/30';
+    case 'warning': return 'bg-warning-soft text-warning border-warning/30';
+    case 'info': return 'bg-maint-soft text-maint border-maint/30';
+    default: return 'bg-unknown-soft text-unknown border-border-2';
   }
 }

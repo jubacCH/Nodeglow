@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Clock, Lock, RotateCcw } from 'lucide-react';
 import { ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Skeleton } from './Skeleton';
@@ -14,6 +14,8 @@ export interface QueryLike<T> {
   error: unknown;
   refetch: () => unknown;
   isFetching?: boolean;
+  /** ms timestamp of the last successful fetch (TanStack `dataUpdatedAt`). */
+  dataUpdatedAt?: number;
 }
 
 /** Human-readable reason for a failed query. */
@@ -29,6 +31,20 @@ export function describeQueryError(error: unknown): string {
   return 'Something went wrong.';
 }
 
+function isForbidden(error: unknown) {
+  return error instanceof ApiError && error.status === 403;
+}
+
+/** "14:32" for today, otherwise a short date + time. */
+export function formatAsOf(ts: number | undefined | null): string | null {
+  if (!ts) return null;
+  const d = new Date(ts);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 interface QueryErrorStateProps {
   error: unknown;
   onRetry?: () => unknown;
@@ -38,8 +54,10 @@ interface QueryErrorStateProps {
   className?: string;
 }
 
-/** Error panel with a retry button — so a failed request never looks "empty". */
-export function QueryErrorState({ error, onRetry, title = 'Could not load data', compact, className }: QueryErrorStateProps) {
+/** Error panel with a retry button, so a failed request never looks "empty". */
+export function QueryErrorState({ error, onRetry, title, compact, className }: QueryErrorStateProps) {
+  const forbidden = isForbidden(error);
+  const Icon = forbidden ? Lock : AlertTriangle;
   return (
     <div
       role="alert"
@@ -49,14 +67,16 @@ export function QueryErrorState({ error, onRetry, title = 'Could not load data',
         className,
       )}
     >
-      <AlertTriangle size={compact ? 20 : 32} className="text-amber-400" aria-hidden="true" />
-      <p className={cn('font-medium text-slate-200', compact ? 'text-sm' : 'text-base')}>{title}</p>
-      <p className="text-xs text-slate-500 max-w-md">{describeQueryError(error)}</p>
-      {onRetry && (
+      <Icon size={compact ? 20 : 28} className={forbidden ? 'text-fg-3' : 'text-warning'} aria-hidden="true" />
+      <p className={cn('font-medium text-fg', compact ? 'text-ui' : 'text-body')}>
+        {title ?? (forbidden ? 'No access' : 'Could not load data')}
+      </p>
+      <p className="max-w-md text-meta text-fg-2">{describeQueryError(error)}</p>
+      {onRetry && !forbidden && (
         <button
           type="button"
           onClick={() => onRetry()}
-          className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs text-slate-300 bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] transition-colors"
+          className="mt-1 inline-flex h-[28px] items-center gap-1.5 rounded-ng-sm border border-border-2 bg-surface-2 px-2.5 text-meta font-medium text-fg hover:bg-surface-3"
         >
           <RotateCcw size={12} aria-hidden="true" /> Retry
         </button>
@@ -65,14 +85,35 @@ export function QueryErrorState({ error, onRetry, title = 'Could not load data',
   );
 }
 
-/** Thin banner for "showing cached data, the last refresh failed". */
-export function StaleDataBanner({ error, onRetry }: { error: unknown; onRetry?: () => unknown }) {
+interface StaleDataBannerProps {
+  error?: unknown;
+  onRetry?: () => unknown;
+  /** ms timestamp of the data still on screen. */
+  updatedAt?: number;
+  className?: string;
+}
+
+/**
+ * Thin banner for "showing cached data, the last refresh failed". Stale data
+ * is labelled with its age so it never passes for live data.
+ */
+export function StaleDataBanner({ error, onRetry, updatedAt, className }: StaleDataBannerProps) {
+  const asOf = formatAsOf(updatedAt);
   return (
-    <div role="status" className="flex items-center gap-2 px-3 py-2 mb-3 rounded-md text-xs bg-amber-500/10 border border-amber-500/20 text-amber-300">
-      <AlertTriangle size={14} aria-hidden="true" />
-      <span className="flex-1">Refresh failed — showing the last data received. {describeQueryError(error)}</span>
+    <div
+      role="status"
+      className={cn(
+        'mb-3 flex items-center gap-2 rounded-ctl border border-degraded/40 bg-degraded-soft px-3 py-2 text-meta text-degraded',
+        className,
+      )}
+    >
+      <Clock size={14} aria-hidden="true" className="shrink-0" />
+      <span className="flex-1">
+        {asOf ? `Showing data from ${asOf}. ` : 'Showing the last data received. '}
+        Refresh failed{error ? `: ${describeQueryError(error)}` : '.'}
+      </span>
       {onRetry && (
-        <button type="button" onClick={() => onRetry()} className="underline hover:text-amber-200">
+        <button type="button" onClick={() => onRetry()} className="font-medium underline underline-offset-2">
           Retry
         </button>
       )}
@@ -89,22 +130,24 @@ interface QueryStateProps<T> {
   /** Defaults to "is an empty array". */
   isEmpty?: (data: T) => boolean;
   errorTitle?: string;
+  /** Compact error layout (inside cards). */
+  compact?: boolean;
   children: (data: T) => ReactNode;
 }
 
 /**
  * One place for the loading / error / empty / data branches of a query.
  * A refetch that fails while older data is cached keeps the data on screen
- * and adds a banner instead of replacing it.
+ * and adds a stale banner (with the data's age) instead of replacing it.
  */
-export function QueryState<T>({ query, loading, empty, isEmpty, errorTitle, children }: QueryStateProps<T>) {
-  const { data, isLoading, isError, error, refetch } = query;
+export function QueryState<T>({ query, loading, empty, isEmpty, errorTitle, compact, children }: QueryStateProps<T>) {
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = query;
 
   if (isLoading) {
     return (
       <>
         {loading ?? (
-          <div className="space-y-2" aria-busy="true">
+          <div className="space-y-2" aria-busy="true" aria-label="Loading">
             <Skeleton className="h-6 w-full" />
             <Skeleton className="h-6 w-full" />
             <Skeleton className="h-6 w-3/4" />
@@ -115,14 +158,14 @@ export function QueryState<T>({ query, loading, empty, isEmpty, errorTitle, chil
   }
 
   if (data === undefined) {
-    if (isError) return <QueryErrorState error={error} onRetry={refetch} title={errorTitle} />;
+    if (isError) return <QueryErrorState error={error} onRetry={refetch} title={errorTitle} compact={compact} />;
     return <>{empty ?? null}</>;
   }
 
   const emptyCheck = isEmpty ?? ((d: T) => Array.isArray(d) && d.length === 0);
   return (
     <>
-      {isError && <StaleDataBanner error={error} onRetry={refetch} />}
+      {isError && <StaleDataBanner error={error} onRetry={refetch} updatedAt={dataUpdatedAt} />}
       {emptyCheck(data) && empty !== undefined ? empty : children(data)}
     </>
   );

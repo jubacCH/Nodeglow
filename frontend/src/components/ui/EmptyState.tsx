@@ -1,52 +1,68 @@
 'use client';
 
 import type { LucideIcon } from 'lucide-react';
+import { CheckCircle2, Inbox } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 interface EmptyStateProps {
-  icon: LucideIcon;
+  icon?: LucideIcon;
   title: string;
-  description?: string;
-  /** Primary call-to-action shown below the description */
+  description?: ReactNode;
+  /**
+   * - `not-configured`: feature has no source yet (neutral, offer setup)
+   * - `no-results`: filters match nothing (neutral, offer reset)
+   * - `confirmed`: positively checked and fresh, e.g. 0 open incidents.
+   *   Green, and requires `asOf` — "empty" is only good news with a timestamp.
+   */
+  variant?: 'not-configured' | 'no-results' | 'confirmed';
+  /** Timestamp of the check behind a `confirmed` empty state. */
+  asOf?: ReactNode;
   action?: ReactNode;
-  /** Optional secondary action (link or button) shown to the right of the primary */
   secondaryAction?: ReactNode;
-  /** Apply on a card or directly on the page; default sizing fits a card */
+  /** Smaller layout inside cards. */
+  compact?: boolean;
   className?: string;
 }
 
-/**
- * Reusable empty state — use whenever a list or panel has nothing to show.
- *
- * Design intent: never leave the user staring at a void. Every empty state
- * gives them a concrete next step or, at minimum, explains why the panel
- * is empty so they can debug it themselves.
- */
+/** Empty state. Never leave a void: say why it is empty and what to do next. */
 export function EmptyState({
-  icon: Icon,
+  icon,
   title,
   description,
+  variant = 'not-configured',
+  asOf,
   action,
   secondaryAction,
+  compact,
   className,
 }: EmptyStateProps) {
+  const confirmed = variant === 'confirmed';
+  const Icon = icon ?? (confirmed ? CheckCircle2 : Inbox);
   return (
     <div
+      role={confirmed ? 'status' : undefined}
       className={cn(
-        'flex flex-col items-center justify-center text-center px-6 py-12',
+        'flex flex-col items-center justify-center text-center',
+        compact ? 'gap-1.5 px-4 py-6' : 'gap-2 px-6 py-12',
         className,
       )}
     >
-      <div className="mb-4 p-3 rounded-full bg-slate-500/10">
-        <Icon size={36} className="text-slate-500" />
-      </div>
-      <h3 className="text-base font-semibold text-slate-200 mb-1">{title}</h3>
-      {description && (
-        <p className="text-sm text-slate-500 max-w-md mb-5">{description}</p>
-      )}
+      <span
+        className={cn(
+          'mb-1 grid place-items-center rounded-card',
+          compact ? 'h-9 w-9' : 'h-11 w-11',
+          confirmed ? 'bg-ok-soft text-ok' : 'bg-surface-2 text-fg-3',
+        )}
+        aria-hidden="true"
+      >
+        <Icon size={compact ? 18 : 22} />
+      </span>
+      <h3 className={cn('font-medium text-fg', compact ? 'text-ui' : 'text-body')}>{title}</h3>
+      {description && <p className="max-w-md text-ui text-fg-2">{description}</p>}
+      {confirmed && asOf && <p className="text-meta text-fg-3">As of {asOf}</p>}
       {(action || secondaryAction) && (
-        <div className="flex items-center gap-3">
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
           {action}
           {secondaryAction}
         </div>
