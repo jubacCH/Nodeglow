@@ -9,6 +9,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+## [2.0.0-rc.1] - 2026-10-10
+
 ### Added
 
 - **Release pipeline.** Tagged releases build signed, multi-arch images
@@ -107,4 +109,5 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   sidecar finds the database without a hard-coded container name.
 - Password hashing survives bcrypt 5's 72-byte limit.
 
-[Unreleased]: https://github.com/jubacCH/Nodeglow/commits/main
+[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.1...HEAD
+[2.0.0-rc.1]: https://github.com/jubacCH/Nodeglow/releases/tag/v2.0.0-rc.1
