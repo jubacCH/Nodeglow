@@ -43,7 +43,7 @@ async def rules_list(
             "message_template": r.message_template,
             "cooldown_minutes": r.cooldown_minutes,
             "required_consecutive": r.required_consecutive,
-            "last_triggered_at": str(r.last_triggered) if r.last_triggered else None,
+            "last_triggered_at": str(r.last_triggered_at) if r.last_triggered_at else None,
             "trigger_count": getattr(r, "trigger_count", 0),
         }
         for r in all_rules
