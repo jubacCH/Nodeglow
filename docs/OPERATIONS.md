@@ -47,7 +47,9 @@ from that experience, not from a load test.
   enterprise features in `ee/` (see [LICENSING.md](../LICENSING.md)).
   `NODEGLOW_DISABLE_EE=1` runs the community edition; the log line
   `Nodeglow edition: ...` at startup and `GET /api/v2/features` show which
-  one is running.
+  one is running. The enterprise features need a license key; without one
+  they stay inactive and everything else works (see
+  [Enterprise license](#enterprise-license)).
 
 ### Ports and firewall
 
@@ -478,6 +480,72 @@ request, so an error a user reports can be found with
 
 ---
 
+## Enterprise license
+
+The enterprise features in `ee/` (HA scheduler, Glow, AI postmortems, the AI
+daily summary) are switched on by a license key: a signed file, verified
+offline on the server (no phone-home, works air-gapped). Monitoring never
+depends on it.
+
+| License state | What happens |
+|---|---|
+| none installed / unusable | Enterprise features inactive: their endpoints answer `402`, their jobs skip, the UI hides them. Everything else works. |
+| valid | The features listed in the license work. |
+| expired, first 14 days | Still working (grace period); admins see a banner. |
+| expired, after 14 days | Monitoring keeps running and nothing is deleted. Enterprise actions are refused (`402`), data they produced stays visible (e.g. stored postmortems). HA leader election keeps running so replicas do not duplicate jobs. |
+
+### Installing a license
+
+**In the UI (recommended):** Settings → License → paste the license key →
+*Install license*. Admins only; the change is recorded in the audit log
+(`license.install` / `license.remove`) and applies without a restart. The
+key is stored in the `settings` table, so it is part of the database backup.
+
+**Through the environment:** set `NODEGLOW_LICENSE` in `.env` to the key
+itself or to a path inside the container, e.g. put the file into `./data/`
+and set `NODEGLOW_LICENSE=/data/nodeglow-license.txt`, then
+`docker compose up -d backend`. The environment wins over a key installed in
+the UI, and the settings page shows it read-only.
+
+Check it: Settings → License, `GET /api/v2/features` (`license.status`), or
+on the host
+
+```bash
+docker compose exec -w /opt/nodeglow-ee backend python -m nodeglow_ee.licensing verify /data/nodeglow-license.txt
+```
+
+HA leader election is decided when the scheduler starts: after installing a
+license that includes it, restart the backends once.
+
+**Installation-bound licenses** (optional): Settings → License shows an
+*Installation ID*. A license issued for that ID works only on this
+installation. Licenses are not bound unless the issuer asks for it.
+
+### Issuing licenses (vendor / owner)
+
+License keys are signed with a private Ed25519 key that is **never** stored in
+the repository or on a Nodeglow server; its public key is embedded in
+`ee/backend/nodeglow_ee/licensing.py` (`TRUSTED_KEYS`, key id `ng-2026-10`).
+From `ee/backend/`, on the machine that holds the private key:
+
+```bash
+# once: a key pair (prints the public key line for TRUSTED_KEYS)
+python -m nodeglow_ee.licensing keygen --out-dir ~/nodeglow-license-keys --kid ng-2026-10
+
+# a license (features: "all" or a comma list; omit --max-tenants for unlimited)
+python -m nodeglow_ee.licensing issue \
+  --signing-key ~/nodeglow-license-keys/ng-2026-10.private.pem --kid ng-2026-10 \
+  --customer "ACME AG" --expires 2027-12-31 --features all --out acme-license.txt
+```
+
+The owner's own installation uses a license issued the same way — there is no
+built-in bypass. Back up the private key (password manager / vault); without
+it no new licenses can be issued. Rotating the key: generate a new one with a
+new `--kid`, add its public key to `TRUSTED_KEYS` next to the old one, and
+remove the old id only once every license signed with it has been replaced.
+
+---
+
 ## AI features
 
 Glow (the chat), automatic incident postmortems and the daily AI summary send
@@ -603,6 +671,7 @@ Useful optional settings:
 | `UI_BIND` | `0.0.0.0` | Host address for the UI port 8000 |
 | `SYSLOG_BIND` | `0.0.0.0` | Host address for the syslog ports 514/udp, 1514/tcp |
 | `NODEGLOW_NO_NEW_PRIVILEGES` | `false` | `true` enables no-new-privileges for the backend; verify ICMP checks afterwards |
+| `NODEGLOW_LICENSE` | unset | Enterprise license key or a path to a file with it ([Enterprise license](#enterprise-license)) |
 | `LOG_LEVEL` | `INFO` | Backend log level |
 | `LOG_FORMAT` | `text` | `json` for one JSON object per line |
 | `APP_VERSION` | from `VERSION` | Build arg; set automatically by the UI update |
