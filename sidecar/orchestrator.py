@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import namedtuple
 from dataclasses import dataclass
 from typing import Callable
@@ -335,12 +336,41 @@ def step_pull(ctx: Ctx) -> str:
     return f"{old_sha} → {new_sha} ({n} commits)"
 
 
+_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
+
+
+def read_version(repo_path: str) -> str:
+    """Return the release version from ``VERSION`` in the repo, or ``""``.
+
+    The file may carry trailing comment lines (``# <timestamp>``); the first
+    non-comment line is the version. Anything that does not look like a
+    version string is ignored rather than passed on to the build.
+    """
+    try:
+        with open(os.path.join(repo_path, "VERSION"), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line if _VERSION_RE.match(line) else ""
+    return ""
+
+
 def step_build(ctx: Ctx) -> str:
-    """Build the new images without touching the running containers."""
-    result = _compose(ctx, "build", *BUILD_SERVICES, timeout=BUILD_TIMEOUT)
+    """Build the new images without touching the running containers.
+
+    The backend build context is ./backend, which does not contain the
+    repo-root VERSION file, so the version travels as a build arg.
+    """
+    version = read_version(ctx.repo_path)
+    extra = ["--build-arg", f"APP_VERSION={version}"] if version else []
+    result = _compose(ctx, "build", *extra, *BUILD_SERVICES, timeout=BUILD_TIMEOUT)
     if result.returncode != 0:
         raise StepError(f"docker compose build failed: {result.stderr[-MAX_ERROR_CHARS:]}")
-    return f"built {', '.join(BUILD_SERVICES)}"
+    suffix = f" (version {version})" if version else ""
+    return f"built {', '.join(BUILD_SERVICES)}{suffix}"
 
 
 def step_migrate(ctx: Ctx) -> str:

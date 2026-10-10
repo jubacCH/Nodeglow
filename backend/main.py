@@ -59,9 +59,10 @@ async def lifespan(app: FastAPI):
 
 
 _debug = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
+from config import get_version
 app = FastAPI(
     title="NODEGLOW",
-    version="1.0.0",
+    version=get_version(),
     description="Network monitoring and incident correlation platform",
     docs_url="/api/docs" if _debug else None,
     redoc_url="/api/redoc" if _debug else None,

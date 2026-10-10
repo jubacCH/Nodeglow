@@ -31,6 +31,7 @@ from orchestrator import (
     DumpResult,
     idle_state,
     list_backups,
+    read_version,
     run_update,
 )
 
@@ -265,13 +266,7 @@ class UpdateHandler(BaseHTTPRequestHandler):
             commit = r.stdout.strip() if r.returncode == 0 else "unknown"
         except Exception:
             commit = "unknown"
-        version = ""
-        try:
-            with open(f"{REPO_PATH}/VERSION") as f:
-                version = f.read().strip()
-        except Exception:
-            pass
-        return {"commit": commit, "version": version}
+        return {"commit": commit, "version": read_version(REPO_PATH)}
 
     def _check_updates(self):
         if not os.path.isdir(f"{REPO_PATH}/.git"):
