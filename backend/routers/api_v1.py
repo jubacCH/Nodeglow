@@ -345,6 +345,8 @@ async def get_host(
     lr = latest_map.get(host_id)  # dict or None
 
     um = (await get_ping_uptime([host_id], hours=24)).get(host_id, {})
+    um_7d = (await get_ping_uptime([host_id], hours=24 * 7)).get(host_id, {})
+    um_30d = (await get_ping_uptime([host_id], hours=24 * 30)).get(host_id, {})
 
     # Agent metrics (if host is agent-sourced)
     agent_metrics = None
@@ -479,7 +481,11 @@ async def get_host(
             "latency_ms": round(float(lr["latency_ms"]), 2) if lr and lr.get("latency_ms") is not None else None,
             "timestamp": lr["timestamp"].isoformat() if lr and lr.get("timestamp") else None,
         },
-        "uptime": {"h24": um.get("h24"), "d7": um.get("d7"), "d30": um.get("d30")},
+        "uptime": {
+            "h24": um.get("uptime_pct"),
+            "d7": um_7d.get("uptime_pct"),
+            "d30": um_30d.get("uptime_pct"),
+        },
         "health_score": health_score,
         "health_pct": health_pct,
         "agent": agent_metrics,

@@ -556,12 +556,11 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 
     # Active incidents
     from models.incident import Incident, IncidentEvent
-    active_incidents = (await db.execute(
-        select(Incident)
+    # A count, not len() of a limited query: that capped the tile at 5.
+    active_incident_count = (await db.execute(
+        select(func.count(Incident.id))
         .where(Incident.status.in_(["open", "acknowledged"]))
-        .order_by(Incident.created_at.desc())
-        .limit(5)
-    )).scalars().all()
+    )).scalar() or 0
 
     _cp("syslog")
     # ── Syslog stats (last 24h) ──────────────────────────────────────────────
@@ -1269,7 +1268,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "offline_count": offline_count,
         "total_count": len(active_stats),
         "integration_health": integration_health,
-        "active_incidents": len(active_incidents),
+        "active_incidents": active_incident_count,
         "syslog_stats": {
             "total_24h": syslog_stats.get("total", 0),
             "errors_24h": syslog_stats.get("error_rate_1h", 0),
