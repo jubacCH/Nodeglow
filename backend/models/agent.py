@@ -31,6 +31,10 @@ class Agent(Base):
     is_probe   = Column(Boolean, default=False, nullable=False)
     probe_interval_seconds = Column(Integer, nullable=True)
     watched_services = Column(Text, nullable=True)
+    # Latest reported state of the watched services plus the failure streaks,
+    # JSON (see services.agent_services). NULL until the agent first reports
+    # service states — always the case for agents that predate the feature.
+    service_states = Column(Text, nullable=True)
     last_seen  = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
