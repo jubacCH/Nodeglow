@@ -1,3 +1,8 @@
+# cosign verifies release image signatures in image update mode
+# (NODEGLOW_UPDATE_MODE=image, see image_update.py). Taken from the official,
+# multi-arch Sigstore image at a pinned version; bump deliberately.
+FROM gcr.io/projectsigstore/cosign:v2.4.1 AS cosign
+
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,11 +17,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
+RUN cosign version >/dev/null
+
 # NOTE: Runs as root — required for Docker socket access and git operations.
 # The sidecar is not exposed to external traffic (internal network only).
 
 WORKDIR /app
-COPY update-server.py orchestrator.py ./
+COPY update-server.py orchestrator.py image_update.py ./
 
 EXPOSE 9100
 CMD ["python", "update-server.py"]
