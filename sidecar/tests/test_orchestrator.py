@@ -28,6 +28,7 @@ from orchestrator import (  # noqa: E402
     step_preflight,
     step_pull,
     step_restart,
+    read_version,
 )
 
 
@@ -381,6 +382,33 @@ def test_build_only_builds_app_services(tmp_path):
                             "build", "nodeglow", "frontend"]
     assert seen["timeout"] >= 1800
     assert "nodeglow" in detail
+
+
+def test_build_passes_version_from_repo_file(tmp_path):
+    seen = {}
+
+    def run_cmd(argv, timeout=60, cwd=None):
+        seen["argv"] = argv
+        return CmdResult(0, "", "")
+
+    ctx = make_ctx(tmp_path, run_cmd=run_cmd)
+    with open(os.path.join(ctx.repo_path, "VERSION"), "w") as fh:
+        fh.write("1.2.3\n# 2026-04-03T06:28:41Z\n")
+
+    detail = step_build(ctx)
+
+    assert seen["argv"] == ["docker", "compose", "-p", "vigil", "-f", ctx.compose_file,
+                            "build", "--build-arg", "APP_VERSION=1.2.3",
+                            "nodeglow", "frontend"]
+    assert "1.2.3" in detail
+
+
+def test_read_version_skips_comments_and_rejects_garbage(tmp_path):
+    (tmp_path / "VERSION").write_text("# header\n\n2.0.0-rc1\n")
+    assert read_version(str(tmp_path)) == "2.0.0-rc1"
+    (tmp_path / "VERSION").write_text("1.0 ; rm -rf /\n")
+    assert read_version(str(tmp_path)) == ""
+    assert read_version(str(tmp_path / "missing")) == ""
 
 
 def test_build_failure_is_reported(tmp_path):

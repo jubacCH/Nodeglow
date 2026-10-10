@@ -22,6 +22,46 @@ if not DATABASE_URL:
 REDIS_URL = os.getenv("REDIS_URL", "")
 
 
+# ── Application version ──────────────────────────────────────────────────────
+# Single source of truth is the VERSION file at the repository root. The
+# backend image is built from ./backend, which does not contain that file, so
+# the version reaches the image as the APP_VERSION build arg (compose passes
+# it, the update sidecar fills it from VERSION) and the Dockerfile writes it to
+# /app/VERSION. For local runs and tests the repo-root file is read directly.
+_VERSION_FALLBACK = "0.0.0+unknown"
+_BACKEND_DIR = Path(__file__).resolve().parent
+
+
+def _version_candidates() -> list[Path]:
+    return [
+        _BACKEND_DIR / "VERSION",          # baked into the image (/app/VERSION)
+        _BACKEND_DIR.parent / "VERSION",   # repo checkout (dev, CI)
+    ]
+
+
+def get_version() -> str:
+    """Return the application version, e.g. ``"1.0.0"``.
+
+    Order: ``APP_VERSION`` env, ``/app/VERSION`` (image), repo-root ``VERSION``,
+    then a fallback that is obviously not a release. The VERSION file may carry
+    trailing comment lines (``# <timestamp>``); only the first non-comment line
+    counts.
+    """
+    env = os.getenv("APP_VERSION", "").strip()
+    if env:
+        return env
+    for path in _version_candidates():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line
+    return _VERSION_FALLBACK
+
+
 # Sentinel value for get_secret_key(): True when the key was sourced from
 # the env var, False when it came from (or was just created in) the data
 # volume. The app startup path logs a warning in the volume-fallback case

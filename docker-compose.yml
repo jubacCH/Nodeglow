@@ -56,6 +56,10 @@ services:
         # for anything you distribute: Ookla's licence restricts redistribution
         # and commercial use. Set BUNDLE_OOKLA=1 in .env for your own install.
         BUNDLE_OOKLA: ${BUNDLE_OOKLA:-0}
+        # Version shown in the UI/API. Source of truth is ./VERSION; the update
+        # sidecar passes it automatically. For a manual build:
+        #   APP_VERSION=$(head -n1 VERSION) docker compose build nodeglow
+        APP_VERSION: ${APP_VERSION:-}
     container_name: nodeglow
     ports:
       - "514:1514/udp"    # Syslog UDP (host 514 → container 1514)
