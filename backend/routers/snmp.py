@@ -59,6 +59,11 @@ async def snmp_page(request: Request, db: AsyncSession = Depends(get_db)):
     )
     available_hosts = [h for h in q.scalars().all() if h.id not in configured_ids]
 
+    cred_names = {c.id: c.name for c in credentials}
+
+    def _iso_utc(dt):
+        return dt.isoformat() + ("Z" if dt.tzinfo is None else "") if dt else None
+
     from fastapi.responses import JSONResponse
     return JSONResponse({
         "mibs": [
@@ -74,6 +79,10 @@ async def snmp_page(request: Request, db: AsyncSession = Depends(get_db)):
                 "host_name": hc["host_name"],
                 "hostname": hc["hostname"],
                 "credential_id": hc["config"].credential_id,
+                "credential_name": cred_names.get(hc["config"].credential_id),
+                "port": hc["config"].port or 161,
+                "last_poll": _iso_utc(hc["config"].last_poll),
+                "last_ok": hc["config"].last_ok,
                 "poll_interval": getattr(hc["config"], "poll_interval", 300),
                 "enabled": getattr(hc["config"], "enabled", True),
             }
