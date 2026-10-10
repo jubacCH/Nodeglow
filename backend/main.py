@@ -58,6 +58,8 @@ async def lifespan(app: FastAPI):
     yield
     await stop_syslog_server()
     stop_scheduler()
+    from utils.ping import close_http_clients
+    await close_http_clients()
 
 
 _debug = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
