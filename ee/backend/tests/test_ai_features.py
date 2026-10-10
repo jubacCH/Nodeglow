@@ -47,8 +47,10 @@ def test_plugin_registers_everything_on_a_fresh_registry():
     paths = {r.path for router in reg.routers for r in router.routes}
     assert {"/api/v1/glow/chat", "/api/v1/incidents/{incident_id}/postmortem",
             "/settings/ai/test-summary"} <= paths
-    assert reg.scheduler_coordinator is not None
-    assert len(reg.incident_resolved_hooks) == 1 and len(reg.scheduler_hooks) == 1
+    assert "/settings/license" in paths
+    assert reg.scheduler_coordinator is not None and reg.license_provider is not None
+    # The license hook first, then the daily summary job.
+    assert len(reg.incident_resolved_hooks) == 1 and len(reg.scheduler_hooks) == 2
 
 
 async def test_daily_summary_hook_schedules_the_job(monkeypatch):
