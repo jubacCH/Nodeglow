@@ -4,6 +4,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { SyslogLiveTail } from '@/components/syslog/SyslogLiveTail';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
 import { useSyslog } from '@/hooks/queries/useSyslog';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -52,7 +53,7 @@ export default function SyslogPage() {
   const [sortKey, setSortKey] = useState<SortKey>('timestamp');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  const { data: messages, isLoading } = useSyslog({
+  const { data: messages, isLoading, isError, error, refetch } = useSyslog({
     severity: selectedSeverity,
     limit: 200,
   });
@@ -208,6 +209,7 @@ export default function SyslogPage() {
       </div>
 
       {/* Messages table */}
+      {isError && messages && <StaleDataBanner error={error} onRetry={refetch} />}
       <GlassCard>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -307,7 +309,14 @@ export default function SyslogPage() {
                   </Fragment>
                 );
               })}
-              {!isLoading && (!filtered || filtered.length === 0) && (
+              {!isLoading && isError && !messages && (
+                <tr>
+                  <td colSpan={4}>
+                    <QueryErrorState error={error} onRetry={refetch} title="Could not load syslog messages" />
+                  </td>
+                </tr>
+              )}
+              {!isLoading && !(isError && !messages) && (!filtered || filtered.length === 0) && (
                 <tr>
                   <td colSpan={4} className="px-4 py-16">
                     <div className="flex flex-col items-center gap-3">

@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { GlassCard } from '@/components/ui/GlassCard';
+import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -17,7 +18,7 @@ import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Net
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { get, patch, post } from '@/lib/api';
+import { ApiError, get, patch, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { Modal } from '@/components/ui/Modal';
 import type { EChartsOption } from 'echarts';
@@ -204,7 +205,10 @@ export default function HostDetailPage() {
   const qc = useQueryClient();
   const toast = useToastStore((s) => s.show);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: host, isLoading } = useHost(hostId) as { data: any; isLoading: boolean };
+  const hostQuery = useHost(hostId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const host = hostQuery.data as any;
+  const { isLoading } = hostQuery;
   const { data: history, isLoading: historyLoading } = useHostHistory(hostId, 24);
   const { data: allHosts } = useHosts();
 
@@ -265,9 +269,27 @@ export default function HostDetailPage() {
               ? 'online' as const
               : 'unknown' as const;
 
+  // A failed or 404 request must not render an empty host page.
+  if (!isLoading && !host && hostQuery.isError) {
+    const notFound = hostQuery.error instanceof ApiError && hostQuery.error.status === 404;
+    return (
+      <div>
+        <Breadcrumbs items={[{ label: 'Hosts', href: '/hosts' }, { label: `Host #${hostId}` }]} />
+        <GlassCard className="mt-4">
+          <QueryErrorState
+            error={hostQuery.error}
+            onRetry={notFound ? undefined : hostQuery.refetch}
+            title={notFound ? 'Host not found' : 'Could not load this host'}
+          />
+        </GlassCard>
+      </div>
+    );
+  }
+
   return (
     <div>
       <Breadcrumbs items={[{ label: 'Hosts', href: '/hosts' }, { label: host?.name ?? `Host #${hostId}` }]} />
+      {hostQuery.isError && host && <StaleDataBanner error={hostQuery.error} onRetry={hostQuery.refetch} />}
       <PageHeader
         title={isLoading ? 'Loading...' : (host?.name ?? 'Host')}
         description={

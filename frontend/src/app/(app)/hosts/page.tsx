@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Pagination } from '@/components/ui/Pagination';
+import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
 import { useHosts } from '@/hooks/queries/useHosts';
 import { useConfirm } from '@/hooks/useConfirm';
 import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
@@ -115,7 +116,7 @@ function HostsPageInner() {
   const qc = useQueryClient();
   const qParam = searchParams.get('q') ?? '';
   const [search, setSearch] = useState(qParam);
-  const { data: hosts, isLoading } = useHosts();
+  const { data: hosts, isLoading, isError, error, refetch } = useHosts();
   const redirected = useRef(false);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -409,6 +410,7 @@ function HostsPageInner() {
         </GlassCard>
       )}
 
+      {isError && hosts && <StaleDataBanner error={error} onRetry={refetch} />}
       <GlassCard>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -507,7 +509,14 @@ function HostsPageInner() {
                   </tr>
                 );
               })}
-              {!isLoading && filteredHosts.length === 0 && (
+              {!isLoading && isError && !hosts && (
+                <tr>
+                  <td colSpan={selectMode ? 7 : 6}>
+                    <QueryErrorState error={error} onRetry={refetch} title="Could not load hosts" />
+                  </td>
+                </tr>
+              )}
+              {!isLoading && !(isError && !hosts) && filteredHosts.length === 0 && (
                 <tr>
                   <td colSpan={selectMode ? 7 : 6} className="px-4 py-12 text-center">
                     <Server size={48} className="mx-auto mb-4 text-slate-600" />
