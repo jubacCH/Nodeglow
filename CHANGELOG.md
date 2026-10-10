@@ -22,12 +22,32 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - **Image-based updates.** With `NODEGLOW_UPDATE_MODE=image` the updater
   installs published releases: cosign verification (fail closed), pre-update
   dump, pull, migrate, restart. Git-based installs keep building from source.
-- **E3 redesign.** New design system, app shell (icon rail, top bar, section
-  navigation) and every page migrated to it: hosts, incidents, alert rules,
-  maintenance, logs, integrations, agents, topology, settings and more.
+- **Enterprise license keys.** Offline-verified Ed25519 license keys for the
+  `ee/` features (no phone-home), installed under Settings → License or via
+  `NODEGLOW_LICENSE`, with a 14-day grace period and an admin banner. Without
+  a key the enterprise features stay inactive and the core works unchanged.
+  `GET /api/v2/features` reports edition, installed and licensed features.
+- **E3 redesign.** New design system with light, dark and system theme, app
+  shell (icon rail, top bar, section sub-navigation, mobile tab bar, command
+  palette) and every page migrated to it: hosts, incidents, alert rules,
+  maintenance, logs, integrations, agents, topology, settings and more. Some
+  pages were renamed (Logs, Log overview, Log patterns, Traffic, Weekly
+  report, Discovery, Agents & Probes).
 - **Dashboard v2.** The Overview route shows the new E3 dashboard on
-  `/api/v2/dashboard` and `/api/v2/summary`, plus a change feed (`/changes`)
-  and the last dashboard visit per user.
+  `/api/v2/dashboard` and `/api/v2/summary`, plus a change feed (`/changes`,
+  `/api/v2/changes`) and the last dashboard visit per user
+  (`/api/v2/me/seen`).
+- **Remote probes:** agents can run the checks for hosts the server cannot
+  reach; hosts behind a silent probe are `unknown`.
+- **Incident API:** filters for status, severity, rule, host, time range and
+  sort order, paging with an optional `{items, total, limit, offset, has_more}`
+  envelope (`envelope=true`; the bare list stays the default, total in
+  `X-Total-Count`), and the affected hosts of each incident (`host_ids`,
+  `hosts`).
+- **Bulk host edit** (`PATCH /api/v1/hosts/bulk`) and the probe toggle on the
+  agents page now actually work and persist.
+- The syslog live tail filters "severity N or worse", like the list; the SNMP
+  page shows port, credential and last poll state.
 - **Notification channels:** Microsoft Teams, Slack and ntfy, with settings,
   test button and rule-editor support.
 - **Maintenance windows**, one-off and recurring, with a badge on affected
@@ -49,9 +69,24 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   and the AI features (Glow, postmortems, daily summary) moved to `ee/` under
   the Nodeglow Enterprise License, loaded as a plugin. The UI shows enterprise
   features only where they are installed. See [LICENSING.md](LICENSING.md).
-- **Unified host state:** one probe-aware host state for lists, dashboard and
-  topology; incidents record their affected hosts.
+- **Unified host state:** one probe-aware host state (`up`, `degraded`,
+  `warning`, `down`, `unknown`, `maintenance`, `disabled`) for lists,
+  dashboard, badges and topology, exposed as `state`, `state_reason` and
+  `observed_at` on every host endpoint. The legacy `status` field is derived
+  from it, so a host behind a silent probe now reads `unknown` instead of
+  `online`.
 - Frontend on Next 15.5 and React 19, image and CI on Node 22.
+- **Fonts are self-hosted** (Sora, Inter Tight, JetBrains Mono via
+  `@fontsource-variable`): the frontend build and the UI need no access to
+  Google Fonts, which also makes air-gapped builds possible.
+- Dependency majors: lucide-react 1, framer-motion 14, vitest 5,
+  @types/node 22, clickhouse-connect 1.10.
+
+### Removed
+
+- The 3D "gravity well" dashboard view and with it three.js and
+  `@react-three/*`; the old sidebar layout, the glass-card components and the
+  previous dashboard widgets.
 - Many performance fixes: concurrent integration collection, bulk ping job,
   cheaper syslog inserts and queries, ClickHouse-side aggregation for trend and
   anomaly passes.
@@ -60,7 +95,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 - **Security:** CSRF token required for cookie-authenticated `/api/v1`
   mutations; Telegram, Discord and webhook secrets encrypted and write-only;
-  SSRF guard for webhooks; JSON backup export encrypted with an admin
+  SSRF guards for webhooks, notification channels, host targets created
+  through the API and AI provider URLs; JSON backup export encrypted with an admin
   passphrase; an install token could hijack an enrolled agent; LDAP sent
   passwords over unverified TLS and could take over local accounts; alert rules
   were reachable without login; integration credentials could be redirected to
