@@ -260,8 +260,10 @@ async def test_since_last_visit_uses_the_stored_visit():
                 await db.commit()
             await client.post("/api/v2/me/seen")
             async with sf() as db:
+                # +1 s: the visit and the incident must not share a timestamp
+                # (coarse clocks, e.g. Windows, made this flaky).
                 db.add(Incident(rule="r", title="new one", severity="warning", status="open",
-                                created_at=datetime.utcnow()))
+                                created_at=datetime.utcnow() + timedelta(seconds=1)))
                 await db.commit()
             data = (await client.get("/api/v2/dashboard")).json()
         assert data["previous_seen_at"] is not None
