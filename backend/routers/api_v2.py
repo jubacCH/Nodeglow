@@ -37,14 +37,17 @@ def _session_user_id(request: Request) -> int:
 
 @router.get("/features", summary="Edition and the features this installation offers")
 async def features():
-    """``{edition: "community"|"enterprise", features: {name: bool}}``.
+    """``{edition, features: {name: bool}, installed: {name: bool}, license}``.
 
-    The UI shows enterprise features only when their flag is true. A flag says
-    the feature is *installed*; whether it is switched on (e.g. the AI opt-in)
+    The UI shows enterprise features only when their flag in ``features`` is
+    true: installed in this build and, in the enterprise edition, covered by
+    a usable license. ``installed`` tells "not in this edition" apart from
+    "not licensed"; ``license`` is the license summary (``null`` in the
+    community edition). Whether a feature is switched on (e.g. the AI opt-in)
     is reported by the feature's own status endpoint (/api/v1/ai/status).
     """
     from extensions import registry
-    return registry.feature_payload()
+    return await registry.resolve_feature_payload()
 
 
 # ── Dashboard + summary ──────────────────────────────────────────────────────

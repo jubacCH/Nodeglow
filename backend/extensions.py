@@ -11,7 +11,10 @@ to it; the core reads it at the few places where it can be extended:
 * incident resolution (manual and automatic) calls the **incident-resolved
   hooks** after the transaction has committed;
 * ``GET /api/v2/features`` reports the **edition** and **feature flags** so
-  the UI shows only what this installation can do.
+  the UI shows only what this installation can do. A plugin that gates its
+  features (the enterprise license check) registers a **license provider**;
+  the endpoint then reports a flag as on only while the provider says the
+  feature is usable, plus the provider's license summary.
 
 With no plugin loaded every list is empty, every flag keeps its community
 default and every call site behaves exactly as the plain core.
@@ -60,6 +63,8 @@ class SchedulerCoordinator(Protocol):
 
 IncidentResolvedHook = Callable[[int], Awaitable[None]]
 SchedulerHook = Callable[[Any], Awaitable[None]]
+# ``await provider()`` → ``{"license": {...summary...}, "active": {feature: bool}}``
+LicenseProvider = Callable[[], Awaitable[dict]]
 
 
 @dataclass
@@ -71,6 +76,7 @@ class Registry:
     scheduler_hooks: list[SchedulerHook] = field(default_factory=list)
     incident_resolved_hooks: list[IncidentResolvedHook] = field(default_factory=list)
     scheduler_coordinator: SchedulerCoordinator | None = None
+    license_provider: LicenseProvider | None = None
     features: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_FEATURES))
     edition: str = EDITION_COMMUNITY
 
@@ -96,10 +102,40 @@ class Registry:
     def enable_feature(self, name: str) -> None:
         self.features[name] = True
 
+    def set_license_provider(self, provider: LicenseProvider) -> None:
+        """Gate the reported flags: a flag is on only while ``provider`` says so."""
+        if self.license_provider is not None:
+            raise RuntimeError("A license provider is already registered")
+        self.license_provider = provider
+
     # ── read API (used by the core) ─────────────────────────────────────────
 
     def feature_payload(self) -> dict:
+        """Installed features (no license check)."""
         return {"edition": self.edition, "features": dict(sorted(self.features.items()))}
+
+    async def resolve_feature_payload(self) -> dict:
+        """What GET /api/v2/features returns.
+
+        ``features``: usable now (installed and, if a license provider is
+        registered, licensed). ``installed``: present in this build.
+        ``license``: the provider's summary, ``None`` without a provider.
+        """
+        installed = dict(sorted(self.features.items()))
+        payload = {"edition": self.edition, "features": dict(installed),
+                   "installed": installed, "license": None}
+        if self.license_provider is None:
+            return payload
+        try:
+            info = await self.license_provider()
+            active = info.get("active") or {}
+            payload["license"] = info.get("license")
+        except Exception:
+            log.exception("License provider failed — reporting enterprise features as inactive")
+            active = {}
+            payload["license"] = {"status": "error", "message": "The license could not be checked."}
+        payload["features"] = {name: on and bool(active.get(name)) for name, on in installed.items()}
+        return payload
 
     def reset(self) -> None:
         """Back to the plain core (test helper)."""
