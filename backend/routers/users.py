@@ -22,6 +22,22 @@ def _require_admin(request: Request) -> bool:
     return role != "admin"
 
 
+def _verify_password(user, candidate) -> bool:
+    """True if ``candidate`` is the user's current local password.
+
+    LDAP users have a random placeholder hash, so this is always False for
+    them — their password lives in the directory, not here.
+    """
+    if not candidate or not isinstance(candidate, str):
+        return False
+    if (getattr(user, "auth_source", "local") or "local") == "ldap":
+        return False
+    try:
+        return bcrypt.checkpw(candidate.encode(), (user.password_hash or "").encode())
+    except ValueError:
+        return False
+
+
 @api_router.get("/api/users")
 async def list_users_api(request: Request, db: AsyncSession = Depends(get_db)):
     """JSON user list for the frontend (session-authenticated)."""
@@ -111,6 +127,12 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
                 return JSONResponse({"error": "Cannot demote the last admin"}, status_code=400)
         user.role = new_role
     if "password" in body and body["password"]:
+        # An admin resetting SOMEONE ELSE needs no old password. Changing
+        # one's own does: otherwise a hijacked session (or an unlocked
+        # screen) is enough to take the account over for good.
+        if user.id == current.id and not _verify_password(user, body.get("current_password")):
+            return JSONResponse({"error": "Current password is incorrect",
+                                 "code": "current_password_required"}, status_code=403)
         pw_error = validate_password(body["password"])
         if pw_error:
             return JSONResponse({"error": pw_error}, status_code=400)
@@ -125,17 +147,23 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
 async def change_own_password(
     request: Request,
     password: str = Form(...),
+    current_password: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
-    """Allow any logged-in user to change their own password."""
+    """Allow any logged-in user to change their own password — after proving
+    they know the current one."""
     user = request.state.current_user
     if not user:
-        from fastapi.responses import RedirectResponse
+        # (No local import here: it made RedirectResponse a local name for the
+        # whole function, and the success path below raised UnboundLocalError.)
         return RedirectResponse(url="/login", status_code=303)
+    db_user = await db.get(User, user.id)
+    if not db_user or not _verify_password(db_user, current_password):
+        return JSONResponse({"error": "Current password is incorrect",
+                             "code": "current_password_required"}, status_code=403)
     pw_error = validate_password(password)
     if pw_error:
         return JSONResponse({"error": pw_error}, status_code=400)
-    db_user = await db.get(User, user.id)
     if db_user:
         db_user.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
         # Invalidate all other sessions (keep current one via new login)
