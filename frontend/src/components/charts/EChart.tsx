@@ -5,7 +5,7 @@ import * as echarts from 'echarts/core';
 import { BarChart, LineChart, PieChart, GaugeChart as EGaugeChart } from 'echarts/charts';
 import {
   TitleComponent, TooltipComponent, GridComponent,
-  LegendComponent, DataZoomComponent,
+  LegendComponent, DataZoomComponent, MarkLineComponent, MarkAreaComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
@@ -14,7 +14,7 @@ import { buildEChartsTheme, useChartTheme } from '@/lib/chart-theme';
 echarts.use([
   BarChart, LineChart, PieChart, EGaugeChart,
   TitleComponent, TooltipComponent, GridComponent,
-  LegendComponent, DataZoomComponent, CanvasRenderer,
+  LegendComponent, DataZoomComponent, MarkLineComponent, MarkAreaComponent, CanvasRenderer,
 ]);
 
 export interface EChartProps {
