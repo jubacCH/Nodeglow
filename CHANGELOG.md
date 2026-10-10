@@ -9,6 +9,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+## [2.0.0-rc.2] - 2026-10-10
+
 ### Fixed
 - Updater image: cosign 2.6.5, Docker CLI 29.8.1 and Compose 5.5.1 replace
   binaries built with an outdated Go toolchain (Go stdlib crypto/tls
@@ -114,5 +116,6 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   sidecar finds the database without a hard-coded container name.
 - Password hashing survives bcrypt 5's 72-byte limit.
 
-[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.1...HEAD
+[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.2...HEAD
+[2.0.0-rc.2]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.1...v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/jubacCH/Nodeglow/releases/tag/v2.0.0-rc.1
