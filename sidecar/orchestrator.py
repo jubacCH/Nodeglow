@@ -124,6 +124,11 @@ class Ctx:
     db_name: str
     state_path: str
     run_id: str
+    # Host-side directory the stack was started from (e.g. /opt/vigil). When
+    # set, compose runs with --project-directory so relative bind sources
+    # (./data, ./clickhouse/*.xml) and .env resolve to HOST paths. Empty keeps
+    # the legacy behaviour (paths relative to compose_file).
+    project_dir: str = ""
 
 
 def idle_state() -> dict:
@@ -199,12 +204,86 @@ def _compose(ctx: Ctx, *args, timeout: int) -> CmdResult:
     considers the running containers to belong to a different project and tries
     to create its own — which fails on the fixed container_name, and would have
     built images under the wrong prefix.
+
+    The project directory has to be passed for the same reason. Compose resolves
+    relative bind sources client-side, against the directory of the compose
+    file, and hands the daemon absolute paths — which the daemon interprets on
+    the HOST. With the file at /opt/repo/docker-compose.yml, ``./data`` became
+    the host path /opt/repo/data: an empty directory instead of the real data.
+    ``--project-directory <host dir>`` (made readable inside the sidecar by a
+    symlink, see update-server.py) gives compose the host's view instead.
     """
+    head = ["docker", "compose", "-p", ctx.compose_project]
+    if ctx.project_dir:
+        head += ["--project-directory", ctx.project_dir]
     return ctx.run_cmd(
-        ["docker", "compose", "-p", ctx.compose_project, "-f", ctx.compose_file, *args],
+        [*head, "-f", ctx.compose_file, *args],
         timeout=timeout,
         cwd=ctx.repo_path,
     )
+
+
+APP_CONTAINER = "nodeglow"
+DATA_TARGET = "/data"
+
+
+def _compose_bind_source(config: dict, service: str, target: str) -> tuple[str, str] | None:
+    """Return ``(type, source)`` of the volume a service mounts at ``target``."""
+    for vol in (config.get("services", {}).get(service, {}) or {}).get("volumes", []) or []:
+        if isinstance(vol, dict) and vol.get("target") == target:
+            return vol.get("type", ""), vol.get("source", "")
+    return None
+
+
+def _running_mount_source(mounts: list, target: str) -> tuple[str, str] | None:
+    for m in mounts or []:
+        if m.get("Destination") == target:
+            return m.get("Type", ""), m.get("Source", "")
+    return None
+
+
+def check_data_mount(ctx: Ctx) -> str:
+    """Refuse to continue if compose would mount a different /data than now.
+
+    Compares the bind source compose resolves for the app's /data with the one
+    the running container actually uses. A mismatch means the recreated
+    container would start on another directory — empty, with a freshly
+    generated encryption key when SECRET_KEY is not set. Failing here, before
+    anything is mutated, is the only safe answer.
+    """
+    cfg = _compose(ctx, "config", "--format", "json", timeout=60)
+    if cfg.returncode != 0:
+        raise StepError(f"docker compose config failed: {cfg.stderr[-MAX_ERROR_CHARS:]}")
+    try:
+        wanted = _compose_bind_source(json.loads(cfg.stdout), APP_CONTAINER, DATA_TARGET)
+    except ValueError as exc:
+        raise StepError(f"docker compose config returned no JSON: {exc}") from exc
+
+    insp = ctx.run_cmd(
+        ["docker", "inspect", "-f", "{{json .Mounts}}", APP_CONTAINER], timeout=15
+    )
+    if insp.returncode != 0:
+        raise StepError(f"Cannot inspect the running {APP_CONTAINER} container: "
+                        f"{insp.stderr[-MAX_ERROR_CHARS:]}")
+    try:
+        current = _running_mount_source(json.loads(insp.stdout or "[]"), DATA_TARGET)
+    except ValueError as exc:
+        raise StepError(f"Unreadable mounts of {APP_CONTAINER}: {exc}") from exc
+
+    if wanted is None or current is None:
+        return "no /data mount to compare"
+    if wanted[0] != "bind" or current[0] != "bind":
+        return f"/data is a {wanted[0] or current[0]} mount, not compared"
+    want_src = wanted[1].rstrip("/")
+    cur_src = current[1].rstrip("/")
+    if want_src != cur_src:
+        raise StepError(
+            f"Refusing to update: compose would mount {want_src} as /data, but the "
+            f"running container uses {cur_src}. The update would start on the wrong "
+            "data directory. Set HOST_PROJECT_DIR to the directory the stack was "
+            "started from (see docs/OPERATIONS.md, 'Updater: host paths')."
+        )
+    return f"/data from {cur_src}"
 
 
 def step_preflight(ctx: Ctx) -> str:
@@ -251,9 +330,11 @@ def step_preflight(ctx: Ctx) -> str:
     if inspect.returncode != 0 or inspect.stdout.strip() != "true":
         raise StepError(f"Database container {ctx.db_container} is not running")
 
+    data = check_data_mount(ctx)
+
     return (
         f"{free / 1024**3:.1f} GB free, {ctx.db_container} running, "
-        f"HEAD on {EXPECTED_REF.rsplit('/', 1)[-1]}"
+        f"HEAD on {EXPECTED_REF.rsplit('/', 1)[-1]}, {data}"
     )
 
 
