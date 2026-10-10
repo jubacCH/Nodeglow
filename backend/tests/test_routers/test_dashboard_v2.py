@@ -260,10 +260,16 @@ async def test_since_last_visit_uses_the_stored_visit():
                 await db.commit()
             await client.post("/api/v2/me/seen")
             async with sf() as db:
-                # +1 s: the visit and the incident must not share a timestamp
-                # (coarse clocks, e.g. Windows, made this flaky).
+                # Visit 2 s ago, new incident 1 s ago: strictly inside the
+                # [visit, now) window even with a coarse clock (Windows), where
+                # "created now" could equal the request's own "now".
+                from sqlalchemy import update
+                from models.user_preference import UserPreference
+                now = datetime.utcnow()
+                await db.execute(update(UserPreference).values(
+                    dashboard_seen_at=now - timedelta(seconds=2)))
                 db.add(Incident(rule="r", title="new one", severity="warning", status="open",
-                                created_at=datetime.utcnow() + timedelta(seconds=1)))
+                                created_at=now - timedelta(seconds=1)))
                 await db.commit()
             data = (await client.get("/api/v2/dashboard")).json()
         assert data["previous_seen_at"] is not None
