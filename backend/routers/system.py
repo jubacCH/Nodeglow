@@ -342,11 +342,11 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         syslog_status["running"] = _udp_transport is not None
         syslog_status["buffer_size"] = len(_buffer)
         # Messages per minute (last 10 min) — query ClickHouse, not PostgreSQL
-        from services.clickhouse_client import query_scalar as ch_scalar
-        ten_min_ago = now - timedelta(minutes=10)
+        from services.clickhouse_client import query_scalar as ch_scalar, received_since_clause
+        since_sql, since_params = received_since_clause(now - timedelta(minutes=10))
         syslog_rate = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE received_at >= {since:DateTime64(3)}",
-            {"since": ten_min_ago},
+            f"SELECT count() FROM syslog_messages WHERE {since_sql}",
+            since_params,
         ) or 0)
         syslog_status["msg_per_min"] = round(syslog_rate / 10, 1)
     except Exception:
@@ -414,8 +414,11 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         # Syslog age from ClickHouse
         try:
             from services.clickhouse_client import query_scalar as ch_scalar
+            # Part metadata instead of min(received_at): that scanned the whole table.
             oldest_syslog = await ch_scalar(
-                "SELECT min(received_at) FROM syslog_messages"
+                "SELECT min(min_time) FROM system.parts "
+                "WHERE database = currentDatabase() AND table = 'syslog_messages' "
+                "AND active AND min_time > toDateTime(0)"
             )
             if oldest_syslog:
                 retention_info["syslog_age"] = _format_age(oldest_syslog)
