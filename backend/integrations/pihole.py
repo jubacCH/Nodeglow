@@ -5,6 +5,8 @@ import logging
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 log = logging.getLogger(__name__)
@@ -159,7 +161,7 @@ class PiholeAPI:
         return parse_pihole_data(raw, top_queries, top_blocked, local_dns)
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
             # Try v6 first (check if /api/auth endpoint exists)
             v6_error = None
             try:

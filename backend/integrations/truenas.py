@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-import httpx
+from utils.net_safety import safe_async_client
 
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
@@ -21,7 +21,7 @@ class TruenasAPI:
         return {"Authorization": f"Bearer {self.api_key}"}
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=30.0, follow_redirects=True) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=30.0, follow_redirects=True) as client:
             info_task = client.get(f"{self.base}/api/v2.0/system/info", headers=self._headers())
             pools_task = client.get(f"{self.base}/api/v2.0/pool", headers=self._headers())
             disks_task = client.get(f"{self.base}/api/v2.0/disk", headers=self._headers())
@@ -41,7 +41,7 @@ class TruenasAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
                 resp = await client.get(f"{self.base}/api/v2.0/system/info", headers=self._headers())
                 return resp.status_code == 200
         except Exception:

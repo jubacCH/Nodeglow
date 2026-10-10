@@ -10,6 +10,8 @@ import logging
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
@@ -71,7 +73,7 @@ class InternetBoxAPI:
         """Collect all data from the Internet-Box."""
         # verify_ssl defaults to False because the Internet-Box uses a self-signed
         # cert on the local network, but it is overridable via the config field.
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=20.0) as client:
             self._context = await self._login(client)
 
             # ── Device Info ──
@@ -190,7 +192,7 @@ class InternetBoxAPI:
         """Quick login test."""
         try:
             # verify_ssl defaults to False (self-signed cert) but is overridable.
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=10.0) as client:
                 await self._login(client)
                 return True
         except Exception:

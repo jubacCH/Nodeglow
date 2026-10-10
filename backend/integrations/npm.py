@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 log = logging.getLogger(__name__)
@@ -44,7 +46,7 @@ class NpmAPI:
         return resp.json()
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(
+        async with safe_async_client(
             verify=self.verify_ssl, timeout=15.0, follow_redirects=True,
         ) as client:
             await self._auth(client)
@@ -59,7 +61,7 @@ class NpmAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(
+            async with safe_async_client(
                 verify=self.verify_ssl, timeout=10.0, follow_redirects=True,
             ) as client:
                 await self._auth(client)

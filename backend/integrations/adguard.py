@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 
-import httpx
+from utils.net_safety import safe_async_client
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
@@ -27,7 +27,7 @@ class AdguardAPI:
 
     async def fetch_all(self) -> dict:
         headers = self._auth_headers()
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
             stats_resp = await client.get(f"{self.base}/control/stats", headers=headers)
             stats_resp.raise_for_status()
             status_resp = await client.get(f"{self.base}/control/status", headers=headers)

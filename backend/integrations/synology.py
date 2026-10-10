@@ -5,6 +5,8 @@ import logging
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
@@ -58,7 +60,7 @@ class SynologyAPI:
         return resp.json()
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=20) as client:
             sid = await self._login(client)
             try:
                 info = await self._api(client, "SYNO.DSM.Info", "getinfo", 2, sid)
@@ -70,7 +72,7 @@ class SynologyAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=10) as client:
                 sid = await self._login(client)
                 await self._logout(client, sid)
             return True

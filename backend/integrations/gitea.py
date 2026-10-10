@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-import httpx
+from utils.net_safety import safe_async_client
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
@@ -25,7 +25,7 @@ class GiteaAPI:
         return {}
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=15) as client:
             version_resp = await client.get(
                 f"{self.base}/api/v1/version", headers=self._headers())
             version_resp.raise_for_status()
@@ -65,7 +65,7 @@ class GiteaAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=8) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=8) as client:
                 resp = await client.get(f"{self.base}/api/v1/version", headers=self._headers())
                 return resp.status_code == 200
         except Exception:

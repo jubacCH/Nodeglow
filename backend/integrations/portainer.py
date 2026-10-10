@@ -6,6 +6,8 @@ import logging
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
@@ -37,7 +39,7 @@ class PortainerAPI:
             return []
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0, follow_redirects=True) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=20.0, follow_redirects=True) as client:
             resp = await client.get(f"{self.base}/api/endpoints", headers=self._headers())
             resp.raise_for_status()
             raw_endpoints: list = resp.json()
@@ -58,7 +60,7 @@ class PortainerAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
                 resp = await client.get(f"{self.base}/api/endpoints", headers=self._headers())
                 return resp.status_code == 200
         except Exception:

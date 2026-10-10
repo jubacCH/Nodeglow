@@ -5,6 +5,8 @@ import asyncio
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 
@@ -27,7 +29,7 @@ class TechnitiumAPI:
         return body.get("response") or {}
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
             stats, settings, cluster, update = await asyncio.gather(
                 self._get(client, "dashboard/stats/get", type="LastDay"),
                 self._get(client, "settings/get"),

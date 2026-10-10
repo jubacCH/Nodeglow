@@ -9,7 +9,6 @@ Features:
 import asyncio
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
 import smtplib
@@ -18,7 +17,6 @@ import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape as html_escape
-from urllib.parse import urlparse
 
 import httpx
 
@@ -31,28 +29,27 @@ def _is_safe_url(url: str) -> bool:
     NOTE: Private IPs (10.x, 192.168.x, 172.16.x) are intentionally allowed
     because this is a homelab monitoring tool where webhooks to local services
     are legitimate use cases.
+
+    Resolves the name and rejects loopback, link-local, 0.0.0.0, multicast,
+    cloud metadata and our own compose service names (see utils.net_safety).
+    May block briefly on DNS. Send paths additionally use
+    :func:`_webhook_client`, which re-checks the address at connect time
+    (DNS rebinding) and never follows redirects.
     """
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-            return False
-        # Block cloud metadata endpoints
-        if hostname == "169.254.169.254":
-            return False
-        try:
-            ip = ipaddress.ip_address(hostname)
-            if ip.is_loopback or ip.is_link_local:
-                return False
-        except ValueError:
-            pass  # domain name, not IP — ok
-        return True
-    except Exception:
-        return False
+    from utils.net_safety import is_safe_url
+    return is_safe_url(url)
+
+
+def _webhook_client(timeout: float = 10) -> httpx.AsyncClient:
+    """HTTP client for user-configured webhook URLs: connect-time SSRF guard,
+    no redirects (a 30x to an internal address is not followed)."""
+    from utils.net_safety import safe_async_client
+    return safe_async_client(timeout=timeout, follow_redirects=False)
+
+
+async def _url_is_safe(url: str) -> bool:
+    """Non-blocking :func:`_is_safe_url` for async send paths."""
+    return await asyncio.to_thread(_is_safe_url, url)
 
 
 # ── Rate Limiting ─────────────────────────────────────────────────────────────
@@ -104,11 +101,11 @@ async def _send_telegram(bot_token: str, chat_id: str, text: str) -> None:
 
 
 async def _send_discord(webhook_url: str, title: str, message: str, color: int = 0xe74c3c) -> None:
-    if not _is_safe_url(webhook_url):
+    if not await _url_is_safe(webhook_url):
         logger.warning("Blocked webhook to unsafe URL: %s", webhook_url)
         return
     payload = {"embeds": [{"title": title, "description": message, "color": color}]}
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with _webhook_client() as client:
         for attempt in range(4):  # initial + 3 retries
             resp = await client.post(webhook_url, json=payload)
             if resp.status_code == 429:
@@ -123,7 +120,7 @@ async def _send_discord(webhook_url: str, title: str, message: str, color: int =
 
 async def _send_webhook(url: str, secret: str, title: str, message: str,
                         severity: str = "critical") -> None:
-    if not _is_safe_url(url):
+    if not await _url_is_safe(url):
         logger.warning("Blocked webhook to unsafe URL: %s", url)
         return
     payload = {"title": title, "message": message, "severity": severity,
@@ -133,7 +130,7 @@ async def _send_webhook(url: str, secret: str, title: str, message: str,
     if secret:
         sig = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
         headers["X-Nodeglow-Signature"] = f"sha256={sig}"
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with _webhook_client() as client:
         resp = await client.post(url, content=body, headers=headers)
         resp.raise_for_status()
 

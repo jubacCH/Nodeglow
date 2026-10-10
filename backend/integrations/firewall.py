@@ -6,6 +6,8 @@ import logging
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ class OPNsenseAPI:
         return resp.json()
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=20) as client:
             firmware: dict = {}
             status: dict = {}
             interfaces: dict = {}
@@ -55,7 +57,7 @@ class OPNsenseAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=10) as client:
                 resp = await client.get(f"{self.base}/api/core/firmware/info", headers=self._headers())
                 return resp.status_code < 400
         except Exception:
@@ -78,7 +80,7 @@ class PfsenseAPI:
         return (self.username, self.password)
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=20) as client:
             sys_info: dict = {}
             interfaces: dict = {}
             # system/info is the primary auth probe: an auth/transport error here
@@ -98,7 +100,7 @@ class PfsenseAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=10) as client:
                 resp = await client.get(f"{self.base}/api/v1/system/info", auth=self._auth())
                 return resp.status_code < 400
         except Exception:

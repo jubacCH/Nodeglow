@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import httpx
+from utils.net_safety import safe_async_client
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
@@ -40,7 +40,7 @@ class PhpIpamClient:
         # User auth: POST /user/ with basic auth
         if not self.username or not self.password:
             return
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=10) as client:
             resp = await client.post(self._api("user/"), auth=(self.username, self.password))
             resp.raise_for_status()
             body = resp.json()
@@ -54,7 +54,7 @@ class PhpIpamClient:
         return {}
 
     async def get_addresses(self) -> list[dict]:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=15) as client:
             resp = await client.get(self._api("addresses/all/"), headers=self._headers())
             if resp.status_code == 404:
                 return []
