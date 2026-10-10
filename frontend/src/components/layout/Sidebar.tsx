@@ -237,6 +237,7 @@ export function Sidebar() {
             <input
               ref={searchRef}
               type="text"
+              aria-label="Search hosts and integrations"
               placeholder="Search hosts, integrations…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -258,7 +259,9 @@ export function Sidebar() {
             {/* Cmd+K discoverability pill — clicking this opens the global
                 command palette via a synthetic keydown so users learn the
                 shortcut by mousing over it once. */}
-            <kbd
+            <button
+              type="button"
+              aria-label="Open command palette"
               onClick={() => {
                 document.dispatchEvent(
                   new KeyboardEvent('keydown', {
@@ -272,8 +275,8 @@ export function Sidebar() {
               className="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-mono text-slate-500 bg-white/[0.04] border border-white/[0.08] rounded cursor-pointer hover:text-slate-300 hover:border-white/[0.18] transition-colors select-none"
               title="Open command palette"
             >
-              ⌘K
-            </kbd>
+              <kbd className="font-mono">⌘K</kbd>
+            </button>
           </div>
           {searchFocused && searchResults.length > 0 && (
             <div className="absolute left-3 right-3 mt-1 z-50 rounded-md border shadow-xl overflow-hidden max-h-80 overflow-y-auto" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border-elevated)' }}>
@@ -308,6 +311,9 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              aria-current={isActive ? 'page' : undefined}
+              aria-label={sidebarCollapsed ? item.label : undefined}
+              title={sidebarCollapsed ? item.label : undefined}
               className={cn(
                 'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                 isActive
@@ -328,7 +334,7 @@ export function Sidebar() {
                   )}
                 />
               )}
-              <item.icon size={18} className={item.iconColor || 'text-slate-400'} />
+              <item.icon size={18} className={item.iconColor || 'text-slate-400'} aria-hidden="true" />
               {!sidebarCollapsed && (
                 <>
                   <span className="flex-1">{item.label}</span>
@@ -350,6 +356,8 @@ export function Sidebar() {
         <div className="pt-2">
           <button
             onClick={() => setIntOpen(!intOpen)}
+            aria-expanded={intOpen}
+            aria-label="Integrations"
             className="flex items-center gap-3 w-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-400"
           >
             {!sidebarCollapsed && <span className="flex-1 text-left">Integrations</span>}
@@ -432,6 +440,9 @@ export function Sidebar() {
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={isActive ? 'page' : undefined}
+                aria-label={sidebarCollapsed ? item.label : undefined}
+                title={sidebarCollapsed ? item.label : undefined}
                 className={cn(
                   'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                   isActive
@@ -453,6 +464,7 @@ export function Sidebar() {
         <div className="px-3 py-1">
           <button
             onClick={toggleGlow}
+            aria-pressed={glowOpen}
             className={cn(
               'flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors',
               glowOpen
@@ -479,6 +491,7 @@ export function Sidebar() {
             </div>
             <button
               onClick={toggleColorMode}
+              aria-label={colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
               className="p-1.5 rounded-md transition-colors"
               style={{ color: 'var(--ng-text-muted)' }}
               title={colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -487,6 +500,7 @@ export function Sidebar() {
             </button>
             <button
               onClick={logout}
+              aria-label="Log out"
               className="p-1.5 rounded-md transition-colors"
               style={{ color: 'var(--ng-text-muted)' }}
               title="Logout"

@@ -983,6 +983,10 @@ export default function SettingsPage() {
                 <p className="text-xs text-slate-500 mt-0.5">Send alerts when incidents are created or resolved.</p>
               </div>
               <button
+                type="button"
+                role="switch"
+                aria-checked={notifyEnabled}
+                aria-label="Enable notifications"
                 onClick={() => setNotifyEnabled(!notifyEnabled)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   notifyEnabled ? 'bg-sky-500' : 'bg-white/[0.1]'
@@ -1296,6 +1300,10 @@ export default function SettingsPage() {
                 <p className="text-xs text-slate-500 mt-0.5">Send a weekly summary of incidents, host uptime, syslog stats, and SSL expiry. Requires SMTP configured above.</p>
               </div>
               <button
+                type="button"
+                role="switch"
+                aria-checked={digestEnabled}
+                aria-label="Weekly digest email"
                 onClick={() => setDigestEnabled(!digestEnabled)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   digestEnabled ? 'bg-sky-500' : 'bg-white/[0.1]'

@@ -175,6 +175,7 @@ export function GlowPanel() {
         </div>
         <button
           onClick={close}
+          aria-label="Close Glow"
           className="p-1 rounded-md transition-colors"
           style={{ color: 'var(--ng-text-muted)' }}
         >
@@ -274,6 +275,7 @@ export function GlowPanel() {
           <button
             onClick={() => sendMessage(input)}
             disabled={!input.trim() || isStreaming}
+            aria-label="Send message"
             className="p-2 rounded-lg bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Send size={16} />

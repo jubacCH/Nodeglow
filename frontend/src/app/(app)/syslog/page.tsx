@@ -37,10 +37,30 @@ type SortKey = 'timestamp' | 'severity' | 'hostname';
 type SortDir = 'asc' | 'desc';
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
-  if (!active) return <ArrowUpDown size={12} className="text-slate-600" />;
+  if (!active) return <ArrowUpDown size={12} className="text-slate-600" aria-hidden="true" />;
   return dir === 'asc'
-    ? <ChevronUp size={12} className="text-sky-400" />
-    : <ChevronDown size={12} className="text-sky-400" />;
+    ? <ChevronUp size={12} className="text-sky-400" aria-hidden="true" />
+    : <ChevronDown size={12} className="text-sky-400" aria-hidden="true" />;
+}
+
+function SortableTh({ sortKey, label, currentKey, dir, onSort }: {
+  sortKey: SortKey; label: string; currentKey: SortKey; dir: SortDir; onSort: (k: SortKey) => void;
+}) {
+  const active = currentKey === sortKey;
+  return (
+    <th
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider select-none"
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="flex items-center gap-1 uppercase tracking-wider hover:text-slate-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-500/60 rounded-sm"
+      >
+        {label} <SortIcon active={active} dir={dir} />
+      </button>
+    </th>
+  );
 }
 
 export default function SyslogPage() {
@@ -215,15 +235,9 @@ export default function SyslogPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/[0.06]">
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-300" onClick={() => toggleSort('timestamp')}>
-                  <span className="flex items-center gap-1">Timestamp <SortIcon active={sortKey === 'timestamp'} dir={sortDir} /></span>
-                </th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-300" onClick={() => toggleSort('severity')}>
-                  <span className="flex items-center gap-1">Sev <SortIcon active={sortKey === 'severity'} dir={sortDir} /></span>
-                </th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-300" onClick={() => toggleSort('hostname')}>
-                  <span className="flex items-center gap-1">Host <SortIcon active={sortKey === 'hostname'} dir={sortDir} /></span>
-                </th>
+                <SortableTh sortKey="timestamp" label="Timestamp" currentKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh sortKey="severity" label="Sev" currentKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh sortKey="hostname" label="Host" currentKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Message</th>
               </tr>
             </thead>
