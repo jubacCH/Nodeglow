@@ -23,6 +23,7 @@ from sqlalchemy import delete, func, select
 
 from models.base import AsyncSessionLocal
 from models.ping import PingHost
+from services import clickhouse_client as _ch
 from services.clickhouse_client import query as ch_query
 from services.clickhouse_client import query_scalar as ch_scalar
 from models.integration import IntegrationConfig
@@ -467,80 +468,80 @@ async def _rule_syslog_spike(db, min_cycles: int = 2):
 # ── Rule 5: Log Anomaly ────────────────────────────────────────────────
 
 async def _rule_log_anomaly(db, min_cycles: int = 2):
-    """Detect per-host log volume anomalies vs. learned baselines."""
+    """Detect per-host log volume anomalies vs. learned baselines.
+
+    Baselines come from load_effective_baselines: the weekday slot once it
+    has enough samples, the hour-of-day slot until then. Current volume is
+    counted for all candidates in one grouped query per key type, not one
+    query per baseline row.
+    """
+    from services.log_intelligence import load_effective_baselines
+
     now = datetime.utcnow()
-    hour = now.hour
-    dow = now.weekday()
-
-    # Get baselines for current time slot with sufficient data
-    baselines = (await db.execute(
-        select(HostBaseline).where(
-            HostBaseline.hour_of_day == hour,
-            HostBaseline.day_of_week == dow,
-            HostBaseline.sample_count >= 3,
-            HostBaseline.avg_rate > 0,
-        )
-    )).scalars().all()
-
+    baselines = [
+        b for b in (await load_effective_baselines(db, now)).values()
+        if (b.avg_rate or 0) > 0
+    ]
     if not baselines:
         return
 
     window_10m = now - timedelta(minutes=10)
 
+    by_source: dict[str, HostBaseline] = {}
+    by_host_id: dict[int, HostBaseline] = {}
     for bl in baselines:
-        # Current rate: messages in last 10min, extrapolated to per-hour
         if bl.host_key.startswith("host:"):
-            parts = bl.host_key.split(":", 1)
-            if len(parts) < 2 or not parts[1].isdigit():
-                continue
-            host_id = int(parts[1])
-            count = int(await ch_scalar(
-                "SELECT count() FROM syslog_messages WHERE host_id = {hid:Int32} AND timestamp >= {t:DateTime64(3)}",
-                {"hid": host_id, "t": window_10m},
-            ) or 0)
+            part = bl.host_key.split(":", 1)[1]
+            if part.isdigit():
+                by_host_id[int(part)] = bl
         else:
-            count = int(await ch_scalar(
-                "SELECT count() FROM syslog_messages WHERE source_ip = {ip:String} AND timestamp >= {t:DateTime64(3)}",
-                {"ip": bl.host_key, "t": window_10m},
-            ) or 0)
+            by_source[bl.host_key] = bl
 
+    source_counts = await _ch.count_syslog_received_by_source(
+        window_10m, list(by_source),
+    ) if by_source else {}
+    host_counts = await _ch.count_syslog_received_by_host(
+        window_10m, list(by_host_id),
+    ) if by_host_id else {}
+
+    candidates: list[tuple[HostBaseline, int, int | None]] = [
+        (bl, source_counts.get(ip, 0), None) for ip, bl in by_source.items()
+    ] + [
+        (bl, host_counts.get(hid, 0), hid) for hid, bl in by_host_id.items()
+    ]
+
+    hosts_by_id: dict[int, PingHost] = {}
+    if by_host_id:
+        hosts_by_id = {h.id: h for h in (await db.execute(
+            select(PingHost).where(PingHost.id.in_(list(by_host_id)))
+        )).scalars().all()}
+
+    for bl, count, host_id in candidates:
         current_rate = count * 6  # extrapolate 10min → 1hr
-        threshold = bl.avg_rate + 3 * max(bl.std_rate, bl.avg_rate * 0.3)
+        threshold = bl.avg_rate + 3 * max(bl.std_rate or 0.0, bl.avg_rate * 0.3)
+        if not (current_rate > threshold and count >= 20):
+            continue
 
-        if current_rate > threshold and count >= 20:
-            # Determine host_ids early for hit tracking
-            _host_ids_for_track = [0]
-            if bl.host_key.startswith("host:"):
-                _p = bl.host_key.split(":", 1)
-                if len(_p) > 1 and _p[1].isdigit():
-                    _host_ids_for_track = [int(_p[1])]
-            if not _track_rule_hit("log_anomaly", _host_ids_for_track, min_cycles):
-                continue
-            host_label = bl.host_key
-            if bl.host_key.startswith("host:"):
-                _parts = bl.host_key.split(":", 1)
-                _hid = int(_parts[1]) if len(_parts) > 1 and _parts[1].isdigit() else 0
-                host = (await db.execute(
-                    select(PingHost).where(PingHost.id == _hid)
-                )).scalar_one_or_none()
-                if host:
-                    host_label = host.name
-                    host_ids = [host.id]
-                else:
-                    host_ids = [0]
-            else:
-                host_ids = [0]
+        # Per-source discriminator: every source-keyed baseline maps to host 0,
+        # so a shared key let two anomalous sources reach min_cycles within a
+        # single cycle.
+        if not _track_rule_hit(f"log_anomaly_{bl.host_key}", [host_id or 0], min_cycles):
+            continue
 
-            await _find_or_create_incident(
-                db,
-                rule="log_anomaly",
-                title=f"Log volume anomaly: {host_label}",
-                severity="warning",
-                host_ids=host_ids,
-                event_type="syslog_error",
-                summary=f"{host_label}: {current_rate}/hr (baseline: {int(bl.avg_rate)}/hr ± {int(bl.std_rate)})",
-                detail=f"{count} messages in last 10min, expected ~{int(bl.avg_rate / 6)}",
-            )
+        host = hosts_by_id.get(host_id) if host_id is not None else None
+        host_label = host.name if host else bl.host_key
+        host_ids = [host.id] if host else [0]
+
+        await _find_or_create_incident(
+            db,
+            rule="log_anomaly",
+            title=f"Log volume anomaly: {host_label}",
+            severity="warning",
+            host_ids=host_ids,
+            event_type="syslog_error",
+            summary=f"{host_label}: {current_rate}/hr (baseline: {int(bl.avg_rate)}/hr ± {int(bl.std_rate or 0)})",
+            detail=f"{count} messages in last 10min, expected ~{int(bl.avg_rate / 6)}",
+        )
 
 
 # ── Rule 7: Fleet-Wide Issue ───────────────────────────────────────────────
