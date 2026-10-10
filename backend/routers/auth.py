@@ -64,8 +64,17 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class LdapConfigError(Exception):
+    """LDAP is enabled but its stored configuration cannot be used."""
+
+
 async def _get_ldap_config(db: AsyncSession):
-    """Build LdapConfig from settings, or None if LDAP is disabled."""
+    """Build LdapConfig from settings, or None if LDAP is disabled.
+
+    Raises LdapConfigError when the stored bind password cannot be decrypted.
+    It used to fall back to sending the ciphertext itself as the bind
+    password — to whichever server is configured — and to keep going.
+    """
     from models.base import decrypt_value
     enabled = await get_setting(db, "ldap_enabled", "0")
     if enabled != "1":
@@ -76,7 +85,11 @@ async def _get_ldap_config(db: AsyncSession):
     try:
         bind_pw = decrypt_value(bind_pw_enc) if bind_pw_enc else ""
     except Exception:
-        bind_pw = bind_pw_enc
+        logger.error(
+            "LDAP bind password cannot be decrypted (SECRET_KEY changed?). "
+            "LDAP login is disabled until the bind password is saved again."
+        )
+        raise LdapConfigError("Stored LDAP bind password cannot be decrypted — save it again")
 
     return LdapConfig(
         server=await get_setting(db, "ldap_server", ""),
@@ -91,13 +104,28 @@ async def _get_ldap_config(db: AsyncSession):
         editor_group=await get_setting(db, "ldap_editor_group", ""),
         use_ssl=(await get_setting(db, "ldap_use_ssl", "0")) == "1",
         start_tls=(await get_setting(db, "ldap_start_tls", "0")) == "1",
+        tls_verify=(await get_setting(db, "ldap_tls_verify", "1")) != "0",
     )
 
 
 async def _try_ldap_login(db: AsyncSession, username: str, password: str):
     """Attempt LDAP auth. Returns (User, created) or (None, False)."""
-    ldap_cfg = await _get_ldap_config(db)
+    try:
+        ldap_cfg = await _get_ldap_config(db)
+    except LdapConfigError:
+        return None, False  # fail closed; already logged
     if not ldap_cfg or not ldap_cfg.server:
+        return None, False
+
+    # A same-named LOCAL account is never taken over by a directory login.
+    # It used to be: LDAP auth succeeded, the local row was flipped to
+    # auth_source="ldap" and kept its role — so whoever controls the
+    # directory entry "admin" became Nodeglow's local admin. Such a user
+    # keeps logging in with the local password; resolving the clash is an
+    # admin decision (rename or delete the local account).
+    result = await db.execute(select(User).where(User.username == username))
+    user = result.scalar_one_or_none()
+    if user is not None and (user.auth_source or "local") != "ldap":
         return None, False
 
     from services.ldap_auth import authenticate_ldap
@@ -105,16 +133,9 @@ async def _try_ldap_login(db: AsyncSession, username: str, password: str):
     if not ldap_user:
         return None, False
 
-    # Find or create local user
-    result = await db.execute(select(User).where(User.username == username))
-    user = result.scalar_one_or_none()
-
     if user:
         # Update role and display name from LDAP
         changed = False
-        if user.auth_source != "ldap":
-            user.auth_source = "ldap"
-            changed = True
         if ldap_user.role and user.role != ldap_user.role:
             user.role = ldap_user.role
             changed = True

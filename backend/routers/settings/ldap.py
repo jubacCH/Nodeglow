@@ -28,6 +28,9 @@ async def save_ldap_settings(
     ldap_editor_group: str = Form(""),
     ldap_use_ssl:      str = Form("0"),
     ldap_start_tls:    str = Form("0"),
+    # Optional: only changed when the form sends it, so a frontend that does
+    # not know the field yet cannot silently reset an operator's choice.
+    ldap_tls_verify:   str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Save LDAP configuration. Admin only."""
@@ -48,6 +51,9 @@ async def save_ldap_settings(
     await set_setting(db, "ldap_editor_group", ldap_editor_group.strip())
     await set_setting(db, "ldap_use_ssl", "1" if ldap_use_ssl in ("1", "true") else "0")
     await set_setting(db, "ldap_start_tls", "1" if ldap_start_tls in ("1", "true") else "0")
+    if ldap_tls_verify is not None:
+        await set_setting(db, "ldap_tls_verify",
+                          "0" if ldap_tls_verify.strip().lower() in ("0", "false", "off") else "1")
     await db.commit()
 
     await log_action(db, request, "settings.update", "setting", target_name="ldap")
@@ -62,9 +68,12 @@ async def test_ldap(request: Request, db: AsyncSession = Depends(get_db)):
     if err := require_admin(request):
         return err
 
-    from routers.auth import _get_ldap_config
+    from routers.auth import LdapConfigError, _get_ldap_config
     from services.ldap_auth import test_ldap_connection
-    ldap_cfg = await _get_ldap_config(db)
+    try:
+        ldap_cfg = await _get_ldap_config(db)
+    except LdapConfigError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)})
     if not ldap_cfg or not ldap_cfg.server:
         return JSONResponse({"ok": False, "error": "LDAP not configured or not enabled"})
 

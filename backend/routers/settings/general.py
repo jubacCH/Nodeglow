@@ -74,8 +74,10 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "ldap_enabled", "ldap_server", "ldap_bind_dn", "ldap_base_dn",
         "ldap_user_filter", "ldap_display_attr", "ldap_group_attr",
         "ldap_admin_group", "ldap_editor_group", "ldap_use_ssl", "ldap_start_tls",
+        "ldap_tls_verify",
     ]
     ldap_defaults = {
+        "ldap_tls_verify": "1",
         "ldap_user_filter": "(&(objectClass=person)(sAMAccountName={username}))",
         "ldap_display_attr": "displayName",
         "ldap_group_attr": "memberOf",
