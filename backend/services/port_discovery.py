@@ -191,8 +191,10 @@ async def run_port_discovery():
 
     async with AsyncSessionLocal() as db:
         hosts = (await db.execute(
-            select(PingHost).where(PingHost.enabled == True, PingHost.maintenance == False)
+            select(PingHost).where(PingHost.enabled == True)
         )).scalars().all()
+        from services.maintenance import without_maintenance
+        hosts = await without_maintenance(db, list(hosts))
 
         if not hosts:
             return

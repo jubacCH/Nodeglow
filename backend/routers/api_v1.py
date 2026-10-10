@@ -30,6 +30,7 @@ from services.clickhouse_client import query as ch_query, _where_clauses as ch_w
 from ratelimit import rate_limit
 from services import ping as ping_svc
 from services import snapshot as snap_svc
+from services import maintenance as maint_svc
 from services.audit import log_action
 from utils import http_options as http_opts
 
@@ -292,14 +293,17 @@ async def list_hosts(
 
     latest_map = await ping_svc.get_latest_by_host([h.id for h in hosts])
     uptime_map = await ping_svc.get_uptime_map()
+    now = datetime.utcnow()
+    windows = await maint_svc.load_windows(db)
 
     out = []
     for h in hosts:
         lr = latest_map.get(h.id)
         is_online = bool(lr.get("success")) if lr else None
+        in_maint = maint_svc.is_in_maintenance(h, now, windows)
         host_status = (
             "disabled" if not h.enabled
-            else "maintenance" if h.maintenance
+            else "maintenance" if in_maint
             else "online" if is_online
             else "offline" if is_online is False
             else "unknown"
@@ -325,7 +329,7 @@ async def list_hosts(
                 "d7": um.get("d7"),
                 "d30": um.get("d30"),
             },
-            "maintenance": h.maintenance or False,
+            **maint_svc.api_fields(h, now, windows),
             "enabled": h.enabled,
         })
     return out
@@ -436,9 +440,12 @@ async def get_host(
     _online = bool(lr.get("success")) if lr else None
     _lat = lr.get("latency_ms") if lr else None
     _thr = host.latency_threshold_ms
+    _now = datetime.utcnow()
+    _windows = await maint_svc.load_windows(db)
+    _maint = maint_svc.api_fields(host, _now, _windows)
     if _online is False:
         health_score = 1.0
-    elif host.maintenance:
+    elif _maint["maintenance"]:
         health_score = 0.5
     elif _online is None:
         health_score = 0.8
@@ -466,7 +473,7 @@ async def get_host(
         "check_type": host.check_type or "icmp",
         "port": host.port,
         "enabled": host.enabled,
-        "maintenance": host.maintenance or False,
+        **_maint,
         "maintenance_until": host.maintenance_until.isoformat() if host.maintenance_until else None,
         "source": host.source or "manual",
         "source_detail": host.source_detail,
@@ -1929,6 +1936,7 @@ async def get_topology(
     # every row and this endpoint reported the entire topology as down.
     from services.probes import statuses_for
     statuses = await statuses_for(db, hosts, now.timestamp())
+    windows = await maint_svc.load_windows(db)
 
     nodes = []
     edges = []
@@ -1940,7 +1948,7 @@ async def get_topology(
             "status": statuses.get(h.id, "unknown"),
             "check_type": h.check_type,
             "source": h.source,
-            "maintenance": h.maintenance or False,
+            "maintenance": maint_svc.is_in_maintenance(h, now, windows),
         })
         parent = topo.get(h.id)
         if parent is not None:

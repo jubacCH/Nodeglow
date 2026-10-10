@@ -267,6 +267,9 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     hosts_result = await db.execute(select(PingHost).where(PingHost.enabled == True))
     hosts = hosts_result.scalars().all()
     host_ids = [h.id for h in hosts]
+    # Manual flag or an active maintenance window — decided once per request.
+    from services.maintenance import maintenance_ids
+    maint_ids = await maintenance_ids(db, hosts, now)
 
     window_2h = now - timedelta(hours=2)
     host_stats = []
@@ -330,7 +333,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         # Latency threshold alarm (skip maintenance hosts)
         effective_threshold = host.latency_threshold_ms if host.latency_threshold_ms is not None else global_latency_ms
         if (
-            not host.maintenance
+            host.id not in maint_ids
             and latest_success
             and latest_latency is not None
             and effective_threshold is not None
@@ -357,7 +360,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         })
 
     # Exclude maintenance hosts from counts and Top-10
-    active_stats = [s for s in host_stats if not s["host"].maintenance]
+    active_stats = [s for s in host_stats if s["host"].id not in maint_ids]
     online_count  = sum(1 for s in active_stats if s["online"])
     offline_count = sum(1 for s in active_stats if s["online"] is False)
 
@@ -1087,7 +1090,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Uptime ranking ────────────────────────────────────────────────────────
     uptime_ranking = sorted(
         [{"host_id": s["host"].id, "name": s["host"].name, "uptime": s["uptime_pct"]}
-         for s in active_stats if not s["host"].maintenance],
+         for s in active_stats],
         key=lambda x: x["uptime"],
     )[:15]
 
@@ -1125,7 +1128,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             day_map[(int(row["host_id"]), str(row["day"]))] = pct
 
         heatmap_hosts = sorted(
-            [h for h in hosts if not h.maintenance],
+            [h for h in hosts if h.id not in maint_ids],
             key=lambda h: min(
                 (day_map.get((h.id, str((now - timedelta(days=_HEATMAP_DAYS - 1 - i)).date())), 100) or 100)
                 for i in range(_HEATMAP_DAYS)
@@ -1206,7 +1209,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         if s["online"] is False:
             s["health_score"] = 1.0
             continue
-        if h.maintenance:
+        if h.id in maint_ids:
             s["health_score"] = 0.5
             continue
         if s["online"] is None:
@@ -1299,7 +1302,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     def _host_dict(h):
         return {"id": h.id, "name": h.name, "hostname": h.hostname,
                 "source": getattr(h, "source", ""), "check_type": getattr(h, "check_type", ""),
-                "maintenance": h.maintenance, "port_error": getattr(h, "port_error", False) or False}
+                "maintenance": h.id in maint_ids, "port_error": getattr(h, "port_error", False) or False}
 
     def _stat_dict(s):
         return {

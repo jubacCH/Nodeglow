@@ -133,6 +133,10 @@ async def api_status(db: AsyncSession = Depends(get_db)):
         )
         last_seen_by_host = {int(r["host_id"]): r["last_ok"] for r in rows if r.get("last_ok")}
 
+    from services.maintenance import api_fields, load_windows
+    now = datetime.utcnow()
+    windows = await load_windows(db)
+
     out = []
     for host in hosts:
         lr = latest_by_host.get(host.id)
@@ -142,7 +146,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
             "hostname": host.hostname,
             "ip_address": getattr(host, "ip_address", None),
             "check_type": host.check_type or "icmp",
-            "maintenance": host.maintenance or False,
+            **api_fields(host, now, windows),
             "enabled": host.enabled,
             "source": host.source or "manual",
             "source_detail": host.source_detail,

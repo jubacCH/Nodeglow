@@ -483,6 +483,19 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         }
     except Exception:
         pass
+    try:
+        # "active" counts hosts in maintenance by any route — manual flag or
+        # an active window — the same rule the monitoring itself applies.
+        from sqlalchemy import select
+        from database import PingHost
+        from services.maintenance import is_window_active, load_windows, maintenance_ids
+        windows = await load_windows(db)
+        all_hosts = (await db.execute(select(PingHost))).scalars().all()
+        maintenance_stats["active"] = len(await maintenance_ids(db, all_hosts))
+        maintenance_stats["windows"] = len(windows)
+        maintenance_stats["windows_active"] = sum(1 for w in windows if is_window_active(w))
+    except Exception:
+        pass
 
     # ── Log Intelligence ─────────────────────────────────────────────────
     log_intelligence = {}
