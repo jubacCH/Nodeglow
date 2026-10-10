@@ -1,87 +1,104 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { MessageSquare, BarChart3, Brain, AlertTriangle, Server, Activity, ShieldAlert } from 'lucide-react';
-import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { EChart } from '@/components/charts/LazyEChart';
-import { useSyslogStats } from '@/hooks/queries/useSyslogStats';
+import { BarChart3 } from 'lucide-react';
 import type { EChartsOption } from 'echarts';
-
-const SEVERITY_LABELS: Record<number, string> = {
-  0: 'Emergency',
-  1: 'Alert',
-  2: 'Critical',
-  3: 'Error',
-  4: 'Warning',
-  5: 'Notice',
-  6: 'Info',
-  7: 'Debug',
-};
-
-const SEVERITY_CHART_COLORS: Record<number, string> = {
-  0: '#ef4444',
-  1: '#f87171',
-  2: '#fb923c',
-  3: '#f97316',
-  4: '#fbbf24',
-  5: '#60a5fa',
-  6: '#38bdf8',
-  7: '#64748b',
-};
+import { PageHeader } from '@/components/layout/PageHeader';
+import { EChart } from '@/components/charts/LazyEChart';
+import { SEVERITY_LABELS, SeverityBadge, severityChartColor } from '@/components/syslog/severity';
+import { BigNumber } from '@/components/ui/BigNumber';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryErrorState, StaleDataBanner, formatAsOf } from '@/components/ui/QueryState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { SegmentedControl } from '@/components/ui/Tabs';
+import { useSyslogStats } from '@/hooks/queries/useSyslogStats';
+import { useChartTheme, type ChartTokens } from '@/lib/chart-theme';
 
 const TIME_RANGES = [
-  { label: '1h', hours: 1 },
-  { label: '6h', hours: 6 },
-  { label: '12h', hours: 12 },
-  { label: '24h', hours: 24 },
-  { label: '7d', hours: 168 },
+  { label: '1h', hours: 1, long: 'last hour' },
+  { label: '6h', hours: 6, long: 'last 6 hours' },
+  { label: '12h', hours: 12, long: 'last 12 hours' },
+  { label: '24h', hours: 24, long: 'last 24 hours' },
+  { label: '7d', hours: 168, long: 'last 7 days' },
 ];
 
+/** The stats endpoint returns at most this many hosts/apps. */
+const TOP_N = 10;
+
+function barOption(t: ChartTokens, labels: string[], values: number[], color: string): EChartsOption {
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 8, right: 24, top: 8, bottom: 8, containLabel: true },
+    xAxis: { type: 'value' },
+    yAxis: {
+      type: 'category',
+      inverse: true,
+      data: labels,
+      axisLabel: { width: 120, overflow: 'truncate', fontFamily: t.monoFamily },
+    },
+    series: [{
+      type: 'bar',
+      name: 'Messages',
+      data: values,
+      itemStyle: { color, borderRadius: [0, 3, 3, 0] },
+      barMaxWidth: 18,
+    }],
+  };
+}
+
+function ChartCard({ title, meta, children }: { title: string; meta?: ReactNode; children: ReactNode }) {
+  return (
+    <Card as="section" aria-label={title}>
+      <CardHeader title={title} meta={meta} />
+      {children}
+    </Card>
+  );
+}
+
 export default function SyslogDashboardPage() {
-  useEffect(() => { document.title = 'Syslog Dashboard | Nodeglow'; }, []);
+  useEffect(() => { document.title = 'Log overview | Nodeglow'; }, []);
   const [hours, setHours] = useState(24);
-  const { data, isLoading } = useSyslogStats(hours);
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useSyslogStats(hours);
+  const t = useChartTheme();
+  const range = TIME_RANGES.find((r) => r.hours === hours) ?? TIME_RANGES[3];
 
   const errorCount = useMemo(() => {
-    if (!data) return 0;
+    if (!data) return null;
     return data.severity_distribution
       .filter((s) => s.severity <= 3)
       .reduce((sum, s) => sum + s.count, 0);
   }, [data]);
 
-  const uniqueHosts = data?.top_hosts.length ?? 0;
-
   const topSeverity = useMemo(() => {
     if (!data?.severity_distribution.length) return null;
-    const sorted = [...data.severity_distribution].sort((a, b) => a.severity - b.severity);
-    return sorted[0];
+    return [...data.severity_distribution].sort((a, b) => a.severity - b.severity)[0];
   }, [data]);
 
-  // Severity pie chart
+  // Severity distribution: one bar per level, error = down, warning = warning, rest grey.
   const severityOption = useMemo((): EChartsOption => {
     if (!data) return {};
+    const rows = [...data.severity_distribution].sort((a, b) => a.severity - b.severity);
     return {
-      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-      legend: { show: false },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: 8, right: 24, top: 8, bottom: 8, containLabel: true },
+      xAxis: { type: 'value' },
+      yAxis: {
+        type: 'category',
+        inverse: true,
+        data: rows.map((s) => SEVERITY_LABELS[s.severity] ?? `Sev ${s.severity}`),
+      },
       series: [{
-        type: 'pie',
-        radius: ['45%', '75%'],
-        avoidLabelOverlap: true,
-        itemStyle: { borderRadius: 4, borderColor: 'transparent', borderWidth: 2 },
-        label: { show: true, formatter: '{b}', fontSize: 11 },
-        data: data.severity_distribution.map((s) => ({
-          name: SEVERITY_LABELS[s.severity] ?? `Sev ${s.severity}`,
-          value: s.count,
-          itemStyle: { color: SEVERITY_CHART_COLORS[s.severity] ?? '#64748b' },
-        })),
+        type: 'bar',
+        name: 'Messages',
+        barMaxWidth: 18,
+        itemStyle: { borderRadius: [0, 3, 3, 0] },
+        data: rows.map((s) => ({ value: s.count, itemStyle: { color: severityChartColor(s.severity, t) } })),
       }],
     };
-  }, [data]);
+  }, [data, t]);
 
-  // Message rate area chart
   const rateOption = useMemo((): EChartsOption => {
     if (!data?.message_rate.length) return {};
     const buckets = data.message_rate.map((r) => {
@@ -92,219 +109,197 @@ export default function SyslogDashboardPage() {
     });
     return {
       tooltip: { trigger: 'axis' },
-      legend: { data: ['Total', 'Errors'], textStyle: { fontSize: 11 } },
-      grid: { left: 40, right: 16, top: 36, bottom: 24 },
-      xAxis: { type: 'category', data: buckets, axisLabel: { fontSize: 10, rotate: hours > 24 ? 30 : 0 } },
-      yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
+      legend: { data: ['Total', 'Error or worse'], top: 0, right: 0 },
+      grid: { left: 8, right: 8, top: 32, bottom: 8, containLabel: true },
+      xAxis: { type: 'category', data: buckets, boundaryGap: false },
+      yAxis: { type: 'value' },
       series: [
         {
           name: 'Total',
           type: 'line',
-          smooth: true,
-          areaStyle: { opacity: 0.15 },
-          itemStyle: { color: '#38bdf8' },
+          showSymbol: false,
+          lineStyle: { width: 2, color: t.accent },
+          itemStyle: { color: t.accent },
+          areaStyle: { color: t.accentFill, opacity: 1 },
           data: data.message_rate.map((r) => r.count),
         },
         {
-          name: 'Errors',
+          name: 'Error or worse',
           type: 'line',
-          smooth: true,
-          areaStyle: { opacity: 0.15 },
-          itemStyle: { color: '#f87171' },
+          showSymbol: false,
+          lineStyle: { width: 2, color: t.status.down },
+          itemStyle: { color: t.status.down },
           data: data.message_rate.map((r) => r.errors),
         },
       ],
     };
-  }, [data, hours]);
+  }, [data, hours, t]);
 
-  // Top hosts horizontal bar chart
-  const hostsOption = useMemo((): EChartsOption => {
-    if (!data?.top_hosts.length) return {};
-    const hosts = [...data.top_hosts].reverse();
-    return {
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-      grid: { left: 120, right: 24, top: 8, bottom: 8 },
-      xAxis: { type: 'value', axisLabel: { fontSize: 10 } },
-      yAxis: {
-        type: 'category',
-        data: hosts.map((h) => h.hostname),
-        axisLabel: { fontSize: 10, width: 110, overflow: 'truncate' },
-      },
-      series: [{
-        type: 'bar',
-        data: hosts.map((h) => h.count),
-        itemStyle: { color: '#38bdf8', borderRadius: [0, 3, 3, 0] },
-        barMaxWidth: 20,
-      }],
-    };
-  }, [data]);
+  const hostsOption = useMemo(
+    () => (data?.top_hosts.length ? barOption(t, data.top_hosts.map((h) => h.hostname || h.source_ip), data.top_hosts.map((h) => h.count), t.series[0]) : {}),
+    [data, t],
+  );
+  const appsOption = useMemo(
+    () => (data?.top_apps.length ? barOption(t, data.top_apps.map((a) => a.app_name || '(none)'), data.top_apps.map((a) => a.count), t.series[1]) : {}),
+    [data, t],
+  );
 
-  // Top apps horizontal bar chart
-  const appsOption = useMemo((): EChartsOption => {
-    if (!data?.top_apps.length) return {};
-    const apps = [...data.top_apps].reverse();
-    return {
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-      grid: { left: 120, right: 24, top: 8, bottom: 8 },
-      xAxis: { type: 'value', axisLabel: { fontSize: 10 } },
-      yAxis: {
-        type: 'category',
-        data: apps.map((a) => a.app_name),
-        axisLabel: { fontSize: 10, width: 110, overflow: 'truncate' },
-      },
-      series: [{
-        type: 'bar',
-        data: apps.map((a) => a.count),
-        itemStyle: { color: '#a78bfa', borderRadius: [0, 3, 3, 0] },
-        barMaxWidth: 20,
-      }],
-    };
-  }, [data]);
+  const asOf = formatAsOf(dataUpdatedAt);
+  const hostCount = data?.top_hosts.length ?? null;
+  const noMessages = data !== undefined && data.total === 0;
+
+  const chartBody = (has: boolean | undefined, height: number, chart: ReactNode, emptyTitle: string) => {
+    if (isLoading) return <Skeleton className={height > 260 ? 'h-[300px] w-full' : 'h-[260px] w-full'} />;
+    if (!data) return null;
+    if (!has) {
+      return (
+        <div className={`grid place-items-center ${height > 260 ? 'min-h-[300px]' : 'min-h-[260px]'}`}>
+          <EmptyState compact variant="no-results" icon={BarChart3} title={emptyTitle} description={`Nothing in the ${range.long}.`} />
+        </div>
+      );
+    }
+    return chart;
+  };
 
   return (
     <div>
       <PageHeader
-        title="Syslog"
-        description="Dashboard - aggregated syslog statistics and trends"
+        title="Log overview"
+        description={
+          <>
+            Aggregated syslog statistics for the {range.long}
+            {asOf && <> · Updated {asOf}</>}
+          </>
+        }
+        actions={
+          <SegmentedControl
+            label="Time range"
+            value={String(hours)}
+            onChange={(v) => setHours(Number(v))}
+            options={TIME_RANGES.map((r) => ({ value: String(r.hours), label: r.label, ariaLabel: r.long }))}
+          />
+        }
       />
 
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 mb-4">
-        <Link href="/syslog" className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors">
-          <MessageSquare size={15} /> Messages
-        </Link>
-        <span className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-white/[0.06] text-slate-100">
-          <BarChart3 size={15} /> Dashboard
-        </span>
-        <Link href="/syslog/templates" className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors">
-          <Brain size={15} /> Intelligence
-        </Link>
-      </div>
+      {isError && data && <StaleDataBanner error={error} onRetry={refetch} updatedAt={dataUpdatedAt} />}
 
-      {/* Time range selector */}
-      <div className="flex flex-wrap gap-2 mb-6">
-        {TIME_RANGES.map((r) => (
-          <button
-            key={r.hours}
-            onClick={() => setHours(r.hours)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-              hours === r.hours
-                ? 'bg-sky-500/30 text-sky-300 border border-sky-500/50'
-                : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
-            }`}
-          >
-            {r.label}
-          </button>
-        ))}
-      </div>
+      {isError && !data ? (
+        <Card>
+          <QueryErrorState error={error} onRetry={refetch} title="Could not load log statistics" />
+        </Card>
+      ) : (
+        <>
+          {/* Key figures */}
+          <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <Card>
+              {isLoading ? <Skeleton className="h-[52px] w-28" /> : (
+                <BigNumber size="sm" value={data ? data.total.toLocaleString() : null} label="Messages" />
+              )}
+            </Card>
+            <Card>
+              {isLoading ? <Skeleton className="h-[52px] w-24" /> : (
+                <BigNumber
+                  size="sm"
+                  value={errorCount === null ? null : errorCount.toLocaleString()}
+                  state={errorCount ? 'down' : undefined}
+                  label="Error or worse (sev 0–3)"
+                />
+              )}
+            </Card>
+            <Card>
+              {isLoading ? <Skeleton className="h-[52px] w-16" /> : (
+                <BigNumber
+                  size="sm"
+                  value={hostCount === null ? null : hostCount >= TOP_N ? `${TOP_N}+` : hostCount}
+                  label="Sending hosts"
+                />
+              )}
+            </Card>
+            <Card>
+              {isLoading ? <Skeleton className="h-[52px] w-24" /> : (
+                <div className="min-w-0">
+                  <div className="flex h-[30px] items-center">
+                    {topSeverity ? (
+                      <SeverityBadge severity={topSeverity.severity} className="h-[24px] px-2 text-meta" />
+                    ) : (
+                      <span className="num font-display text-num-sm font-medium text-fg-3">—</span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-meta text-fg-2">Highest severity seen</div>
+                </div>
+              )}
+            </Card>
+          </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <GlassCard className="px-4 py-3 flex items-center gap-3">
-          <div className="rounded-md bg-sky-500/20 p-2">
-            <Activity className="h-4 w-4 text-sky-400" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Total Messages</p>
-            {isLoading ? (
-              <Skeleton className="h-5 w-16 mt-0.5" />
-            ) : (
-              <p className="text-lg font-semibold text-slate-100">{(data?.total ?? 0).toLocaleString()}</p>
-            )}
-          </div>
-        </GlassCard>
-
-        <GlassCard className="px-4 py-3 flex items-center gap-3">
-          <div className="rounded-md bg-red-500/20 p-2">
-            <AlertTriangle className="h-4 w-4 text-red-400" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Errors (Sev 0-3)</p>
-            {isLoading ? (
-              <Skeleton className="h-5 w-16 mt-0.5" />
-            ) : (
-              <p className="text-lg font-semibold text-red-400">{errorCount.toLocaleString()}</p>
-            )}
-          </div>
-        </GlassCard>
-
-        <GlassCard className="px-4 py-3 flex items-center gap-3">
-          <div className="rounded-md bg-emerald-500/20 p-2">
-            <Server className="h-4 w-4 text-emerald-400" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Unique Hosts</p>
-            {isLoading ? (
-              <Skeleton className="h-5 w-12 mt-0.5" />
-            ) : (
-              <p className="text-lg font-semibold text-slate-100">{uniqueHosts}</p>
-            )}
-          </div>
-        </GlassCard>
-
-        <GlassCard className="px-4 py-3 flex items-center gap-3">
-          <div className="rounded-md bg-amber-500/20 p-2">
-            <ShieldAlert className="h-4 w-4 text-amber-400" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Top Severity</p>
-            {isLoading ? (
-              <Skeleton className="h-5 w-20 mt-0.5" />
-            ) : (
-              <p className="text-lg font-semibold text-slate-100">
-                {topSeverity ? topSeverity.label : 'None'}
-              </p>
-            )}
-          </div>
-        </GlassCard>
-      </div>
-
-      {/* Charts grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Severity Distribution</h3>
-          {isLoading ? (
-            <Skeleton className="h-[260px] w-full" />
-          ) : data?.severity_distribution.length ? (
-            <EChart option={severityOption} height={260} />
-          ) : (
-            <div className="h-[260px] flex items-center justify-center text-sm text-slate-500">No data</div>
+          {noMessages && (
+            <Card className="mb-4">
+              <EmptyState
+                variant="not-configured"
+                title={`No syslog messages in the ${range.long}`}
+                description={<>Pick a longer time range, or check that devices send syslog to Nodeglow. <Link href="/syslog" className="text-accent hover:text-accent-hover">Open Logs</Link></>}
+              />
+            </Card>
           )}
-        </GlassCard>
 
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Message Rate</h3>
-          {isLoading ? (
-            <Skeleton className="h-[260px] w-full" />
-          ) : data?.message_rate.length ? (
-            <EChart option={rateOption} height={260} />
-          ) : (
-            <div className="h-[260px] flex items-center justify-center text-sm text-slate-500">No data</div>
-          )}
-        </GlassCard>
+          {!noMessages && (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <ChartCard title="Message rate" meta={range.label}>
+                {chartBody(
+                  Boolean(data?.message_rate.length),
+                  260,
+                  <EChart
+                    option={rateOption}
+                    height={260}
+                    ariaLabel={`Message rate over the ${range.long}: total messages and messages with severity error or worse.`}
+                  />,
+                  'No message rate data',
+                )}
+              </ChartCard>
 
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Top 10 Hosts</h3>
-          {isLoading ? (
-            <Skeleton className="h-[300px] w-full" />
-          ) : data?.top_hosts.length ? (
-            <EChart option={hostsOption} height={300} />
-          ) : (
-            <div className="h-[300px] flex items-center justify-center text-sm text-slate-500">No data</div>
-          )}
-        </GlassCard>
+              <ChartCard title="Severity distribution" meta={range.label}>
+                {chartBody(
+                  Boolean(data?.severity_distribution.length),
+                  260,
+                  <EChart
+                    option={severityOption}
+                    height={260}
+                    ariaLabel={`Messages per severity: ${(data?.severity_distribution ?? [])
+                      .map((s) => `${SEVERITY_LABELS[s.severity] ?? s.severity} ${s.count}`)
+                      .join(', ')}.`}
+                  />,
+                  'No severity data',
+                )}
+              </ChartCard>
 
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Top 10 Applications</h3>
-          {isLoading ? (
-            <Skeleton className="h-[300px] w-full" />
-          ) : data?.top_apps.length ? (
-            <EChart option={appsOption} height={300} />
-          ) : (
-            <div className="h-[300px] flex items-center justify-center text-sm text-slate-500">No data</div>
+              <ChartCard title="Top hosts" meta={`by messages · top ${TOP_N}`}>
+                {chartBody(
+                  Boolean(data?.top_hosts.length),
+                  300,
+                  <EChart
+                    option={hostsOption}
+                    height={300}
+                    ariaLabel={`Top hosts by message count: ${(data?.top_hosts ?? []).map((h) => `${h.hostname} ${h.count}`).join(', ')}.`}
+                  />,
+                  'No host data',
+                )}
+              </ChartCard>
+
+              <ChartCard title="Top applications" meta={`by messages · top ${TOP_N}`}>
+                {chartBody(
+                  Boolean(data?.top_apps.length),
+                  300,
+                  <EChart
+                    option={appsOption}
+                    height={300}
+                    ariaLabel={`Top applications by message count: ${(data?.top_apps ?? []).map((a) => `${a.app_name} ${a.count}`).join(', ')}.`}
+                  />,
+                  'No application data',
+                )}
+              </ChartCard>
+            </div>
           )}
-        </GlassCard>
-      </div>
+        </>
+      )}
     </div>
   );
 }
