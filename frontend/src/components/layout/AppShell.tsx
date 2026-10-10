@@ -80,7 +80,7 @@ export function AppShell({ children }: AppShellProps) {
           id="main"
           tabIndex={-1}
           className={cn(
-            'outline-none',
+            'min-w-0 overflow-x-clip outline-none',
             density === 'compact' ? 'px-4 pb-10 pt-5' : 'px-gutter pb-12 pt-7',
             'max-[759px]:px-4 max-[759px]:pb-[90px] max-[759px]:pt-5',
           )}
