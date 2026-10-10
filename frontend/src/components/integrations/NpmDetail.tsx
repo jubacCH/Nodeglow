@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/Badge';
 import { StatusDot } from '@/components/ui/StatusDot';
 import {
   Globe, Lock, ArrowRight, Radio, Skull,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, type LucideIcon,
 } from 'lucide-react';
 
 interface ProxyHost {
@@ -100,7 +100,7 @@ function certDotStatus(days: number | null): 'online' | 'offline' | 'maintenance
 }
 
 function Section({ title, icon: Icon, iconColor, count, children }: {
-  title: string; icon: React.ElementType; iconColor: string;
+  title: string; icon: LucideIcon; iconColor: string;
   count?: number; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);

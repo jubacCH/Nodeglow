@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
 import { StatusDot } from '@/components/ui/StatusDot';
-import { Globe, Shield, HardDrive, ArrowUpDown, Lock, ChevronDown, ChevronRight } from 'lucide-react';
+import { Globe, Shield, HardDrive, ArrowUpDown, Lock, ChevronDown, ChevronRight, type LucideIcon } from 'lucide-react';
 
 interface DnsRecord {
   type: string;
@@ -71,7 +71,7 @@ function formatNumber(n: number): string {
 
 function StatCard({ label, value, icon: Icon, color }: {
   label: string; value: string | number;
-  icon: React.ElementType; color: string;
+  icon: LucideIcon; color: string;
 }) {
   return (
     <GlassCard className="p-4 text-center">
