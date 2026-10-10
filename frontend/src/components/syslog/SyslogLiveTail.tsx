@@ -4,28 +4,11 @@ import { useSSE } from '@/hooks/useSSE';
 import type { SyslogMessage } from '@/types';
 import { useMemo } from 'react';
 import Link from 'next/link';
-
-const SEVERITY_COLORS: Record<number, string> = {
-  0: 'bg-red-500 text-white',
-  1: 'bg-red-400 text-white',
-  2: 'bg-red-400/80 text-white',
-  3: 'bg-orange-400 text-black',
-  4: 'bg-amber-400 text-black',
-  5: 'bg-blue-400 text-white',
-  6: 'bg-sky-400/60 text-white',
-  7: 'bg-slate-500 text-white',
-};
-
-const SEVERITY_LABELS: Record<number, string> = {
-  0: 'EMERG',
-  1: 'ALERT',
-  2: 'CRIT',
-  3: 'ERR',
-  4: 'WARN',
-  5: 'NOTICE',
-  6: 'INFO',
-  7: 'DEBUG',
-};
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { StatusDot } from '@/components/ui/StatusDot';
+import { cn } from '@/lib/utils';
+import { SEVERITY_LABELS, SeverityBadge, formatLogTime, hostHref } from './severity';
 
 interface SyslogLiveTailProps {
   enabled: boolean;
@@ -52,68 +35,69 @@ export function SyslogLiveTail({ enabled, severity, host, app }: SyslogLiveTailP
 
   if (!enabled) return null;
 
+  const sevLabel = severity ? SEVERITY_LABELS[Number(severity)] : undefined;
+
   return (
-    <div className="mb-6 rounded-lg border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.06] bg-white/[0.02]">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
+    <Card as="section" padding="none" className="mb-4 overflow-hidden" aria-labelledby="live-tail-title">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <h2 id="live-tail-title" className="text-body font-medium text-fg">Live tail</h2>
+          {/* Connected = calm, colourless "Live"; connecting = hollow ring. */}
+          <span role="status" className="inline-flex items-center gap-1.5 text-meta text-fg-2">
             {isStreaming ? (
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
-              </span>
+              <span aria-hidden="true" className="h-[8px] w-[8px] rounded-full bg-fg-2" />
             ) : (
-              <span className="inline-flex rounded-full h-2.5 w-2.5 bg-slate-500" />
+              <StatusDot status="unknown" label="" />
             )}
-            <span className="text-xs font-medium text-slate-300">
-              {isStreaming ? 'Live' : 'Connecting...'}
-            </span>
-          </div>
-          <span className="text-xs text-slate-500">
+            {isStreaming ? 'Live' : 'Connecting…'}
+          </span>
+          <span className="num text-meta text-fg-3">
             {messages.length} message{messages.length !== 1 ? 's' : ''}
           </span>
+          {sevLabel && (
+            <span className="text-meta text-fg-3">Only {sevLabel.toLowerCase()} messages</span>
+          )}
         </div>
-        <button
-          onClick={clear}
-          className="px-2 py-1 text-xs text-slate-400 hover:text-slate-200 transition-colors"
-        >
+        <Button variant="ghost" size="sm" onClick={clear} disabled={messages.length === 0}>
           Clear
-        </button>
+        </Button>
       </div>
 
-      {/* Messages */}
-      <div className="max-h-80 overflow-y-auto">
+      <div className="max-h-80 overflow-y-auto" role="log" aria-live="off" aria-label="Live syslog messages">
         {messages.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-slate-500">
-            Waiting for messages...
-          </div>
+          <p className="px-4 py-8 text-center text-ui text-fg-3">
+            {isStreaming
+              ? 'Connected. No new messages since the live tail started.'
+              : 'Connecting to the live stream… Retrying every few seconds if the connection drops.'}
+          </p>
         ) : (
-          <div className="divide-y divide-white/[0.03]">
-            {messages.map((msg) => (
-              <div
-                key={msg.__sseId}
-                className="px-4 py-2 hover:bg-white/[0.02] transition-colors flex items-start gap-3"
-              >
-                <span className="text-xs text-slate-500 font-mono whitespace-nowrap shrink-0 pt-0.5">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
-                </span>
-                <span
-                  className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${SEVERITY_COLORS[msg.severity] ?? 'bg-slate-500 text-white'}`}
+          <ul className="divide-y divide-border">
+            {messages.map((msg) => {
+              const time = formatLogTime(msg.timestamp);
+              return (
+                <li
+                  key={msg.__sseId}
+                  className="flex min-w-0 items-start gap-3 px-4 py-1.5 hover:bg-hover max-[759px]:flex-wrap max-[759px]:gap-x-2 max-[759px]:gap-y-1"
                 >
-                  {SEVERITY_LABELS[msg.severity] ?? msg.severity}
-                </span>
-                <Link href={`/hosts?q=${encodeURIComponent(msg.hostname)}`} className="text-xs text-sky-300/70 hover:text-sky-300 font-mono whitespace-nowrap shrink-0 transition-colors">
-                  {msg.hostname}
-                </Link>
-                <span className="text-xs text-slate-300 truncate min-w-0">
-                  {msg.message}
-                </span>
-              </div>
-            ))}
-          </div>
+                  <time className="num shrink-0 whitespace-nowrap pt-0.5 font-mono text-meta text-fg-3" title={time.full}>
+                    {time.short}
+                  </time>
+                  <SeverityBadge severity={msg.severity} short className="shrink-0" />
+                  <Link
+                    href={hostHref(msg.host_id, msg.hostname)}
+                    className="shrink-0 whitespace-nowrap pt-0.5 font-mono text-meta text-fg-2 hover:text-accent"
+                  >
+                    {msg.hostname || '—'}
+                  </Link>
+                  <span className={cn('min-w-0 flex-1 truncate pt-0.5 font-mono text-meta text-fg', 'max-[759px]:basis-full max-[759px]:whitespace-normal max-[759px]:break-words')}>
+                    {msg.message}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
