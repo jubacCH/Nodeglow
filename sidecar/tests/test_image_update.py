@@ -53,13 +53,27 @@ def compose_config(version, data="/opt/nodeglow/data"):
 DIGESTS = {"nodeglow-backend": DIGEST_B, "nodeglow-frontend": DIGEST_F,
            "nodeglow-updater": DIGEST_U}
 
+NEW_DEPLOY = {"docker-compose.yml": "# compose 1.1.0\n",
+              "clickhouse/config.xml": "<new/>\n",
+              "clickhouse/init.sql": "-- new\n"}
+OLD_DEPLOY = {"docker-compose.yml": "# compose 1.0.0\n",
+              "clickhouse/config.xml": "<old/>\n",
+              "clickhouse/init.sql": "-- old\n"}
+
+
+def read(repo, rel):
+    with open(os.path.join(repo, rel)) as fh:
+        return fh.read()
+
 
 class Docker:
     """A fake docker/cosign CLI recording every call."""
 
     def __init__(self, target="1.1.0", cosign_rc=0, pull_digest_override=None,
-                 running_data="/opt/nodeglow/data"):
+                 running_data="/opt/nodeglow/data", deploy_files=None, migrate_rc=0):
         self.calls = []
+        self.deploy_files = NEW_DEPLOY if deploy_files is None else deploy_files
+        self.migrate_rc = migrate_rc
         self.target = target
         self.cosign_rc = cosign_rc
         self.pull_digest_override = pull_digest_override
@@ -95,6 +109,19 @@ class Docker:
             return CmdResult(0, json.dumps([f"{name}@{digest}"]), "")
         if argv[:2] == ["docker", "run"]:
             return CmdResult(0, "abc123", "")
+        if argv[:2] in (["docker", "create"], ["docker", "rm"]):
+            return CmdResult(0, "cid", "")
+        if argv[:2] == ["docker", "cp"]:
+            if self.deploy_files:
+                dest = argv[3]
+                for rel, content in self.deploy_files.items():
+                    path = os.path.join(dest, rel)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w") as fh:
+                        fh.write(content)
+            return CmdResult(0, "", "")
+        if self.migrate_rc and "alembic" in argv:
+            return CmdResult(self.migrate_rc, "", "relation already exists")
         if "docker" in argv and "compose" in argv:
             return CmdResult(0, "ok", "")
         raise AssertionError(f"unexpected command: {argv}")
@@ -104,7 +131,10 @@ def make_ctx(tmp_path, run_cmd, **over):
     repo = str(tmp_path / "install")
     if not os.path.exists(os.path.join(repo, ".env")):
         write_env(repo)
-    open(os.path.join(repo, "docker-compose.yml"), "a").close()
+    for rel, content in OLD_DEPLOY.items():
+        os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
+        with open(os.path.join(repo, rel), "w") as fh:
+            fh.write(content)
     defaults = dict(
         run_cmd=run_cmd,
         run_dump=lambda argv, dest, timeout=1800: (open(dest, "wb").close() or DumpResult(0, 10, "")),
@@ -248,6 +278,13 @@ def test_full_image_update_run(tmp_path):
     # .env pinned to the new version, old one kept
     assert iu.read_env_value(os.path.join(ctx.repo_path, ".env"), "NODEGLOW_VERSION") == "1.1.0"
     assert os.path.exists(os.path.join(ctx.repo_path, ".env.bak-2026-10-10T12-00-00"))
+    # the release's own deploy files replaced the old ones, old ones kept
+    for rel, content in NEW_DEPLOY.items():
+        assert read(ctx.repo_path, rel) == content
+        assert read(ctx.repo_path, rel + ".bak-2026-10-10T12-00-00") == OLD_DEPLOY[rel]
+    assert not os.path.exists(os.path.join(ctx.repo_path, iu.STAGING_DIRNAME))
+    # the staging container is always removed
+    assert any(c[:3] == ["docker", "rm", "-f"] for c in docker.calls)
     # every Nodeglow image was verified with the release workflow identity
     cosign = [c for c in docker.calls if c[0] == "cosign"]
     assert {c[2] for c in cosign} == {f"{REG}/nodeglow-backend:1.1.0",
@@ -304,6 +341,45 @@ def test_digest_mismatch_after_pull_fails_before_migrate(tmp_path):
     assert state.by_name("pull").status == "failed"
     assert state.by_name("migrate").status == "pending"
     assert "does not match the verified digest" in state.error
+    assert iu.read_env_value(os.path.join(ctx.repo_path, ".env"), "NODEGLOW_VERSION") == "1.0.0"
+
+
+def test_updater_image_without_deploy_files_is_refused(tmp_path):
+    ctx = make_ctx(tmp_path, Docker(deploy_files={}))
+    state = run_update(ctx, steps=steps())
+    assert state.status == "failed"
+    assert state.by_name("stage").status == "failed"
+    assert "carries no deploy files" in state.error
+    assert read(ctx.repo_path, "docker-compose.yml") == OLD_DEPLOY["docker-compose.yml"]
+
+
+def test_failed_migration_restores_compose_file_and_version(tmp_path):
+    docker = Docker(migrate_rc=1)
+    ctx = make_ctx(tmp_path, docker)
+
+    state = run_update(ctx, steps=steps())
+
+    assert state.status == "failed"
+    assert state.by_name("migrate").status == "failed"
+    assert state.by_name("restart").status == "pending"
+    assert iu.read_env_value(os.path.join(ctx.repo_path, ".env"), "NODEGLOW_VERSION") == "1.0.0"
+    for rel, content in OLD_DEPLOY.items():
+        assert read(ctx.repo_path, rel) == content
+    assert not any(c[0] == "env" and "up" in c for c in docker.calls)
+
+
+def test_install_reverts_when_new_compose_moves_data(tmp_path):
+    class Moving(Docker):
+        def __call__(self, argv, timeout=60, cwd=None):
+            if "config" in argv and "json" in argv and "NODEGLOW_VERSION=1.1.0" in argv:
+                return CmdResult(0, compose_config("1.1.0", data="/elsewhere/data"), "")
+            return super().__call__(argv, timeout, cwd)
+
+    ctx = make_ctx(tmp_path, Moving())
+    state = run_update(ctx, steps=steps())
+    assert state.status == "failed"
+    assert state.by_name("install").status == "failed"
+    assert read(ctx.repo_path, "docker-compose.yml") == OLD_DEPLOY["docker-compose.yml"]
     assert iu.read_env_value(os.path.join(ctx.repo_path, ".env"), "NODEGLOW_VERSION") == "1.0.0"
 
 

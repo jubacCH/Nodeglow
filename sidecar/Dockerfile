@@ -3,6 +3,16 @@
 # multi-arch Sigstore image at a pinned version; bump deliberately.
 FROM gcr.io/projectsigstore/cosign:v2.4.1 AS cosign
 
+# ── Release deploy files ─────────────────────────────────────────────────────
+# The release workflow passes a named build context "deploy" holding
+# deploy/docker-compose.yml (= docker-compose.release.yml) and
+# deploy/clickhouse/*, which replaces this stage. The image-mode updater copies
+# them into the installation directory on update, so a release can change its
+# compose file and the files are covered by the image signature. A plain
+# `docker build sidecar/` (git-mode installs) gets this empty stage instead.
+FROM python:3.12-slim AS deploy
+RUN mkdir -p /deploy
+
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,6 +35,7 @@ RUN cosign version >/dev/null
 
 WORKDIR /app
 COPY update-server.py orchestrator.py image_update.py ./
+COPY --from=deploy /deploy /app/deploy
 
 EXPOSE 9100
 CMD ["python", "update-server.py"]
