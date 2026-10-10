@@ -1,0 +1,52 @@
+{
+  "type": "message",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "contentUrl": null,
+      "content": {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "msteams": {
+          "width": "Full"
+        },
+        "body": [
+          {
+            "type": "Container",
+            "style": "accent",
+            "bleed": true,
+            "items": [
+              {
+                "type": "TextBlock",
+                "text": "🔵 INFO",
+                "weight": "Bolder",
+                "size": "Small",
+                "color": "Accent"
+              }
+            ]
+          },
+          {
+            "type": "TextBlock",
+            "text": "✅ Resolved: x",
+            "weight": "Bolder",
+            "size": "Medium",
+            "wrap": true
+          },
+          {
+            "type": "TextBlock",
+            "text": "back online",
+            "wrap": true
+          },
+          {
+            "type": "TextBlock",
+            "text": "Nodeglow",
+            "isSubtle": true,
+            "size": "Small",
+            "spacing": "Medium"
+          }
+        ]
+      }
+    }
+  ]
+}
