@@ -230,7 +230,7 @@ export default function AgentsPage() {
           }
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[980px]">
                 <THead>
                   <Tr>
@@ -266,9 +266,9 @@ export default function AgentsPage() {
                             {agent.agent_version && <Badge>v{agent.agent_version}</Badge>}
                           </div>
                         </Td>
-                        <Td><UsageBar label="CPU" value={agent.cpu_pct} stale={stale} /></Td>
-                        <Td><UsageBar label="Memory" value={agent.mem_pct} stale={stale} /></Td>
-                        <Td><UsageBar label="Disk" value={agent.disk_pct} stale={stale} /></Td>
+                        <Td><UsageBar hideLabel label="CPU" value={agent.cpu_pct} stale={stale} /></Td>
+                        <Td><UsageBar hideLabel label="Memory" value={agent.mem_pct} stale={stale} /></Td>
+                        <Td><UsageBar hideLabel label="Disk" value={agent.disk_pct} stale={stale} /></Td>
                         <Td muted className="whitespace-nowrap">
                           {agent.last_seen ? (
                             <time dateTime={agent.last_seen} title={new Date(agent.last_seen).toLocaleString()}>

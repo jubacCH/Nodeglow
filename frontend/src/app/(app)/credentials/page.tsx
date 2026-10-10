@@ -243,7 +243,7 @@ export default function CredentialsPage() {
           }
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[560px]">
                 <THead>
                   <Tr>

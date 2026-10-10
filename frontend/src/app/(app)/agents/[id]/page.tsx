@@ -21,7 +21,7 @@ import { QueryErrorState, StaleDataBanner, formatAsOf } from '@/components/ui/Qu
 import { EChart } from '@/components/charts/LazyEChart';
 import { useChartTheme } from '@/lib/chart-theme';
 import { get, patch, post, put, apiErrorMessage } from '@/lib/api';
-import { cn, formatUptime, timeAgo } from '@/lib/utils';
+import { formatUptime, timeAgo } from '@/lib/utils';
 import type { HealthState } from '@/lib/status';
 import { MAX_WATCHED_SERVICES, parseServiceList, serviceBadge } from '@/lib/agentServices';
 import { useToastStore } from '@/stores/toast';
@@ -185,7 +185,8 @@ export default function AgentDetailPage() {
                 ariaLabel={`CPU, memory and disk usage over the last ${snapshots.length} reports`}
                 option={{
                   tooltip: { trigger: 'axis' },
-                  legend: { data: ['CPU', 'Memory', 'Disk'] },
+                  legend: { data: ['CPU', 'Memory', 'Disk'], top: 0, right: 0 },
+                  grid: { top: 32, left: 8, right: 8, bottom: 8, containLabel: true },
                   xAxis: {
                     type: 'category',
                     data: snapshots.map((s) =>
@@ -194,7 +195,7 @@ export default function AgentDetailPage() {
                   },
                   yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
                   series: [
-                    { name: 'CPU', type: 'line', data: snapshots.map((s) => s.cpu_pct).reverse(), color: chart.series[0], smooth: true, showSymbol: false, areaStyle: { color: chart.accentFill } },
+                    { name: 'CPU', type: 'line', data: snapshots.map((s) => s.cpu_pct).reverse(), color: chart.series[0], smooth: true, showSymbol: false },
                     { name: 'Memory', type: 'line', data: snapshots.map((s) => s.mem_pct).reverse(), color: chart.series[1], smooth: true, showSymbol: false },
                     { name: 'Disk', type: 'line', data: snapshots.map((s) => s.disk_pct).reverse(), color: chart.series[2], smooth: true, showSymbol: false },
                   ],
@@ -535,7 +536,7 @@ function MetricCard({
             stale={stale}
             label={extra}
           />
-          <UsageBar label={`${label} usage`} value={value} stale={stale} className={cn('mt-3 [&>div:first-child]:sr-only')} />
+          <UsageBar hideLabel label={`${label} usage`} value={value} stale={stale} className="mt-3 [&>div:first-child]:sr-only" />
         </>
       )}
     </Card>

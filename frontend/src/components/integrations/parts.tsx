@@ -264,7 +264,7 @@ export function TableCard({
   return (
     <Card as="section" padding="none">
       <CardHeader title={title} meta={meta} actions={actions} className="mb-2 px-4 pt-4" />
-      <TableContainer maxHeight={maxHeight}>{children}</TableContainer>
+      <TableContainer className="relative" maxHeight={maxHeight}>{children}</TableContainer>
     </Card>
   );
 }

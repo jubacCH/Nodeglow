@@ -185,7 +185,7 @@ export default function SslPage() {
           }
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[720px]">
                 <THead>
                   <Tr>

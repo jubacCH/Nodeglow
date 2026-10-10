@@ -151,7 +151,7 @@ export function NpmDetail({ data }: { data: NpmData }) {
       {/* Proxy hosts */}
       <Section title="Proxy hosts" icon={Globe} count={data.proxy_count}>
         <Card padding="none">
-          <TableContainer>
+          <TableContainer className="relative">
             <Table>
               <THead>
                 <Tr>
@@ -218,7 +218,7 @@ export function NpmDetail({ data }: { data: NpmData }) {
       {data.redir_count > 0 && (
         <Section title="Redirections" icon={ArrowRight} count={data.redir_count}>
           <Card padding="none">
-            <TableContainer>
+            <TableContainer className="relative">
               <Table>
                 <THead>
                   <Tr>
@@ -248,7 +248,7 @@ export function NpmDetail({ data }: { data: NpmData }) {
       {data.stream_count > 0 && (
         <Section title="Streams" icon={Radio} count={data.stream_count}>
           <Card padding="none">
-            <TableContainer>
+            <TableContainer className="relative">
               <Table>
                 <THead>
                   <Tr>

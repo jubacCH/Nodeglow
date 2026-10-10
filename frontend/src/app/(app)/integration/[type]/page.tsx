@@ -248,7 +248,7 @@ export default function IntegrationListPage() {
           }
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[760px]">
                 <THead>
                   <Tr>

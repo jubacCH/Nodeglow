@@ -194,11 +194,12 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
               <div className="flex min-w-0 items-center gap-2">
                 <StatusDot status={nodeState(node.online)} />
                 <span className="truncate text-ui font-medium text-fg">{node.name}</span>
-                <span className="num ml-auto shrink-0 text-meta text-fg-3">{uptime(node.uptime_s) ?? '—'}</span>
+                <span className="num ml-auto shrink-0 text-meta text-fg-3">{node.online ? uptime(node.uptime_s) ?? '—' : 'Offline'}</span>
               </div>
-              <UsageBar label="CPU" pct={node.cpu_pct} />
-              <UsageBar label="Memory" pct={node.mem_pct} detail={gb(node.mem_used_gb, node.mem_total_gb)} />
-              <UsageBar label="Disk" pct={node.disk_pct} detail={gb(node.disk_used_gb, node.disk_total_gb)} />
+              {/* An offline node reports zeros: show "not reported", not 0 %. */}
+              <UsageBar label="CPU" pct={node.online ? node.cpu_pct : null} />
+              <UsageBar label="Memory" pct={node.online ? node.mem_pct : null} detail={node.online ? gb(node.mem_used_gb, node.mem_total_gb) : undefined} />
+              <UsageBar label="Disk" pct={node.online ? node.disk_pct : null} detail={node.online ? gb(node.disk_used_gb, node.disk_total_gb) : undefined} />
             </Card>
           ))}
         </div>

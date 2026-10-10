@@ -276,7 +276,7 @@ export default function ScannerPage() {
             {scanResult.alive.length === 0 ? (
               <EmptyState compact variant="no-results" title="No live hosts found" description="Nothing in this subnet answered. Check the CIDR and that the scanner can reach it." />
             ) : (
-              <TableContainer>
+              <TableContainer className="relative">
                 <Table className="min-w-[520px]">
                   <THead>
                     <Tr>
@@ -349,7 +349,7 @@ export default function ScannerPage() {
           }
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[760px]">
                 <THead>
                   <Tr>
