@@ -7,6 +7,7 @@ Design- und Umsetzungsdokumentation für die Neugestaltung von Nodeglow.
 | [01-ux-audit.md](01-ux-audit.md) | Phase A: Seiteninventar, Funktionsabdeckung, Scorecard, 58 Befunde, technische Rahmenbedingungen |
 | [02-information-architecture.md](02-information-architecture.md) | Phase B: Navigation, Objektmodell, Workflows, UX-Muster, Dashboard-Hierarchie, Backend-Lücken |
 | [03-design-directions.md](03-design-directions.md) | Phase C: Vergleich der drei Richtungen, Bewertung, Empfehlung |
+| [04-design-system.md](04-design-system.md) | Phase D: Tokens, Tailwind-Klassen, Komponentenkatalog, Glow- und Zustandsregeln, App-Shell, Migrations-Checkliste |
 | [directions/](directions/) | Die drei Richtungsdokumente im Detail |
 | [prototypes/](prototypes/) | Szenario und die drei Browser-Prototypen |
 
