@@ -6,7 +6,11 @@ import type { NavSection } from '@/lib/navigation';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Popover } from '@/components/ui/Popover';
 import { Lockup, NodeglowMark } from '@/components/ui/NodeglowMark';
+import { useFeatures } from '@/hooks/queries/useFeatures';
 import { useNavBadges, useShellNav } from './useShellNav';
+
+/** Public source of this build — AGPL-3.0 section 13 asks network users to get it. */
+export const SOURCE_URL = 'https://github.com/jubacCH/Nodeglow';
 
 /** Count badge on a rail icon. Critical counts glow (E3). */
 export function NavCountBadge({ count, className }: { count: number; className?: string }) {
@@ -20,6 +24,27 @@ export function NavCountBadge({ count, className }: { count: number; className?:
     >
       {count > 99 ? '99+' : count}
     </span>
+  );
+}
+
+function AboutDetails() {
+  const { data } = useFeatures();
+  const enterprise = data?.edition === 'enterprise';
+  return (
+    <dl className="mt-3.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-border pt-3 text-meta">
+      <dt className="text-fg-3">Edition</dt>
+      <dd className="text-fg">{data ? (enterprise ? 'Enterprise' : 'Community') : '—'}</dd>
+      <dt className="text-fg-3">License</dt>
+      <dd className="text-fg">
+        AGPL-3.0{enterprise ? ' core · ee/ under the Nodeglow Enterprise License' : ''}
+      </dd>
+      <dt className="text-fg-3">Source</dt>
+      <dd>
+        <a href={SOURCE_URL} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+          github.com/jubacCH/Nodeglow
+        </a>
+      </dd>
+    </dl>
   );
 }
 
@@ -44,11 +69,7 @@ function AboutPopover() {
       <p className="mt-3 text-meta leading-normal text-fg-2">
         Infrastructure monitoring. Only what needs attention glows; no light means no data.
       </p>
-      <div className="mt-3.5 flex items-end gap-3.5 border-t border-border pt-3 text-micro text-fg-3" aria-hidden="true">
-        <span className="flex flex-col items-center gap-1.5"><NodeglowMark size={40} />40 px</span>
-        <span className="flex flex-col items-center gap-1.5"><NodeglowMark size={20} />20 px</span>
-        <span className="flex flex-col items-center gap-1.5"><NodeglowMark size={20} mono />mono</span>
-      </div>
+      <AboutDetails />
     </Popover>
   );
 }
