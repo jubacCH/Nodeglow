@@ -100,6 +100,14 @@ function talkerLabel(t: NonNullable<BandwidthSummary['top_talkers']>[number]): s
   return name || t.source_name || '—';
 }
 
+/** "device / interface" so equal interface names (eth0 on two hosts) stay distinguishable. */
+function talkerFullLabel(t: NonNullable<BandwidthSummary['top_talkers']>[number]): string {
+  const iface = talkerLabel(t);
+  if (!t.source_name || iface === t.source_name) return iface;
+  const full = `${t.source_name} / ${iface}`;
+  return full.length > 32 ? full.slice(0, 31) + '…' : full;
+}
+
 /* ---------- component ---------- */
 
 export default function BandwidthPage() {
@@ -204,8 +212,8 @@ export default function BandwidthPage() {
       yAxis: {
         type: 'category',
         inverse: true,
-        data: talkers.map(talkerLabel),
-        axisLabel: { width: 150, overflow: 'truncate', fontFamily: t.monoFamily },
+        data: talkers.map(talkerFullLabel),
+        axisLabel: { width: 190, overflow: 'truncate', fontFamily: t.monoFamily },
       },
       series: [
         {
@@ -271,7 +279,7 @@ export default function BandwidthPage() {
                 unit={top?.unit}
                 label={
                   <span className="block truncate" title={topTalker ? `${topTalker.source_name ?? ''} ${topTalker.interface_name ?? ''}`.trim() : undefined}>
-                    Top talker{topTalker && <>: <span className="font-mono">{topTalker.source_name ? `${topTalker.source_name} / ${talkerLabel(topTalker)}` : talkerLabel(topTalker)}</span></>}
+                    Top talker{topTalker && <>: <span className="font-mono">{talkerFullLabel(topTalker)}</span></>}
                   </span>
                 }
               />
@@ -322,7 +330,7 @@ export default function BandwidthPage() {
         )}
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
         {/* Interfaces */}
         <Card as="section" padding="none" aria-labelledby="h-ifaces" className="overflow-hidden">
           <div className="px-5 pt-5 max-[759px]:px-4 max-[759px]:pt-4">
@@ -401,7 +409,7 @@ export default function BandwidthPage() {
             <EChart
               option={topTalkersOption}
               height={400}
-              ariaLabel={`Top talkers by current rate: ${talkers.map((x) => `${talkerLabel(x)} ${formatBps((x.rx_rate_bps ?? 0) + (x.tx_rate_bps ?? 0))}`).join(', ')}.`}
+              ariaLabel={`Top talkers by current rate: ${talkers.map((x) => `${talkerFullLabel(x)} ${formatBps((x.rx_rate_bps ?? 0) + (x.tx_rate_bps ?? 0))}`).join(', ')}.`}
             />
           ) : (
             <div className="grid min-h-[400px] place-items-center">
