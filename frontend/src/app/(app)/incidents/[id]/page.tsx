@@ -1,37 +1,45 @@
 'use client';
 
-import { useParams } from 'next/navigation';
-import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { useQuery } from '@tanstack/react-query';
-import { get, post } from '@/lib/api';
-import { useToastStore } from '@/stores/toast';
-import { useAuthStore } from '@/stores/auth';
-import { aiUnavailableMessage, useAiStatus, type AiStatus } from '@/hooks/queries/useAiStatus';
-import type { Incident, IncidentEvent } from '@/types';
-import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
-import { ArrowLeft, CheckCircle, Eye, FileText, Zap, Search, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { CheckCircle2, ChevronDown, ChevronRight, Eye, RefreshCw, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { AffectedHostsCard } from '@/components/incidents/AffectedHostsCard';
+import { IncidentStatusBadge, SeverityIndicator } from '@/components/incidents/IncidentBits';
+import { Badge } from '@/components/ui/Badge';
+import { Button, buttonClasses } from '@/components/ui/Button';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryState } from '@/components/ui/QueryState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { StatusDot } from '@/components/ui/StatusDot';
+import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '@/components/ui/Table';
+import { Tag } from '@/components/ui/Tag';
+import { aiUnavailableMessage, useAiStatus, type AiStatus } from '@/hooks/queries/useAiStatus';
+import { useIncidentAction } from '@/hooks/queries/useAlerts';
+import { apiErrorMessage, get, post } from '@/lib/api';
+import {
+  SEVERITY_LABEL, formatDateTime, formatDuration, incidentDurationMs, incidentNeedsGlow, parseServerDate, ruleLabel,
+  severityState, type IncidentItem,
+} from '@/lib/incidents';
+import { cn } from '@/lib/utils';
+import { useAuthStore, useIsEditor } from '@/stores/auth';
+import { useToastStore } from '@/stores/toast';
 
-const SEVERITY_LABELS: Record<number, { label: string; color: string }> = {
-  0: { label: 'EMERG', color: 'text-red-300 bg-red-500/20' },
-  1: { label: 'ALERT', color: 'text-red-300 bg-red-500/20' },
-  2: { label: 'CRIT', color: 'text-red-400 bg-red-500/15' },
-  3: { label: 'ERROR', color: 'text-red-400 bg-red-500/10' },
-  4: { label: 'WARN', color: 'text-amber-400 bg-amber-500/10' },
+const SYSLOG_SEVERITY: Record<number, { label: string; tone: 'down' | 'warning' }> = {
+  0: { label: 'EMERG', tone: 'down' },
+  1: { label: 'ALERT', tone: 'down' },
+  2: { label: 'CRIT', tone: 'down' },
+  3: { label: 'ERROR', tone: 'down' },
+  4: { label: 'WARN', tone: 'warning' },
 };
 
-function SeverityBadge({ severity }: { severity: number }) {
-  const info = SEVERITY_LABELS[severity] ?? { label: `SEV${severity}`, color: 'text-slate-400 bg-white/[0.05]' };
-  return (
-    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium ${info.color}`}>
-      {info.label}
-    </span>
-  );
+function SyslogSeverity({ severity }: { severity: number }) {
+  const info = SYSLOG_SEVERITY[severity];
+  return <Badge tone={info?.tone ?? 'neutral'} className="font-mono">{info?.label ?? `SEV${severity}`}</Badge>;
 }
 
 interface RelatedLog {
@@ -75,8 +83,18 @@ interface LogAnalysis {
   }[];
 }
 
-interface IncidentDetail extends Incident {
-  events: IncidentEvent[];
+/** Timeline entry as GET /api/v1/incidents/{id} returns it. */
+interface TimelineEvent {
+  timestamp: string;
+  /** Current field name; `event_type` kept for older backends. */
+  type?: string;
+  event_type?: string;
+  summary: string;
+  detail: string | null;
+}
+
+interface IncidentDetail extends IncidentItem {
+  events: TimelineEvent[];
   events_total?: number;
   related_logs?: RelatedLog[];
   log_analysis?: LogAnalysis | null;
@@ -84,209 +102,236 @@ interface IncidentDetail extends Incident {
   postmortem_generated_at?: string | null;
 }
 
-export default function IncidentDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const incidentId = Number(id);
-  const toast = useToastStore((s) => s.show);
-  const { data: aiStatus } = useAiStatus();
-  // No AI, no postmortem on its way: stop polling for one.
-  const aiAvailable = aiStatus?.available ?? true;
-
-  const { data, isLoading, refetch } = useQuery({
-    queryKey: ['incident', incidentId],
-    queryFn: () => get<IncidentDetail>(`/api/v1/incidents/${incidentId}`),
-    enabled: incidentId > 0,
-    refetchInterval: (query) => {
-      const d = query.state.data;
-      if (aiAvailable && d && d.status === 'resolved' && !d.postmortem) return 5000;
-      return false;
-    },
-  });
-
-  async function acknowledge() {
-    try {
-      await post(`/api/v1/incidents/${incidentId}/acknowledge`);
-      refetch();
-      toast('Incident acknowledged', 'success');
-    } catch {
-      toast('Failed to acknowledge', 'error');
-    }
-  }
-
-  async function resolve() {
-    try {
-      await post(`/api/v1/incidents/${incidentId}/resolve`);
-      refetch();
-      toast('Incident resolved', 'success');
-    } catch {
-      toast('Failed to resolve', 'error');
-    }
-  }
-
-  async function submitFeedback(verdict: 'real' | 'noise') {
-    try {
-      await post(`/api/v1/incidents/${incidentId}/feedback`, { verdict });
-      refetch();
-      toast(verdict === 'noise' ? 'Marked as noise — pattern suppressed' : 'Marked as real', 'success');
-    } catch {
-      toast('Failed to submit feedback', 'error');
-    }
-  }
-
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <Breadcrumbs items={[{ label: 'Alerts', href: '/alerts' }, { label: data?.title ?? `Incident #${incidentId}` }]} />
-      <PageHeader
-        title={data?.title ?? `Incident #${incidentId}`}
-        actions={
-          <div className="flex items-center gap-2">
-            {data?.status === 'open' && (
-              <Button size="sm" variant="ghost" onClick={acknowledge}>
-                <Eye size={16} /> Acknowledge
-              </Button>
-            )}
-            {data?.status !== 'resolved' && (
-              <Button size="sm" onClick={resolve}>
-                <CheckCircle size={16} /> Resolve
-              </Button>
-            )}
-            <Link href="/alerts?tab=incidents">
-              <Button variant="ghost" size="sm"><ArrowLeft size={16} /> Back</Button>
-            </Link>
-          </div>
-        }
-      />
-
-      {isLoading ? (
-        <Skeleton className="h-40 w-full" />
-      ) : data ? (
-        <>
-          <GlassCard className="p-4 mb-6">
-            <div className="flex items-center gap-3 flex-wrap">
-              <Badge variant="severity" severity={data.severity}>{data.severity}</Badge>
-              <Badge>{data.status}</Badge>
-              <span className="text-xs text-slate-500 font-mono">{data.rule}</span>
-              <span className="text-xs text-slate-500">
-                Created: {new Date(data.created_at).toLocaleString()}
-              </span>
-              {data.resolved_at && (
-                <span className="text-xs text-emerald-400">
-                  Resolved: {new Date(data.resolved_at).toLocaleString()}
-                </span>
-              )}
-            </div>
-
-            {/* Operator feedback loop */}
-            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-white/[0.06] flex-wrap">
-              <span className="text-xs text-slate-400 mr-1">War dieser Alert nützlich?</span>
-              <button
-                type="button"
-                onClick={() => submitFeedback('real')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                  data.feedback === 'real'
-                    ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40'
-                    : 'bg-white/[0.04] text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-300'
-                }`}
-              >
-                <ThumbsUp size={13} /> Echt
-              </button>
-              <button
-                type="button"
-                onClick={() => submitFeedback('noise')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                  data.feedback === 'noise'
-                    ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40'
-                    : 'bg-white/[0.04] text-slate-400 hover:bg-amber-500/10 hover:text-amber-300'
-                }`}
-              >
-                <ThumbsDown size={13} /> Rauschen
-              </button>
-              {data.feedback_by && (
-                <span className="text-[10px] text-slate-500 ml-1">
-                  von {data.feedback_by}
-                  {data.feedback_at ? ` · ${new Date(data.feedback_at).toLocaleString()}` : ''}
-                </span>
-              )}
-            </div>
-          </GlassCard>
-
-          <GlassCard className="p-4">
-            <h3 className="text-sm font-medium text-slate-300 mb-4">
-              Event Timeline
-              {(data.events_total ?? 0) > (data.events?.length ?? 0) && (
-                <span className="ml-2 text-[10px] font-normal text-slate-500">
-                  showing latest {data.events.length} of {data.events_total}
-                </span>
-              )}
-            </h3>
-            {data.events?.length ? (
-              <div className="space-y-0">
-                {data.events.map((evt, i) => (
-                  <div key={evt.id} className="flex gap-3 pb-4 relative">
-                    {i < data.events.length - 1 && (
-                      <div className="absolute left-[7px] top-5 bottom-0 w-px bg-white/[0.06]" />
-                    )}
-                    <div className="w-4 h-4 rounded-full bg-white/[0.08] border-2 border-white/[0.15] mt-0.5 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <Badge>{evt.event_type}</Badge>
-                        <span className="text-[10px] text-slate-500">
-                          {new Date(evt.timestamp).toLocaleString()}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-300 mt-1">{evt.summary}</p>
-                      {evt.detail && (
-                        <pre className="text-xs text-slate-500 mt-1 bg-white/[0.02] rounded p-2 overflow-x-auto">
-                          {evt.detail}
-                        </pre>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">No events</p>
-            )}
-          </GlassCard>
-
-          {/* Postmortem */}
-          {data.status === 'resolved' && (
-            <PostmortemSection
-              incidentId={incidentId}
-              postmortem={data.postmortem}
-              generatedAt={data.postmortem_generated_at}
-              onRegenerate={refetch}
-              aiStatus={aiStatus}
-            />
-          )}
-
-          {/* Log Analysis */}
-          {data.log_analysis && (
-            <LogAnalysisSection analysis={data.log_analysis} />
-          )}
-
-          {/* Related Syslog Messages (collapsible) */}
-          {data.related_logs && data.related_logs.length > 0 && (
-            <RawLogsSection logs={data.related_logs} />
-          )}
-        </>
-      ) : (
-        <GlassCard className="p-8 text-center">
-          <p className="text-sm text-slate-500">Incident not found</p>
-        </GlassCard>
-      )}
+    <div className="min-w-0">
+      <dt className="text-meta text-fg-3">{label}</dt>
+      <dd className="mt-0.5 truncate text-ui text-fg">{children}</dd>
     </div>
   );
 }
 
-/* ---------- Postmortem Section ---------- */
+const EVENT_LABEL: Record<string, string> = {
+  created: 'Opened', opened: 'Opened', acknowledged: 'Acknowledged', resolved: 'Resolved',
+  update: 'Update', updated: 'Update', escalated: 'Escalated', reopened: 'Reopened',
+};
+
+function eventLabel(t: string | undefined) {
+  if (!t) return 'Event';
+  return EVENT_LABEL[t] ?? ruleLabel(t);
+}
+
+export default function IncidentDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const incidentId = Number(id);
+  const toast = useToastStore((s) => s.show);
+  const canEdit = useIsEditor();
+  const { data: aiStatus } = useAiStatus();
+  // No AI, no postmortem on its way: stop polling for one.
+  const aiAvailable = aiStatus?.available ?? true;
+  const action = useIncidentAction();
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+
+  const query = useQuery({
+    queryKey: ['incident', incidentId],
+    queryFn: () => get<IncidentDetail>(`/api/v1/incidents/${incidentId}`),
+    enabled: incidentId > 0,
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (aiAvailable && d && d.status === 'resolved' && !d.postmortem) return 5000;
+      return false;
+    },
+  });
+  const data = query.data;
+
+  useEffect(() => {
+    document.title = `${data?.title ?? `Incident #${incidentId}`} | Nodeglow`;
+  }, [data?.title, incidentId]);
+
+  async function submitFeedback(verdict: 'real' | 'noise') {
+    setFeedbackBusy(true);
+    try {
+      await post(`/api/v1/incidents/${incidentId}/feedback`, { verdict });
+      await query.refetch();
+      toast(verdict === 'noise' ? 'Marked as noise — this pattern is suppressed' : 'Marked as a real problem', 'success');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not save the feedback'), 'error');
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }
+
+  const pending = action.isPending;
+  const title = data?.title ?? `Incident #${incidentId}`;
+  const durationMs = data ? incidentDurationMs(data) : null;
+
+  return (
+    <div>
+      <Breadcrumbs items={[{ label: 'Incidents', href: '/alerts' }, { label: title }]} />
+      <PageHeader
+        title={title}
+        status={data && severityState(data.severity) ? (
+          <StatusDot
+            status={severityState(data.severity)!}
+            size="lg"
+            glow={incidentNeedsGlow(data)}
+            breathe={incidentNeedsGlow(data)}
+            label={`${SEVERITY_LABEL[data.severity]} severity`}
+          />
+        ) : undefined}
+        description={data ? (
+          <>
+            <span title={data.rule}>{ruleLabel(data.rule)}</span>
+            {' · '}{data.status === 'resolved' ? 'lasted' : 'open for'} {durationMs === null ? '—' : formatDuration(durationMs)}
+          </>
+        ) : undefined}
+        actions={data && canEdit && data.status !== 'resolved' ? (
+          <>
+            {data.status === 'open' && (
+              <Button variant="secondary" disabled={pending} onClick={() => action.mutate({ id: incidentId, action: 'acknowledge' })}>
+                <Eye size={15} aria-hidden="true" /> Acknowledge
+              </Button>
+            )}
+            <Button disabled={pending} onClick={() => action.mutate({ id: incidentId, action: 'resolve' })}>
+              <CheckCircle2 size={15} aria-hidden="true" /> Resolve
+            </Button>
+          </>
+        ) : undefined}
+      />
+
+      <QueryState<IncidentDetail>
+        query={query}
+        errorTitle="Could not load the incident"
+        isEmpty={() => false}
+        loading={
+          <div className="grid grid-cols-1 gap-4 min-[1200px]:grid-cols-3" aria-busy="true" aria-label="Loading">
+            <Skeleton className="h-40 w-full min-[1200px]:col-span-2" />
+            <Skeleton className="h-40 w-full" />
+          </div>
+        }
+      >
+        {(inc) => (
+          <div className="grid grid-cols-1 gap-4 min-[1200px]:grid-cols-3">
+            <div className="min-w-0 space-y-4 min-[1200px]:col-span-2">
+              <Card
+                as="section"
+                aria-labelledby="inc-overview"
+              >
+                <CardHeader title="Overview" titleId="inc-overview" actions={<IncidentStatusBadge status={inc.status} />} />
+                {inc.summary && <p className="mb-4 text-ui text-fg-2">{inc.summary}</p>}
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 min-[760px]:grid-cols-4">
+                  <Fact label="Severity"><SeverityIndicator severity={inc.severity} status={inc.status} glow={false} /></Fact>
+                  <Fact label="Rule"><span className="font-mono text-meta" title={inc.rule}>{inc.rule}</span></Fact>
+                  <Fact label="Opened"><span title={inc.created_at}>{formatDateTime(inc.created_at)}</span></Fact>
+                  <Fact label={inc.status === 'resolved' ? 'Duration' : 'Open for'}>
+                    <span className="num">{durationMs === null ? '—' : formatDuration(durationMs)}</span>
+                  </Fact>
+                  <Fact label="Last update">{formatDateTime(inc.updated_at)}</Fact>
+                  <Fact label="Acknowledged by">{inc.acknowledged_by ?? <span className="text-fg-3">—</span>}</Fact>
+                  <Fact label="Resolved">{inc.resolved_at ? formatDateTime(inc.resolved_at) : <span className="text-fg-3">Not yet</span>}</Fact>
+                  <Fact label="ID"><span className="num">#{inc.id}</span></Fact>
+                </dl>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+                  <span id="feedback-label" className="mr-1 text-meta text-fg-2">Was this alert useful?</span>
+                  <div role="group" aria-labelledby="feedback-label" className="flex gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      aria-pressed={inc.feedback === 'real'}
+                      disabled={feedbackBusy || !canEdit}
+                      onClick={() => submitFeedback('real')}
+                      className={cn(inc.feedback === 'real' && 'border-ok/40 bg-ok-soft text-ok hover:bg-ok-soft')}
+                    >
+                      <ThumbsUp size={13} aria-hidden="true" /> Real problem
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      aria-pressed={inc.feedback === 'noise'}
+                      disabled={feedbackBusy || !canEdit}
+                      onClick={() => submitFeedback('noise')}
+                      className={cn(inc.feedback === 'noise' && 'border-border-2 bg-surface-3 text-fg')}
+                    >
+                      <ThumbsDown size={13} aria-hidden="true" /> Noise
+                    </Button>
+                  </div>
+                  {inc.feedback_by && (
+                    <span className="text-meta text-fg-3">
+                      by {inc.feedback_by}{inc.feedback_at ? ` · ${formatDateTime(inc.feedback_at)}` : ''}
+                    </span>
+                  )}
+                </div>
+              </Card>
+
+              <TimelineCard events={inc.events ?? []} total={inc.events_total} />
+
+              {inc.status === 'resolved' && (
+                <PostmortemSection
+                  incidentId={incidentId}
+                  postmortem={inc.postmortem}
+                  generatedAt={inc.postmortem_generated_at}
+                  onRegenerate={() => query.refetch()}
+                  aiStatus={aiStatus}
+                />
+              )}
+
+              {inc.log_analysis && <LogAnalysisSection analysis={inc.log_analysis} />}
+              {inc.related_logs && inc.related_logs.length > 0 && <RawLogsSection logs={inc.related_logs} />}
+            </div>
+
+            <div className="min-w-0 space-y-4">
+              <AffectedHostsCard incident={inc} />
+            </div>
+          </div>
+        )}
+      </QueryState>
+    </div>
+  );
+}
+
+/* ---------- Timeline ---------- */
+
+function TimelineCard({ events, total }: { events: TimelineEvent[]; total?: number }) {
+  // The API returns the newest events (capped); show newest first.
+  const sorted = [...events].sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0));
+  const more = (total ?? 0) > events.length;
+  return (
+    <Card as="section" aria-labelledby="inc-timeline">
+      <CardHeader title="Timeline" titleId="inc-timeline" meta={more ? `latest ${events.length} of ${total}` : events.length ? `${events.length}` : undefined} />
+      {sorted.length === 0 ? (
+        <p className="text-ui text-fg-3">No events recorded.</p>
+      ) : (
+        <ol className="relative space-y-4">
+          {sorted.map((evt, i) => {
+            const t = evt.type ?? evt.event_type;
+            return (
+              <li key={`${evt.timestamp}-${i}`} className="relative flex gap-3">
+                {i < sorted.length - 1 && <span aria-hidden="true" className="absolute bottom-[-16px] left-[4px] top-4 w-px bg-border-2" />}
+                <span aria-hidden="true" className={cn('mt-[5px] h-[9px] w-[9px] shrink-0 rounded-full border-2', t === 'resolved' ? 'border-ok bg-ok' : 'border-line bg-surface')} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="text-ui font-medium text-fg">{eventLabel(t)}</span>
+                    <time dateTime={evt.timestamp} className="text-meta text-fg-3">{formatDateTime(evt.timestamp)}</time>
+                  </div>
+                  <p className="mt-0.5 text-ui text-fg-2 [overflow-wrap:anywhere]">{evt.summary}</p>
+                  {evt.detail && (
+                    <pre className="mt-1.5 max-h-48 overflow-auto rounded-ctl border border-border bg-surface-2 p-2 font-mono text-meta text-fg-2">{evt.detail}</pre>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </Card>
+  );
+}
+
+/* ---------- Postmortem ---------- */
 
 function PostmortemSection({
-  incidentId,
-  postmortem,
-  generatedAt,
-  onRegenerate,
-  aiStatus,
+  incidentId, postmortem, generatedAt, onRegenerate, aiStatus,
 }: {
   incidentId: number;
   postmortem?: string | null;
@@ -296,6 +341,7 @@ function PostmortemSection({
 }) {
   const toast = useToastStore((s) => s.show);
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const canEdit = useIsEditor();
   const [regenerating, setRegenerating] = useState(false);
   const aiUnavailable = aiStatus ? !aiStatus.available : false;
 
@@ -305,249 +351,170 @@ function PostmortemSection({
       await post(`/api/v1/incidents/${incidentId}/postmortem`);
       toast('Postmortem generation started', 'success');
       setTimeout(onRegenerate, 3000);
-    } catch {
-      toast('Failed to start postmortem generation', 'error');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not start the postmortem'), 'error');
     } finally {
       setRegenerating(false);
     }
   }
 
   const isFailed = postmortem?.startsWith('[Generation failed]');
-
-  if (aiUnavailable && !postmortem) {
-    return (
-      <GlassCard className="p-4 mt-6">
-        <div className="flex items-center gap-2 mb-2">
-          <FileText size={16} className="text-sky-400" />
-          <h3 className="text-sm font-medium text-slate-300">Postmortem</h3>
-        </div>
-        <p className="text-xs text-slate-400" data-testid="postmortem-ai-disabled">
-          {aiUnavailableMessage(aiStatus, isAdmin)}{' '}
-          {isAdmin && (
-            <Link href="/settings?tab=ai" className="text-sky-400 hover:underline">Open AI settings</Link>
-          )}
-        </p>
-      </GlassCard>
-    );
-  }
+  const regen = (label: string) => canEdit && (
+    <Button size="sm" variant="secondary" onClick={handleRegenerate} disabled={regenerating || aiUnavailable}
+      title={aiUnavailable ? 'AI features are off (Settings → AI)' : undefined}>
+      <RefreshCw size={13} aria-hidden="true" className={regenerating ? 'animate-spin' : ''} /> {label}
+    </Button>
+  );
 
   return (
-    <GlassCard className="p-4 mt-6">
-      <div className="flex items-center gap-2 mb-4">
-        <FileText size={16} className="text-sky-400" />
-        <h3 className="text-sm font-medium text-slate-300">Postmortem</h3>
-        {generatedAt && !isFailed && (
-          <span className="text-[10px] text-slate-500 ml-auto">
-            Generated {new Date(generatedAt).toLocaleString()}
-          </span>
-        )}
-      </div>
-
-      {postmortem && !isFailed ? (
-        <>
-          <div className="bg-white/[0.03] rounded-lg p-4 border border-white/[0.06]">
-            <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
-              {postmortem}
-            </div>
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleRegenerate}
-              disabled={regenerating || aiUnavailable}
-              title={aiUnavailable ? 'AI features are off (Settings → AI)' : undefined}
-            >
-              <RefreshCw size={14} className={regenerating ? 'animate-spin' : ''} />
-              Regenerate
-            </Button>
-          </div>
-        </>
+    <Card as="section" aria-labelledby="inc-postmortem">
+      <CardHeader
+        title="Postmortem"
+        titleId="inc-postmortem"
+        meta={generatedAt && !isFailed ? `Generated ${formatDateTime(generatedAt)}` : undefined}
+        actions={postmortem ? regen(isFailed ? 'Retry' : 'Regenerate') : undefined}
+      />
+      {aiUnavailable && !postmortem ? (
+        <p className="text-ui text-fg-2" data-testid="postmortem-ai-disabled">
+          {aiUnavailableMessage(aiStatus, isAdmin)}{' '}
+          {isAdmin && <Link href="/settings?tab=ai" className="text-accent hover:underline">Open AI settings</Link>}
+        </p>
+      ) : postmortem && !isFailed ? (
+        <div className="whitespace-pre-wrap text-ui leading-relaxed text-fg">{postmortem}</div>
       ) : isFailed ? (
-        <>
-          <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
-            <p className="text-xs text-amber-400">{postmortem}</p>
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleRegenerate}
-              disabled={regenerating || aiUnavailable}
-              title={aiUnavailable ? 'AI features are off (Settings → AI)' : undefined}
-            >
-              <RefreshCw size={14} className={regenerating ? 'animate-spin' : ''} />
-              Retry
-            </Button>
-          </div>
-        </>
+        <p role="alert" className="rounded-ctl border border-warning/30 bg-warning-soft px-3 py-2 text-ui text-warning">{postmortem}</p>
       ) : (
-        <div className="flex items-center gap-3 py-4">
-          <div className="w-4 h-4 border-2 border-sky-400/50 border-t-sky-400 rounded-full animate-spin" />
-          <span className="text-sm text-slate-400">Generating postmortem...</span>
-        </div>
+        <p className="flex items-center gap-2 text-ui text-fg-2" role="status">
+          <RefreshCw size={14} aria-hidden="true" className="animate-spin text-fg-3" /> Generating the postmortem…
+        </p>
       )}
-    </GlassCard>
+    </Card>
   );
 }
 
-/* ---------- Log Analysis Section ---------- */
+/* ---------- Log analysis ---------- */
 
 function LogAnalysisSection({ analysis }: { analysis: LogAnalysis }) {
   return (
-    <GlassCard className="p-4 mt-6">
-      <div className="flex items-center gap-2 mb-4">
-        <Zap size={16} className="text-amber-400" />
-        <h3 className="text-sm font-medium text-slate-300">Error Analysis</h3>
-        <div className="flex gap-2 ml-auto">
-          <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.05] text-slate-400">
-            {analysis.total_messages} messages
+    <Card as="section" aria-labelledby="inc-analysis">
+      <CardHeader
+        title="Error analysis"
+        titleId="inc-analysis"
+        actions={
+          <span className="flex flex-wrap gap-1.5">
+            <Tag>{analysis.total_messages} messages</Tag>
+            <Tag>{analysis.unique_patterns} pattern{analysis.unique_patterns !== 1 ? 's' : ''}</Tag>
+            <Tag>{analysis.affected_hosts} host{analysis.affected_hosts !== 1 ? 's' : ''}</Tag>
           </span>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.05] text-slate-400">
-            {analysis.unique_patterns} pattern{analysis.unique_patterns !== 1 ? 's' : ''}
-          </span>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.05] text-slate-400">
-            {analysis.affected_hosts} host{analysis.affected_hosts !== 1 ? 's' : ''}
-          </span>
-        </div>
-      </div>
+        }
+      />
+      <p className="mb-4 text-ui leading-relaxed text-fg">{analysis.summary}</p>
 
-      {/* Summary */}
-      <div className="bg-white/[0.03] rounded-lg p-3 mb-4 border border-white/[0.06]">
-        <p className="text-sm text-slate-200 leading-relaxed">{analysis.summary}</p>
-      </div>
-
-      {/* Precursor warnings */}
       {analysis.precursor_hints.length > 0 && (
-        <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3 mb-4">
-          <p className="text-xs font-medium text-amber-400 mb-2">Precursor Pattern Detected</p>
-          {analysis.precursor_hints.map((hint, i) => (
-            <div key={i} className="flex items-start gap-2 text-xs mb-1">
-              <span className="text-amber-400 shrink-0">{hint.confidence}%</span>
-              <span className="text-slate-300">
-                This pattern has preceded <span className="text-amber-300 font-medium">{hint.precedes}</span> events
-                {hint.lead_time_min != null && (
-                  <span className="text-slate-500"> (~{hint.lead_time_min}min lead time)</span>
-                )}
-              </span>
-            </div>
-          ))}
+        <div className="mb-4 rounded-ctl border border-warning/30 bg-warning-soft px-3 py-2.5">
+          <p className="mb-1.5 text-meta font-medium text-warning">Precursor pattern detected</p>
+          <ul className="space-y-1">
+            {analysis.precursor_hints.map((hint, i) => (
+              <li key={i} className="flex items-start gap-2 text-meta text-fg">
+                <span className="num shrink-0 font-medium text-warning">{hint.confidence}%</span>
+                <span>
+                  This pattern has preceded <span className="font-medium">{hint.precedes}</span> events
+                  {hint.lead_time_min != null && <span className="text-fg-2"> (~{hint.lead_time_min} min lead time)</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
-      {/* Pattern groups */}
-      <div className="space-y-3">
+      <ul className="space-y-2">
         {analysis.patterns.map((pattern, i) => (
-          <div key={i} className="border border-white/[0.06] rounded-lg p-3">
-            <div className="flex items-start gap-3 mb-2">
-              <span className="text-lg font-bold text-sky-400 shrink-0 leading-none mt-0.5">
-                {pattern.count}x
-              </span>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-slate-300 font-mono break-all leading-relaxed">
-                  {pattern.template}
-                </p>
-                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                  {!pattern.is_known && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-medium">
-                      NEW PATTERN
-                    </span>
-                  )}
-                  {pattern.noise_score != null && pattern.noise_score >= 70 && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.05] text-slate-500">
-                      noise: {pattern.noise_score}%
-                    </span>
-                  )}
-                  {pattern.tags.filter(Boolean).map((tag) => (
-                    <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400">
-                      {tag}
-                    </span>
-                  ))}
+          <li key={i} className="rounded-ctl border border-border p-3">
+            <div className="flex items-start gap-3">
+              <span className="num w-10 shrink-0 text-right font-display text-lead font-medium text-fg">{pattern.count}×</span>
+              <div className="min-w-0 flex-1">
+                <p className="break-all font-mono text-meta leading-relaxed text-fg">{pattern.template}</p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {!pattern.is_known && <Badge tone="warning">New pattern</Badge>}
+                  {pattern.noise_score != null && pattern.noise_score >= 70 && <Badge>noise {pattern.noise_score}%</Badge>}
+                  {pattern.tags.filter(Boolean).map((tag) => <Tag key={tag}>{tag}</Tag>)}
                   {Object.entries(pattern.severity_breakdown).map(([sev, count]) => (
-                    <span key={sev} className="text-[10px] text-slate-500">
-                      {sev}: {count}
-                    </span>
+                    <span key={sev} className="text-micro text-fg-3">{sev}: {count}</span>
                   ))}
                 </div>
+                {pattern.hosts.length > 0 && (
+                  <p className="mt-1.5 text-micro text-fg-3">
+                    Hosts:{' '}
+                    {pattern.hosts.map((h, j) => (
+                      <span key={h.name} className="font-mono text-fg-2">{j > 0 && ', '}{h.name}{h.count > 1 ? ` (${h.count})` : ''}</span>
+                    ))}
+                  </p>
+                )}
               </div>
             </div>
-            {/* Affected hosts */}
-            {pattern.hosts.length > 0 && (
-              <div className="flex items-center gap-2 ml-9 flex-wrap">
-                <span className="text-[10px] text-slate-500">Hosts:</span>
-                {pattern.hosts.map((h) => (
-                  <span key={h.name} className="text-[10px] font-mono text-slate-400">
-                    {h.name}{h.count > 1 ? ` (${h.count})` : ''}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          </li>
         ))}
-      </div>
-    </GlassCard>
+      </ul>
+    </Card>
   );
 }
 
-/* ---------- Raw Logs Section (collapsible) ---------- */
+/* ---------- Raw logs (collapsible) ---------- */
+
+function logTime(ts: string) {
+  const d = parseServerDate(ts);
+  return d ? d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ts;
+}
 
 function RawLogsSection({ logs }: { logs: RelatedLog[] }) {
   const [expanded, setExpanded] = useState(false);
-
+  const Icon = expanded ? ChevronDown : ChevronRight;
   return (
-    <GlassCard className="p-4 mt-6">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full text-left"
-      >
-        <Search size={14} className="text-slate-400" />
-        <h3 className="text-sm font-medium text-slate-300">
-          Raw Syslog Messages
-        </h3>
-        <span className="text-xs text-slate-500 font-normal">
-          ({logs.length} entries)
-        </span>
-        <span className="text-xs text-slate-500 ml-auto">
-          {expanded ? '▾ collapse' : '▸ expand'}
-        </span>
-      </button>
-
+    <Card as="section" aria-labelledby="inc-logs">
+      <h2 id="inc-logs" className="text-body font-medium text-fg">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls="inc-logs-table"
+          onClick={() => setExpanded(!expanded)}
+          className={buttonClasses({ variant: 'ghost', size: 'sm', className: '-ml-2 text-body text-fg' })}
+        >
+          <Icon size={14} aria-hidden="true" /> Related syslog messages
+          <span className="num text-meta font-normal text-fg-3">({logs.length})</span>
+        </button>
+      </h2>
       {expanded && (
-        <div className="overflow-x-auto mt-4">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-slate-500 border-b border-white/[0.06]">
-                <th className="pb-2 pr-3 font-medium">Time</th>
-                <th className="pb-2 pr-3 font-medium">Sev</th>
-                <th className="pb-2 pr-3 font-medium">Host</th>
-                <th className="pb-2 pr-3 font-medium">App</th>
-                <th className="pb-2 font-medium">Message</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((log, i) => (
-                <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                  <td className="py-1.5 pr-3 text-slate-400 font-mono whitespace-nowrap">
-                    {new Date(log.timestamp).toLocaleTimeString()}
-                  </td>
-                  <td className="py-1.5 pr-3">
-                    <SeverityBadge severity={log.severity} />
-                  </td>
-                  <td className="py-1.5 pr-3 text-slate-300 font-mono whitespace-nowrap">
-                    {log.hostname}
-                  </td>
-                  <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap">
-                    {log.app_name || '—'}
-                  </td>
-                  <td className="py-1.5 text-slate-300 font-mono break-all">
-                    {log.message}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div id="inc-logs-table" className="mt-3">
+          {logs.length === 0 ? (
+            <EmptyState compact variant="no-results" title="No related messages" />
+          ) : (
+            <TableContainer maxHeight={480}>
+              <Table density="compact" aria-label="Related syslog messages">
+                <THead sticky>
+                  <Tr>
+                    <Th>Time</Th>
+                    <Th>Severity</Th>
+                    <Th>Host</Th>
+                    <Th>App</Th>
+                    <Th>Message</Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {logs.map((log, i) => (
+                    <Tr key={i}>
+                      <Td muted className="whitespace-nowrap font-mono text-meta">{logTime(log.timestamp)}</Td>
+                      <Td><SyslogSeverity severity={log.severity} /></Td>
+                      <Td className="whitespace-nowrap font-mono text-meta">{log.hostname}</Td>
+                      <Td muted className="whitespace-nowrap text-meta">{log.app_name || '—'}</Td>
+                      <Td className="min-w-[280px] break-all py-1 font-mono text-meta">{log.message}</Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </TableContainer>
+          )}
         </div>
       )}
-    </GlassCard>
+    </Card>
   );
 }
