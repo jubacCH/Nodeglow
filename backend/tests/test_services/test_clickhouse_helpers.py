@@ -391,6 +391,40 @@ async def test_get_previous_bandwidth_sample_returns_first(fake_query):
     }
 
 
+# ── schema migrations ───────────────────────────────────────────────────────
+
+
+async def test_migrations_drop_unused_aggregate_and_fix_syslog_ttl(monkeypatch):
+    issued: list[str] = []
+
+    class FakeClient:
+        async def command(self, ddl):
+            issued.append(" ".join(ddl.split()))
+
+    monkeypatch.setattr(ch, "_schemas_applied", False)
+    await ch._ensure_schemas(FakeClient())
+
+    drop_mv = issued.index("DROP VIEW IF EXISTS syslog_aggregated_mv")
+    drop_tbl = issued.index("DROP TABLE IF EXISTS syslog_aggregated")
+    # The view must go before its target table, or inserts would fail in between.
+    assert drop_mv < drop_tbl
+    assert "ALTER TABLE syslog_messages MODIFY SETTING ttl_only_drop_parts = 0" in issued
+
+
+def test_init_sql_has_no_aggregate_view_and_row_level_ttl_setting():
+    from pathlib import Path
+
+    sql = (Path(__file__).resolve().parents[3] / "clickhouse" / "init.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS syslog_aggregated" not in sql
+    assert "CREATE MATERIALIZED VIEW" not in sql
+    syslog_ddl = sql.split("CREATE TABLE IF NOT EXISTS syslog_messages")[1].split(";")[0]
+    assert "ttl_only_drop_parts = 0" in syslog_ddl
+
+
+def test_clickhouse_compression_defaults_to_lz4():
+    assert ch.CLICKHOUSE_COMPRESSION == "lz4"
+
+
 # ── syslog time windows ─────────────────────────────────────────────────────
 
 
