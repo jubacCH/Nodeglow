@@ -95,7 +95,11 @@ async def make_client(fake_user=_AUTH_DISABLED):
         return 0
 
     # Mock Jinja2 TemplateResponse — templates don't exist on disk (Next.js frontend)
-    def _fake_template_response(name, context=None, **kwargs):
+    # Same signature as Starlette's: request first. Starlette 1.0 dropped the
+    # old (name, {"request": ...}) form, so a fake that accepts it hides a crash.
+    def _fake_template_response(request, name, context=None, **kwargs):
+        if not isinstance(name, str):
+            raise TypeError("TemplateResponse(request, name, context): name must be a str")
         return HTMLResponse(content=f"<html><body>template:{name}</body></html>")
 
     if fake_user is _AUTH_DISABLED:
