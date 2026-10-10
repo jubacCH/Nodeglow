@@ -9,6 +9,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+### Fixed
+- Release workflow: pin cosign-installer v4.1.2 (the action has no `v4` tag).
+
 ## [2.0.0-rc.4] - 2026-10-10
 
 ### Fixed
