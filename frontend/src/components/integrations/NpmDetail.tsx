@@ -1,13 +1,17 @@
 'use client';
 
-import { useState } from 'react';
-import { GlassCard } from '@/components/ui/GlassCard';
+import { useId, useState } from 'react';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { StatusDot } from '@/components/ui/StatusDot';
+import { Table, TableContainer, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import type { HealthState } from '@/lib/status';
+import { cn } from '@/lib/utils';
 import {
   Globe, Lock, ArrowRight, Radio, Skull,
   ChevronDown, ChevronRight, type LucideIcon,
 } from 'lucide-react';
+import { EnabledPill, StatGrid, StatTile, isNum } from './parts';
 
 interface ProxyHost {
   id: number;
@@ -74,240 +78,219 @@ interface NpmData {
   dead_count: number;
 }
 
-function StatCard({ label, value, color }: { label: string; value: number; color?: string }) {
-  return (
-    <GlassCard className="p-4 text-center">
-      <p className={`text-2xl font-bold ${color || 'text-slate-100'}`}>{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
-  );
+/** Certificate validity: expired or ≤ 7 days down, ≤ 30 days warning. */
+function certState(days: number | null | undefined): HealthState {
+  if (!isNum(days)) return 'unknown';
+  if (days <= 7) return 'down';
+  if (days <= 30) return 'warning';
+  return 'ok';
 }
 
-function certColor(days: number | null): string {
-  if (days === null) return 'text-slate-500';
-  if (days <= 0) return 'text-red-400';
-  if (days <= 7) return 'text-red-400';
-  if (days <= 30) return 'text-amber-400';
-  return 'text-emerald-400';
-}
+const CERT_TEXT: Record<HealthState, string> = {
+  ok: 'text-ok', degraded: 'text-degraded', warning: 'text-warning', down: 'text-down', maint: 'text-maint', unknown: 'text-fg-3',
+};
 
-function certDotStatus(days: number | null): 'online' | 'offline' | 'maintenance' | 'unknown' {
-  if (days === null) return 'unknown';
-  if (days <= 0) return 'offline';
-  if (days <= 7) return 'offline';
-  if (days <= 30) return 'maintenance';
-  return 'online';
-}
-
-function Section({ title, icon: Icon, iconColor, count, children }: {
-  title: string; icon: LucideIcon; iconColor: string;
+function Section({ title, icon: Icon, count, children }: {
+  title: string; icon: LucideIcon;
   count?: number; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
+  const id = useId();
   return (
-    <div>
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 mb-3 text-sm font-semibold text-slate-300 hover:text-slate-100 transition-colors"
-      >
-        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <Icon size={14} className={iconColor} />
-        {title}
-        {count !== undefined && (
-          <span className="text-xs text-slate-500 font-normal ml-1">({count})</span>
-        )}
-      </button>
-      {open && children}
-    </div>
+    <section>
+      <h2 className="mb-3">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-2 rounded-chip text-body font-medium text-fg transition-colors hover:text-fg-2"
+        >
+          {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+          <Icon size={14} className="text-fg-3" aria-hidden="true" />
+          {title}
+          {isNum(count) && <span className="num text-meta font-normal text-fg-3">({count})</span>}
+        </button>
+      </h2>
+      <div id={id} hidden={!open}>{open && children}</div>
+    </section>
+  );
+}
+
+function DomainCell({ domains, primary }: { domains: string[] | undefined; primary?: string }) {
+  const list = domains ?? [];
+  const first = primary || list[0];
+  return (
+    <span className="whitespace-nowrap">
+      <span className="font-mono">{first || '—'}</span>
+      {list.length > 1 && <span className="num ml-1 text-fg-3">+{list.length - 1}</span>}
+    </span>
   );
 }
 
 export function NpmDetail({ data }: { data: NpmData }) {
   if (!data) return null;
+  const expiring = isNum(data.certs_expiring_soon) && isNum(data.certs_expired) ? data.certs_expiring_soon + data.certs_expired : null;
+  const certificates = data.certificates ?? [];
 
   return (
     <div className="space-y-6">
       {/* Overview */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard label="Proxy Hosts" value={data.proxy_count} color="text-sky-400" />
-        <StatCard label="Enabled" value={data.online_count} color="text-emerald-400" />
-        <StatCard label="Disabled" value={data.offline_count} color="text-slate-400" />
-        <StatCard label="SSL Certs" value={data.cert_count} color="text-violet-400" />
-        <StatCard
-          label="Expiring"
-          value={data.certs_expiring_soon + data.certs_expired}
-          color={data.certs_expiring_soon + data.certs_expired > 0 ? 'text-amber-400' : 'text-emerald-400'}
+      <StatGrid cols={5}>
+        <StatTile label="Proxy hosts" value={data.proxy_count} />
+        <StatTile label="Enabled" value={data.online_count} />
+        <StatTile label="Disabled" value={data.offline_count} />
+        <StatTile label="SSL certificates" value={data.cert_count} />
+        <StatTile
+          label="Expiring or expired"
+          value={expiring}
+          state={isNum(data.certs_expired) && data.certs_expired > 0 ? 'down' : expiring !== null && expiring > 0 ? 'warning' : undefined}
         />
-      </div>
+      </StatGrid>
 
-      {/* Proxy Hosts */}
-      <Section title="Proxy Hosts" icon={Globe} iconColor="text-sky-400" count={data.proxy_count}>
-        <GlassCard>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-white/[0.06]">
-                  <th className="text-left px-3 py-2 text-slate-500 font-medium">Domain</th>
-                  <th className="text-left px-3 py-2 text-slate-500 font-medium">Forward To</th>
-                  <th className="text-left px-3 py-2 text-slate-500 font-medium">SSL</th>
-                  <th className="text-left px-3 py-2 text-slate-500 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.proxy_hosts.map((h) => (
-                  <tr key={h.id} className="border-b border-white/[0.04]">
-                    <td className="px-3 py-2">
-                      <div>
-                        <span className="text-slate-200 font-mono">{h.domain_primary}</span>
-                        {h.domains.length > 1 && (
-                          <span className="text-slate-500 ml-1">+{h.domains.length - 1}</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-slate-400 font-mono">{h.forward}</td>
-                    <td className="px-3 py-2">
+      {/* Proxy hosts */}
+      <Section title="Proxy hosts" icon={Globe} count={data.proxy_count}>
+        <Card padding="none">
+          <TableContainer className="relative">
+            <Table>
+              <THead>
+                <Tr>
+                  <Th>Status</Th>
+                  <Th>Domain</Th>
+                  <Th>Forward to</Th>
+                  <Th>SSL</Th>
+                </Tr>
+              </THead>
+              <TBody>
+                {(data.proxy_hosts ?? []).map((h) => (
+                  <Tr key={h.id}>
+                    <Td><EnabledPill enabled={h.enabled} /></Td>
+                    <Td><DomainCell domains={h.domains} primary={h.domain_primary} /></Td>
+                    <Td muted className="whitespace-nowrap font-mono">{h.forward || '—'}</Td>
+                    <Td className="whitespace-nowrap">
                       {h.certificate_id > 0 ? (
-                        <span className="flex items-center gap-1 text-emerald-400">
-                          <Lock size={10} /> {h.ssl_forced ? 'Forced' : 'On'}
+                        <span className="flex items-center gap-1 text-fg">
+                          <Lock size={11} aria-hidden="true" className="text-fg-3" /> {h.ssl_forced ? 'Forced' : 'On'}
                         </span>
                       ) : (
-                        <span className="text-slate-500">None</span>
+                        <span className="text-fg-3">None</span>
                       )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <StatusDot status={h.enabled ? 'online' : 'disabled'} />
-                        <span className={h.enabled ? 'text-emerald-400' : 'text-slate-500'}>
-                          {h.enabled ? 'Active' : 'Disabled'}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
+                    </Td>
+                  </Tr>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+              </TBody>
+            </Table>
+          </TableContainer>
+        </Card>
       </Section>
 
-      {/* SSL Certificates */}
-      <Section title="SSL Certificates" icon={Lock} iconColor="text-violet-400" count={data.cert_count}>
+      {/* SSL certificates */}
+      <Section title="SSL certificates" icon={Lock} count={data.cert_count}>
         <div className="space-y-2">
-          {data.certificates.map((cert) => (
-            <GlassCard key={cert.id} className="p-3">
-              <div className="flex items-center gap-3">
-                <StatusDot status={certDotStatus(cert.days_left)} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-slate-200 font-medium truncate">
-                    {cert.nice_name || cert.domains[0] || `Cert #${cert.id}`}
-                  </p>
-                  <p className="text-xs text-slate-500 font-mono truncate">
-                    {cert.domains.join(', ')}
-                  </p>
+          {certificates.map((cert) => {
+            const state = certState(cert.days_left);
+            const domains = cert.domains ?? [];
+            return (
+              <Card key={cert.id} padding="sm">
+                <div className="flex min-w-0 flex-wrap items-center gap-3">
+                  <StatusDot status={state} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-ui font-medium text-fg">
+                      {cert.nice_name || domains[0] || `Cert #${cert.id}`}
+                    </p>
+                    <p className="truncate font-mono text-meta text-fg-3">{domains.join(', ') || '—'}</p>
+                  </div>
+                  {cert.provider && <Badge>{cert.provider}</Badge>}
+                  <span className={cn('num text-meta', CERT_TEXT[state])}>
+                    {isNum(cert.days_left) ? (cert.days_left <= 0 ? 'Expired' : `${cert.days_left}d left`) : '—'}
+                  </span>
                 </div>
-                <Badge>{cert.provider}</Badge>
-                <span className={`text-xs font-mono ${certColor(cert.days_left)}`}>
-                  {cert.days_left !== null ? (
-                    cert.days_left <= 0 ? 'Expired' : `${cert.days_left}d`
-                  ) : '—'}
-                </span>
-              </div>
-            </GlassCard>
-          ))}
-          {data.certificates.length === 0 && (
-            <p className="text-sm text-slate-500 text-center py-4">No certificates</p>
+              </Card>
+            );
+          })}
+          {certificates.length === 0 && (
+            <p className="py-4 text-center text-ui text-fg-3">No certificates</p>
           )}
         </div>
       </Section>
 
       {/* Redirections */}
       {data.redir_count > 0 && (
-        <Section title="Redirections" icon={ArrowRight} iconColor="text-amber-400" count={data.redir_count}>
-          <GlassCard>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-white/[0.06]">
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Source</th>
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Target</th>
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Code</th>
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.redirections.map((r) => (
-                    <tr key={r.id} className="border-b border-white/[0.04]">
-                      <td className="px-3 py-2 text-slate-200 font-mono">
-                        {r.domains[0] || '—'}
-                        {r.domains.length > 1 && <span className="text-slate-500 ml-1">+{r.domains.length - 1}</span>}
-                      </td>
-                      <td className="px-3 py-2 text-slate-400 font-mono">{r.forward_scheme}://{r.forward_url}</td>
-                      <td className="px-3 py-2"><Badge>{r.forward_code}</Badge></td>
-                      <td className="px-3 py-2">
-                        <span className={r.enabled ? 'text-emerald-400' : 'text-slate-500'}>
-                          {r.enabled ? 'Active' : 'Disabled'}
-                        </span>
-                      </td>
-                    </tr>
+        <Section title="Redirections" icon={ArrowRight} count={data.redir_count}>
+          <Card padding="none">
+            <TableContainer className="relative">
+              <Table>
+                <THead>
+                  <Tr>
+                    <Th>Status</Th>
+                    <Th>Source</Th>
+                    <Th>Target</Th>
+                    <Th>Code</Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {(data.redirections ?? []).map((r) => (
+                    <Tr key={r.id}>
+                      <Td><EnabledPill enabled={r.enabled} /></Td>
+                      <Td><DomainCell domains={r.domains} /></Td>
+                      <Td muted className="whitespace-nowrap font-mono">{r.forward_scheme}://{r.forward_url}</Td>
+                      <Td><Badge>{r.forward_code}</Badge></Td>
+                    </Tr>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </GlassCard>
+                </TBody>
+              </Table>
+            </TableContainer>
+          </Card>
         </Section>
       )}
 
       {/* Streams */}
       {data.stream_count > 0 && (
-        <Section title="Streams" icon={Radio} iconColor="text-cyan-400" count={data.stream_count}>
-          <GlassCard>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-white/[0.06]">
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Incoming Port</th>
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Forward To</th>
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Protocol</th>
-                    <th className="text-left px-3 py-2 text-slate-500 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.streams.map((s) => (
-                    <tr key={s.id} className="border-b border-white/[0.04]">
-                      <td className="px-3 py-2 text-slate-200 font-mono">:{s.incoming_port}</td>
-                      <td className="px-3 py-2 text-slate-400 font-mono">{s.forwarding_host}:{s.forwarding_port}</td>
-                      <td className="px-3 py-2">
-                        {s.tcp && <Badge>TCP</Badge>}
-                        {s.udp && <Badge>UDP</Badge>}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className={s.enabled ? 'text-emerald-400' : 'text-slate-500'}>
-                          {s.enabled ? 'Active' : 'Disabled'}
+        <Section title="Streams" icon={Radio} count={data.stream_count}>
+          <Card padding="none">
+            <TableContainer className="relative">
+              <Table>
+                <THead>
+                  <Tr>
+                    <Th>Status</Th>
+                    <Th>Incoming port</Th>
+                    <Th>Forward to</Th>
+                    <Th>Protocol</Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {(data.streams ?? []).map((s) => (
+                    <Tr key={s.id}>
+                      <Td><EnabledPill enabled={s.enabled} /></Td>
+                      <Td className="font-mono">:{s.incoming_port}</Td>
+                      <Td muted className="whitespace-nowrap font-mono">{s.forwarding_host}:{s.forwarding_port}</Td>
+                      <Td>
+                        <span className="flex gap-1">
+                          {s.tcp && <Badge>TCP</Badge>}
+                          {s.udp && <Badge>UDP</Badge>}
                         </span>
-                      </td>
-                    </tr>
+                      </Td>
+                    </Tr>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </GlassCard>
+                </TBody>
+              </Table>
+            </TableContainer>
+          </Card>
         </Section>
       )}
 
-      {/* 404 Hosts */}
+      {/* 404 hosts */}
       {data.dead_count > 0 && (
-        <Section title="404 Hosts" icon={Skull} iconColor="text-red-400" count={data.dead_count}>
+        <Section title="404 hosts" icon={Skull} count={data.dead_count}>
           <div className="space-y-2">
-            {data.dead_hosts.map((d) => (
-              <GlassCard key={d.id} className="p-3">
-                <div className="flex items-center gap-3">
-                  <Skull size={14} className="text-red-400" />
-                  <span className="text-sm text-slate-200 font-mono">{d.domains.join(', ')}</span>
-                  <span className={`text-xs ml-auto ${d.enabled ? 'text-emerald-400' : 'text-slate-500'}`}>
-                    {d.enabled ? 'Active' : 'Disabled'}
-                  </span>
+            {(data.dead_hosts ?? []).map((d) => (
+              <Card key={d.id} padding="sm">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Skull size={14} className="shrink-0 text-fg-3" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 break-all font-mono text-ui text-fg">{(d.domains ?? []).join(', ') || '—'}</span>
+                  <EnabledPill enabled={d.enabled} />
                 </div>
-              </GlassCard>
+              </Card>
             ))}
           </div>
         </Section>
