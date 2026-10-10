@@ -2,19 +2,21 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Index, Integer,
+    Boolean, Column, DateTime, Float, Index, Integer,
     SmallInteger, String, Text,
 )
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk, tenant_parent_unique
 
 
-class LogTemplate(Base):
+class LogTemplate(TenantScoped, Base):
     """A learned log message template (skeleton with wildcards)."""
     __tablename__ = "log_templates"
+    __tenant_index__ = False  # covered by ix_log_templates_template_hash
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    template_hash = Column(String(32), unique=True, nullable=False, index=True)
+    template_hash = Column(String(32), nullable=False)  # unique per tenant, see below
     template = Column(Text, nullable=False)          # "Failed password for <*> from <*> port <*>"
     example = Column(Text)                           # One real message
     count = Column(Integer, default=1)               # Total occurrences
@@ -29,12 +31,15 @@ class LogTemplate(Base):
 
     __table_args__ = (
         Index("ix_log_tpl_first_seen", "first_seen"),
+        Index("ix_log_templates_template_hash", "tenant_id", "template_hash", unique=True),
+        tenant_parent_unique("log_templates"),
     )
 
 
-class HostBaseline(Base):
+class HostBaseline(TenantScoped, Base):
     """Per-host hourly message rate baseline (7-day rolling)."""
     __tablename__ = "host_baselines"
+    __tenant_index__ = False  # covered by ix_baseline_host_time
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     host_key = Column(String(64), nullable=False)    # source_ip or "host:<host_id>"
@@ -48,16 +53,17 @@ class HostBaseline(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        Index("ix_baseline_host_time", "host_key", "hour_of_day", "day_of_week", unique=True),
+        Index("ix_baseline_host_time", "tenant_id", "host_key", "hour_of_day", "day_of_week", unique=True),
     )
 
 
-class PrecursorPattern(Base):
+class PrecursorPattern(TenantScoped, Base):
     """Learned pattern: template X often precedes event Y."""
     __tablename__ = "precursor_patterns"
+    __tenant_index__ = False  # covered by ix_precursor_tpl_event
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    template_id = Column(Integer, ForeignKey("log_templates.id"), nullable=False)
+    template_id = Column(Integer, nullable=False)
     precedes_event = Column(String(64), nullable=False)  # "host_down", "high_latency"
     confidence = Column(Float, default=0.0)          # 0.0 - 1.0
     avg_lead_time_sec = Column(Integer, default=0)   # seconds before event
@@ -68,11 +74,12 @@ class PrecursorPattern(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        Index("ix_precursor_tpl_event", "template_id", "precedes_event", unique=True),
+        Index("ix_precursor_tpl_event", "tenant_id", "template_id", "precedes_event", unique=True),
+        tenant_fk("template_id", "log_templates", name="fk_precursor_patterns_template"),
     )
 
 
-class FleetPattern(Base):
+class FleetPattern(TenantScoped, Base):
     """A log template appearing on 3+ hosts simultaneously — fleet-wide issue."""
     __tablename__ = "fleet_patterns"
 

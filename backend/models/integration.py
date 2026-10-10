@@ -4,9 +4,10 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, text
 
 from models.base import Base
+from models.tenant import TenantScoped
 
 
-class IntegrationConfig(Base):
+class IntegrationConfig(TenantScoped, Base):
     """
     Single table for all integration configurations.
     Each row stores one integration instance (e.g. one Proxmox cluster, one UniFi controller).
@@ -29,12 +30,13 @@ class IntegrationConfig(Base):
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 
-class Snapshot(Base):
+class Snapshot(TenantScoped, Base):
     """
     Generic snapshot table for all integration types.
     Stores the latest collected data as JSON.
     """
     __tablename__ = "snapshots"
+    __tenant_index__ = False  # the composite indexes below lead with tenant_id
     id          = Column(Integer, primary_key=True, autoincrement=True)
     entity_type = Column(String(32), nullable=False)
     entity_id   = Column(Integer, nullable=False)
@@ -44,13 +46,13 @@ class Snapshot(Base):
     error       = Column(Text, nullable=True)
 
     __table_args__ = (
-        Index("ix_snap_type_entity_ts", "entity_type", "entity_id", timestamp.desc()),
+        Index("ix_snap_type_entity_ts", "tenant_id", "entity_type", "entity_id", timestamp.desc()),
         Index("ix_snap_entity_id", "entity_id"),
-        Index("ix_snap_type_ts", "entity_type", "timestamp"),
+        Index("ix_snap_type_ts", "tenant_id", "entity_type", "timestamp"),
         # Precursor learning filters on ok/timestamp only. Partial, so it holds
         # just the handful of failed snapshots instead of the whole table.
         Index("ix_snap_failed_ts", "timestamp", postgresql_where=text("ok = false")),
         # Serves max(id) GROUP BY (entity_type, entity_id) — the "newest
         # snapshot per entity" lookup — from the index instead of the heap.
-        Index("ix_snap_latest_per_entity", "entity_type", "entity_id", id.desc()),
+        Index("ix_snap_latest_per_entity", "tenant_id", "entity_type", "entity_id", id.desc()),
     )

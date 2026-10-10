@@ -1,16 +1,18 @@
 """Backup monitoring models – BackupJob and BackupHistory."""
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, DateTime, ForeignKey, Index,
+    BigInteger, Boolean, Column, DateTime, Index,
     Integer, String, Text, func,
 )
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk, tenant_parent_unique
 
 
-class BackupJob(Base):
+class BackupJob(TenantScoped, Base):
     """Tracks a single backup job from any source (Proxmox, UNAS, TrueNAS, etc.)."""
     __tablename__ = "backup_jobs"
+    __tenant_index__ = False  # covered by uq_backup_jobs_tenant_id_id
 
     id              = Column(Integer, primary_key=True, autoincrement=True)
     name            = Column(String(256), nullable=False)
@@ -34,15 +36,16 @@ class BackupJob(Base):
 
     __table_args__ = (
         Index("ix_backup_jobs_source", "source_type", "source_config_id"),
+        tenant_parent_unique("backup_jobs"),
     )
 
 
-class BackupHistory(Base):
+class BackupHistory(TenantScoped, Base):
     """Individual backup run records linked to a BackupJob."""
     __tablename__ = "backup_history"
 
     id          = Column(Integer, primary_key=True, autoincrement=True)
-    job_id      = Column(Integer, ForeignKey("backup_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    job_id      = Column(Integer, nullable=False, index=True)
     timestamp   = Column(DateTime, nullable=False, index=True)
     status      = Column(String(32), nullable=False)
     duration_sec = Column(Integer, nullable=True)
@@ -52,4 +55,5 @@ class BackupHistory(Base):
 
     __table_args__ = (
         Index("ix_backup_history_job_ts", "job_id", timestamp.desc()),
+        tenant_fk("job_id", "backup_jobs", name="fk_backup_history_job", ondelete="CASCADE"),
     )
