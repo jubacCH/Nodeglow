@@ -66,6 +66,33 @@ export async function api<T = unknown>(
   return res.text() as unknown as T;
 }
 
+/** JSON error body the backend sends with 4xx responses, e.g. {error, code}. */
+export interface ApiErrorBody {
+  error?: string;
+  code?: string;
+  missing_fields?: string[];
+  [key: string]: unknown;
+}
+
+/** Parse the JSON body of a failed request, or null when there is none. */
+export function apiErrorBody(e: unknown): ApiErrorBody | null {
+  if (!(e instanceof ApiError) || typeof e.data !== 'string' || !e.data) return null;
+  try {
+    const parsed = JSON.parse(e.data);
+    return parsed && typeof parsed === 'object' ? (parsed as ApiErrorBody) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The backend's `error` (or FastAPI `detail`) text, else `fallback`. */
+export function apiErrorMessage(e: unknown, fallback: string): string {
+  const body = apiErrorBody(e);
+  if (typeof body?.error === 'string' && body.error) return body.error;
+  if (typeof body?.detail === 'string' && body.detail) return body.detail;
+  return fallback;
+}
+
 /** Convenience methods */
 export const get = <T>(path: string) => api<T>(path);
 
