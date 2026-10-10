@@ -210,7 +210,6 @@ export default function HostDetailPage() {
   const host = hostQuery.data as any;
   const { isLoading } = hostQuery;
   const { data: history, isLoading: historyLoading } = useHostHistory(hostId, 24);
-  const { data: allHosts } = useHosts();
 
   const { data: relatedIncidents } = useQuery({
     queryKey: ['host-incidents', hostId, host?.name],
@@ -1160,7 +1159,7 @@ export default function HostDetailPage() {
       )}
 
       {activeTab === 'ports' && hasPorts && (
-        <PortsTab ports={device.port_table} clients={device.connected_clients ?? []} allHosts={allHosts ?? []} />
+        <PortsTab ports={device.port_table} clients={device.connected_clients ?? []} />
       )}
 
       {activeTab === 'timeline' && (
@@ -1199,7 +1198,11 @@ function formatRate(bytesPerSec: number | null | undefined): string {
   return `${(bits / 1_000_000_000).toFixed(2)} Gbps`;
 }
 
-function PortsTab({ ports, clients, allHosts }: { ports: PortInfo[]; clients: ConnectedClient[]; allHosts: { id: number; hostname: string; name: string }[] }) {
+function PortsTab({ ports, clients }: { ports: PortInfo[]; clients: ConnectedClient[] }) {
+  // Only needed to link connected clients to their hosts — fetched when the
+  // Ports tab is opened instead of on every host detail page.
+  const { data: allHostsData } = useHosts();
+  const allHosts = useMemo(() => allHostsData ?? [], [allHostsData]);
   // Build lookup: IP → host id, MAC → host id
   const hostByIp = useMemo(() => {
     const map: Record<string, number> = {};
