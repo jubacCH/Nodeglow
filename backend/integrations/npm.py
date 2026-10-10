@@ -79,7 +79,8 @@ def _days_until(date_str: str | None) -> int | None:
         cleaned = date_str.replace("Z", "").replace("T", " ").strip()
         exp = datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         return max(0, (exp - datetime.now(timezone.utc)).days)
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
+        log.debug("unparseable NPM certificate date %r", date_str)
         return None
 
 
