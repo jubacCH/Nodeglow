@@ -63,12 +63,24 @@ _VARIABLE_PATTERNS = [
     (re.compile(r'(?<=user[= ])\S+'), '<USER>'),
     (re.compile(r'(?<=for user )\S+'), '<USER>'),
     (re.compile(r'(?<=from user )\S+'), '<USER>'),
-    # Numbers (3+ digits, standalone)
-    (re.compile(r'\b\d{3,}\b'), '<NUM>'),
-    # Port-like numbers after specific keywords
-    (re.compile(r'(?<=port\s)\d+'), '<PORT>'),
-    (re.compile(r'(?<=pid\s)\d+'), '<PID>'),
-    (re.compile(r'(?<=pid=)\d+'), '<PID>'),
+    # Port-like numbers after specific keywords (before the generic number
+    # rule, which would otherwise swallow them first)
+    (re.compile(r'(?<=port\s)\d+\b'), '<PORT>'),
+    (re.compile(r'(?<=pid\s)\d+\b'), '<PID>'),
+    (re.compile(r'(?<=pid=)\d+\b'), '<PID>'),
+    # Numbers with a unit glued on: "5ms", "1.5s", "512MB", "30sec"
+    (re.compile(
+        r'\b\d+(?:\.\d+)?(?=(?:ns|us|ms|s|sec|secs|min|mins|h|hrs|d|'
+        r'b|kb|mb|gb|tb|kib|mib|gib|tib|bps|kbps|mbps|gbps)\b)',
+        re.IGNORECASE,
+    ), '<NUM>'),
+    # Any standalone number, including 1-2 digits: counters, durations,
+    # retry attempts, percentages and the like vary per message, and leaving
+    # them in split one message into a new template per value — most of the
+    # 305k seen-once templates in production. \b keeps digits that are part of
+    # an identifier ("eth0", "vlan10", "sda1", "ipv6") untouched, since there
+    # is no word boundary between a letter and a digit.
+    (re.compile(r'\b\d+(?:\.\d+)?\b'), '<NUM>'),
 ]
 
 
@@ -1586,9 +1598,16 @@ async def run_analytics():
 # ── Template Retention ───────────────────────────────────────────────────────
 
 DEFAULT_TEMPLATE_RETENTION_DAYS = 90
+# A template seen exactly once and not again for this long was a one-off — in
+# practice almost always a message whose variable part the extractor missed.
+DEFAULT_SINGLETON_RETENTION_DAYS = 7
 
 
-async def cleanup_log_templates(db: AsyncSession, retention_days: int) -> int:
+async def cleanup_log_templates(
+    db: AsyncSession,
+    retention_days: int,
+    singleton_retention_days: int = DEFAULT_SINGLETON_RETENTION_DAYS,
+) -> int:
     """Delete templates that have not been seen within the retention window.
 
     Without this the table only ever grows. Measured on production after five
@@ -1596,22 +1615,33 @@ async def cleanup_log_templates(db: AsyncSession, retention_days: int) -> int:
     288'298 had not been seen for over 30 days — roughly 1 GB of rows that no
     longer describe anything the system is observing.
 
+    Templates seen only once are dropped much sooner
+    (``singleton_retention_days``; 0 disables that rule): they are the bulk of
+    the table and carry no statistics worth keeping.
+
     Templates referenced by a learned precursor pattern are kept regardless of
     age: they carry the predictor's history and are foreign-key referenced.
+    A retention of 0 disables pruning entirely.
     """
     if retention_days <= 0:
         return 0
 
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    now = datetime.utcnow()
+    expired = LogTemplate.last_seen < now - timedelta(days=retention_days)
+    if singleton_retention_days > 0:
+        expired = or_(expired, and_(
+            LogTemplate.count <= 1,
+            LogTemplate.last_seen < now - timedelta(days=singleton_retention_days),
+        ))
 
     protected = select(PrecursorPattern.template_id)
     result = await db.execute(
-        delete(LogTemplate).where(
-            LogTemplate.last_seen < cutoff,
-            LogTemplate.id.notin_(protected),
-        )
+        delete(LogTemplate).where(expired, LogTemplate.id.notin_(protected))
     )
     deleted = result.rowcount or 0
     if deleted:
-        log.info("Pruned %d log templates older than %d days", deleted, retention_days)
+        log.info(
+            "Pruned %d log templates (unseen for %d days, or seen once and not "
+            "for %d days)", deleted, retention_days, singleton_retention_days,
+        )
     return deleted

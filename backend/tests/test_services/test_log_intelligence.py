@@ -64,6 +64,41 @@ def test_extract_template_mac_address():
     assert "<MAC>" in tpl
 
 
+def test_extract_template_small_numbers_do_not_split_templates():
+    """1-2 digit counters used to stay literal: one template per value."""
+    _, h1 = extract_template("retry 3 of 10 failed after 5 attempts")
+    _, h2 = extract_template("retry 7 of 10 failed after 12 attempts")
+    assert h1 == h2
+    tpl, _ = extract_template("queue depth 42, load 0.75")
+    assert "42" not in tpl and "0.75" not in tpl
+    assert tpl.count("<NUM>") == 2
+
+
+def test_extract_template_numbers_with_units():
+    _, h1 = extract_template("request took 5ms, payload 512MB")
+    _, h2 = extract_template("request took 1.5s, payload 3GB")
+    tpl, _ = extract_template("request took 5ms, payload 512MB")
+    assert "<NUM>ms" in tpl and "<NUM>MB" in tpl
+    # The unit stays, so milliseconds and seconds remain distinguishable.
+    assert h1 != h2
+
+
+def test_extract_template_keeps_identifiers_with_digits():
+    """Interface / device names are structure, not values."""
+    tpl, _ = extract_template("eth0: link up on vlan10 via sda1 and ipv6")
+    for ident in ("eth0", "vlan10", "sda1", "ipv6"):
+        assert ident in tpl
+    _, h_eth0 = extract_template("eth0: link down")
+    _, h_eth1 = extract_template("eth1: link down")
+    assert h_eth0 != h_eth1
+
+
+def test_extract_template_port_and_pid_keep_their_labels():
+    tpl, _ = extract_template("sshd pid=42 listening on port 22")
+    assert "pid=<PID>" in tpl
+    assert "port <PORT>" in tpl
+
+
 # ── Auto-Tagging ─────────────────────────────────────────────────────────────
 
 def test_auto_tag_security():
@@ -411,6 +446,35 @@ async def test_retention_keeps_templates_backing_a_precursor(db):
     assert deleted == 0
     remaining = (await db.execute(select(LogTemplate.id))).scalars().all()
     assert tpl.id in remaining
+
+
+async def test_retention_prunes_one_off_templates_early(db):
+    """Seen once and not again for a week: gone, long before the 90 days."""
+    from services.log_intelligence import cleanup_log_templates
+
+    one_off = await _seed_noise_template(db, "Once <*> only", count=1, hours_ago=24 * 10)
+    one_off.last_seen = datetime.utcnow() - timedelta(days=10)
+    recent_one_off = await _seed_noise_template(db, "Once <*> today", count=1, hours_ago=2)
+    repeated = await _seed_noise_template(db, "Often <*> seen", count=3, hours_ago=24 * 10)
+    repeated.last_seen = datetime.utcnow() - timedelta(days=10)
+    await db.commit()
+
+    deleted = await cleanup_log_templates(db, retention_days=90, singleton_retention_days=7)
+
+    assert deleted == 1
+    remaining = set((await db.execute(select(LogTemplate.id))).scalars().all())
+    assert one_off.id not in remaining
+    assert {recent_one_off.id, repeated.id} <= remaining
+
+
+async def test_retention_singleton_rule_can_be_disabled(db):
+    from services.log_intelligence import cleanup_log_templates
+
+    one_off = await _seed_noise_template(db, "Once <*> kept", count=1, hours_ago=24 * 10)
+    one_off.last_seen = datetime.utcnow() - timedelta(days=10)
+    await db.commit()
+
+    assert await cleanup_log_templates(db, retention_days=90, singleton_retention_days=0) == 0
 
 
 async def test_retention_disabled_deletes_nothing(db):
