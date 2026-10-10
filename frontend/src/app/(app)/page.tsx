@@ -6,6 +6,7 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
 import { AnimatedCounter } from '@/components/data/AnimatedCounter';
 import dynamic from 'next/dynamic';
 
@@ -60,7 +61,7 @@ function WidgetHeader({ icon: Icon, iconColor, title, trailing }: {
 
 export default function DashboardPage() {
   useEffect(() => { document.title = 'Dashboard | Nodeglow'; }, []);
-  const { data, isLoading, dataUpdatedAt } = useDashboard();
+  const { data, isLoading, dataUpdatedAt, isError, error, refetch } = useDashboard();
 
   // "Just refreshed" indicator — flashes a small sky pulse next to the
   // page header for ~1.6s every time a new dashboard payload arrives. Tells
@@ -132,6 +133,18 @@ export default function DashboardPage() {
     (data.host_stats?.length ?? 0) === 0 &&
     (data.integration_health?.length ?? 0) === 0;
 
+  // Without this a backend error renders a grid of zeros and empty widgets.
+  if (!isLoading && !data && isError) {
+    return (
+      <div>
+        <PageHeader title="Dashboard" description="Infrastructure overview" />
+        <GlassCard>
+          <QueryErrorState error={error} onRetry={refetch} title="Could not load the dashboard" />
+        </GlassCard>
+      </div>
+    );
+  }
+
   if (isFirstRun) {
     return (
       <div>
@@ -173,6 +186,8 @@ export default function DashboardPage() {
           </div>
         }
       />
+
+      {isError && data && <StaleDataBanner error={error} onRetry={refetch} />}
 
       {/* ── Quick Stats — compact row, ~64px tall ──
           justRefreshed re-applies .ng-just-changed for 1.6s on every refresh,
