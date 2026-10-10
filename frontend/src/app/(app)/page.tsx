@@ -28,14 +28,14 @@ import {
   Server, ServerOff, Gauge, ShieldAlert, Zap, Clock,
   ArrowUpDown, HardDrive, Activity, AlertTriangle,
   Container, BatteryCharging, Lock, Trophy, Timer,
-  TrendingUp, Wifi, EyeOff,
+  TrendingUp, Wifi, EyeOff, type LucideIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { ngColors } from '@/styles/tokens.gen';
 import { WidgetErrorBoundary } from '@/components/ui/WidgetErrorBoundary';
 
 function WidgetHeader({ icon: Icon, iconColor, title, trailing }: {
-  icon: React.ElementType;
+  icon: LucideIcon;
   iconColor: string;
   title: string;
   trailing?: React.ReactNode;
@@ -709,7 +709,7 @@ function StatCard({
   href,
   deltaGoodWhen = 'down',
 }: {
-  icon: React.ElementType;
+  icon: LucideIcon;
   label: string;
   value?: number;
   color: string;

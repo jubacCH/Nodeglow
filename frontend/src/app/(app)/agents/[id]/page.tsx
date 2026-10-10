@@ -13,7 +13,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, patch, post } from '@/lib/api';
 import { formatUptime } from '@/lib/utils';
 import { useToastStore } from '@/stores/toast';
-import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick, FileText, Save, Trash2 } from 'lucide-react';
+import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick, FileText, Save, Trash2, type LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -382,7 +382,7 @@ function MetricCard({
   extra,
   loading,
 }: {
-  icon: React.ElementType;
+  icon: LucideIcon;
   label: string;
   value?: number | null;
   suffix?: string;

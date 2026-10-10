@@ -10,7 +10,7 @@ import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText, Bot, Scan,
   Radio, ShieldCheck, KeyRound, ClipboardList, Network, ArrowUpDown,
   Activity, Shield, BookOpen, Settings, Users, Plug, RefreshCw,
-  Search,
+  Search, type LucideIcon,
 } from 'lucide-react';
 
 interface CommandPaletteProps {
@@ -21,7 +21,7 @@ interface CommandPaletteProps {
 interface NavEntry {
   label: string;
   href: string;
-  icon: React.ElementType;
+  icon: LucideIcon;
   group: 'Navigation' | 'System';
 }
 
