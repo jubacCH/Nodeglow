@@ -143,10 +143,10 @@ services:
       NODEGLOW_UPDATE_MODE: git
       # Postgres container to dump. Leave unset: the sidecar finds the `db`
       # service of the running compose project via its labels (this also works
-      # for the legacy stack started as project "vigil"). Set it only if that
-      # fails, e.g. DB_CONTAINER=vigil-db-1.
+      # when the stack was started under a different project name). Set it
+      # only if that fails, e.g. DB_CONTAINER=nodeglow-db-1.
       DB_CONTAINER: ${DB_CONTAINER:-}
-      # Host directory this stack runs from (e.g. /opt/vigil). Leave unset: it
+      # Host directory this stack runs from (e.g. /opt/nodeglow). Leave unset: it
       # is read from the running container's compose labels. Needed so that
       # ./data etc. resolve to the right HOST path when the updater recreates
       # containers; the update refuses to run if /data would move.

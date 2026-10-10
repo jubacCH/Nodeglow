@@ -1,5 +1,12 @@
 # Nodeglow Frontend Specification
 
+> **Historical — superseded.** The spec for the first Next.js 14 frontend.
+> The frontend now runs on Next.js 15 / React 19 with the E3 design system
+> and no 3D views or grid layouts. Current references:
+> [design/04-design-system.md](design/04-design-system.md),
+> [design/02-information-architecture.md](design/02-information-architecture.md),
+> [../frontend/README.md](../frontend/README.md). Kept for reference only.
+
 > Next.js 14 rewrite of the Nodeglow monitoring UI.
 > Backend: FastAPI + PostgreSQL + ClickHouse (unchanged).
 

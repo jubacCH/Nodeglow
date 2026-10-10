@@ -3,7 +3,10 @@
 What you need to run this in production: updating, backing up, restoring, and
 working out what is wrong when something looks off.
 
-For installation see the Quick start in the [README](../README.md).
+Installing a release: [INSTALL.md](INSTALL.md). Running from a git checkout:
+[README → Run from source](../README.md#run-from-source). Everything below
+applies to both unless a section says otherwise. All environment variables
+are listed in the [Configuration reference](#configuration-reference).
 
 ---
 
@@ -30,7 +33,7 @@ from that experience, not from a load test.
 - ClickHouse alone wants about 1 GB of RAM and is what grows with syslog
   volume. Its tables are TTL-reaped; plan disk for your retention × message
   rate.
-- An update needs **2 GB free** (preflight check) for the image build.
+- A git-mode update needs **2 GB free** (preflight check) for the image build.
 - **Practical ceiling: roughly 1000 monitored hosts** at the default 60 s
   interval. Checks run 50 at a time, and an unreachable host holds its slot
   for the full timeout (2 s ping, 3 s TCP, 5 s HTTP), so many hosts down at
@@ -40,9 +43,10 @@ from that experience, not from a load test.
 - Scaling out is not supported out of the box. `REDIS_URL` makes the rate
   limiter multi-process safe; scheduler leader election across several
   backend processes (only one runs the jobs) is an enterprise feature
-  (`ee/`). Without it the backend runs single-instance and logs a warning
-  when `REDIS_URL` is set. The syslog listener and the compose file assume a
-  single backend either way.
+  (`ee/`, licensed). Without it the backend runs single-instance and logs a
+  warning when `REDIS_URL` is set. The syslog listener and the shipped compose
+  files assume a single backend either way, and they do not pass `REDIS_URL`
+  to the backend — see [Advanced backend settings](#advanced-backend-settings).
 - Edition: the image built by the shipped compose file includes the
   enterprise features in `ee/` (see [LICENSING.md](../LICENSING.md)).
   `NODEGLOW_DISABLE_EE=1` runs the community edition; the log line
@@ -60,7 +64,7 @@ from that experience, not from a load test.
 | 1514 | tcp | inbound | Syslog over TCP | Devices that send logs |
 | 8000 (backend), 5432, 8123, 9100 | tcp | internal only | Backend, Postgres, ClickHouse, updater | Docker network only — never publish |
 | varies | icmp/tcp/udp | outbound | Checks, integrations (HTTPS APIs), SNMP 161/udp | Monitored networks |
-| 443 | tcp | outbound | Notifications (Telegram, Discord, webhooks), GeoIP updates, GitHub for updates | Internet |
+| 443 | tcp | outbound | Notifications (Telegram, Discord, Teams, Slack, ntfy, webhooks), the AI provider if AI is enabled, GeoIP updates, GitHub / GHCR for updates | Internet |
 | 25/465/587 | tcp | outbound | E-mail notifications, if configured | Your SMTP server |
 
 **Agents** connect *to* the server on the UI port (8000, or 443 behind a
@@ -116,7 +120,7 @@ this section describes the git mode.
 
 ### From the UI
 
-**System → Status → Software Updates → Update Now.**
+**Administration → System status → Software updates → Update now.**
 
 The update runs as an observable sequence and the page shows each step live:
 
@@ -159,7 +163,7 @@ the directory the stack was started from (see below), then
 ### Updater: host paths
 
 The updater sees the repository at `/opt/repo`, but the stack runs from some
-other directory on the host (e.g. `/opt/vigil`). Compose turns relative bind
+other directory on the host (e.g. `/opt/nodeglow`). Compose turns relative bind
 sources such as `./data` into absolute paths *before* handing them to the
 Docker daemon, which then reads them as **host** paths. Older updater versions
 therefore recreated `nodeglow` with `/opt/repo/data` — a directory that only
@@ -228,8 +232,8 @@ running new code against an old schema is what it exists to prevent.
   diagnose if something fails.
 - **Before updating:** check that the last scheduled backup is recent
   (`docker compose logs updater | grep "scheduled backup"`), and read the
-  commit list in *Software Updates* for anything marked as needing an `.env`
-  change.
+  commit list (git mode) or the [changelog](../CHANGELOG.md) (releases) for
+  anything marked as needing an `.env` change.
 - **Agents** update themselves from the server after the server is updated
   (SHA-256 checked; additionally ed25519-verified when update signing is
   configured on the server and the agent has the public key).
@@ -522,14 +526,14 @@ key is stored in the `settings` table, so it is part of the database backup.
 **Through the environment:** set `NODEGLOW_LICENSE` in `.env` to the key
 itself or to a path inside the container, e.g. put the file into `./data/`
 and set `NODEGLOW_LICENSE=/data/nodeglow-license.txt`, then
-`docker compose up -d backend`. The environment wins over a key installed in
+`docker compose up -d nodeglow`. The environment wins over a key installed in
 the UI, and the settings page shows it read-only.
 
 Check it: Settings → License, `GET /api/v2/features` (`license.status`), or
 on the host
 
 ```bash
-docker compose exec -w /opt/nodeglow-ee backend python -m nodeglow_ee.licensing verify /data/nodeglow-license.txt
+docker compose exec -w /opt/nodeglow-ee nodeglow python -m nodeglow_ee.licensing verify /data/nodeglow-license.txt
 ```
 
 HA leader election is decided when the scheduler starts: after installing a
@@ -675,35 +679,78 @@ Required in `.env` — the stack refuses to start without them:
 | `POSTGRES_PASSWORD` | Database password |
 | `UPDATE_SIDECAR_TOKEN` | Shared secret between backend and updater. Generate with `openssl rand -hex 32` |
 
-Useful optional settings:
+This is the one list of environment variables; the other documents link
+here. Everything in this first table goes into `.env` next to the compose file
+and is read by both `docker-compose.yml` (git checkout) and
+`docker-compose.release.yml` (release install) unless the last column says
+otherwise. `install.sh` generates `.env` for release installs; for a checkout,
+start from `.env.example`.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `POSTGRES_SHARED_BUFFERS` | `512MB` | Raise on hosts with plenty of RAM |
-| `POSTGRES_WORK_MEM` | `8MB` | Per-operation sort/hash memory |
-| `SECRET_KEY` | unset | Encryption key. Strongly recommended — see [The encryption key](#the-encryption-key) |
-| `BACKUP_SCHEDULE` | `02:30` | Scheduled dumps: `HH:MM` (UTC), `every 6h`, or `off` |
-| `BACKUP_RETENTION` | `5` | Dumps to keep, per kind (scheduled / pre-update) |
-| `DB_CONTAINER` | auto | Only needed if the database container cannot be resolved from the compose project (e.g. `vigil-db-1`) |
-| `HOST_PROJECT_DIR` | auto | Host directory the stack runs from; only if the updater cannot read it from the compose labels ([Updater: host paths](#updater-host-paths)) |
-| `UI_BIND` | `0.0.0.0` | Host address for the UI port 8000 |
-| `SYSLOG_BIND` | `0.0.0.0` | Host address for the syslog ports 514/udp, 1514/tcp |
-| `NODEGLOW_NO_NEW_PRIVILEGES` | `false` | `true` enables no-new-privileges for the backend; verify ICMP checks afterwards |
-| `NODEGLOW_LICENSE` | unset | Enterprise license key or a path to a file with it ([Enterprise license](#enterprise-license)) |
-| `LOG_LEVEL` | `INFO` | Backend log level |
-| `LOG_FORMAT` | `text` | `json` for one JSON object per line |
-| `APP_VERSION` | from `VERSION` | Build arg; set automatically by the UI update |
-| `SKIP_MIGRATIONS` | unset | `1` skips the schema check on start — emergencies only |
-| `NODEGLOW_DISABLE_EE` | unset | `1` runs the community edition even with `ee/` built in |
+| Variable | Default | Purpose | Used by |
+|---|---|---|---|
+| `POSTGRES_DB`, `POSTGRES_USER` | `nodeglow` | Database name and user | both |
+| `CLICKHOUSE_PASSWORD` | `POSTGRES_PASSWORD` | Separate ClickHouse password, if wanted | both |
+| `POSTGRES_SHARED_BUFFERS` | `512MB` | Raise on hosts with plenty of RAM, lower on small ones | both |
+| `POSTGRES_EFFECTIVE_CACHE_SIZE` | `1536MB` | Planner hint; about half the host RAM | both |
+| `POSTGRES_WORK_MEM` | `8MB` | Per-operation sort/hash memory | both |
+| `POSTGRES_MAINTENANCE_WORK_MEM` | `128MB` | Memory for vacuum and index builds | both |
+| `SECRET_KEY` | unset (file in `./data`) | Encryption key for stored credentials. Strongly recommended; `install.sh` generates it — see [The encryption key](#the-encryption-key) | both |
+| `NODEGLOW_LICENSE` | unset | Enterprise license key or a path to a file with it ([Enterprise license](#enterprise-license)) | both |
+| `NODEGLOW_DISABLE_EE` | unset | `1` runs the community edition even with `ee/` present | both |
+| `NODEGLOW_ALLOW_SHARED_ENROLLMENT` | unset | `1` re-enables the legacy shared agent enrollment key; leave unset | both |
+| `UI_BIND` | `0.0.0.0` | Host address for the UI port 8000 (`127.0.0.1` behind a local reverse proxy) | both |
+| `SYSLOG_BIND` | `0.0.0.0` | Host address for the syslog ports 514/udp, 1514/tcp | both |
+| `NODEGLOW_NO_NEW_PRIVILEGES` | `false` | `true` enables no-new-privileges for the backend; verify ICMP checks afterwards | both |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | both |
+| `LOG_FORMAT` | `text` | `json` for one JSON object per line | both |
+| `SKIP_MIGRATIONS` | unset | `1` skips the schema upgrade on start — emergencies only | both |
+| `BACKUP_SCHEDULE` | `02:30` | Scheduled dumps: `HH:MM` (UTC), `every 6h`, or `off` | both |
+| `BACKUP_RETENTION` | `5` | Dumps to keep, per kind (scheduled / pre-update) | both |
+| `DB_CONTAINER` | auto | Only if the database container cannot be resolved from the compose project (e.g. `nodeglow-db-1`) | both |
+| `HOST_PROJECT_DIR` | auto | Host directory the stack runs from; only if the updater cannot read it from the compose labels ([Updater: host paths](#updater-host-paths)). `install.sh` sets it | both |
+| `APP_VERSION` | from `VERSION` | Build arg: the version shown in UI and API; set automatically by the UI update | checkout |
+| `BUNDLE_OOKLA` | `0` | Build arg: `1` bundles the proprietary Ookla speedtest CLI — own installations only, never redistribute | checkout |
+| `NODEGLOW_VERSION` | — (required) | Image tag of all Nodeglow images; changed by updates | release |
+| `NODEGLOW_BACKEND_IMAGE` | `nodeglow-backend` | `nodeglow-backend-community` for the AGPL-only edition ([Editions](INSTALL.md#editions-and-images)) | release |
+| `NODEGLOW_REGISTRY` | `ghcr.io/jubacch` | Registry/namespace to pull from (mirror) | release |
+| `NODEGLOW_UPDATE_CHANNEL` | `stable` | `prerelease` to be offered release candidates | release |
+| `NODEGLOW_RELEASES_URL` | GitHub Releases API | `off` disables update checks (air-gapped) | release |
+| `NODEGLOW_VERIFY_SIGNATURES` | `1` | `0` lets the updater install unsigned images (self-built mirrors only) | release |
 
-Release installs (`docker-compose.release.yml`) additionally use
-`NODEGLOW_VERSION` (required), `NODEGLOW_BACKEND_IMAGE`, `NODEGLOW_REGISTRY`,
-`NODEGLOW_UPDATE_CHANNEL`, `NODEGLOW_RELEASES_URL` and
-`NODEGLOW_VERIFY_SIGNATURES` — see [INSTALL.md](INSTALL.md#configuration-env).
+`NODEGLOW_UPDATE_MODE` (`git` / `image`) is fixed by the compose file and is
+not meant to be changed in `.env`.
+
+### Advanced backend settings
+
+The backend and the updater read a few more variables that the shipped compose
+files do **not** pass through. To use one, add it to the service's
+`environment` in a `docker-compose.override.yml` (merged automatically by
+`docker compose` and `install.sh`; the UI updater in image mode does not read
+it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
+
+| Variable | Service | Default | Purpose |
+|---|---|---|---|
+| `REDIS_URL` | `nodeglow` | unset | Shared rate-limit state across processes; with an enterprise license also scheduler leader election (HA) |
+| `SECURE_COOKIES` | `nodeglow` | auto | `1` always marks session cookies `Secure` (otherwise only when the request or `X-Forwarded-Proto` is HTTPS) |
+| `CORS_ORIGINS` | `nodeglow` | unset | Comma list of origins allowed to call the API cross-origin; not needed for the bundled UI |
+| `DEBUG` | `nodeglow` | unset | `1` serves the OpenAPI docs at `/api/docs` — never in production |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` | `nodeglow` | unset | OpenTelemetry tracing export (OTLP/HTTP) |
+| `NODEGLOW_INTEGRATION_CONCURRENCY` | `nodeglow` | `8` | Integrations collected in parallel |
+| `NODEGLOW_INTEGRATION_TIMEOUT` | `nodeglow` | `60` | Seconds per integration collect |
+| `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |
+| `NODEGLOW_PING_LOOKBACK_HOURS` | `nodeglow` | `24` | How far back the "latest check" lookup searches |
+| `NODEGLOW_SYSLOG_CLOCK_SKEW_HOURS` | `nodeglow` | `24` | How far a sender's clock may lag and its messages still show up in time-window queries |
+| `NODEGLOW_CLICKHOUSE_COMPRESSION` | `nodeglow` | `lz4` | ClickHouse client compression |
+| `DNS_CACHE_TTL` | `nodeglow` | `60` | Seconds DNS lookups of check targets are cached; `0` disables |
+| `LDAP_CA_CERTS_FILE` | `nodeglow` | unset | CA bundle for LDAPS when not set in the LDAP settings |
+| `GEOIP_DB_PATH` | `nodeglow` | `/data/geoip/GeoLite2-City.mmdb` | Alternative GeoLite2 database file |
+| `NODEGLOW_EE_PATH` | `nodeglow` | set by the image | Where the enterprise plugin source lives |
+| `NODEGLOW_COSIGN_IDENTITY_REGEXP`, `NODEGLOW_COSIGN_OIDC_ISSUER` | `updater` | this repository's release workflow | Signing identity accepted in image mode — only for your own signed builds |
 
 Retention is configured in the UI under Settings, not through the environment:
 integration snapshots (7 days), incident events (30 days) and log templates
-(90 days).
+(90 days). Ping results and other ClickHouse time series expire by a fixed
+TTL.
 
 ---
 

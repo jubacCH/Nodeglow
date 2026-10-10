@@ -1,6 +1,9 @@
 # 05 — API für die neu gestaltete Oberfläche (Dashboard E3)
 
-Stand: Branch `feat/dashboard-api`. Ergänzt [`02-information-architecture.md`](02-information-architecture.md)
+Stand: umgesetzt und in `main` (ursprünglich Branch `feat/dashboard-api`). Die
+Endpunkte sind derzeit nur für Session-Aufrufer (die UI) erreichbar, die Middleware lässt
+API-Keys nur unter `/api/v1` zu; Überblick über die
+gesamte API inkl. Authentifizierung: [`../API.md`](../API.md). Ergänzt [`02-information-architecture.md`](02-information-architecture.md)
 Abschnitt 8 (B-01 … B-15) und das freigegebene Konzept
 [`directions/concept-e3.md`](directions/concept-e3.md).
 
