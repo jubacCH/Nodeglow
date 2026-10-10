@@ -1155,87 +1155,114 @@ async def refresh_noise_scores(db: AsyncSession) -> int:
 
 # ── Severity Trend Detection (periodic) ──────────────────────────────────────
 
+TREND_MIN_POINTS = 4       # active hours in the window needed for a trend
+TREND_MIN_TEMPLATE_COUNT = 5
+
+
+def trend_from_counts(counts: list[int]) -> tuple[str, float]:
+    """(direction, relative slope per hour) from consecutive hourly counts."""
+    n = len(counts)
+    xs = range(n)
+    sum_x = sum(xs)
+    sum_y = sum(counts)
+    sum_xy = sum(x * y for x, y in zip(xs, counts))
+    sum_xx = sum(x * x for x in xs)
+    denom = n * sum_xx - sum_x * sum_x
+    slope = (n * sum_xy - sum_x * sum_y) / denom if abs(denom) > 1e-10 else 0.0
+
+    avg_count = sum_y / n if n else 1
+    # Normalize slope relative to average (% change per hour)
+    rel_slope = slope / max(avg_count, 1.0)
+    if rel_slope > 0.05:
+        return "rising", rel_slope
+    if rel_slope < -0.05:
+        return "falling", rel_slope
+    return "stable", rel_slope
+
+
 async def compute_severity_trends(db: AsyncSession):
     """Detect templates increasing in frequency or escalating severity.
-    Updates trend_direction, trend_score, and severity_mode on LogTemplate."""
-    from services.clickhouse_client import query_chunked as ch_query_chunked
+    Updates trend_direction, trend_score, and severity_mode on LogTemplate.
 
-    templates = (await db.execute(
-        select(LogTemplate).where(LogTemplate.count >= 5)
-    )).scalars().all()
-    if not templates:
-        return
+    ClickHouse does the grouping and keeps only templates with enough active
+    hours; Postgres is touched only for those hits. The old path loaded every
+    template with count >= 5 as an ORM object and sent all their hashes back to
+    ClickHouse in 1000-element IN-lists.
+    """
+    from services import clickhouse_client as ch
 
-    hashes = [t.template_hash for t in templates]
-    # Hourly counts over last 48h per template + avg severity
-    rows = await ch_query_chunked(
+    rows = await ch.query(
         """SELECT template_hash,
-                  toStartOfHour(timestamp) AS h,
-                  count() AS cnt,
-                  avg(severity) AS avg_sev
-           FROM syslog_messages
-           WHERE template_hash IN ({hashes:Array(String)})
-             AND timestamp >= now() - INTERVAL 48 HOUR
-           GROUP BY template_hash, h
-           ORDER BY template_hash, h""",
-        list_param="hashes",
-        values=hashes,
+                  groupArray((h, cnt, avg_sev)) AS points
+           FROM (
+               SELECT template_hash,
+                      toStartOfHour(timestamp) AS h,
+                      count() AS cnt,
+                      avg(severity) AS avg_sev
+               FROM syslog_messages
+               WHERE timestamp >= now() - INTERVAL 48 HOUR
+                 AND template_hash != ''
+               GROUP BY template_hash, h
+           )
+           GROUP BY template_hash
+           HAVING count() >= {min_points:UInt32}""",
+        {"min_points": TREND_MIN_POINTS},
     )
+    points_by_hash = {r["template_hash"]: r["points"] for r in rows if r.get("points")}
 
-    # Group by template_hash
-    by_hash: dict[str, list] = defaultdict(list)
-    sev_by_hash: dict[str, list] = defaultdict(list)
-    for r in rows:
-        by_hash[r["template_hash"]].append(r)
-        sev_by_hash[r["template_hash"]].append(r["avg_sev"])
+    # Only templates with enough history overall are trended (as before).
+    eligible: dict[str, int] = {}
+    hashes = list(points_by_hash.keys())
+    for chunk in _chunks(hashes, 5000):
+        for tpl_id, tpl_hash in (await db.execute(
+            select(LogTemplate.id, LogTemplate.template_hash).where(
+                LogTemplate.template_hash.in_(chunk),
+                LogTemplate.count >= TREND_MIN_TEMPLATE_COUNT,
+            )
+        )).all():
+            eligible[tpl_hash] = tpl_id
 
-    tpl_map = {t.template_hash: t for t in templates}
-    updated = 0
-
-    for h, data_points in by_hash.items():
-        tpl = tpl_map.get(h)
-        if not tpl or len(data_points) < 4:
-            continue
-
-        # Linear regression on hourly counts
-        counts = [d["cnt"] for d in data_points]
-        n = len(counts)
-        xs = list(range(n))
-        sum_x = sum(xs)
-        sum_y = sum(counts)
-        sum_xy = sum(x * y for x, y in zip(xs, counts))
-        sum_xx = sum(x * x for x in xs)
-        denom = n * sum_xx - sum_x * sum_x
-
-        if abs(denom) > 1e-10:
-            slope = (n * sum_xy - sum_x * sum_y) / denom
-        else:
-            slope = 0.0
-
-        avg_count = sum_y / n if n else 1
-        # Normalize slope relative to average (% change per hour)
-        rel_slope = slope / max(avg_count, 1.0)
-
-        if rel_slope > 0.05:
-            direction = "rising"
-        elif rel_slope < -0.05:
-            direction = "falling"
-        else:
-            direction = "stable"
-
-        tpl.trend_direction = direction
-        tpl.trend_score = round(rel_slope, 4)
-
-        # Severity mode: most common severity
-        sevs = sev_by_hash.get(h, [])
+    changes: list[dict] = []
+    for h, tpl_id in eligible.items():
+        # groupArray gives no order guarantee; sort the hourly points.
+        points = sorted(points_by_hash[h], key=lambda p: p[0])
+        direction, rel_slope = trend_from_counts([int(p[1]) for p in points])
+        sevs = [float(p[2]) for p in points if p[2] is not None]
+        change = {
+            "id": tpl_id,
+            "trend_direction": direction,
+            "trend_score": round(rel_slope, 4),
+        }
         if sevs:
-            tpl.severity_mode = round(sum(sevs) / len(sevs))
+            change["severity_mode"] = round(sum(sevs) / len(sevs))
+        changes.append(change)
 
-        updated += 1
+    # A template that stopped appearing keeps whatever trend it last had —
+    # including "rising", which made the severity_trend rule fire on it for as
+    # long as it stayed quiet. Anything not trended this run is not rising.
+    trended_ids = {c["id"] for c in changes}
+    stale = [
+        tpl_id for (tpl_id,) in (await db.execute(
+            select(LogTemplate.id).where(LogTemplate.trend_direction != "stable")
+        )).all()
+        if tpl_id not in trended_ids
+    ]
+    changes.extend({"id": i, "trend_direction": "stable", "trend_score": 0.0} for i in stale)
+
+    # Rows carry different key sets (severity_mode is optional); the ORM bulk
+    # path groups them by keys itself.
+    for chunk in _chunks(changes, NOISE_UPDATE_CHUNK):
+        await db.execute(
+            update(LogTemplate), chunk,
+            execution_options={"synchronize_session": None},
+        )
 
     await db.commit()
-    if updated:
-        log.info("Severity trends computed for %d templates", updated)
+    if changes:
+        log.info(
+            "Severity trends computed for %d templates (%d reset to stable)",
+            len(trended_ids), len(stale),
+        )
 
 
 # ── Template Diversity Per Host (periodic) ───────────────────────────────────
@@ -1417,103 +1444,93 @@ async def detect_fleet_patterns(db: AsyncSession) -> list[dict]:
 
 # ── Content-Based Anomalies ──────────────────────────────────────────────────
 
+# A template that normally logs at info/debug (severity_mode >= this) and
+# suddenly appears at error level or worse is a severity upgrade.
+SEVERITY_UPGRADE_NORMAL_MIN = 5
+SEVERITY_UPGRADE_MIN_COUNT = 3
+
+
 async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
-    """Detect new templates on stable hosts and severity upgrades."""
-    from services.clickhouse_client import query_chunked as ch_query_chunked
+    """Detect template diversity spikes on stable hosts and severity upgrades.
+
+    ClickHouse aggregates first and Postgres is asked only about the hits.
+    The old path loaded every template with severity_mode >= 5 from Postgres
+    (a large share of the table) and shipped their hashes back to ClickHouse in
+    1000-element IN-lists — hundreds of queries per run.
+    """
+    from services import clickhouse_client as ch
 
     now = datetime.utcnow()
-    hour = now.hour
-    dow = now.weekday()
-    anomalies = []
+    anomalies: list[dict] = []
 
-    # Get hosts with template diversity baselines
-    baselines = (await db.execute(
-        select(HostBaseline).where(
-            HostBaseline.hour_of_day == hour,
-            HostBaseline.day_of_week == dow,
-            HostBaseline.avg_template_count > 0,
-            HostBaseline.sample_count >= 3,
-        )
-    )).scalars().all()
-
-    if not baselines:
-        return anomalies
-
+    # ── Diversity spike on hosts whose template mix is normally stable ──
+    baselines = await load_effective_baselines(db, now, require_templates=True)
     stable_hosts = {
-        b.host_key: b for b in baselines
-        if b.avg_template_count < 10 and b.std_template_count < 3
+        k: b for k, b in baselines.items()
+        if not k.startswith("host:")
+        and b.avg_template_count < 10 and b.std_template_count < 3
     }
-
-    if not stable_hosts:
-        return anomalies
-
-    # Current hour: per-host new templates (templates not seen before on this host)
-    host_keys = list(stable_hosts.keys())
-    rows = await ch_query_chunked(
-        """SELECT source_ip, template_hash, min(severity) AS min_sev
-           FROM syslog_messages
-           WHERE timestamp >= now() - INTERVAL 1 HOUR
-             AND source_ip IN ({ips:Array(String)})
-             AND template_hash != ''
-           GROUP BY source_ip, template_hash""",
-        list_param="ips",
-        values=host_keys,
-    )
-
-    # Count distinct templates per host
-    host_templates: dict[str, list] = defaultdict(list)
-    for r in rows:
-        host_templates[r["source_ip"]].append(r)
-
-    for sip, tpl_rows in host_templates.items():
-        baseline = stable_hosts.get(sip)
-        if not baseline:
-            continue
-
-        diversity = len(tpl_rows)
-        threshold = baseline.avg_template_count + 3 * max(baseline.std_template_count, 1)
-
-        if diversity > threshold and diversity > 5:
-            anomalies.append({
-                "source_ip": sip,
-                "type": "template_diversity_spike",
-                "current": diversity,
-                "baseline": round(baseline.avg_template_count, 1),
-            })
-
-    # Severity upgrade detection: templates with severity much lower than normal
-    templates_with_mode = (await db.execute(
-        select(LogTemplate).where(
-            LogTemplate.severity_mode.isnot(None),
-            LogTemplate.severity_mode >= 5,  # normally info/debug
-        )
-    )).scalars().all()
-
-    if templates_with_mode:
-        sev_hashes = [t.template_hash for t in templates_with_mode]
-        sev_rows = await ch_query_chunked(
-            """SELECT template_hash, min(severity) AS min_sev, count() AS cnt
+    if stable_hosts:
+        rows = await ch.query(
+            """SELECT source_ip, uniqExact(template_hash) AS diversity
                FROM syslog_messages
-               WHERE template_hash IN ({hashes:Array(String)})
-                 AND timestamp >= now() - INTERVAL 2 HOUR
-                 AND severity <= 3
-               GROUP BY template_hash
-               HAVING cnt >= 3""",
-            list_param="hashes",
-            values=sev_hashes,
+               WHERE timestamp >= now() - INTERVAL 1 HOUR
+                 AND source_ip IN ({ips:Array(String)})
+                 AND template_hash != ''
+               GROUP BY source_ip""",
+            {"ips": list(stable_hosts.keys())},
         )
-        tpl_map = {t.template_hash: t for t in templates_with_mode}
-        for r in sev_rows:
-            tpl = tpl_map.get(r["template_hash"])
-            if tpl:
+        for r in rows:
+            sip = r["source_ip"]
+            baseline = stable_hosts.get(sip)
+            if not baseline:
+                continue
+            diversity = int(r["diversity"])
+            threshold = baseline.avg_template_count + 3 * max(baseline.std_template_count, 1)
+            if diversity > threshold and diversity > 5:
                 anomalies.append({
-                    "type": "severity_upgrade",
-                    "template_hash": r["template_hash"],
-                    "template": tpl.template[:100],
-                    "normal_severity": tpl.severity_mode,
-                    "current_severity": r["min_sev"],
-                    "count": r["cnt"],
+                    "source_ip": sip,
+                    "type": "template_diversity_spike",
+                    "current": diversity,
+                    "baseline": round(baseline.avg_template_count, 1),
                 })
+
+    # ── Severity upgrade: independent of host baselines ──
+    # (It used to sit behind the baseline early-returns, so it could only run
+    # once diversity baselines existed — which, with the old sample counts,
+    # was never.)
+    sev_rows = await ch.query(
+        """SELECT template_hash, min(severity) AS min_sev, count() AS cnt
+           FROM syslog_messages
+           WHERE timestamp >= now() - INTERVAL 2 HOUR
+             AND severity <= 3
+             AND template_hash != ''
+           GROUP BY template_hash
+           HAVING cnt >= {min_cnt:UInt32}""",
+        {"min_cnt": SEVERITY_UPGRADE_MIN_COUNT},
+    )
+    hits = {r["template_hash"]: r for r in sev_rows}
+    if hits:
+        tpl_rows = []
+        for chunk in _chunks(list(hits.keys()), 5000):
+            tpl_rows.extend((await db.execute(
+                select(LogTemplate.template_hash, LogTemplate.template, LogTemplate.severity_mode)
+                .where(
+                    LogTemplate.template_hash.in_(chunk),
+                    LogTemplate.severity_mode.isnot(None),
+                    LogTemplate.severity_mode >= SEVERITY_UPGRADE_NORMAL_MIN,
+                )
+            )).all())
+        for tpl_hash, tpl_text, sev_mode in tpl_rows:
+            r = hits[tpl_hash]
+            anomalies.append({
+                "type": "severity_upgrade",
+                "template_hash": tpl_hash,
+                "template": (tpl_text or "")[:100],
+                "normal_severity": sev_mode,
+                "current_severity": r["min_sev"],
+                "count": r["cnt"],
+            })
 
     return anomalies
 
