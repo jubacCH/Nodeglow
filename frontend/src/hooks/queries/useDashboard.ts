@@ -1,5 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useCallback, useSyncExternalStore } from 'react';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { get } from '@/lib/api';
+import { whileLive } from '@/stores/websocket';
+import type { HostStatus } from '@/types';
+import type { HostListItem } from './useHosts';
 
 export interface DashboardData {
   host_stats: HostStat[];
@@ -194,12 +198,18 @@ export interface ResourceWarning {
   threshold: number;
 }
 
+/**
+ * The full dashboard payload (every host with sparklines, heatmaps, …).
+ * Heavy — use it on the dashboard page only. App-wide chrome (sidebar,
+ * command palette) has lighter sources below.
+ */
 export function useDashboard() {
   return useQuery({
     queryKey: ['dashboard'],
     queryFn: () =>
       get<DashboardData>('/api/dashboard'),
-    refetchInterval: 30_000,
+    // Host online/latency is patched in live from the WebSocket.
+    refetchInterval: whileLive(30_000, 60_000),
   });
 }
 
@@ -209,4 +219,68 @@ export function useNavCounts() {
     queryFn: () => get<Record<string, number>>('/api/v2/nav-counts'),
     refetchInterval: 60_000,
   });
+}
+
+export interface SystemSummary {
+  hosts: { total: number; enabled: number };
+  agents: { total: number };
+  integrations: { total: number };
+  incidents: { open: number };
+}
+
+/** Cheap COUNT(*) summary (/api/v1/status) — used for the open-incident badge. */
+export function useSystemSummary() {
+  return useQuery({
+    queryKey: ['v1-status'],
+    queryFn: () => get<SystemSummary>('/api/v1/status'),
+    refetchInterval: 60_000,
+  });
+}
+
+export interface HostSearchResult {
+  id: number;
+  name: string;
+  hostname: string;
+  enabled: boolean;
+  online: boolean | null;
+}
+
+/**
+ * Server-side host search (/hosts/api/search, name/hostname, max 10).
+ * Only runs for queries of 2+ characters and while `enabled`.
+ */
+export function useHostSearch(q: string, enabled = true) {
+  const query = q.trim();
+  return useQuery({
+    queryKey: ['host-search', query.toLowerCase()],
+    queryFn: () => get<HostSearchResult[]>(`/hosts/api/search?q=${encodeURIComponent(query)}`),
+    enabled: enabled && query.length >= 2,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+function offlineCountFromCache(qc: QueryClient): number | null {
+  const dash = qc.getQueryData<DashboardData>(['dashboard']);
+  if (dash) return dash.offline_count ?? 0;
+  const hosts = qc.getQueryData<HostStatus[]>(['hosts']);
+  if (hosts) return hosts.filter((h) => !h.maintenance && h.online === false).length;
+  const v1 = qc.getQueryData<HostListItem[]>(['hosts-v1']);
+  if (v1) return v1.filter((h) => h.status === 'offline').length;
+  return null;
+}
+
+/**
+ * Offline-host count derived from whatever host data is already cached
+ * (dashboard, hosts list), kept live by the WebSocket patches. It never
+ * fetches on its own — there is no lightweight count endpoint yet — so it
+ * returns null until one of those pages has loaded its data.
+ */
+export function useCachedOfflineCount(): number | null {
+  const qc = useQueryClient();
+  return useSyncExternalStore(
+    useCallback((cb) => qc.getQueryCache().subscribe(cb), [qc]),
+    () => offlineCountFromCache(qc),
+    () => null,
+  );
 }
