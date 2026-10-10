@@ -2,6 +2,7 @@ mod config;
 mod collector;
 mod checks;
 mod client;
+mod services;
 mod updater;
 
 #[cfg(target_os = "linux")]
@@ -99,10 +100,24 @@ async fn main() {
         // Collect logs
         let logs = collect_logs(&server_config).await;
 
+        // Watched services, as last configured by the server. Empty (the
+        // default, and always the case before the first heartbeat answered)
+        // means no process is spawned and nothing extra is sent.
+        let watched = server_config
+            .read()
+            .await
+            .watched_services
+            .clone()
+            .unwrap_or_default();
+        let service_states = services::check_services(&watched).await;
+
         // Report to server, handing over any check results collected since the
         // last successful heartbeat.
         let delivered = pending_results.len();
-        match api.report(&metrics, &logs, pending_results.as_slice()).await {
+        match api
+            .report(&metrics, &logs, pending_results.as_slice(), &service_states)
+            .await
+        {
             Ok(resp) => {
                 // Only clear once the server has actually taken them.
                 if delivered > 0 {

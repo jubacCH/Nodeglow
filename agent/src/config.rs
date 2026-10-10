@@ -173,6 +173,11 @@ pub struct ServerConfig {
     pub log_file_paths: String,
     #[serde(default = "default_log_level")]
     pub agent_log_level: String,
+    /// Services (Windows) / systemd units (Linux) to report on every heartbeat.
+    /// `Option` so that an explicit `null` from the server parses like an
+    /// absent field instead of failing the whole heartbeat response.
+    #[serde(default)]
+    pub watched_services: Option<Vec<String>>,
 }
 
 fn default_log_level() -> String {
