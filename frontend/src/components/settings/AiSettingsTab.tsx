@@ -12,6 +12,7 @@ import { SegmentedControl } from '@/components/ui/Tabs';
 import { api, apiErrorBody, apiErrorMessage, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { AI_STATUS_KEY } from '@/hooks/queries/useAiStatus';
+import { ENTERPRISE_NOTES, hasAnyAiFeature, hasFeature, useFeatures } from '@/hooks/queries/useFeatures';
 import { describeDestination, type AiProvider as Provider } from '@/lib/ai';
 import { Code, Notice, SaveBar, SettingsSection, useSaveStatus, useSectionForm } from './formKit';
 
@@ -141,11 +142,17 @@ function AiUsageCard() {
 /* ---------- Tab ---------- */
 
 export function AiSettingsTab() {
+  const { data: features } = useFeatures();
+  // Community edition: none of the AI features is installed, so there is
+  // nothing to configure — the tab shows one calm note instead.
+  const noAiFeatures = !!features && !hasAnyAiFeature(features);
+  const dailyInstalled = hasFeature(features, 'ai_daily_summary');
   const toast = useToastStore();
   const qc = useQueryClient();
   const cfgQuery = useQuery<AiConfig>({
     queryKey: ['ai-config'],
     queryFn: () => get('/settings/ai/config'),
+    enabled: !noAiFeatures,
   });
   const cfg = cfgQuery.data;
   const form = useSectionForm(cfg, cfgQuery.dataUpdatedAt, formFromConfig);
@@ -214,6 +221,16 @@ export function AiSettingsTab() {
     } finally {
       setTestingSummary(false);
     }
+  }
+
+  if (noAiFeatures) {
+    return (
+      <SettingsSection id="ai-optin" title="AI features">
+        <Notice tone="info">
+          <span data-testid="ai-enterprise-note">{ENTERPRISE_NOTES.ai}</span>
+        </Notice>
+      </SettingsSection>
+    );
   }
 
   return (
@@ -376,7 +393,7 @@ export function AiSettingsTab() {
           </div>
         </SettingsSection>
 
-        <SettingsSection
+        {dailyInstalled && <SettingsSection
           id="ai-daily"
           title="Daily AI summary"
           description="A daily AI-generated briefing with incidents, root cause analysis and resolution suggestions, sent via the selected notification channels."
@@ -410,7 +427,7 @@ export function AiSettingsTab() {
             </fieldset>
             {!cfg?.ai_enabled && <Notice tone="info">Runs only while AI features are enabled and saved (above).</Notice>}
           </div>
-        </SettingsSection>
+        </SettingsSection>}
 
         <AiUsageCard />
 
@@ -419,7 +436,7 @@ export function AiSettingsTab() {
           onSave={() => { void doSave(); }}
           onDiscard={form.discard}
           label="Save AI settings"
-          extra={
+          extra={dailyInstalled && (
             <Button
               size="sm"
               variant="ghost"
@@ -431,7 +448,7 @@ export function AiSettingsTab() {
               {!testingSummary && <Send size={13} aria-hidden="true" />}
               {testingSummary ? 'Generating…' : 'Send test summary'}
             </Button>
-          }
+          )}
         />
       </div>
     );
