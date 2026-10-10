@@ -10,14 +10,16 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { Button } from '@/components/ui/Button';
 import { EChart } from '@/components/charts/LazyEChart';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, patch, post } from '@/lib/api';
-import { formatUptime } from '@/lib/utils';
+import { get, patch, post, put, apiErrorMessage } from '@/lib/api';
+import { cn, formatUptime, severityColor } from '@/lib/utils';
+import { MAX_WATCHED_SERVICES, parseServiceList, serviceBadge } from '@/lib/agentServices';
 import { useToastStore } from '@/stores/toast';
-import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick, FileText, Save, Trash2, type LucideIcon } from 'lucide-react';
+import { useIsEditor } from '@/stores/auth';
+import { ArrowLeft, Monitor, Cpu, HardDrive, MemoryStick, FileText, Save, Trash2, Activity, Pencil, X, type LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import type { Agent, AgentSnapshot } from '@/types';
+import type { Agent, AgentServiceState, AgentSnapshot } from '@/types';
 
 interface AgentDetail extends Agent {
   snapshots: AgentSnapshot[];
@@ -25,6 +27,9 @@ interface AgentDetail extends Agent {
   log_channels?: string;
   log_file_paths?: string;
   agent_log_level?: string;
+  watched_services?: string[];
+  services?: AgentServiceState[];
+  services_reported_at?: string | null;
 }
 
 export default function AgentDetailPage() {
@@ -134,6 +139,9 @@ export default function AgentDetailPage() {
         />
       </div>
 
+      {/* Watched Services */}
+      {data && <WatchedServices agentId={agentId} data={data} online={online} />}
+
       {/* Log Settings */}
       {data && <LogSettings agentId={agentId} data={data} />}
 
@@ -188,6 +196,139 @@ export default function AgentDetailPage() {
         )}
       </GlassCard>
     </div>
+  );
+}
+
+function WatchedServices({ agentId, data, online }: { agentId: number; data: AgentDetail; online: boolean }) {
+  const toast = useToastStore((s) => s.show);
+  const qc = useQueryClient();
+  const canEdit = useIsEditor();
+  const isWindows = data.platform?.toLowerCase().includes('windows');
+  const watched = data.watched_services ?? [];
+  const services = data.services ?? [];
+
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const parsed = parseServiceList(text);
+  const tooMany = parsed.names.length > MAX_WATCHED_SERVICES;
+
+  function startEdit() {
+    setText(watched.join('\n'));
+    setEditing(true);
+  }
+
+  async function handleSave() {
+    if (parsed.invalid.length || tooMany) return;
+    setSaving(true);
+    try {
+      await put(`/api/v1/agents/${agentId}/services`, { services: parsed.names });
+      qc.invalidateQueries({ queryKey: ['agent', agentId] });
+      toast('Watched services saved', 'success');
+      setEditing(false);
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Failed to save watched services'), 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const neverReported = watched.length > 0 && !data.services_reported_at;
+
+  return (
+    <GlassCard className="p-4 mb-6">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <h3 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+          <Activity size={16} className="text-sky-400" /> Watched Services
+        </h3>
+        {canEdit && !editing && (
+          <Button size="sm" variant="ghost" onClick={startEdit}>
+            <Pencil size={14} /> Edit
+          </Button>
+        )}
+      </div>
+
+      {editing ? (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">
+            {isWindows
+              ? 'One Windows service name per line (the service name, not the display name — e.g. Spooler, W32Time).'
+              : 'One systemd unit per line (e.g. nginx, sshd, docker.service).'}
+          </p>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            placeholder={isWindows ? 'Spooler\nW32Time' : 'nginx\nsshd'}
+            className="ng-input font-mono text-xs"
+            aria-label="Watched services"
+          />
+          {parsed.invalid.length > 0 && (
+            <p className="text-xs text-red-400">Invalid name(s): {parsed.invalid.join(', ')}</p>
+          )}
+          {tooMany && (
+            <p className="text-xs text-red-400">At most {MAX_WATCHED_SERVICES} services can be watched.</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>
+              <X size={14} /> Cancel
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={saving || parsed.invalid.length > 0 || tooMany}>
+              <Save size={14} />
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      ) : watched.length === 0 ? (
+        <p className="text-xs text-slate-500">
+          No services watched.{canEdit ? ' Add services to get an incident when one stops running.' : ''}
+        </p>
+      ) : (
+        <>
+          {neverReported && (
+            <p className="text-xs text-amber-400 mb-3">
+              The agent has not reported service states yet. It picks up the list on its next check-in;
+              agents older than this feature need an update first.
+            </p>
+          )}
+          {!neverReported && !online && (
+            <p className="text-xs text-slate-500 mb-3">Agent is offline — states below are from its last report.</p>
+          )}
+          <ul className="divide-y divide-white/[0.06]">
+            {services.map((s) => {
+              const badge = serviceBadge(s.state);
+              return (
+                <li key={s.name} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-200 font-mono truncate">{s.name}</p>
+                    <p className="text-[11px] text-slate-500">
+                      {s.start_type ? `Start: ${s.start_type}` : ''}
+                      {s.start_type && s.since ? ' · ' : ''}
+                      {s.since ? `since ${new Date(s.since).toLocaleString()}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {s.alerted && <Badge variant="severity" severity="critical">Incident</Badge>}
+                    <span
+                      className={cn(
+                        'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border',
+                        badge.severity === 'ok'
+                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                          : badge.severity === 'none'
+                            ? 'bg-white/[0.06] text-slate-400 border-white/[0.08]'
+                            : severityColor(badge.severity),
+                      )}
+                    >
+                      {badge.label}
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </GlassCard>
   );
 }
 
