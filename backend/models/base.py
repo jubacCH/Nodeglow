@@ -2,6 +2,7 @@
 Database engine, session factory, base class, and encryption helpers.
 """
 import base64
+import functools
 import hashlib
 from typing import AsyncGenerator
 
@@ -35,7 +36,12 @@ class Base(DeclarativeBase):
 _KDF_SALT = hashlib.sha256(("nodeglow-kdf-salt:" + SECRET_KEY).encode()).digest()[:16]
 
 
+@functools.lru_cache(maxsize=1)
 def _fernet() -> Fernet:
+    # 480k PBKDF2 rounds take ~50 ms. SECRET_KEY and the salt are fixed for the
+    # life of the process, so the key is derived once instead of on every
+    # encrypt/decrypt (the dashboard alone decrypted once per Proxmox cluster
+    # per request).
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_KDF_SALT, iterations=480_000)
     key = kdf.derive(SECRET_KEY.encode())
     return Fernet(base64.urlsafe_b64encode(key))
