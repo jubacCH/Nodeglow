@@ -14,9 +14,15 @@ from utils.ping import check_host
 from database import PingHost, get_db
 from models.discovered_port import DiscoveredPort
 from models.agent import Agent
+from routers.api_v1 import require_editor
 from services.audit import log_action
 
 router = APIRouter(prefix="/hosts")
+
+# Every mutating route below changes monitoring state. The middleware already
+# refuses read-only sessions, but the requirement belongs on the route too, so
+# it survives a middleware refactor and shows up in the route's dependants.
+_EDITOR = [Depends(require_editor)]
 
 
 async def _dns_resolve(hostname: str) -> dict:
@@ -159,7 +165,7 @@ async def test_ping(host_id: int, db: AsyncSession = Depends(get_db)):
 
 # ── Manual ping ────────────────────────────────────────────────────────────────
 
-@router.post("/{host_id}/check")
+@router.post("/{host_id}/check", dependencies=_EDITOR)
 async def ping_check_now(host_id: int, db: AsyncSession = Depends(get_db)):
     """Run an immediate ping check for a single host and store the result."""
     host = await db.get(PingHost, host_id)
@@ -205,7 +211,7 @@ async def ping_check_now(host_id: int, db: AsyncSession = Depends(get_db)):
 
 # ── CRUD actions ───────────────────────────────────────────────────────────────
 
-@router.post("/add")
+@router.post("/add", dependencies=_EDITOR)
 async def add_ping_host(
     name: str = Form(...),
     hostname: str = Form(...),
@@ -214,8 +220,8 @@ async def add_ping_host(
     latency_threshold_ms: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
-    from routers.integrations import _validate_host
-    host_err = _validate_host(hostname.strip())
+    from routers.integrations import validate_host_async
+    host_err = await validate_host_async(hostname.strip())
     if host_err:
         return RedirectResponse(url=f"/hosts?error={host_err}", status_code=303)
     check_type = ",".join(t.strip() for t in check_types if t.strip()) or "icmp"
@@ -230,7 +236,7 @@ async def add_ping_host(
     return RedirectResponse(url="/hosts", status_code=303)
 
 
-@router.post("/api/create")
+@router.post("/api/create", dependencies=_EDITOR)
 async def api_create_host(request: Request, db: AsyncSession = Depends(get_db)):
     """JSON endpoint for creating a host from the SPA frontend."""
     body = await request.json()
@@ -240,8 +246,8 @@ async def api_create_host(request: Request, db: AsyncSession = Depends(get_db)):
     port_str = str(body.get("port") or "").strip()
     if not name or not hostname:
         return JSONResponse({"error": "name and hostname required"}, status_code=400)
-    from routers.integrations import _validate_host
-    host_err = _validate_host(hostname)
+    from routers.integrations import validate_host_async
+    host_err = await validate_host_async(hostname)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
     host = PingHost(
@@ -256,7 +262,7 @@ async def api_create_host(request: Request, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "id": host.id}
 
 
-@router.post("/{host_id}/edit")
+@router.post("/{host_id}/edit", dependencies=_EDITOR)
 async def edit_ping_host(
     host_id: int,
     name: str = Form(...),
@@ -267,6 +273,11 @@ async def edit_ping_host(
     parent_id: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
+    from routers.integrations import validate_host_async
+    host_err = await validate_host_async(hostname.strip())
+    if host_err:
+        from urllib.parse import quote
+        return RedirectResponse(url=f"/hosts/{host_id}?tab=info&error={quote(host_err)}", status_code=303)
     host = await db.get(PingHost, host_id)
     if host:
         host.name = name.strip()
@@ -279,7 +290,7 @@ async def edit_ping_host(
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info&saved=1", status_code=303)
 
 
-@router.post("/api/{host_id}/delete")
+@router.post("/api/{host_id}/delete", dependencies=_EDITOR)
 async def delete_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
     if host:
@@ -288,7 +299,7 @@ async def delete_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     return RedirectResponse(url="/hosts", status_code=303)
 
 
-@router.post("/{host_id}/toggle")
+@router.post("/{host_id}/toggle", dependencies=_EDITOR)
 async def toggle_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
     if host:
@@ -297,7 +308,7 @@ async def toggle_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)
 
 
-@router.post("/{host_id}/maintenance")
+@router.post("/{host_id}/maintenance", dependencies=_EDITOR)
 async def toggle_maintenance(
     host_id: int,
     request: Request,
@@ -336,7 +347,7 @@ async def toggle_maintenance(
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)
 
 
-@router.post("/api/{host_id}/maintenance")
+@router.post("/api/{host_id}/maintenance", dependencies=_EDITOR)
 async def toggle_maintenance_api(
     host_id: int,
     request: Request,
@@ -439,7 +450,7 @@ def _reset_port_streaks(host_id: int) -> None:
     reset_port_error_state(host_id)
 
 
-@router.patch("/api/{host_id}/discovered-ports/{port_id}")
+@router.patch("/api/{host_id}/discovered-ports/{port_id}", dependencies=_EDITOR)
 async def update_discovered_port(host_id: int, port_id: int, request: Request,
                                   db: AsyncSession = Depends(get_db)):
     """Accept or dismiss a discovered port / SSL cert."""
@@ -522,7 +533,7 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
     return {"ok": True, "status": dp.status, "ssl_status": dp.ssl_status}
 
 
-@router.post("/api/{host_id}/scan-ports")
+@router.post("/api/{host_id}/scan-ports", dependencies=_EDITOR)
 async def trigger_port_scan(host_id: int, db: AsyncSession = Depends(get_db)):
     """Manually trigger a port scan for a specific host."""
     host = (await db.execute(
