@@ -8,6 +8,48 @@ export interface User {
 }
 
 // ── Hosts ──
+/** Options for http/https checks. Defaults reproduce the historical check. */
+export interface HttpOptions {
+  method: 'GET' | 'HEAD';
+  /** "/path?query" appended to the host, or an absolute http(s) URL. */
+  url: string | null;
+  /** e.g. "200-299,301"; null = any status below 500 counts as up. */
+  expected_status: string | null;
+  /** Must appear in the body (case-insensitive substring). */
+  keyword: string | null;
+  /** Must not appear in the body (case-insensitive substring). */
+  keyword_absent: string | null;
+  timeout: number;
+  follow_redirects: boolean;
+  verify_tls: boolean;
+}
+
+/** The maintenance window currently covering a host. */
+export interface MaintenanceWindowRef {
+  id: number;
+  name: string;
+  ends_at: string | null;
+}
+
+export interface MaintenanceWindow {
+  id: number;
+  name: string;
+  enabled: boolean;
+  kind: 'weekly' | 'once';
+  /** 0 = Monday … 6 = Sunday */
+  weekdays: number[];
+  start_time: string | null;
+  duration_minutes: number | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  timezone: string;
+  all_hosts: boolean;
+  host_ids: number[];
+  active: boolean;
+  current: { start: string; end: string } | null;
+  next: { start: string; end: string } | null;
+}
+
 export interface PingHost {
   id: number;
   name: string;
@@ -16,9 +58,16 @@ export interface PingHost {
   check_type: string;
   port: number | null;
   latency_threshold_ms: number | null;
+  /** Effective state: the manual flag or an active maintenance window. */
   maintenance: boolean;
+  /** The manual flag alone (what the toggle changes). */
+  maintenance_manual?: boolean;
+  maintenance_window?: MaintenanceWindowRef | null;
   maintenance_until: string | null;
   ssl_expiry_days: number | null;
+  http_options?: HttpOptions;
+  /** Why each failed check failed, e.g. {"https": "status 503"}. */
+  check_errors?: Record<string, string> | null;
   source: 'manual' | 'phpipam' | 'proxmox' | 'unifi' | 'agent';
   source_detail: string | null;
   mac_address: string | null;
@@ -38,8 +87,11 @@ export interface HostStatus {
   check_type: string;
   enabled: boolean;
   maintenance: boolean;
+  maintenance_manual?: boolean;
+  maintenance_window?: MaintenanceWindowRef | null;
   port_error: boolean;
   check_detail: Record<string, boolean> | null;
+  check_errors?: Record<string, string> | null;
   source: string;
   uptime_h24: number | null;
   uptime_d7: number | null;
