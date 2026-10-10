@@ -11,8 +11,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [2.0.0-rc.2] - 2026-10-10
 
+### Changed
+- Releases are signed with cosign 3.1.3; `SHA256SUMS` is verified with
+  `cosign verify-blob --bundle SHA256SUMS.sigstore.json` (separate `.sig`/`.pem`
+  files are no longer published).
+
 ### Fixed
-- Updater image: cosign 2.6.5, Docker CLI 29.8.1 and Compose 5.5.1 replace
+- Updater image: cosign 3.1.3, Docker CLI 29.8.1 and Compose 5.5.1 replace
   binaries built with an outdated Go toolchain (Go stdlib crypto/tls
   CVE-2025-68121, grpc-go CVE-2026-33186) that failed the release Trivy gate.
 

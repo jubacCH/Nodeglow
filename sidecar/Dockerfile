@@ -3,7 +3,7 @@
 # cosign verifies release image signatures in image update mode
 # (NODEGLOW_UPDATE_MODE=image, see image_update.py). Taken from the official,
 # multi-arch Sigstore image at a pinned version; bump deliberately.
-FROM gcr.io/projectsigstore/cosign:v2.6.5 AS cosign
+FROM gcr.io/projectsigstore/cosign:v3.1.3 AS cosign
 
 # ── Release deploy files ─────────────────────────────────────────────────────
 # The release workflow passes a named build context "deploy" holding
