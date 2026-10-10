@@ -24,19 +24,45 @@ directory. Removing `ee/` removes the commercial features and nothing else.
 
 ## Commercial features (`ee/`)
 
-Features intended for businesses and service providers live in `ee/`, for
-example:
+Features intended for businesses and service providers live in `ee/`.
+
+**In `ee/` today:**
+
+- **High availability** — scheduler leader election across several backend
+  processes/replicas (Redis lease; only the holder runs scheduled jobs).
+  The core runs single-instance. The Redis-backed **rate limiter stays in
+  the core**: it is a security control every installation needs.
+- **AI features** — Glow (the AI assistant chat), AI postmortem drafts for
+  resolved incidents (automatic and on demand), and the AI daily summary
+  (scheduled and test send). The AI *plumbing* stays in the core: the
+  provider abstraction (`services/ai_client.py`), the opt-in and provider
+  settings (`services/ai_config.py`, Settings → AI), redaction
+  (`services/ai_redaction.py`) and token-usage accounting.
+
+**Planned for `ee/`:**
 
 - multi-tenancy and the MSP portal
-- SSO / SAML / SCIM
-- SLA PDF reports and long-term rollups
-- high availability / clustering
-- AI premium features
-- audit export / SIEM integration
+- SSO via SAML / OIDC, and SCIM provisioning
+- custom roles (RBAC beyond admin / editor / read-only)
+- on-call schedules and escalation
+- SLA reports per customer (PDF) and long-term rollups
+- audit log export / SIEM integration and long audit retention
+
+**What stays AGPL even though it serves `ee/`:** the frontend. All UI code,
+including the screens for enterprise features, lives in `frontend/` under the
+AGPL; it asks `GET /api/v2/features` which features are installed and shows
+only those. The commercial part is the backend logic in `ee/`. See
+[`ee/README.md`](ee/README.md) for the structure and the reasons.
 
 The source is visible, and you may use it for development and testing.
 Running it in production requires a valid Nodeglow Enterprise subscription or
-license key. See [`ee/LICENSE`](ee/LICENSE) and [`ee/README.md`](ee/README.md).
+license key. License keys are not enforced yet (see `ee/README.md`); the
+license terms apply regardless. See [`ee/LICENSE`](ee/LICENSE).
+
+**Running without `ee/`:** delete the directory, build without it, or set
+`NODEGLOW_DISABLE_EE=1`. The result is the community edition: every core
+feature works, the enterprise endpoints do not exist, and the UI hides them
+(with a one-line note where a user would look for them).
 
 ## Obtaining a commercial license
 

@@ -69,6 +69,8 @@ A self-hosted infrastructure monitoring platform with **log intelligence**, **in
 | **Notifications** | Telegram, Discord, Email (SMTP), Webhook |
 | **Tasks** | Aggregated pending admin work (new ports, SSL certs) |
 | **Weekly digest** | Scheduled email summary — incidents, host availability, syslog stats, SSL expiry |
+| **AI features** *(Enterprise)* | Glow assistant chat, AI postmortem drafts, AI daily summary — opt-in, Anthropic or any OpenAI-compatible/local provider, with redaction |
+| **High availability** *(Enterprise)* | Scheduler leader election across several backend processes (Redis lease) |
 | **Data retention** | Integration snapshots, incident events and log templates configurable in Settings; time series in ClickHouse expire by fixed TTL |
 
 ---
@@ -245,6 +247,8 @@ nodeglow/
 │   │   ├── client.rs        # HTTP client (enroll, report, update)
 │   │   └── updater.rs       # Auto-update logic
 │   └── Cargo.toml
+├── ee/                      # Enterprise features (Nodeglow Enterprise License)
+│   └── backend/nodeglow_ee/ # HA scheduler, AI features — loaded by backend/ee_loader.py
 ├── sidecar/                 # Updater: self-update, scheduled + pre-update DB dumps
 ├── docker-compose.yml       # PostgreSQL + ClickHouse + Backend + Frontend + Updater
 └── data/                    # Bind mount: GeoIP data, key file if SECRET_KEY is unset
@@ -271,10 +275,14 @@ Nodeglow is **Open Core**:
 - **Core** — everything outside `ee/` — is free software under the
   [GNU AGPL-3.0-only](LICENSE). Self-host it, modify it, share it; if you run a
   modified version for others over a network, offer them its source (AGPL §13).
-- **Enterprise features** in [`ee/`](ee/README.md) (multi-tenancy/MSP portal,
-  SSO/SAML/SCIM, SLA reports, HA, AI premium, audit export) are source-available
-  under the [Nodeglow Enterprise License](ee/LICENSE) (draft): free for
-  development and testing, production use needs a subscription.
+- **Enterprise features** in [`ee/`](ee/README.md) — today high availability
+  (scheduler leader election) and the AI features (Glow, AI postmortems, AI
+  daily summary); planned: multi-tenancy/MSP portal, SSO (SAML/OIDC) + SCIM,
+  custom RBAC, on-call escalation, per-customer SLA reports, audit export and
+  long retention — are source-available under the
+  [Nodeglow Enterprise License](ee/LICENSE) (draft): free for development and
+  testing, production use needs a subscription. The core runs fully without
+  them (`NODEGLOW_DISABLE_EE=1`).
 - **Contributions** require signing the [CLA](CLA.md) — see
   [CONTRIBUTING.md](CONTRIBUTING.md).
 
