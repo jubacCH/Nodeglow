@@ -874,6 +874,73 @@ def _audit_value(value):
     return str(value)
 
 
+# Declared BEFORE /hosts/{host_id}: Starlette matches routes in order and
+# "{host_id}" matches the literal "bulk", so declared after it this route was
+# unreachable — every bulk edit answered 422 from the single-host route.
+_BULK_FIELDS = {"check_type", "enabled", "latency_threshold_ms", "maintenance", "probe_id"}
+_BULK_MAX_IDS = 5000
+
+
+@router.patch("/hosts/bulk", summary="Bulk update hosts")
+async def bulk_update_hosts(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    body = await request.json()
+    raw_ids = body.get("ids", []) if isinstance(body, dict) else []
+    updates = body.get("updates", {}) if isinstance(body, dict) else {}
+    if not raw_ids or not isinstance(raw_ids, list) or not isinstance(updates, dict) or not updates:
+        raise HTTPException(400, "ids and updates required")
+    try:
+        host_ids = sorted({int(i) for i in raw_ids if not isinstance(i, bool)})
+    except (TypeError, ValueError):
+        raise HTTPException(400, "ids must be host ids") from None
+    if len(host_ids) > _BULK_MAX_IDS:
+        raise HTTPException(400, f"at most {_BULK_MAX_IDS} hosts per request")
+
+    values = {k: v for k, v in updates.items() if k in _BULK_FIELDS}
+    ignored = sorted(k for k in updates if k not in _BULK_FIELDS)
+    if "check_type" in values and values["check_type"] not in ("icmp", "http", "https", "tcp"):
+        raise HTTPException(400, "check_type must be icmp, http, https or tcp")
+    if "enabled" in values or "maintenance" in values:
+        for flag in ("enabled", "maintenance"):
+            if flag in values and not isinstance(values[flag], bool):
+                raise HTTPException(400, f"{flag} must be true or false")
+    if "maintenance" in values and values["maintenance"] is False:
+        values["maintenance_until"] = None
+    if "probe_id" in values and values["probe_id"] is not None:
+        try:
+            values["probe_id"] = int(values["probe_id"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "probe_id must be an agent id or null") from None
+        probe = await db.get(Agent, values["probe_id"])
+        if not probe or not probe.is_probe:
+            raise HTTPException(400, "probe_id does not refer to a probe agent")
+
+    existing = [hid for (hid,) in (await db.execute(
+        select(PingHost.id).where(PingHost.id.in_(host_ids))
+    )).all()]
+    if values and existing:
+        await db.execute(update(PingHost).where(PingHost.id.in_(existing)).values(**values))
+        if "check_type" in values:
+            from scheduler import reset_port_error_state
+            await db.execute(
+                update(PingHost).where(PingHost.id.in_(existing))
+                .values(port_error=False, check_detail=None, check_errors=None)
+            )
+            for hid in existing:
+                reset_port_error_state(hid)
+        await log_action(db, request, "host.bulk_update", "host", None,
+                         f"{len(existing)} hosts",
+                         details={"ids": existing,
+                                  "changes": {k: _audit_value(v) for k, v in values.items()}})
+    await db.commit()
+    missing = sorted(set(host_ids) - set(existing))
+    return {"ok": True, "updated": len(existing) if values else 0,
+            "ids": existing, "missing": missing, "ignored_fields": ignored}
+
+
 @router.patch("/hosts/{host_id}", summary="Update a host")
 async def update_host(
     host_id: int,
@@ -936,31 +1003,6 @@ async def update_host(
     return {"ok": True, "id": host.id}
 
 
-@router.patch("/hosts/bulk", summary="Bulk update hosts")
-async def bulk_update_hosts(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    _key: ApiKey = Depends(require_editor),
-):
-    body = await request.json()
-    host_ids = body.get("ids", [])
-    updates = body.get("updates", {})
-    if not host_ids or not updates:
-        raise HTTPException(400, "ids and updates required")
-
-    allowed_fields = {"check_type", "enabled", "latency_threshold_ms"}
-    for field, value in updates.items():
-        if field not in allowed_fields:
-            continue
-        await db.execute(
-            update(PingHost)
-            .where(PingHost.id.in_(host_ids))
-            .values(**{field: value})
-        )
-    await db.commit()
-    return {"ok": True, "updated": len(host_ids)}
-
-
 @router.delete("/hosts/{host_id}", summary="Delete a host")
 async def delete_host(
     host_id: int,
@@ -979,6 +1021,32 @@ async def delete_host(
 
 
 # ── Agents ───────────────────────────────────────────────────────────────────
+
+
+def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) -> dict:
+    """Probe role and freshness of an agent, as the API reports it."""
+    from services.probes import ProbeState, is_stale, staleness_window
+
+    epoch = datetime(1970, 1, 1)
+    out = {
+        "is_probe": bool(agent.is_probe),
+        "probe_interval_seconds": agent.probe_interval_seconds,
+    }
+    if agent.is_probe:
+        st = ProbeState(
+            probe_id=agent.id, name=agent.name or agent.hostname or f"agent-{agent.id}",
+            interval_seconds=agent.probe_interval_seconds,
+            last_report=(agent.last_seen - epoch).total_seconds() if agent.last_seen else None,
+        )
+        out["probe"] = {
+            "stale": is_stale(st, (now - epoch).total_seconds()),
+            "staleness_window_seconds": int(staleness_window(agent.probe_interval_seconds)),
+            "last_report": agent.last_seen.isoformat() + "Z" if agent.last_seen else None,
+            "host_count": host_count,
+        }
+    else:
+        out["probe"] = None
+    return out
 
 
 @router.get("/agents", summary="List all agents")
@@ -1005,6 +1073,15 @@ async def list_agents(
             host_by_name[ph.hostname.lower()] = ph.id
             host_by_name[ph.name.lower()] = ph.id
 
+    # Hosts each probe checks — one GROUP BY, only when probes exist.
+    probe_host_counts: dict[int, int] = {}
+    if any(a.is_probe for a in agents):
+        probe_host_counts = dict((await db.execute(
+            select(PingHost.probe_id, func.count())
+            .where(PingHost.probe_id.isnot(None), PingHost.enabled == True)  # noqa: E712
+            .group_by(PingHost.probe_id)
+        )).all())
+
     out = []
     for a in agents:
         s = snaps_by_agent.get(a.id)
@@ -1013,6 +1090,7 @@ async def list_agents(
         if a.hostname:
             host_id = host_by_name.get(a.hostname.lower())
         out.append({
+            **_probe_fields(a, now, probe_host_counts.get(a.id, 0)),
             "id": a.id,
             "name": a.name,
             "hostname": a.hostname,
@@ -1044,7 +1122,14 @@ async def get_agent(
     snaps = await get_agent_history(agent_id, limit=60)
 
     now = datetime.utcnow()
+    host_count = None
+    if agent.is_probe:
+        host_count = (await db.execute(
+            select(func.count(PingHost.id))
+            .where(PingHost.probe_id == agent.id, PingHost.enabled == True)  # noqa: E712
+        )).scalar() or 0
     return {
+        **_probe_fields(agent, now, host_count),
         "id": agent.id,
         "name": agent.name,
         "hostname": agent.hostname,
@@ -1095,8 +1180,38 @@ async def patch_agent(
     if "agent_log_level" in updates and updates["agent_log_level"] not in ("off", "errors", "all"):
         raise HTTPException(400, "agent_log_level must be 'off', 'errors', or 'all'")
 
+    # Probe role. It used to be silently dropped by the allowlist above while
+    # the UI reported success. Making an agent a probe hands it checks for a
+    # whole network, so it is admin-only and audited.
+    probe_changes: dict[str, dict] = {}
+    if "is_probe" in body or "probe_interval_seconds" in body:
+        if _key.role != "admin":
+            raise HTTPException(403, "Admin role required to change the probe role.")
+        if "is_probe" in body:
+            if not isinstance(body["is_probe"], bool):
+                raise HTTPException(400, "is_probe must be true or false")
+            updates["is_probe"] = body["is_probe"]
+        if "probe_interval_seconds" in body:
+            value = body["probe_interval_seconds"]
+            if value is not None:
+                if isinstance(value, bool):
+                    raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null")
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null") from None
+                if not 10 <= value <= 3600:
+                    raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null")
+            updates["probe_interval_seconds"] = value
+        for field in ("is_probe", "probe_interval_seconds"):
+            if field in updates and getattr(agent, field) != updates[field]:
+                probe_changes[field] = {"from": getattr(agent, field), "to": updates[field]}
+
     if updates:
         await db.execute(update(Agent).where(Agent.id == agent_id).values(**updates))
+        if probe_changes:
+            await log_action(db, request, "agent.probe", "agent", agent_id, agent.name,
+                             details={"changes": probe_changes})
         await db.commit()
 
     await db.refresh(agent)
@@ -1106,6 +1221,8 @@ async def patch_agent(
         "log_channels": agent.log_channels or "",
         "log_file_paths": agent.log_file_paths or "",
         "agent_log_level": agent.agent_log_level or "errors",
+        "is_probe": bool(agent.is_probe),
+        "probe_interval_seconds": agent.probe_interval_seconds,
     }
 
 
