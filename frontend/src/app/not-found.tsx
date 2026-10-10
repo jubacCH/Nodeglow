@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { buttonClasses } from '@/components/ui/Button';
 
 export const metadata = { title: 'Not found' };
 
@@ -12,7 +11,12 @@ export default function NotFound() {
         <p className="mt-2 text-ui text-fg-3">
           The page you were looking for does not exist or has moved.
         </p>
-        <Link href="/" className={buttonClasses({ variant: 'secondary', className: 'mt-6' })}>
+        {/* Server component: buttonClasses() lives in a client module, so the
+            secondary button look is spelled out here. */}
+        <Link
+          href="/"
+          className="mt-6 inline-flex h-[36px] items-center justify-center rounded-ctl border border-border-2 bg-surface-2 px-[14px] text-ui font-medium text-fg transition-colors duration-150 hover:bg-surface-3"
+        >
           Back to the dashboard
         </Link>
       </div>
