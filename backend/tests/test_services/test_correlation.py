@@ -283,6 +283,139 @@ async def test_cleanup_incident_events_keeps_newest_meaningful(db):
     assert sorted(remaining) == ["inc1 newest meaningful", "inc2 recent event"]
 
 
+# ── Cycle structure: offline hosts once, one transaction per rule ───────────
+
+
+def _session_factory(db):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def factory():
+        yield db
+
+    return factory
+
+
+_RULES = [
+    "_rule_host_down_syslog", "_rule_multi_host_down", "_rule_integration_host",
+    "_rule_port_error", "_rule_syslog_spike", "_rule_log_anomaly",
+    "_rule_fleet_wide", "_rule_severity_trend", "_rule_content_anomaly",
+    "_rule_precursor_observed",
+]
+
+
+def _patch_rules(stack, overrides=None):
+    from services import correlation as corr
+
+    mocks = {}
+    for name in _RULES:
+        m = (overrides or {}).get(name) or AsyncMock()
+        stack.enter_context(patch.object(corr, name, new=m))
+        mocks[name] = m
+    return mocks
+
+
+async def test_offline_hosts_are_computed_once_per_cycle(db):
+    from contextlib import ExitStack
+
+    from services import correlation as corr
+
+    offline = [object()]
+    get_offline = AsyncMock(return_value=offline)
+    auto_resolve = AsyncMock(return_value=[])
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(corr, "AsyncSessionLocal", _session_factory(db)))
+        stack.enter_context(patch.object(corr, "_get_offline_hosts", new=get_offline))
+        stack.enter_context(patch.object(corr, "_auto_resolve", new=auto_resolve))
+        mocks = _patch_rules(stack)
+        await corr.run_correlation()
+
+    assert get_offline.await_count == 1
+    for name in ("_rule_host_down_syslog", "_rule_multi_host_down", "_rule_integration_host"):
+        assert mocks[name].await_args.kwargs["offline_hosts"] is offline
+    assert auto_resolve.await_args.kwargs["offline_hosts"] is offline
+
+
+async def test_a_failing_rule_does_not_discard_the_others(db):
+    """One bad rule rolls back only its own transaction."""
+    from contextlib import ExitStack
+
+    from models.incident import Incident
+    from services import correlation as corr
+    from sqlalchemy import select
+
+    async def broken(*a, **kw):
+        raise RuntimeError("boom")
+
+    async def creates_incident(db_, *a, **kw):
+        await corr._find_or_create_incident(
+            db_, rule="port_error", title="svc down", severity="warning",
+            host_ids=[1], event_type="port_error", summary="s",
+        )
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(corr, "AsyncSessionLocal", _session_factory(db)))
+        stack.enter_context(patch.object(corr, "_get_offline_hosts", new=AsyncMock(return_value=[])))
+        stack.enter_context(patch.object(corr, "_auto_resolve", new=AsyncMock(return_value=[])))
+        stack.enter_context(patch("notifications.notify", new=AsyncMock()))
+        mocks = _patch_rules(stack, {
+            "_rule_syslog_spike": AsyncMock(side_effect=broken),
+            "_rule_port_error": AsyncMock(side_effect=creates_incident),
+        })
+        await corr.run_correlation()
+
+    # Rules after the broken one still ran ...
+    assert mocks["_rule_precursor_observed"].await_count == 1
+    # ... and the incident from the healthy rule was committed.
+    incidents = (await db.execute(select(Incident).where(Incident.rule == "port_error"))).scalars().all()
+    assert len(incidents) == 1
+
+
+async def test_unknown_offline_state_skips_host_rules_and_auto_resolve(db):
+    """Auto-resolving against an unknown offline set would 'recover' every host."""
+    from contextlib import ExitStack
+
+    from services import correlation as corr
+
+    auto_resolve = AsyncMock(return_value=[])
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(corr, "AsyncSessionLocal", _session_factory(db)))
+        stack.enter_context(patch.object(
+            corr, "_get_offline_hosts", new=AsyncMock(side_effect=RuntimeError("ch down"))))
+        stack.enter_context(patch.object(corr, "_auto_resolve", new=auto_resolve))
+        mocks = _patch_rules(stack)
+        await corr.run_correlation()
+
+    assert mocks["_rule_host_down_syslog"].await_count == 0
+    assert mocks["_rule_multi_host_down"].await_count == 0
+    assert mocks["_rule_port_error"].await_count == 1
+    assert auto_resolve.await_count == 0
+
+
+async def test_host_down_syslog_counts_errors_in_one_query(db):
+    from types import SimpleNamespace
+
+    from models.incident import Incident
+    from services import correlation as corr
+    from sqlalchemy import select
+
+    corr._rule_hit_counts.clear()
+    corr._current_cycle_hits.clear()
+    hosts = [SimpleNamespace(id=i, name=f"h{i}", hostname=f"10.0.0.{i}") for i in (1, 2, 3)]
+    counts = AsyncMock(return_value={2: 4})
+
+    with patch("services.clickhouse_client.count_syslog_by_host", new=counts), \
+         patch.object(corr, "_get_topology", new=AsyncMock(return_value={})), \
+         patch("notifications.notify", new=AsyncMock()):
+        await corr._rule_host_down_syslog(db, min_cycles=1, offline_hosts=hosts)
+        await db.commit()
+
+    assert counts.await_count == 1
+    assert sorted(counts.await_args.args[0]) == [1, 2, 3]
+    incidents = (await db.execute(select(Incident).where(Incident.rule == "host_down_syslog"))).scalars().all()
+    assert [i.title for i in incidents] == ["h2 offline with syslog errors"]
+
+
 async def test_cleanup_incident_events_disabled_with_zero(db):
     """retention_days=0 disables pruning entirely."""
     from datetime import timedelta
