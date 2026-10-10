@@ -12,7 +12,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { useHost, useHostHistory, useHosts } from '@/hooks/queries/useHosts';
 import { useAgents } from '@/hooks/queries/useAgents';
 import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText, AlertTriangle, Scan, Check, X, Lock, Shield } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';

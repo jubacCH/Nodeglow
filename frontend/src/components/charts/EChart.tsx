@@ -21,7 +21,7 @@ echarts.use([
 echarts.registerTheme('nodeglow-dark', nodeglowDark);
 echarts.registerTheme('nodeglow-light', nodeglowLight);
 
-interface EChartProps {
+export interface EChartProps {
   option: EChartsOption;
   className?: string;
   height?: number | string;

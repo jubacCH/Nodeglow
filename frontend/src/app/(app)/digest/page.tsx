@@ -4,7 +4,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
 import { useEffect, useMemo } from 'react';

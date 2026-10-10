@@ -8,7 +8,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Button } from '@/components/ui/Button';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, patch, post } from '@/lib/api';
 import { formatUptime } from '@/lib/utils';
