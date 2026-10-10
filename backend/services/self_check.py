@@ -54,6 +54,8 @@ class Problem:
     title: str
     severity: str
     summary: str
+    # Ping hosts the problem leaves unobserved (a silent probe's hosts).
+    host_ids: tuple[int, ...] = ()
 
 
 # Auto-discovered MonitoringSource jobs are registered as "src:<name>" but
@@ -274,7 +276,7 @@ async def _active_sources(db) -> dict[str, bool]:
 
 async def _probe_problems(db, now: float) -> list[Problem]:
     """Probes that have gone quiet while hosts depend on them."""
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     from database import PingHost
     from models.agent import Agent
@@ -286,11 +288,13 @@ async def _probe_problems(db, now: float) -> list[Problem]:
     if not rows:
         return []
 
-    counts = dict((await db.execute(
-        select(PingHost.probe_id, func.count())
+    hosts_by_probe: dict[int, list[int]] = {}
+    for probe_id, host_id in (await db.execute(
+        select(PingHost.probe_id, PingHost.id)
         .where(PingHost.probe_id.isnot(None), PingHost.enabled == True)  # noqa: E712
-        .group_by(PingHost.probe_id)
-    )).all())
+    )).all():
+        hosts_by_probe.setdefault(probe_id, []).append(host_id)
+    counts = {pid: len(ids) for pid, ids in hosts_by_probe.items()}
 
     states = [
         ProbeState(
@@ -303,7 +307,8 @@ async def _probe_problems(db, now: float) -> list[Problem]:
     ]
 
     return [
-        Problem(key=p["key"], title=p["title"], severity=p["severity"], summary=p["summary"])
+        Problem(key=p["key"], title=p["title"], severity=p["severity"], summary=p["summary"],
+                host_ids=tuple(sorted(hosts_by_probe.get(int(p["key"].split(":", 1)[1]), []))))
         for p in problems_for(states, counts, now)
     ]
 
@@ -399,6 +404,7 @@ async def run_self_check(db, scheduler, now: float, process_start: float) -> lis
             host_ids=[],
             event_type="self_check",
             summary=problem.summary,
+            affected_host_ids=list(problem.host_ids),
         )
 
     # Clear self-check incidents whose cause is gone.

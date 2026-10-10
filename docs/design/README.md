@@ -8,6 +8,7 @@ Design- und Umsetzungsdokumentation für die Neugestaltung von Nodeglow.
 | [02-information-architecture.md](02-information-architecture.md) | Phase B: Navigation, Objektmodell, Workflows, UX-Muster, Dashboard-Hierarchie, Backend-Lücken |
 | [03-design-directions.md](03-design-directions.md) | Phase C: Vergleich der drei Richtungen, Bewertung, Empfehlung |
 | [04-design-system.md](04-design-system.md) | Phase D: Tokens, Tailwind-Klassen, Komponentenkatalog, Glow- und Zustandsregeln, App-Shell, Migrations-Checkliste |
+| [05-dashboard-api.md](05-dashboard-api.md) | Backend für die neue Oberfläche: einheitlicher Host-Zustand, `/api/v2/dashboard`, `/api/v2/summary`, Änderungen seit dem letzten Besuch, was ableitbar ist |
 | [directions/](directions/) | Die drei Richtungsdokumente im Detail |
 | [prototypes/](prototypes/) | Szenario und die drei Browser-Prototypen |
 
