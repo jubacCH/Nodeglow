@@ -2,29 +2,37 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { ArrowUpDown, Network } from 'lucide-react';
+import type { EChartsOption } from 'echarts';
 import { get } from '@/lib/api';
 import { EChart } from '@/components/charts/LazyEChart';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { StatusDot } from '@/components/ui/StatusDot';
+import { BigNumber } from '@/components/ui/BigNumber';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryErrorState, StaleDataBanner, formatAsOf } from '@/components/ui/QueryState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { ArrowDownToLine, ArrowUpFromLine, Network, Trophy } from 'lucide-react';
+import { StatusDot } from '@/components/ui/StatusDot';
+import { SegmentedControl } from '@/components/ui/Tabs';
+import { TBody, THead, Table, TableContainer, Td, Th, Tr } from '@/components/ui/Table';
+import { useChartTheme } from '@/lib/chart-theme';
+import { cn } from '@/lib/utils';
 
 /* ---------- helpers ---------- */
 
-function formatBps(bps: number | undefined | null): string {
-  if (!bps || bps <= 0) return '0 bps';
-  if (bps >= 1e9) return `${(bps / 1e9).toFixed(2)} Gbps`;
-  if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} Mbps`;
-  if (bps >= 1e3) return `${(bps / 1e3).toFixed(0)} Kbps`;
-  return `${Math.round(bps)} bps`;
+/** Rate with unit. Missing values are "—", never "0 bps". */
+function splitBps(bps: number | undefined | null): { value: string; unit: string } | null {
+  if (bps === null || bps === undefined || Number.isNaN(bps)) return null;
+  if (bps <= 0) return { value: '0', unit: 'bps' };
+  if (bps >= 1e9) return { value: (bps / 1e9).toFixed(2), unit: 'Gbps' };
+  if (bps >= 1e6) return { value: (bps / 1e6).toFixed(1), unit: 'Mbps' };
+  if (bps >= 1e3) return { value: (bps / 1e3).toFixed(0), unit: 'Kbps' };
+  return { value: String(Math.round(bps)), unit: 'bps' };
 }
 
-function rateColor(bps: number | undefined | null): string {
-  if (!bps) return 'text-slate-400';
-  if (bps >= 1e9) return 'text-red-400';
-  if (bps >= 1e8) return 'text-amber-400';
-  return 'text-emerald-400';
+function formatBps(bps: number | undefined | null): string {
+  const s = splitBps(bps);
+  return s ? `${s.value} ${s.unit}` : '—';
 }
 
 function timeAgo(iso: string | undefined | null): string {
@@ -37,11 +45,14 @@ function timeAgo(iso: string | undefined | null): string {
   return `${Math.floor(diff / 86400_000)}d ago`;
 }
 
+/** An interface counts as reporting when its last sample is younger than this. */
+const FRESH_MS = 300_000;
+
 const HOUR_OPTIONS = [
-  { label: '1h', value: 1 },
-  { label: '6h', value: 6 },
-  { label: '24h', value: 24 },
-  { label: '7d', value: 168 },
+  { label: '1h', value: 1, long: 'last hour' },
+  { label: '6h', value: 6, long: 'last 6 hours' },
+  { label: '24h', value: 24, long: 'last 24 hours' },
+  { label: '7d', value: 168, long: 'last 7 days' },
 ] as const;
 
 /* ---------- types ---------- */
@@ -81,30 +92,42 @@ interface HistoryPoint {
   tx_rate_bps?: number;
 }
 
+function talkerLabel(t: NonNullable<BandwidthSummary['top_talkers']>[number]): string {
+  let name = (t.interface_name ?? '').replace(/^device\//, '');
+  // A MAC-like interface name says nothing; prefer the source name.
+  if (/^[0-9A-Fa-f]{12}/.test(name) && t.source_name) name = t.source_name;
+  if (name.length > 25) name = name.slice(0, 22) + '…';
+  return name || t.source_name || '—';
+}
+
 /* ---------- component ---------- */
 
 export default function BandwidthPage() {
-  useEffect(() => { document.title = 'Bandwidth | Nodeglow'; }, []);
+  useEffect(() => { document.title = 'Traffic | Nodeglow'; }, []);
 
   const [hours, setHours] = useState(24);
+  const t = useChartTheme();
+  const range = HOUR_OPTIONS.find((o) => o.value === hours) ?? HOUR_OPTIONS[2];
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  const summaryQ = useQuery({
     queryKey: ['bandwidth-summary'],
     queryFn: () => get<BandwidthSummary>('/api/bandwidth'),
     refetchInterval: 15_000,
   });
-
-  const { data: interfaces, isLoading: ifLoading } = useQuery({
+  const interfacesQ = useQuery({
     queryKey: ['bandwidth-interfaces'],
     queryFn: () => get<BandwidthInterface[]>('/api/bandwidth/interfaces'),
     refetchInterval: 15_000,
   });
-
-  const { data: history } = useQuery({
+  const historyQ = useQuery({
     queryKey: ['bandwidth-history', hours],
     queryFn: () => get<HistoryPoint[]>(`/api/bandwidth/history?hours=${hours}`),
     refetchInterval: 15_000,
   });
+
+  const summary = summaryQ.data;
+  const interfaces = interfacesQ.data;
+  const history = historyQ.data;
 
   const sortedInterfaces = useMemo(() => {
     if (!interfaces || !Array.isArray(interfaces)) return [];
@@ -113,266 +136,279 @@ export default function BandwidthPage() {
     );
   }, [interfaces]);
 
+  const reporting = useMemo(
+    () => sortedInterfaces.filter((i) => i.last_seen && Date.now() - new Date(i.last_seen).getTime() < FRESH_MS).length,
+    [sortedInterfaces],
+  );
+
   const topTalker = summary?.top_talkers?.[0];
+  const hasHistory = Array.isArray(history) && history.length > 0;
+  const talkers = useMemo(() => summary?.top_talkers?.slice(0, 10) ?? [], [summary]);
 
   /* --- chart options --- */
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trafficOption = useMemo((): any => {
-    if (!history || !Array.isArray(history) || history.length === 0) return {};
+  const trafficOption = useMemo((): EChartsOption => {
+    if (!Array.isArray(history) || history.length === 0) return {};
     return {
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['Download', 'Upload'] },
-      grid: { left: 50, right: 20, top: 40, bottom: 30 },
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (v) => `${v} Mbps`,
+      },
+      legend: { data: ['Download', 'Upload'], top: 0, right: 0 },
+      grid: { left: 8, right: 8, top: 32, bottom: 8, containLabel: true },
       xAxis: {
         type: 'category',
+        boundaryGap: false,
         data: history.map((p) => p.timestamp ?? ''),
         axisLabel: {
           formatter: (v: string) => {
-            try {
-              const d = new Date(v);
-              return hours <= 6
-                ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-            } catch { return v; }
+            const d = new Date(v);
+            if (Number.isNaN(d.getTime())) return v;
+            return hours <= 6
+              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
           },
         },
       },
-      yAxis: { type: 'value', name: 'Mbps' },
+      yAxis: { type: 'value', name: 'Mbps', nameTextStyle: { color: t.text3, align: 'left' } },
       series: [
         {
-          name: 'Download', type: 'line', smooth: true, showSymbol: false,
-          areaStyle: { opacity: 0.15 }, itemStyle: { color: '#3b82f6' },
+          name: 'Download', type: 'line', showSymbol: false,
+          lineStyle: { width: 2, color: t.series[0] }, itemStyle: { color: t.series[0] },
+          areaStyle: { color: t.accentFill, opacity: 1 },
           data: history.map((p) => +((p.rx_rate_bps ?? 0) / 1e6).toFixed(2)),
         },
         {
-          name: 'Upload', type: 'line', smooth: true, showSymbol: false,
-          areaStyle: { opacity: 0.15 }, itemStyle: { color: '#22c55e' },
+          name: 'Upload', type: 'line', showSymbol: false,
+          lineStyle: { width: 2, color: t.series[1] }, itemStyle: { color: t.series[1] },
           data: history.map((p) => +((p.tx_rate_bps ?? 0) / 1e6).toFixed(2)),
         },
       ],
     };
-  }, [history, hours]);
+  }, [history, hours, t]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const topTalkersOption = useMemo((): any => {
-    const talkers = summary?.top_talkers?.slice(0, 10) ?? [];
+  const topTalkersOption = useMemo((): EChartsOption => {
     if (talkers.length === 0) return {};
-    const labels = talkers.map((t) => {
-      let name = t.interface_name ?? '';
-      // Clean up device/ prefix and MAC addresses
-      name = name.replace(/^device\//, '');
-      // If it's a MAC-like string, prefer source_name
-      if (/^[0-9A-Fa-f]{12}/.test(name) && t.source_name) {
-        name = t.source_name;
-      }
-      // Truncate long names
-      if (name.length > 25) name = name.slice(0, 22) + '...';
-      return name;
-    });
-
     return {
       tooltip: {
         trigger: 'axis',
-        formatter: (params: unknown) => {
-          const items = params as Array<{ seriesName: string; value: number; name: string; color: string }>;
-          if (!Array.isArray(items) || !items.length) return '';
-          const lines = items.map(i => `<span style="color:${i.color}">\u25CF</span> ${i.seriesName}: <b>${i.value.toFixed(1)} Mbps</b>`);
-          return `${items[0].name}<br/>${lines.join('<br/>')}`;
-        },
+        axisPointer: { type: 'shadow' },
+        valueFormatter: (v) => `${typeof v === 'number' ? v.toFixed(1) : v} Mbps`,
       },
       legend: { data: ['Download', 'Upload'], top: 0, right: 0 },
-      grid: { left: 10, right: 30, top: 30, bottom: 10, containLabel: true },
+      grid: { left: 8, right: 24, top: 32, bottom: 8, containLabel: true },
       xAxis: {
         type: 'value',
-        axisLabel: { formatter: (v: number) => v >= 1000 ? `${(v/1000).toFixed(1)}G` : `${v}M` },
+        axisLabel: { formatter: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}G` : `${v}M`) },
       },
       yAxis: {
-        type: 'category', inverse: true,
-        data: labels,
-        axisLabel: { width: 160, overflow: 'break', fontSize: 11 },
+        type: 'category',
+        inverse: true,
+        data: talkers.map(talkerLabel),
+        axisLabel: { width: 150, overflow: 'truncate', fontFamily: t.monoFamily },
       },
       series: [
         {
-          name: 'Download', type: 'bar', stack: 'total', itemStyle: { color: '#3b82f6' },
-          data: talkers.map((t) => +((t.rx_rate_bps ?? 0) / 1e6).toFixed(2)),
+          name: 'Download', type: 'bar', stack: 'total', barMaxWidth: 18, itemStyle: { color: t.series[0] },
+          data: talkers.map((x) => +((x.rx_rate_bps ?? 0) / 1e6).toFixed(2)),
         },
         {
-          name: 'Upload', type: 'bar', stack: 'total', itemStyle: { color: '#22c55e' },
-          data: talkers.map((t) => +((t.tx_rate_bps ?? 0) / 1e6).toFixed(2)),
+          name: 'Upload', type: 'bar', stack: 'total', barMaxWidth: 18,
+          itemStyle: { color: t.series[1], borderRadius: [0, 3, 3, 0] },
+          data: talkers.map((x) => +((x.tx_rate_bps ?? 0) / 1e6).toFixed(2)),
         },
       ],
     };
-  }, [summary]);
+  }, [talkers, t]);
+
+  const rx = splitBps(summary?.total_rx_bps);
+  const tx = splitBps(summary?.total_tx_bps);
+  const top = topTalker ? splitBps((topTalker.rx_rate_bps ?? 0) + (topTalker.tx_rate_bps ?? 0)) : null;
+  const asOf = formatAsOf(summaryQ.dataUpdatedAt);
 
   return (
     <div>
-      <PageHeader title="Bandwidth" description="Network traffic monitoring" />
+      <PageHeader
+        title="Traffic"
+        description={<>Bandwidth per interface from agents and integrations{asOf && <> · Updated {asOf}</>}</>}
+      />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-blue-500/10">
-              <ArrowDownToLine size={20} className="text-blue-400" />
-            </div>
-            <div>
-              {summaryLoading ? <Skeleton className="h-7 w-24" /> : (
-                <p className="text-xl font-semibold text-slate-100">{formatBps(summary?.total_rx_bps)}</p>
-              )}
-              <p className="text-xs text-slate-400 mt-0.5">Total Download</p>
-            </div>
-          </div>
-        </GlassCard>
+      {summaryQ.isError && summary && (
+        <StaleDataBanner error={summaryQ.error} onRetry={summaryQ.refetch} updatedAt={summaryQ.dataUpdatedAt} />
+      )}
 
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-green-500/10">
-              <ArrowUpFromLine size={20} className="text-green-400" />
-            </div>
-            <div>
-              {summaryLoading ? <Skeleton className="h-7 w-24" /> : (
-                <p className="text-xl font-semibold text-slate-100">{formatBps(summary?.total_tx_bps)}</p>
-              )}
-              <p className="text-xs text-slate-400 mt-0.5">Total Upload</p>
-            </div>
-          </div>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-violet-500/10">
-              <Network size={20} className="text-violet-400" />
-            </div>
-            <div>
-              {summaryLoading ? <Skeleton className="h-7 w-16" /> : (
-                <p className="text-xl font-semibold text-slate-100">{summary?.total_interfaces ?? sortedInterfaces.length}</p>
-              )}
-              <p className="text-xs text-slate-400 mt-0.5">Interfaces</p>
-            </div>
-          </div>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-amber-500/10">
-              <Trophy size={20} className="text-amber-400" />
-            </div>
-            <div>
-              {summaryLoading ? <Skeleton className="h-7 w-28" /> : (
-                <>
-                  <p className="text-xl font-semibold text-slate-100">
-                    {topTalker ? formatBps((topTalker.rx_rate_bps ?? 0) + (topTalker.tx_rate_bps ?? 0)) : '—'}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-0.5 truncate max-w-[160px]">
-                    {topTalker ? (topTalker.source_name ? `${topTalker.source_name} / ${topTalker.interface_name}` : topTalker.interface_name) : 'Top Talker'}
-                  </p>
-                </>
-              )}
-            </div>
-          </div>
-        </GlassCard>
-      </div>
+      {/* Key figures */}
+      {summaryQ.isError && !summary ? (
+        <Card className="mb-4">
+          <QueryErrorState compact error={summaryQ.error} onRetry={summaryQ.refetch} title="Could not load the traffic summary" />
+        </Card>
+      ) : (
+        <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <Card>
+            {summaryQ.isLoading ? <Skeleton className="h-[52px] w-28" /> : (
+              <BigNumber size="sm" value={rx?.value ?? null} unit={rx?.unit} label="Total download" />
+            )}
+          </Card>
+          <Card>
+            {summaryQ.isLoading ? <Skeleton className="h-[52px] w-28" /> : (
+              <BigNumber size="sm" value={tx?.value ?? null} unit={tx?.unit} label="Total upload" />
+            )}
+          </Card>
+          <Card>
+            {summaryQ.isLoading ? <Skeleton className="h-[52px] w-16" /> : (
+              <BigNumber
+                size="sm"
+                value={summary?.total_interfaces ?? (interfaces ? sortedInterfaces.length : null)}
+                label={interfaces ? `Interfaces · ${reporting} reporting` : 'Interfaces'}
+              />
+            )}
+          </Card>
+          <Card>
+            {summaryQ.isLoading ? <Skeleton className="h-[52px] w-28" /> : (
+              <BigNumber
+                size="sm"
+                value={top?.value ?? null}
+                unit={top?.unit}
+                label={
+                  <span className="block truncate" title={topTalker ? `${topTalker.source_name ?? ''} ${topTalker.interface_name ?? ''}`.trim() : undefined}>
+                    Top talker{topTalker && <>: <span className="font-mono">{topTalker.source_name ? `${topTalker.source_name} / ${talkerLabel(topTalker)}` : talkerLabel(topTalker)}</span></>}
+                  </span>
+                }
+              />
+            )}
+          </Card>
+        </div>
+      )}
 
       {/* Traffic chart */}
-      <GlassCard className="p-4 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-slate-200">Traffic</h3>
-          <div className="flex gap-1">
-            {HOUR_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => setHours(opt.value)}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                  hours === opt.value
-                    ? 'bg-sky-500/20 text-sky-300'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {history && Array.isArray(history) && history.length > 0 ? (
-          <EChart option={trafficOption} height={300} />
+      <Card as="section" aria-labelledby="h-traffic" className="mb-4">
+        <CardHeader
+          title="Traffic"
+          titleId="h-traffic"
+          meta={range.long}
+          actions={
+            <SegmentedControl
+              label="Time range"
+              size="sm"
+              value={String(hours)}
+              onChange={(v) => setHours(Number(v))}
+              options={HOUR_OPTIONS.map((o) => ({ value: String(o.value), label: o.label, ariaLabel: o.long }))}
+            />
+          }
+        />
+        {historyQ.isLoading ? (
+          <Skeleton className="h-[300px] w-full" />
+        ) : historyQ.isError && !history ? (
+          <QueryErrorState compact error={historyQ.error} onRetry={historyQ.refetch} title="Could not load traffic history" />
+        ) : hasHistory ? (
+          <>
+            {historyQ.isError && <StaleDataBanner error={historyQ.error} onRetry={historyQ.refetch} updatedAt={historyQ.dataUpdatedAt} />}
+            <EChart
+              option={trafficOption}
+              height={300}
+              ariaLabel={`Total download and upload in Mbps over the ${range.long}.`}
+            />
+          </>
         ) : (
-          <div className="flex items-center justify-center h-[300px] text-sm text-slate-500">
-            No traffic data yet — data will appear after agent snapshots are collected
+          <div className="grid min-h-[300px] place-items-center">
+            <EmptyState
+              compact
+              variant="not-configured"
+              icon={ArrowUpDown}
+              title="No traffic data yet"
+              description="Data appears after agent or integration snapshots with interface counters are collected."
+            />
           </div>
         )}
-      </GlassCard>
+      </Card>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Interface table */}
-        <GlassCard>
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-semibold text-slate-200">Interfaces</h3>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {/* Interfaces */}
+        <Card as="section" padding="none" aria-labelledby="h-ifaces" className="overflow-hidden">
+          <div className="px-5 pt-5 max-[759px]:px-4 max-[759px]:pt-4">
+            <CardHeader
+              title="Interfaces"
+              titleId="h-ifaces"
+              meta={interfaces ? `${sortedInterfaces.length} · sorted by total rate` : undefined}
+              className="mb-3"
+            />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06]">
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Interface</th>
-                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Download</th>
-                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Upload</th>
-                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Last Seen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ifLoading && Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i} className="border-b border-white/[0.06]">
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-40" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20 ml-auto" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20 ml-auto" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16 ml-auto" /></td>
-                  </tr>
-                ))}
-                {sortedInterfaces.map((iface, idx) => {
-                  const isActive = iface.last_seen
-                    ? (Date.now() - new Date(iface.last_seen).getTime()) < 300_000
-                    : false;
-                  return (
-                    <tr key={idx} className="border-b border-white/[0.06] hover:bg-white/[0.02]">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <StatusDot status={isActive ? 'online' : 'offline'} />
-                          <span className="text-slate-300 text-xs">{iface.display_name ?? `${iface.source_type}/${iface.interface_name}`}</span>
-                        </div>
-                      </td>
-                      <td className={`px-4 py-3 text-right font-mono text-xs ${rateColor(iface.rx_rate_bps)}`}>
-                        {formatBps(iface.rx_rate_bps)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-mono text-xs ${rateColor(iface.tx_rate_bps)}`}>
-                        {formatBps(iface.tx_rate_bps)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-xs text-slate-500">{timeAgo(iface.last_seen)}</td>
-                    </tr>
-                  );
-                })}
-                {!ifLoading && sortedInterfaces.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                      No interfaces reporting yet
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
-
-        {/* Top talkers */}
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-semibold text-slate-200 mb-4">Top Talkers</h3>
-          {summary?.top_talkers && summary.top_talkers.length > 0 ? (
-            <EChart option={topTalkersOption} height={400} />
-          ) : (
-            <div className="flex items-center justify-center h-[400px] text-sm text-slate-500">
-              No data available
+          {interfacesQ.isError && interfaces && (
+            <div className="px-5 max-[759px]:px-4">
+              <StaleDataBanner error={interfacesQ.error} onRetry={interfacesQ.refetch} updatedAt={interfacesQ.dataUpdatedAt} />
             </div>
           )}
-        </GlassCard>
+          {interfacesQ.isError && !interfaces ? (
+            <QueryErrorState compact error={interfacesQ.error} onRetry={interfacesQ.refetch} title="Could not load interfaces" />
+          ) : !interfacesQ.isLoading && sortedInterfaces.length === 0 ? (
+            <EmptyState compact variant="not-configured" icon={Network} title="No interfaces reporting yet" description="Interfaces appear once an agent or integration sends interface counters." />
+          ) : (
+            <TableContainer maxHeight={420}>
+              <Table density="compact" aria-label="Interfaces">
+                <THead sticky>
+                  <Tr>
+                    <Th>Interface</Th>
+                    <Th numeric>Download</Th>
+                    <Th numeric>Upload</Th>
+                    <Th numeric>Last seen</Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {interfacesQ.isLoading && Array.from({ length: 5 }).map((_, i) => (
+                    <Tr key={i}>
+                      <Td><Skeleton className="h-3.5 w-40" /></Td>
+                      <Td><Skeleton className="ml-auto h-3.5 w-16" /></Td>
+                      <Td><Skeleton className="ml-auto h-3.5 w-16" /></Td>
+                      <Td><Skeleton className="ml-auto h-3.5 w-12" /></Td>
+                    </Tr>
+                  ))}
+                  {sortedInterfaces.map((iface) => {
+                    const fresh = iface.last_seen
+                      ? Date.now() - new Date(iface.last_seen).getTime() < FRESH_MS
+                      : false;
+                    const name = iface.display_name ?? `${iface.source_type ?? '?'}/${iface.interface_name ?? '?'}`;
+                    return (
+                      <Tr key={`${iface.source_type}|${iface.source_id}|${iface.interface_name}`} className="hover:bg-hover">
+                        <Td className="max-w-[260px]">
+                          <span className="flex min-w-0 items-center gap-2">
+                            {/* Fresh sample = ok; stale or never seen = no data (never green). */}
+                            <StatusDot status={fresh ? 'ok' : 'unknown'} size="sm" label={fresh ? 'Reporting' : 'No recent data'} />
+                            <span className="truncate font-mono text-meta" title={name}>{name}</span>
+                          </span>
+                        </Td>
+                        <Td numeric className={cn('whitespace-nowrap', !fresh && 'text-fg-3')}>{formatBps(iface.rx_rate_bps)}</Td>
+                        <Td numeric className={cn('whitespace-nowrap', !fresh && 'text-fg-3')}>{formatBps(iface.tx_rate_bps)}</Td>
+                        <Td numeric muted className="whitespace-nowrap" title={iface.last_seen ? new Date(iface.last_seen).toLocaleString() : undefined}>
+                          {timeAgo(iface.last_seen)}
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Card>
+
+        {/* Top talkers */}
+        <Card as="section" aria-labelledby="h-talkers">
+          <CardHeader title="Top talkers" titleId="h-talkers" meta="current rate · top 10" />
+          {summaryQ.isLoading ? (
+            <Skeleton className="h-[400px] w-full" />
+          ) : summaryQ.isError && !summary ? (
+            <QueryErrorState compact error={summaryQ.error} onRetry={summaryQ.refetch} title="Could not load top talkers" />
+          ) : talkers.length > 0 ? (
+            <EChart
+              option={topTalkersOption}
+              height={400}
+              ariaLabel={`Top talkers by current rate: ${talkers.map((x) => `${talkerLabel(x)} ${formatBps((x.rx_rate_bps ?? 0) + (x.tx_rate_bps ?? 0))}`).join(', ')}.`}
+            />
+          ) : (
+            <div className="grid min-h-[400px] place-items-center">
+              <EmptyState compact variant="not-configured" icon={ArrowUpDown} title="No top talkers yet" description="Shown once interfaces report traffic." />
+            </div>
+          )}
+        </Card>
       </div>
     </div>
   );
