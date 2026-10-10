@@ -105,14 +105,35 @@ All integrations use a generic plugin system (`BaseIntegration` ABC). Adding a n
 
 ## Quick start
 
-### Requirements
+### Install a release (recommended)
+
+Signed, multi-arch images from GHCR — no build on your host:
+
+```bash
+curl -fsSLO https://github.com/jubacCH/Nodeglow/releases/latest/download/install.sh
+sudo sh install.sh            # → /opt/nodeglow, prints the URL when ready
+```
+
+`install.sh` checks the prerequisites, generates `.env` with strong secrets,
+pulls and (with cosign installed) verifies the images, and starts the stack.
+Air-gapped: `sudo sh install.sh --offline nodeglow-X.Y.Z-offline-amd64.tar.gz`.
+Upgrades run from the UI or by running `install.sh` again.
+
+**[docs/INSTALL.md](docs/INSTALL.md)** covers editions (default image with
+license-gated enterprise features, or an AGPL-only community image), offline
+installs, upgrades, backup/restore and signature verification.
+Changes per release: [CHANGELOG.md](CHANGELOG.md).
+
+### From source (development)
+
+#### Requirements
 
 - Docker Engine 20.10+ with Compose v2
 - Linux host (for ICMP ping via `NET_RAW` capability)
 - 2 vCPU / 4 GB RAM / 20 GB SSD minimum — sizing, ports and a hardening
   checklist are in [docs/OPERATIONS.md](docs/OPERATIONS.md#before-you-go-live)
 
-### Run
+#### Run
 
 ```bash
 git clone https://github.com/jubacCH/Nodeglow.git nodeglow
@@ -206,6 +227,9 @@ All settings are available at **Settings** (admin only):
 ---
 
 ## Operating it
+
+Installing a release, offline installs, upgrades and signature verification:
+**[docs/INSTALL.md](docs/INSTALL.md)**
 
 Sizing, ports and hardening, updating, backups and restore, the encryption
 key, and how to diagnose a problem:

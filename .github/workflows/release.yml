@@ -1,0 +1,452 @@
+name: Release
+
+# Builds, signs and publishes a release for a tag vX.Y.Z (or vX.Y.Z-pre).
+#
+#   1. prepare  VERSION must equal the tag; release notes from CHANGELOG.md
+#   2. test     the full CI workflow, against the tagged commit
+#   3. images   per image: Trivy gate (CRITICAL, fixable) on an amd64 build,
+#               then a multi-arch push to GHCR with SBOM + provenance,
+#               cosign keyless signature and a GitHub build attestation
+#   4. bundle   offline bundle for air-gapped installs (amd64, enterprise image)
+#   5. release  GitHub Release with notes, agent binaries, compose file,
+#               install.sh, deploy archive, bundle and cosign-signed SHA256SUMS
+#
+# Cut a release with scripts/release.sh X.Y.Z, then push the tag. Manual runs
+# (workflow_dispatch) must be started on the tag: "Use workflow from → Tags".
+# See docs/INSTALL.md, "For maintainers".
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_PREFIX: ghcr.io/jubacch
+  PLATFORMS: linux/amd64,linux/arm64
+  # Pinned like in security.yml; bump deliberately.
+  TRIVY_IMAGE: aquasec/trivy:0.58.1
+  COSIGN_VERSION: v2.4.1
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      minor: ${{ steps.meta.outputs.minor }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version from tag must match VERSION
+        id: meta
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::Run this workflow on a tag (Use workflow from → Tags → vX.Y.Z), not on $REF_TYPE $TAG"
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag $TAG is not vX.Y.Z or vX.Y.Z-pre"
+            exit 1
+          fi
+          version="${TAG#v}"
+          file_version=$(sed -n '/^[[:space:]]*[^#[:space:]]/{p;q;}' VERSION | tr -d '[:space:]')
+          if [ "$file_version" != "$version" ]; then
+            echo "::error file=VERSION::VERSION says '$file_version' but the tag is $TAG — use scripts/release.sh"
+            exit 1
+          fi
+          case "$version" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          {
+            echo "version=$version"
+            echo "tag=$TAG"
+            echo "minor=$(printf '%s' "$version" | cut -d. -f1,2)"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -eu
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && (/^## \[/ || /^\[[^]]+\]: /) { exit }
+            on { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error file=CHANGELOG.md::No '## [$VERSION]' section in CHANGELOG.md — use scripts/release.sh"
+            exit 1
+          fi
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+          retention-days: 7
+
+  test:
+    name: CI
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    name: Image ${{ matrix.name }}
+    needs: [prepare, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # push to GHCR
+      id-token: write       # cosign keyless + attestation signing (OIDC)
+      attestations: write   # GitHub build provenance attestation
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Default backend: includes ee/ (Nodeglow Enterprise License). The
+          # enterprise features are inactive without a valid license; the rest
+          # is the AGPL core. See docs/INSTALL.md, "Editions".
+          - name: backend
+            image: nodeglow-backend
+            context: backend
+            build-contexts: ee=ee
+            licenses: AGPL-3.0-only AND LicenseRef-Nodeglow-Enterprise
+            description: Nodeglow backend (core + enterprise features, license-gated)
+          # Pure AGPL build: no ee/ named context → the Dockerfile's empty ee stage.
+          - name: backend-community
+            image: nodeglow-backend-community
+            context: backend
+            build-contexts: ""
+            licenses: AGPL-3.0-only
+            description: Nodeglow backend, community edition (AGPL only, no ee/)
+          - name: frontend
+            image: nodeglow-frontend
+            context: frontend
+            build-contexts: ""
+            licenses: AGPL-3.0-only
+            description: Nodeglow web UI
+          # The deploy context bakes the release compose file + ClickHouse
+          # config into the updater (image-mode updates install them).
+          - name: updater
+            image: nodeglow-updater
+            context: sidecar
+            build-contexts: deploy=dist/updater-context
+            licenses: AGPL-3.0-only
+            description: Nodeglow update and backup sidecar
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stage deploy files for the updater image
+        if: matrix.name == 'updater'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -eu
+          sh scripts/make-offline-bundle.sh --deploy-only --version "$VERSION" --out dist
+          mkdir -p dist/updater-context
+          cp -R "dist/nodeglow-$VERSION" dist/updater-context/deploy
+          find dist/updater-context -type f
+
+      - name: Build metadata
+        id: build
+        run: |
+          {
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "commit=$(git rev-parse --short=12 HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=${{ needs.prepare.outputs.minor }},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=${{ matrix.licenses }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.vendor=Nodeglow
+
+      # Gate first: an amd64 build loaded into the runner's Docker for Trivy.
+      # Nothing is pushed if it fails. The cache makes the push build cheap.
+      - name: Build for scanning (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          build-contexts: ${{ matrix.build-contexts }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: nodeglow-scan:${{ matrix.name }}
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+            GIT_COMMIT=${{ steps.build.outputs.commit }}
+            BUILD_DATE=${{ steps.build.outputs.date }}
+            BUNDLE_OOKLA=0
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # Same scanner and pin as security.yml, but blocking and CRITICAL only.
+      # Accepted findings go into .trivyignore, each with a reason.
+      - name: Trivy gate (CRITICAL, fixable)
+        env:
+          IMAGE: nodeglow-scan:${{ matrix.name }}
+        run: |
+          set -eu
+          ignore=""
+          if [ -f .trivyignore ]; then ignore="--ignorefile /src/.trivyignore"; fi
+          # shellcheck disable=SC2086
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/src:ro" \
+            "$TRIVY_IMAGE" image \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            --scanners vuln $ignore \
+            "$IMAGE"
+
+      - name: Build and push (${{ env.PLATFORMS }})
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          build-contexts: ${{ matrix.build-contexts }}
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+            GIT_COMMIT=${{ steps.build.outputs.commit }}
+            BUILD_DATE=${{ steps.build.outputs.date }}
+            BUNDLE_OOKLA=0
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      # Keyless: the certificate binds the signature to this workflow file and
+      # the tag ref (identity .../release.yml@refs/tags/vX.Y.Z). The updater and
+      # install.sh verify exactly that identity.
+      - name: Sign with cosign
+        env:
+          REF: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@${{ steps.push.outputs.digest }}
+        run: cosign sign --yes --recursive "$REF"
+
+      - name: Build provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### $IMAGE"
+            echo '```'
+            echo "$TAGS"
+            echo "digest: $DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  bundle:
+    name: Offline bundle
+    needs: [prepare, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      bundled: ${{ steps.size.outputs.bundled }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The images were just signed; --require-signature proves the bundle
+      # carries exactly the signed images.
+      - name: Build offline bundle (amd64, enterprise image)
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          sh scripts/make-offline-bundle.sh --version "$VERSION" \
+            --platform linux/amd64 --edition enterprise --require-signature --out dist
+
+      # GitHub release assets are limited to 2 GiB each. Above ~1.9 GiB the
+      # bundle is not attached; operators build it with the script instead.
+      - name: Check size
+        id: size
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -eu
+          file="dist/nodeglow-$VERSION-offline-amd64.tar.gz"
+          bytes=$(stat -c %s "$file")
+          echo "bundle: $file, $((bytes / 1024 / 1024)) MiB" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -lt 2040109465 ]; then
+            echo "bundled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bundled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Offline bundle exceeds the release asset limit; not attached (build it with scripts/make-offline-bundle.sh)"
+            rm -f "$file"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: steps.size.outputs.bundled == 'true'
+        with:
+          name: offline-bundle
+          path: dist/nodeglow-*-offline-amd64.tar.gz
+          retention-days: 3
+          compression-level: 0
+
+  release:
+    name: GitHub Release
+    needs: [prepare, images, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release and upload assets
+      id-token: write   # cosign sign-blob (keyless)
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: notes
+
+      - uses: actions/download-artifact@v8
+        if: needs.bundle.outputs.bundled == 'true'
+        with:
+          name: offline-bundle
+          path: dist
+
+      - name: Collect assets
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p dist
+          sh scripts/make-offline-bundle.sh --deploy-only --version "$VERSION" --out build
+          cp "build/nodeglow-$VERSION-deploy.tar.gz" dist/
+          cp docker-compose.release.yml dist/docker-compose.release.yml
+          cp scripts/install.sh dist/install.sh
+          # The agent binaries are the ones committed by agent-build.yml at
+          # this tag — the same files the backend image serves to agents.
+          cp backend/static/nodeglow-agent-linux dist/nodeglow-agent-linux-x86_64
+          cp backend/static/nodeglow-agent.exe dist/nodeglow-agent-windows-x86_64.exe
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        run: |
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem \
+            --bundle SHA256SUMS.sigstore.json \
+            SHA256SUMS
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          BUNDLED: ${{ needs.bundle.outputs.bundled }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          notes=notes/release-notes.md
+          {
+            echo
+            echo "---"
+            echo
+            echo "### Install"
+            echo
+            echo '```sh'
+            echo "curl -fsSLO https://github.com/$REPO/releases/download/$TAG/install.sh"
+            echo "sudo sh install.sh --version $VERSION"
+            echo '```'
+            echo
+            echo "Images (multi-arch amd64/arm64, cosign-signed, SBOM + provenance):"
+            echo
+            for img in nodeglow-backend nodeglow-backend-community nodeglow-frontend nodeglow-updater; do
+              echo "- \`$IMAGE_PREFIX/$img:$VERSION\`"
+            done
+            echo
+            if [ "$BUNDLED" = "true" ]; then
+              echo "Air-gapped: \`nodeglow-$VERSION-offline-amd64.tar.gz\` → \`sh install.sh --offline <bundle>\`."
+            else
+              echo "Air-gapped: build the offline bundle with \`scripts/make-offline-bundle.sh --version $VERSION\`."
+            fi
+            echo "Verify downloads and images: [docs/INSTALL.md](https://github.com/$REPO/blob/$TAG/docs/INSTALL.md#verifying-signatures)."
+          } >> "$notes"
+
+          flags=""
+          if [ "$PRERELEASE" = "true" ]; then flags="--prerelease"; else flags="--latest"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-run of a release: replace the assets, keep the release.
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file "$notes"
+          else
+            # shellcheck disable=SC2086
+            gh release create "$TAG" dist/* --verify-tag $flags \
+              --title "Nodeglow $VERSION" --notes-file "$notes"
+          fi
