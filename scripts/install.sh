@@ -183,7 +183,13 @@ env_set() {
 }
 
 dc() {
-    docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml" "$@"
+    # An explicit -f disables compose's automatic override merge; keep it.
+    if [ -f "$INSTALL_DIR/docker-compose.override.yml" ]; then
+        docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml" \
+            -f "$INSTALL_DIR/docker-compose.override.yml" "$@"
+    else
+        docker compose --project-directory "$INSTALL_DIR" -f "$INSTALL_DIR/docker-compose.yml" "$@"
+    fi
 }
 
 # ── Steps ────────────────────────────────────────────────────────────────────
