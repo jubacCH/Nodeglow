@@ -1,578 +1,215 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Bell, Pencil, Plus, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
+import { RuleEditor } from '@/components/rules/RuleEditor';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
-import { StatusDot } from '@/components/ui/StatusDot';
-import { Modal } from '@/components/ui/Modal';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { useQuery } from '@tanstack/react-query';
-import { api, get, post } from '@/lib/api';
-import { useToastStore } from '@/stores/toast';
-import { useConfirm } from '@/hooks/useConfirm';
-import type { AlertRule } from '@/types';
-import { Plus, Trash2, Power, Pencil, Play, Bell } from 'lucide-react';
+import { Button, IconButton } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Switch } from '@/components/ui/Field';
+import { QueryState, formatAsOf } from '@/components/ui/QueryState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '@/components/ui/Table';
+import { useConfirm } from '@/hooks/useConfirm';
+import { apiErrorMessage, get, post } from '@/lib/api';
+import { formatAgo, formatDateTime } from '@/lib/incidents';
+import { conditionLabel } from '@/lib/rules';
+import { useIsEditor } from '@/stores/auth';
+import { useToastStore } from '@/stores/toast';
+import type { AlertRule } from '@/types';
 
-interface SourceInstance {
-  id: number;
-  name: string;
+const RULES_KEY = ['rules'];
+
+function LastTriggered({ at }: { at: string | null }) {
+  if (!at) return <span className="text-fg-3">Never</span>;
+  return <time dateTime={at} title={formatDateTime(at)}>{formatAgo(at)}</time>;
 }
 
-interface SourceOption {
-  type: string;
-  label: string;
-  instances: SourceInstance[];
-}
-
-interface FieldOption {
-  path: string;
-  value: unknown;
-  type: string;
-}
-
-const OPERATORS = [
-  { key: 'gt', label: 'Greater than' },
-  { key: 'lt', label: 'Less than' },
-  { key: 'gte', label: 'Greater or equal' },
-  { key: 'lte', label: 'Less or equal' },
-  { key: 'eq', label: 'Equals' },
-  { key: 'ne', label: 'Not equals' },
-  { key: 'contains', label: 'Contains' },
-  { key: 'not_contains', label: 'Not contains' },
-  { key: 'regex', label: 'Matches regex' },
-  { key: 'is_true', label: 'Is true' },
-  { key: 'is_false', label: 'Is false' },
-];
-
-const SEVERITIES = ['critical', 'warning', 'info'] as const;
-const NOTIFY_CHANNELS = ['telegram', 'discord', 'webhook', 'email', 'teams', 'slack', 'ntfy'] as const;
-
-const inputClass =
-  'w-full rounded-md border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:border-blue-500/50 focus:outline-none focus:ring-1 focus:ring-blue-500/30';
-const labelClass = 'block text-xs font-medium text-slate-400 mb-1';
-const selectClass =
-  'w-full rounded-md border border-white/10 bg-[var(--ng-surface)] px-3 py-2 text-sm text-slate-200 focus:border-blue-500/50 focus:outline-none focus:ring-1 focus:ring-blue-500/30 [&>option]:text-[var(--ng-text-primary)]';
-
-interface RuleFormState {
-  name: string;
-  source_type: string;
-  source_id: string;
-  field_path: string;
-  operator: string;
-  threshold: string;
-  severity: string;
-  cooldown_minutes: string;
-  required_consecutive: string;
-  notify_channels: string;
-  message_template: string;
-}
-
-const DEFAULT_FORM: RuleFormState = {
-  name: '',
-  source_type: '',
-  source_id: '',
-  field_path: '',
-  operator: 'gt',
-  threshold: '',
-  severity: 'warning',
-  cooldown_minutes: '5',
-  required_consecutive: '2',
-  notify_channels: '',
-  message_template: '',
-};
-
-function ruleToForm(rule: AlertRule): RuleFormState {
-  return {
-    name: rule.name,
-    source_type: rule.source_type,
-    source_id: rule.source_id != null ? String(rule.source_id) : '',
-    field_path: rule.field_path,
-    operator: rule.operator,
-    threshold: rule.threshold ?? '',
-    severity: rule.severity,
-    cooldown_minutes: String(rule.cooldown_minutes),
-    required_consecutive: String(rule.required_consecutive ?? 2),
-    notify_channels: rule.notify_channels ?? '',
-    message_template: rule.message_template ?? '',
-  };
+function SeverityBadge({ severity }: { severity: AlertRule['severity'] }) {
+  return <Badge variant="severity" severity={severity}>{severity.charAt(0).toUpperCase() + severity.slice(1)}</Badge>;
 }
 
 export default function RulesPage() {
-  useEffect(() => { document.title = 'Rules | Nodeglow'; }, []);
-  const [showModal, setShowModal] = useState(false);
-  const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
-  const [form, setForm] = useState<RuleFormState>(DEFAULT_FORM);
-  const [submitting, setSubmitting] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ current_value: unknown; would_trigger: boolean; detail: string } | null>(null);
-  const [sources, setSources] = useState<SourceOption[]>([]);
-  const [fields, setFields] = useState<FieldOption[]>([]);
-  const [loadingFields, setLoadingFields] = useState(false);
+  useEffect(() => { document.title = 'Alert rules | Nodeglow'; }, []);
+  const qc = useQueryClient();
   const toast = useToastStore((s) => s.show);
+  const canEdit = useIsEditor();
   const { confirm, ConfirmDialogElement } = useConfirm();
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editing, setEditing] = useState<AlertRule | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
-  const { data: rules, isLoading, refetch } = useQuery({
-    queryKey: ['rules'],
+  const query = useQuery({
+    queryKey: RULES_KEY,
     queryFn: () => get<AlertRule[]>('/api/v1/rules'),
   });
 
-  // Fetch sources when modal opens
-  useEffect(() => {
-    if (!showModal) return;
-    get<SourceOption[]>('/api/rules/sources').then(setSources).catch(() => {});
-  }, [showModal]);
+  const openAdd = () => { setEditing(null); setEditorOpen(true); };
+  const openEdit = (rule: AlertRule) => { setEditing(rule); setEditorOpen(true); };
 
-  // Fetch fields when source changes
-  const fetchFields = useCallback(async (sourceType: string, sourceId: string) => {
-    if (!sourceType) {
-      setFields([]);
-      return;
-    }
-    setLoadingFields(true);
+  async function toggleRule(rule: AlertRule) {
+    setBusyId(rule.id);
+    const flip = (enabled: boolean) =>
+      qc.setQueryData<AlertRule[]>(RULES_KEY, (list) => list?.map((r) => (r.id === rule.id ? { ...r, enabled } : r)));
+    flip(!rule.enabled);
     try {
-      const params = new URLSearchParams({ source_type: sourceType });
-      if (sourceId) params.set('source_id', sourceId);
-      const result = await get<FieldOption[]>(`/api/rules/fields?${params}`);
-      setFields(result);
-    } catch {
-      setFields([]);
+      await post(`/api/v1/rules/${rule.id}/toggle`);
+    } catch (e) {
+      flip(rule.enabled);
+      toast(apiErrorMessage(e, `Could not ${rule.enabled ? 'disable' : 'enable'} the rule`), 'error');
     } finally {
-      setLoadingFields(false);
-    }
-  }, []);
-
-  // Fetch fields when source_type or source_id changes
-  useEffect(() => {
-    if (!showModal) return;
-    fetchFields(form.source_type, form.source_id);
-  }, [showModal, form.source_type, form.source_id, fetchFields]);
-
-  async function handleTest() {
-    if (!form.source_type || !form.field_path) {
-      toast('Select a source type and field first', 'error');
-      return;
-    }
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const result = await post<{ current_value: unknown; would_trigger: boolean; detail: string }>('/api/rules/test', {
-        source_type: form.source_type,
-        source_id: form.source_id || null,
-        field_path: form.field_path,
-        operator: form.operator,
-        threshold: form.threshold,
-      });
-      setTestResult(result);
-    } catch {
-      toast('Test failed', 'error');
-    } finally {
-      setTesting(false);
+      setBusyId(null);
+      qc.invalidateQueries({ queryKey: RULES_KEY });
     }
   }
 
-  function openAdd() {
-    setEditingRule(null);
-    setForm(DEFAULT_FORM);
-    setFields([]);
-    setShowModal(true);
-  }
-
-  function openEdit(rule: AlertRule) {
-    setEditingRule(rule);
-    setForm(ruleToForm(rule));
-    setShowModal(true);
-  }
-
-  function closeModal() {
-    setShowModal(false);
-    setEditingRule(null);
-    setTestResult(null);
-  }
-
-  function updateForm(key: keyof RuleFormState, value: string) {
-    setForm((prev) => {
-      const next = { ...prev, [key]: value };
-      // Reset dependent fields when source_type changes
-      if (key === 'source_type') {
-        next.source_id = '';
-        next.field_path = '';
-      }
-      if (key === 'source_id') {
-        next.field_path = '';
-      }
-      return next;
+  async function deleteRule(rule: AlertRule) {
+    const ok = await confirm({
+      title: 'Delete alert rule',
+      description: `Delete "${rule.name}"? It stops alerting immediately. Existing incidents stay.`,
+      confirmLabel: 'Delete rule',
+      variant: 'danger',
     });
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.name.trim() || !form.source_type || !form.field_path) {
-      toast('Please fill in name, source type, and field', 'error');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const body = new FormData();
-      body.set('name', form.name.trim());
-      body.set('source_type', form.source_type);
-      if (form.source_id) body.set('source_id', form.source_id);
-      body.set('field_path', form.field_path);
-      body.set('operator', form.operator);
-      body.set('threshold', form.threshold);
-      body.set('severity', form.severity);
-      body.set('cooldown_minutes', form.cooldown_minutes || '5');
-      body.set('required_consecutive', form.required_consecutive || '2');
-      if (form.notify_channels.trim()) body.set('notify_channels', form.notify_channels.trim());
-      if (form.message_template.trim()) body.set('message_template', form.message_template.trim());
-
-      const url = editingRule ? `/rules/${editingRule.id}/edit` : '/rules/add';
-      await api(url, { method: 'POST', body });
-      refetch();
-      closeModal();
-      toast(editingRule ? 'Rule updated' : 'Rule created', 'success');
-    } catch {
-      toast('Failed to save rule', 'error');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function toggleRule(id: number) {
-    try {
-      await post(`/api/v1/rules/${id}/toggle`);
-      refetch();
-      toast('Rule toggled', 'success');
-    } catch {
-      toast('Failed to toggle rule', 'error');
-    }
-  }
-
-  async function deleteRule(id: number) {
-    const ok = await confirm({ title: 'Delete rule', description: 'Delete this rule? This cannot be undone.', confirmLabel: 'Delete', variant: 'danger' });
     if (!ok) return;
     try {
-      await post(`/api/v1/rules/${id}/delete`);
-      refetch();
-      toast('Rule deleted', 'success');
-    } catch {
-      toast('Failed to delete rule', 'error');
+      await post(`/api/v1/rules/${rule.id}/delete`);
+      toast(`Deleted "${rule.name}"`, 'success');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not delete the rule'), 'error');
+    } finally {
+      qc.invalidateQueries({ queryKey: RULES_KEY });
     }
   }
 
-  const selectedSource = sources.find((s) => s.type === form.source_type);
-  const hideThreshold = form.operator === 'is_true' || form.operator === 'is_false';
+  const rules = query.data;
+  const enabledCount = rules?.filter((r) => r.enabled).length ?? 0;
+  const asOf = formatAsOf(query.dataUpdatedAt);
 
   return (
     <div>
       <PageHeader
-        title="Alert Rules"
-        description="Configure alert and correlation rules"
-        actions={
-          <Button size="sm" onClick={openAdd}>
-            <Plus size={16} /> New Rule
-          </Button>
-        }
+        title="Alert rules"
+        description={rules
+          ? `${rules.length} rule${rules.length === 1 ? '' : 's'}, ${enabledCount} enabled${asOf ? ` · updated ${asOf}` : ''}`
+          : 'Thresholds on integration data that open incidents'}
+        actions={canEdit && (
+          <Button onClick={openAdd}><Plus size={15} aria-hidden="true" /> New rule</Button>
+        )}
       />
 
-      <GlassCard>
-        {isLoading ? (
-          <div className="p-4 space-y-3">
-            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
-          </div>
-        ) : !rules?.length ? (
-          <EmptyState
-            icon={Bell}
-            title="No alert rules configured"
-            description="Rules evaluate integration snapshot fields on every poll and open incidents when thresholds are crossed. Create one to get proactive alerts."
-            action={
-              <Button size="sm" onClick={openAdd}>
-                <Plus size={16} /> Create First Rule
-              </Button>
-            }
-          />
-        ) : (
-          <div className="divide-y divide-white/[0.04]">
-            {rules.map((rule) => (
-              <div key={rule.id} className="px-4 py-3 flex items-center gap-4 group hover:bg-white/[0.06] transition-colors">
-                <StatusDot status={rule.enabled ? 'online' : 'disabled'} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-slate-200">{rule.name}</span>
-                    <Badge variant="severity" severity={rule.severity}>{rule.severity}</Badge>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5 font-mono truncate">
-                    {rule.source_type} &rarr; {rule.field_path} {rule.operator} {rule.threshold}
-                  </p>
-                  {rule.last_triggered_at && (
-                    <p className="text-[10px] text-slate-600 mt-0.5">
-                      Last triggered: {new Date(rule.last_triggered_at).toLocaleString()}
-                    </p>
-                  )}
+      <QueryState
+        query={query}
+        errorTitle="Could not load alert rules"
+        loading={
+          <Card padding="none" aria-busy="true" aria-label="Loading rules">
+            <div className="divide-y divide-border">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-4 py-3">
+                  <Skeleton className="h-4 w-8" /><Skeleton className="h-4 flex-1" /><Skeleton className="h-4 w-20" />
                 </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => openEdit(rule)}
-                    className="p-1.5 rounded-md hover:bg-white/[0.06] text-slate-400 hover:text-slate-200"
-                    title="Edit"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    onClick={() => toggleRule(rule.id)}
-                    className="p-1.5 rounded-md hover:bg-white/[0.06] text-slate-400 hover:text-slate-200"
-                    title={rule.enabled ? 'Disable' : 'Enable'}
-                  >
-                    <Power size={14} />
-                  </button>
-                  <button
-                    onClick={() => deleteRule(rule.id)}
-                    className="p-1.5 rounded-md hover:bg-red-500/10 text-slate-400 hover:text-red-400"
-                    title="Delete"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </GlassCard>
-
-      <Modal open={showModal} onClose={closeModal} title={editingRule ? 'Edit Alert Rule' : 'New Alert Rule'}>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Name */}
-          <div>
-            <label className={labelClass}>Rule Name</label>
-            <input
-              type="text"
-              className={inputClass}
-              placeholder="e.g. High CPU on Proxmox"
-              value={form.name}
-              onChange={(e) => updateForm('name', e.target.value)}
-              required
+              ))}
+            </div>
+          </Card>
+        }
+        empty={
+          <Card>
+            <EmptyState
+              icon={Bell}
+              title="No alert rules yet"
+              description="Rules evaluate integration fields on every poll and open incidents when a threshold is crossed."
+              action={canEdit ? <Button size="sm" onClick={openAdd}><Plus size={14} aria-hidden="true" /> Create the first rule</Button> : undefined}
             />
-          </div>
+          </Card>
+        }
+      >
+        {(list) => (
+          <>
+            <Card padding="none" className="overflow-hidden max-[759px]:hidden">
+              <TableContainer>
+                <Table aria-label="Alert rules">
+                  <THead>
+                    <Tr>
+                      <Th className="w-[96px]">Enabled</Th>
+                      <Th>Rule</Th>
+                      <Th className="w-[110px]">Severity</Th>
+                      <Th className="w-[150px]">Source</Th>
+                      <Th numeric className="w-[140px]">Last triggered</Th>
+                      {canEdit && <Th className="w-[96px]"><span className="sr-only">Actions</span></Th>}
+                    </Tr>
+                  </THead>
+                  <TBody>
+                    {list.map((rule) => (
+                      <Tr key={rule.id} className="hover:bg-hover">
+                        <Td>
+                          {canEdit ? (
+                            <Switch checked={rule.enabled} disabled={busyId === rule.id} onChange={() => toggleRule(rule)} aria-label={`Enable ${rule.name}`} />
+                          ) : (
+                            <span className={rule.enabled ? 'text-fg' : 'text-fg-3'}>{rule.enabled ? 'On' : 'Off'}</span>
+                          )}
+                        </Td>
+                        <Td className="max-w-0 py-2">
+                          <p className={rule.enabled ? 'truncate font-medium text-fg' : 'truncate font-medium text-fg-2'}>{rule.name}</p>
+                          <p className="truncate font-mono text-meta text-fg-3" title={conditionLabel(rule)}>{conditionLabel(rule)}</p>
+                        </Td>
+                        <Td><SeverityBadge severity={rule.severity} /></Td>
+                        <Td muted className="truncate">{rule.source_type}{rule.source_id != null && <span className="text-fg-3"> #{rule.source_id}</span>}</Td>
+                        <Td numeric><LastTriggered at={rule.last_triggered_at} /></Td>
+                        {canEdit && (
+                          <Td>
+                            <div className="flex justify-end gap-0.5">
+                              <IconButton size="sm" aria-label={`Edit ${rule.name}`} onClick={() => openEdit(rule)}><Pencil size={14} aria-hidden="true" /></IconButton>
+                              <IconButton size="sm" aria-label={`Delete ${rule.name}`} onClick={() => deleteRule(rule)} className="hover:text-down"><Trash2 size={14} aria-hidden="true" /></IconButton>
+                            </div>
+                          </Td>
+                        )}
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </TableContainer>
+            </Card>
 
-          {/* Source Type + Instance */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelClass}>Source Type</label>
-              <select
-                className={selectClass}
-                value={form.source_type}
-                onChange={(e) => updateForm('source_type', e.target.value)}
-                required
-              >
-                <option value="">Select source...</option>
-                {sources.map((s) => (
-                  <option key={s.type} value={s.type}>{s.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>Instance</label>
-              <select
-                className={selectClass}
-                value={form.source_id}
-                onChange={(e) => updateForm('source_id', e.target.value)}
-                disabled={!selectedSource?.instances.length}
-              >
-                <option value="">{selectedSource?.instances.length ? 'Any / All' : 'N/A'}</option>
-                {selectedSource?.instances.map((inst) => (
-                  <option key={inst.id} value={String(inst.id)}>{inst.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Field Path */}
-          <div>
-            <label className={labelClass}>Field</label>
-            {loadingFields ? (
-              <Skeleton className="h-9 w-full" />
-            ) : fields.length > 0 ? (
-              <>
-                <select
-                  className={selectClass}
-                  value={form.field_path}
-                  onChange={(e) => updateForm('field_path', e.target.value)}
-                  required
-                >
-                  <option value="">Select field...</option>
-                  {fields.map((f) => (
-                    <option key={f.path} value={f.path}>
-                      {f.path} ({f.type})
-                    </option>
-                  ))}
-                </select>
-                {form.field_path && (() => {
-                  const selected = fields.find((f) => f.path === form.field_path);
-                  if (!selected || selected.value == null) return null;
-                  const displayVal = typeof selected.value === 'object'
-                    ? JSON.stringify(selected.value)
-                    : String(selected.value);
-                  return (
-                    <div className="mt-1.5 px-3 py-1.5 rounded-md bg-white/[0.04] border border-white/[0.06]">
-                      <span className="text-[10px] text-slate-500 uppercase tracking-wider">Current value: </span>
-                      <span className="text-xs font-mono text-slate-300">{displayVal}</span>
+            <ul className="space-y-2 min-[760px]:hidden" aria-label="Alert rules">
+              {list.map((rule) => (
+                <li key={rule.id}>
+                  <Card padding="sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className={rule.enabled ? 'font-medium text-fg [overflow-wrap:anywhere]' : 'font-medium text-fg-2 [overflow-wrap:anywhere]'}>{rule.name}</p>
+                        <p className="font-mono text-meta text-fg-3 [overflow-wrap:anywhere]">{conditionLabel(rule)}</p>
+                      </div>
+                      <SeverityBadge severity={rule.severity} />
                     </div>
-                  );
-                })()}
-              </>
-            ) : (
-              <input
-                type="text"
-                className={inputClass}
-                placeholder="e.g. cpu_pct or data.temperature"
-                value={form.field_path}
-                onChange={(e) => updateForm('field_path', e.target.value)}
-                required
-              />
-            )}
-          </div>
+                    <p className="mt-1.5 text-meta text-fg-2">
+                      {rule.source_type} · last triggered <LastTriggered at={rule.last_triggered_at} />
+                    </p>
+                    {canEdit && (
+                      <div className="mt-2 flex items-center gap-1 border-t border-border pt-2">
+                        <Switch checked={rule.enabled} disabled={busyId === rule.id} onChange={() => toggleRule(rule)} label="Enabled" className="mr-auto" />
+                        <IconButton size="sm" aria-label={`Edit ${rule.name}`} onClick={() => openEdit(rule)}><Pencil size={14} aria-hidden="true" /></IconButton>
+                        <IconButton size="sm" aria-label={`Delete ${rule.name}`} onClick={() => deleteRule(rule)}><Trash2 size={14} aria-hidden="true" /></IconButton>
+                      </div>
+                    )}
+                  </Card>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </QueryState>
 
-          {/* Operator + Threshold */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelClass}>Operator</label>
-              <select
-                className={selectClass}
-                value={form.operator}
-                onChange={(e) => updateForm('operator', e.target.value)}
-              >
-                {OPERATORS.map((op) => (
-                  <option key={op.key} value={op.key}>{op.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>Threshold</label>
-              <input
-                type="text"
-                className={`${inputClass} ${hideThreshold ? 'opacity-30 pointer-events-none' : ''}`}
-                placeholder={hideThreshold ? 'N/A' : 'e.g. 90'}
-                value={hideThreshold ? '' : form.threshold}
-                onChange={(e) => updateForm('threshold', e.target.value)}
-                disabled={hideThreshold}
-              />
-            </div>
-          </div>
-
-          {/* Severity + Cooldown */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={labelClass}>Severity</label>
-              <select
-                className={selectClass}
-                value={form.severity}
-                onChange={(e) => updateForm('severity', e.target.value)}
-              >
-                {SEVERITIES.map((s) => (
-                  <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>Cooldown (minutes)</label>
-              <input
-                type="number"
-                className={inputClass}
-                min={1}
-                value={form.cooldown_minutes}
-                onChange={(e) => updateForm('cooldown_minutes', e.target.value)}
-              />
-            </div>
-            <div>
-              <label className={labelClass}>Required consecutive matches</label>
-              <input
-                type="number"
-                className={inputClass}
-                min={1}
-                max={10}
-                value={form.required_consecutive}
-                onChange={(e) => updateForm('required_consecutive', e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Notify Channels */}
-          <div>
-            <label className={labelClass}>Notify Channels <span className="text-slate-600">(optional — empty = all configured)</span></label>
-            <div className="flex flex-wrap gap-2 mt-1">
-              {NOTIFY_CHANNELS.map((ch) => {
-                const selected = form.notify_channels.split(',').filter(Boolean).includes(ch);
-                return (
-                  <button
-                    key={ch}
-                    type="button"
-                    onClick={() => {
-                      const current = form.notify_channels.split(',').filter(Boolean);
-                      const next = selected
-                        ? current.filter((c) => c !== ch)
-                        : [...current, ch];
-                      updateForm('notify_channels', next.join(','));
-                    }}
-                    className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                      selected
-                        ? 'bg-sky-500/20 border-sky-500/40 text-sky-300'
-                        : 'bg-white/[0.04] border-white/10 text-slate-500 hover:text-slate-300 hover:border-white/20'
-                    }`}
-                  >
-                    {ch}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Message Template */}
-          <div>
-            <label className={labelClass}>Message Template <span className="text-slate-600">(optional)</span></label>
-            <textarea
-              className={`${inputClass} resize-none`}
-              rows={2}
-              placeholder="e.g. {name}: {field} is {value} (threshold: {threshold})"
-              value={form.message_template}
-              onChange={(e) => updateForm('message_template', e.target.value)}
-            />
-          </div>
-
-          {/* Test Result */}
-          {testResult && (
-            <div className={`rounded-lg border px-4 py-3 text-sm ${
-              testResult.would_trigger
-                ? 'bg-red-500/10 border-red-500/30 text-red-300'
-                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-            }`}>
-              <p className="font-medium mb-1">
-                {testResult.would_trigger ? 'Would trigger!' : 'Would not trigger'}
-              </p>
-              <p className="text-xs opacity-80">{testResult.detail}</p>
-              {testResult.current_value != null && (
-                <p className="text-xs opacity-80 mt-0.5">Current value: <span className="font-mono">{String(testResult.current_value)}</span></p>
-              )}
-            </div>
-          )}
-
-          {/* Submit */}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="ghost" size="sm" onClick={closeModal}>
-              Cancel
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={handleTest} disabled={testing || !form.source_type || !form.field_path}>
-              <Play size={14} />
-              {testing ? 'Testing...' : 'Test Rule'}
-            </Button>
-            <Button type="submit" size="sm" disabled={submitting}>
-              {submitting ? 'Saving...' : editingRule ? 'Update Rule' : 'Create Rule'}
-            </Button>
-          </div>
-        </form>
-      </Modal>
+      <RuleEditor
+        open={editorOpen}
+        rule={editing}
+        onClose={() => setEditorOpen(false)}
+        onSaved={(created) => {
+          toast(created ? 'Rule created' : 'Rule updated', 'success');
+          qc.invalidateQueries({ queryKey: RULES_KEY });
+        }}
+      />
       {ConfirmDialogElement}
     </div>
   );
