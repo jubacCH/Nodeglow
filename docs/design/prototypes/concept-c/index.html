@@ -1,0 +1,1331 @@
+<title>Nodeglow Strata</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: two-tier top bar -> verdict band with host ledger -> [outline tree | strata landscape (bedrock = locations, surface = hosts) | attention queue] -> changes + drift strip */
+:root{
+  /* neutrals: cool drafting-film greys, slight cobalt bias */
+  --ground:#EDF0F3; --surface:#FFFFFF; --surface-2:#F5F7F9; --sunken:#E4E8ED;
+  --ink:#131A23; --ink-2:#47525F; --ink-3:#5F6A78; --rule:#D2D8DF; --rule-strong:#A9B3BF;
+  /* accent: survey cobalt, used for selection, focus, navigation only */
+  --accent:#2A39B0; --accent-ink:#FFFFFF; --accent-soft:#E2E5F8;
+  /* strata (non-host aggregates) */
+  --stratum:#D6DCE3; --stratum-ink:#2B3440;
+  /* semantic status: text colour / cell fill / glyph on fill */
+  --ok:#2C7549; --ok-fill:#CFE4D5; --ok-on:#2C7549;
+  --deg:#8A5A00; --deg-fill:#E5B144; --deg-on:#2A1C00;
+  --warn:#B04506; --warn-fill:#D45F1C; --warn-on:#FFFFFF;
+  --down:#B0202D; --down-fill:#B0202D; --down-on:#FFFFFF;
+  --unk:#59626D; --unk-fill:#E2E5E9; --unk-on:#3A424C; --unk-hatch:#8E97A2;
+  --mnt:#7A4C80; --mnt-fill:#EEE2EF; --mnt-on:#6A3F70;
+  --shadow:0 1px 0 rgba(19,26,35,.04), 0 8px 24px -12px rgba(19,26,35,.28);
+  --scrim:rgba(19,26,35,.38);
+  /* type */
+  --f-display:"Archivo", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --f-ui:"Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-data:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --t-xs:11px; --t-s:12px; --t-m:13px; --t-base:14px; --t-l:16px; --t-xl:20px; --t-2xl:28px;
+  /* geometry */
+  --r:2px; --gap:16px; --gap-s:8px; --gap-xs:4px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0E131A; --surface:#151C25; --surface-2:#1A222D; --sunken:#0B1016;
+    --ink:#E2E8EF; --ink-2:#AAB5C2; --ink-3:#8D99A8; --rule:#27313E; --rule-strong:#3B4858;
+    --accent:#9CA9FF; --accent-ink:#0E131A; --accent-soft:#222A50;
+    --stratum:#242E3B; --stratum-ink:#C9D2DC;
+    --ok:#66C28E; --ok-fill:#1C3727; --ok-on:#7FD4A3;
+    --deg:#EBB552; --deg-fill:#D9A23C; --deg-on:#231700;
+    --warn:#F3955A; --warn-fill:#E27434; --warn-on:#1A0C03;
+    --down:#FF8086; --down-fill:#D03A45; --down-on:#FFFFFF;
+    --unk:#A0AAB7; --unk-fill:#212934; --unk-on:#BCC5D0; --unk-hatch:#4F5A68;
+    --mnt:#CFA2D7; --mnt-fill:#2E2434; --mnt-on:#DDB7E3;
+    --shadow:0 1px 0 rgba(0,0,0,.3), 0 12px 32px -12px rgba(0,0,0,.7);
+    --scrim:rgba(4,7,11,.6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0E131A; --surface:#151C25; --surface-2:#1A222D; --sunken:#0B1016;
+  --ink:#E2E8EF; --ink-2:#AAB5C2; --ink-3:#8D99A8; --rule:#27313E; --rule-strong:#3B4858;
+  --accent:#9CA9FF; --accent-ink:#0E131A; --accent-soft:#222A50;
+  --stratum:#242E3B; --stratum-ink:#C9D2DC;
+  --ok:#66C28E; --ok-fill:#1C3727; --ok-on:#7FD4A3;
+  --deg:#EBB552; --deg-fill:#D9A23C; --deg-on:#231700;
+  --warn:#F3955A; --warn-fill:#E27434; --warn-on:#1A0C03;
+  --down:#FF8086; --down-fill:#D03A45; --down-on:#FFFFFF;
+  --unk:#A0AAB7; --unk-fill:#212934; --unk-on:#BCC5D0; --unk-hatch:#4F5A68;
+  --mnt:#CFA2D7; --mnt-fill:#2E2434; --mnt-on:#DDB7E3;
+  --shadow:0 1px 0 rgba(0,0,0,.3), 0 12px 32px -12px rgba(0,0,0,.7);
+  --scrim:rgba(4,7,11,.6);
+  color-scheme: dark;
+}
+
+*{box-sizing:border-box}
+html,body{background:var(--ground)}
+body{margin:0;color:var(--ink);font-family:var(--f-ui);font-size:var(--t-base);line-height:1.45;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num,.mono{font-family:var(--f-data);font-variant-numeric:tabular-nums}
+.sr{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.skip{position:absolute;left:16px;top:-40px;background:var(--accent);color:var(--accent-ink);padding:6px 10px;z-index:50;border-radius:var(--r)}
+.skip:focus{top:8px}
+
+/* ---------- top bars ---------- */
+.bar{background:var(--surface);border-bottom:1px solid var(--rule)}
+.bar-in{display:flex;align-items:center;gap:var(--gap);padding-inline:16px;min-height:48px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--f-display);font-stretch:125%;font-weight:750;font-size:var(--t-l);letter-spacing:-.01em;white-space:nowrap}
+.brand svg{display:block}
+.nav{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1;min-width:0}
+.nav::-webkit-scrollbar{display:none}
+.nav button{background:none;border:0;padding:14px 10px 12px;border-bottom:2px solid transparent;font-weight:550;font-size:var(--t-m);color:var(--ink-2);white-space:nowrap;cursor:pointer}
+.nav button[aria-current="page"]{color:var(--ink);border-bottom-color:var(--accent)}
+.nav button[aria-disabled="true"]{cursor:default}
+.nav .count{font-family:var(--f-data);font-size:var(--t-xs);margin-left:6px;padding:1px 5px;border:1px solid var(--rule-strong);border-radius:var(--r)}
+.icon-btn{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--rule);border-radius:var(--r);padding:5px 9px;cursor:pointer;font-size:var(--t-s);color:var(--ink-2);white-space:nowrap}
+.icon-btn:hover{border-color:var(--rule-strong);color:var(--ink)}
+.ctx{background:var(--surface-2)}
+.ctx .bar-in{min-height:44px;flex-wrap:wrap;padding-block:6px;row-gap:6px}
+.tenant{display:flex;align-items:center;gap:8px;font-size:var(--t-m);font-weight:600;white-space:nowrap}
+.tenant .planned{font-weight:500}
+.planned{display:inline-flex;align-items:center;gap:4px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--ink-3);border:1px dotted var(--rule-strong);padding:1px 5px;border-radius:var(--r);white-space:nowrap}
+.search{flex:1 1 260px;max-width:440px;display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--rule);border-radius:var(--r);padding:6px 10px;color:var(--ink-3);cursor:text;font-size:var(--t-m);text-align:left}
+.search:hover{border-color:var(--rule-strong)}
+.search kbd,.kbd{font-family:var(--f-data);font-size:10px;border:1px solid var(--rule-strong);border-bottom-width:2px;border-radius:var(--r);padding:0 4px;color:var(--ink-2);margin-left:auto}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+.seg button{background:none;border:0;padding:5px 10px;font-size:var(--t-s);font-weight:600;color:var(--ink-2);cursor:pointer;border-right:1px solid var(--rule)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.ctx-right{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
+.sim{font-family:var(--f-data);font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink);border:1.5px solid var(--ink);padding:3px 7px;border-radius:var(--r);white-space:nowrap;background:repeating-linear-gradient(-45deg,transparent 0 6px,var(--sunken) 6px 8px)}
+.clock{font-family:var(--f-data);font-size:var(--t-s);color:var(--ink-2);white-space:nowrap}
+
+/* ---------- page ---------- */
+main{padding:16px;display:grid;gap:var(--gap)}
+.verdict{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,520px);gap:var(--gap) 32px;align-items:end;padding-block:4px 2px}
+.verdict h1{margin:0;font-family:var(--f-display);font-stretch:118%;font-weight:760;font-size:var(--t-2xl);line-height:1.08;letter-spacing:-.015em;text-wrap:balance}
+.verdict h1 .q{display:block;font-family:var(--f-ui);font-stretch:100%;font-weight:600;font-size:var(--t-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);margin-bottom:6px}
+.verdict p{margin:6px 0 0;color:var(--ink-2);font-size:var(--t-m);max-width:70ch}
+.ledger-label{display:flex;justify-content:space-between;gap:8px;font-size:var(--t-xs);color:var(--ink-3);text-transform:uppercase;letter-spacing:.08em;font-weight:600;margin-bottom:6px}
+.ledger{display:flex;gap:2px;height:22px}
+.ledger i{flex:1;border-radius:1px;display:block}
+.ledger-key{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:var(--t-s);color:var(--ink-2)}
+.ledger-key span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.ledger-key b{font-family:var(--f-data);font-weight:600;color:var(--ink)}
+
+.work{display:grid;grid-template-columns:232px minmax(0,1fr) 344px;gap:var(--gap);align-items:start}
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:var(--r);min-width:0}
+.panel-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--rule)}
+.panel-h h2{margin:0;font-size:var(--t-xs);font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2)}
+.panel-h .sub{font-size:var(--t-s);color:var(--ink-3)}
+.panel-h .right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+/* outline tree */
+.tree-wrap{max-height:640px;overflow:auto;padding:6px 4px 10px}
+[role="tree"],[role="group"].tg{list-style:none;margin:0;padding:0}
+[role="group"].tg{padding-left:12px;border-left:1px solid var(--rule);margin-left:9px}
+[role="treeitem"]{outline:none}
+.ti{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:var(--r);font-size:var(--t-s);cursor:pointer;min-width:0;border:1px solid transparent}
+.ti .tw{width:12px;flex:0 0 12px;color:var(--ink-3);font-family:var(--f-data);font-size:10px;text-align:center}
+.ti .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-stretch:88%}
+.ti .ct{font-family:var(--f-data);font-size:10.5px;color:var(--ink-3)}
+.ti:hover{background:var(--surface-2)}
+[role="treeitem"][aria-selected="true"]>.ti{background:var(--accent-soft);border-color:var(--accent)}
+[role="treeitem"]:focus-visible>.ti{outline:2px solid var(--accent);outline-offset:-1px}
+[role="treeitem"][aria-expanded="false"]>[role="group"]{display:none}
+
+/* strata */
+.strata-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.chk{display:inline-flex;align-items:center;gap:5px;font-size:var(--t-s);color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.chk input{accent-color:var(--accent);margin:0}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:var(--t-s);padding:8px 14px 0;min-height:28px}
+.crumbs button{background:none;border:0;padding:2px 4px;color:var(--accent);cursor:pointer;font-weight:600;border-radius:var(--r)}
+.crumbs button[aria-current="true"]{color:var(--ink);cursor:default}
+.crumbs .sep{color:var(--ink-3)}
+.crumbs .hint{margin-left:auto;color:var(--ink-3);font-size:var(--t-xs)}
+.stage{position:relative;padding:4px 14px 0}
+.stage:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#strata{display:block;width:100%;height:auto;overflow:visible}
+#strata .cell{cursor:pointer}
+#strata .cell rect.b{stroke:none}
+#strata text{font-family:var(--f-ui);font-size:11px;font-weight:600;font-stretch:78%;pointer-events:none}
+#strata .rowlab{font-family:var(--f-data);font-size:9.5px;font-weight:500;letter-spacing:.06em;fill:var(--ink-3);font-stretch:100%}
+#strata .dim{opacity:.38}
+#strata .sel{fill:none;stroke:var(--accent);stroke-width:2.5}
+#strata .lin{fill:var(--accent)}
+#strata .ov-label{font-family:var(--f-ui);font-size:11px;font-weight:700;font-stretch:90%}
+#strata .ov-hit{cursor:pointer}
+#strata.fade{animation:fade .18s ease-out}
+@keyframes fade{from{opacity:.25}to{opacity:1}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;padding:10px 14px;border-top:1px solid var(--rule);font-size:var(--t-s);color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.legend .sw{width:16px;height:12px;border-radius:1px;display:inline-block}
+.legend .note{color:var(--ink-3);flex-basis:100%;font-size:var(--t-xs);white-space:normal;display:block}
+
+.inspector{border-top:1px solid var(--rule);padding:10px 14px 12px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 16px;min-height:86px;background:var(--surface-2)}
+.inspector .t{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:var(--t-base)}
+.inspector .t .k{font-weight:500;color:var(--ink-3);font-size:var(--t-s)}
+.inspector .line{font-size:var(--t-s);color:var(--ink-2);display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center}
+.inspector .t,.inspector .line{grid-column:1}
+.inspector .acts{display:flex;gap:6px;align-items:start;flex-wrap:wrap;justify-content:flex-end;grid-row:1 / span 3;grid-column:2}
+.lineage{display:flex;flex-wrap:wrap;gap:2px 4px;align-items:center}
+.lineage .sep{color:var(--ink-3)}
+
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rule-strong);background:var(--surface);border-radius:var(--r);padding:5px 10px;font-size:var(--t-s);font-weight:600;cursor:pointer;white-space:nowrap;color:var(--ink)}
+.btn:hover{border-color:var(--ink-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn[disabled]{opacity:.55;cursor:not-allowed}
+.btn.done{border-style:dashed;color:var(--ink-2)}
+
+/* status chips & relation labels */
+.st{display:inline-flex;align-items:center;gap:5px;font-size:var(--t-s);font-weight:650;white-space:nowrap}
+.st svg{flex:0 0 auto}
+.st.ok{color:var(--ok)} .st.deg{color:var(--deg)} .st.warn{color:var(--warn)} .st.down{color:var(--down)} .st.unk{color:var(--unk)} .st.mnt{color:var(--mnt)}
+.rel{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:650;letter-spacing:.03em;padding:1px 6px;border-radius:var(--r);white-space:nowrap;color:var(--ink-2);border:1px solid var(--rule-strong)}
+.rel::before{content:"";width:7px;height:7px;display:inline-block;flex:0 0 7px}
+.rel.confirmed{border-style:solid;color:var(--ink)} .rel.confirmed::before{background:var(--ink)}
+.rel.rule{border-style:solid} .rel.rule::before{border:1.5px solid var(--ink-2)}
+.rel.suspected{border-style:dashed} .rel.suspected::before{border:1.5px dashed var(--ink-2);border-radius:50%}
+.rel.na{border-style:dotted;color:var(--ink-3)} .rel.na::before{border:1px dotted var(--ink-3)}
+
+/* attention queue */
+.queue{display:grid}
+.qi{display:grid;grid-template-columns:22px minmax(0,1fr);gap:4px 10px;padding:12px 14px;border-bottom:1px solid var(--rule)}
+.qi:last-child{border-bottom:0}
+.qi .ico{padding-top:2px}
+.qi h3{margin:0;font-size:var(--t-m);font-weight:700;line-height:1.3}
+.qi h3 .id{font-family:var(--f-data);font-weight:600;color:var(--ink-2);margin-right:4px}
+.qi .meta{font-size:var(--t-s);color:var(--ink-2);display:flex;flex-wrap:wrap;gap:2px 10px}
+.qi .rels{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.qi .next{margin-top:6px;font-size:var(--t-s);color:var(--ink);background:var(--surface-2);border:1px solid var(--rule);padding:6px 8px;border-radius:var(--r)}
+.qi .next b{display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin-bottom:1px}
+.qi .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.qi.crit{background:linear-gradient(90deg,var(--down) 0 3px,transparent 3px)}
+.qsec{padding:8px 14px 6px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;color:var(--ink-3);border-bottom:1px solid var(--rule);background:var(--surface-2)}
+.ack-note{font-size:var(--t-xs);color:var(--ink-3)}
+
+/* bottom strip */
+.lower{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:var(--gap)}
+.changes{list-style:none;margin:0;padding:6px 0}
+.changes li{display:grid;grid-template-columns:48px 18px minmax(0,1fr);gap:8px;padding:5px 14px;font-size:var(--t-s);align-items:start}
+.changes time{font-family:var(--f-data);color:var(--ink-3)}
+.changes .what{color:var(--ink)}
+.changes .what small{color:var(--ink-3);font-size:var(--t-xs);display:block}
+.drift{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));}
+.dc{padding:12px 14px;border-right:1px solid var(--rule);border-bottom:1px solid var(--rule);min-width:0}
+.dc:nth-child(3n){border-right:0}
+.dc:nth-last-child(-n+3){border-bottom:0}
+.dc h3{margin:0;font-size:var(--t-s);font-weight:650;color:var(--ink-2);display:flex;justify-content:space-between;gap:8px}
+.dc .big{font-family:var(--f-data);font-size:var(--t-xl);font-weight:600;line-height:1.2;margin-top:2px;color:var(--ink)}
+.dc .big small{font-size:var(--t-s);color:var(--ink-3);font-weight:500}
+.dc .cap{font-size:var(--t-xs);color:var(--ink-3);margin-top:2px}
+.dc svg{display:block;width:100%;height:auto;margin-top:6px;overflow:visible}
+.chart text{font-family:var(--f-data);font-size:9.5px;fill:var(--ink-3)}
+
+/* drawer */
+.scrim{position:fixed;inset:0;background:var(--scrim);z-index:30}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(520px,100%);background:var(--surface);border-left:1px solid var(--rule-strong);box-shadow:var(--shadow);z-index:31;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
+.drawer-h{display:flex;align-items:flex-start;gap:12px;padding:16px 18px 12px;border-bottom:1px solid var(--rule)}
+.drawer-h h2{margin:0;font-family:var(--f-display);font-stretch:112%;font-size:var(--t-xl);font-weight:740;line-height:1.15;text-wrap:balance;overflow-wrap:anywhere}
+.drawer-h .eyebrow{font-size:var(--t-xs);font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3)}
+.drawer-h .icon-btn{margin-left:auto}
+.drawer-b{overflow:auto;padding:14px 18px 24px;display:grid;gap:18px;align-content:start}
+.drawer-b h3{margin:0 0 6px;font-size:var(--t-xs);font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3)}
+.facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 16px;margin:0;font-size:var(--t-m)}
+.facts dt{color:var(--ink-3)}
+.facts dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.tl{list-style:none;margin:0;padding:0;display:grid;gap:0;border-left:1px solid var(--rule-strong);margin-left:4px}
+.tl li{position:relative;padding:0 0 10px 16px;font-size:var(--t-s)}
+.tl li::before{content:"";position:absolute;left:-4px;top:5px;width:7px;height:7px;background:var(--surface);border:1.5px solid var(--ink-2)}
+.tl time{font-family:var(--f-data);color:var(--ink-3);margin-right:6px}
+.relrow{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;padding:8px 0;border-bottom:1px solid var(--rule);font-size:var(--t-s)}
+.relrow:last-child{border-bottom:0}
+.relrow>.rel,.relrow>div>.rel{justify-self:start}
+.memberlist{display:flex;flex-wrap:wrap;gap:4px}
+.memberlist button{border:1px solid var(--rule);background:var(--surface-2);padding:2px 6px;border-radius:var(--r);font-size:var(--t-xs);cursor:pointer;font-family:var(--f-data)}
+
+/* command palette */
+.cmd{position:fixed;left:50%;top:12vh;transform:translateX(-50%);width:min(620px,calc(100% - 32px));background:var(--surface);border:1px solid var(--rule-strong);box-shadow:var(--shadow);z-index:41;border-radius:var(--r)}
+.cmd input{width:100%;border:0;border-bottom:1px solid var(--rule);background:transparent;padding:14px 16px;font:inherit;font-size:var(--t-l);color:var(--ink);outline:none}
+.cmd ul{list-style:none;margin:0;padding:6px;max-height:52vh;overflow:auto}
+.cmd li{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:var(--r);font-size:var(--t-m);cursor:pointer}
+.cmd li[aria-selected="true"]{background:var(--accent-soft);outline:1px solid var(--accent)}
+.cmd li .kind{margin-left:auto;font-size:var(--t-xs);color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em}
+.cmd .foot{padding:8px 14px;border-top:1px solid var(--rule);font-size:var(--t-xs);color:var(--ink-3);display:flex;gap:14px;flex-wrap:wrap}
+.cmd-scrim{z-index:40}
+
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:8px 14px;border-radius:var(--r);font-size:var(--t-s);z-index:60;max-width:calc(100% - 32px)}
+
+/* responsive */
+@media (max-width:1359px){
+  .work{grid-template-columns:minmax(0,1fr) 320px}
+  .work .outline{grid-column:1 / -1;order:3}
+  .tree-wrap{max-height:340px;columns:2 260px}
+  .verdict{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:899px){
+  .work{grid-template-columns:minmax(0,1fr)}
+  .work .attention{order:-1}
+  .lower{grid-template-columns:minmax(0,1fr)}
+  .drift{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dc:nth-child(3n){border-right:1px solid var(--rule)}
+  .dc:nth-child(2n){border-right:0}
+  .dc:nth-last-child(-n+3){border-bottom:1px solid var(--rule)}
+  .dc:nth-last-child(-n+2){border-bottom:0}
+  .tree-wrap{columns:auto}
+  .inspector{grid-template-columns:minmax(0,1fr)}
+  .inspector .acts{grid-row:auto;grid-column:auto;justify-content:flex-start}
+  .crumbs .hint{display:none}
+}
+@media (max-width:560px){
+  .verdict h1{font-size:22px}
+  .brand .wm{display:none}
+  .search{flex-basis:100%;max-width:none;order:5}
+  .ctx-right{margin-left:0}
+  .drift{grid-template-columns:minmax(0,1fr)}
+  .dc{border-right:0!important;border-bottom:1px solid var(--rule)!important}
+  .dc:last-child{border-bottom:0!important}
+}
+@media (prefers-reduced-motion: reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+
+<a class="skip" href="#landscape">Skip to landscape</a>
+
+<header class="bar" role="banner">
+  <div class="bar-in">
+    <div class="brand">
+      <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden="true"><rect x="0" y="13" width="22" height="5" fill="var(--ink)"/><rect x="0" y="7" width="15" height="5" fill="var(--ink-2)"/><rect x="16" y="7" width="6" height="5" fill="var(--down-fill)"/><rect x="2" y="1" width="6" height="5" fill="var(--ink-3)"/><rect x="9" y="1" width="5" height="5" fill="var(--ink-3)"/></svg>
+      <span class="wm">Nodeglow</span>
+    </div>
+    <nav class="nav" aria-label="Primary">
+      <button aria-current="page">Landscape</button>
+      <button aria-disabled="true" title="Not part of this prototype">Incidents<span class="count">2</span></button>
+      <button aria-disabled="true" title="Not part of this prototype">Changes<span class="count">9</span></button>
+      <button aria-disabled="true" title="Not part of this prototype">Trends</button>
+      <button aria-disabled="true" title="Not part of this prototype">Inventory</button>
+      <button aria-disabled="true" title="Not part of this prototype">Logs</button>
+      <button aria-disabled="true" title="Not part of this prototype">Configure</button>
+    </nav>
+    <button class="icon-btn" id="themeBtn" type="button" aria-label="Switch colour theme">
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 1a6 6 0 0 1 0 12z" fill="currentColor"/></svg>
+      <span id="themeLabel">System</span>
+    </button>
+  </div>
+</header>
+<div class="bar ctx">
+  <div class="bar-in">
+    <div class="tenant" title="Multi-tenancy is planned, not built">
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="3" width="10" height="8" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="4" y="1" width="4" height="2" fill="currentColor"/></svg>
+      Muster Treuhand AG
+      <span class="planned">Tenant switch · planned</span>
+    </div>
+    <button class="search" id="searchBtn" type="button" aria-haspopup="dialog" aria-label="Search hosts, incidents and commands (Ctrl+K)">
+      <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true"><circle cx="5.5" cy="5.5" r="4.3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8.7 8.7 12 12" stroke="currentColor" stroke-width="1.5"/></svg>
+      Find host, incident or command
+      <kbd>Ctrl K</kbd>
+    </button>
+    <div class="ctx-right">
+      <div class="seg" role="group" aria-label="Time window for markers on the landscape" id="rangeSeg">
+        <button type="button" data-r="live" aria-pressed="true">Live</button>
+        <button type="button" data-r="1h" aria-pressed="false">1 h</button>
+        <button type="button" data-r="24h" aria-pressed="false">24 h</button>
+        <button type="button" data-r="7d" aria-pressed="false">7 d</button>
+      </div>
+      <span class="clock">Fri 10.10.2026 · 14:32</span>
+      <span class="sim" title="All values in this prototype are simulated (shared scenario)">Simulated data</span>
+    </div>
+  </div>
+</div>
+
+<main id="main">
+  <section class="verdict" aria-labelledby="verdictH">
+    <div>
+      <h1 id="verdictH"><span class="q">Is everything healthy?</span>No. A core uplink in Zürich is failing and Bern is unobserved.</h1>
+      <p>One critical incident with <b>7 hosts</b> in its blast radius behind <span class="mono">SW-ZH-CORE-02</span>. <b>9 Bern hosts</b> have sent no data for 11 min, so their state is unknown. Since your last visit at <span class="mono">09:12</span>: 4 incidents opened, 2 resolved.</p>
+    </div>
+    <div>
+      <div class="ledger-label"><span>48 hosts · one tick each</span><span>30 days <b class="num" style="color:var(--ink)">99.94 %</b> (target 99.90 %)</span></div>
+      <div class="ledger" id="ledger" role="img" aria-label="Host ledger: 2 down, 2 warning, 5 degraded, 9 unknown, 1 maintenance, 29 healthy"></div>
+      <div class="ledger-key" id="ledgerKey"></div>
+    </div>
+  </section>
+
+  <div class="work">
+    <section class="panel outline" aria-labelledby="outlineH">
+      <div class="panel-h"><h2 id="outlineH">Outline</h2><span class="sub">same data as the landscape</span></div>
+      <div class="tree-wrap"><ul role="tree" id="tree" aria-labelledby="outlineH"></ul></div>
+    </section>
+
+    <section class="panel" id="landscape" aria-labelledby="strataH">
+      <div class="panel-h">
+        <h2 id="strataH">Strata</h2>
+        <span class="sub">Locations at the base, hosts on the surface. Built from topology parents.</span>
+        <div class="right strata-tools">
+          <label class="chk"><input type="checkbox" id="optBlast" checked> Blast radius</label>
+          <label class="chk"><input type="checkbox" id="optDelta"> Changed since 09:12</label>
+          <label class="chk"><input type="checkbox" id="optGroup"> Group leaves by state</label>
+          <div class="seg" role="group" aria-label="Data scale">
+            <button type="button" id="scaleReal" aria-pressed="true">Scenario · 48</button>
+            <button type="button" id="scaleSyn" aria-pressed="false">Preview · 10,000</button>
+          </div>
+        </div>
+      </div>
+      <nav class="crumbs" id="crumbs" aria-label="Landscape zoom path"></nav>
+      <div class="stage" id="stage" tabindex="0" role="group" aria-roledescription="topology landscape" aria-label="Strata landscape. Arrow keys move: left and right between neighbours, up to children, down to parent. Enter zooms or opens details, Backspace zooms out." aria-describedby="inspector">
+        <svg id="strata" aria-hidden="true" focusable="false"></svg>
+      </div>
+      <div class="inspector" id="inspector" aria-live="polite"></div>
+      <div class="legend" id="legend"></div>
+    </section>
+
+    <section class="panel attention" aria-labelledby="attH">
+      <div class="panel-h"><h2 id="attH">Needs attention</h2><span class="sub">ordered by impact</span></div>
+      <div class="queue" id="queue"></div>
+    </section>
+  </div>
+
+  <div class="lower">
+    <section class="panel" aria-labelledby="chgH">
+      <div class="panel-h"><h2 id="chgH">Since your last visit</h2><span class="sub mono">09:12 → 14:32</span></div>
+      <ul class="changes" id="changes"></ul>
+    </section>
+    <section class="panel" aria-labelledby="driftH">
+      <div class="panel-h"><h2 id="driftH">Drift</h2><span class="sub">trends heading the wrong way</span></div>
+      <div class="drift" id="drift"></div>
+    </section>
+  </div>
+</main>
+
+<div id="layer"></div>
+
+<script>
+(function(){
+"use strict";
+/* ================= state vocabulary ================= */
+const ST = {
+  down:{label:"Down",sev:6}, warn:{label:"Warning",sev:5}, deg:{label:"Degraded",sev:4},
+  unk:{label:"Unknown (stale)",sev:3}, mnt:{label:"Maintenance",sev:2}, ok:{label:"Healthy",sev:1}
+};
+const ORDER = ["down","warn","deg","unk","mnt","ok"];
+const NS = "http://www.w3.org/2000/svg";
+const RM = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+/* glyph shapes so state never depends on colour alone */
+function glyphPath(s, cx, cy, r){
+  switch(s){
+    case "ok": return {t:"circle", a:{cx,cy,r:r*.62}};
+    case "deg": return {t:"path", a:{d:`M${cx} ${cy-r}L${cx+r} ${cy}L${cx} ${cy+r}L${cx-r} ${cy}Z`}};
+    case "warn": return {t:"path", a:{d:`M${cx} ${cy-r}L${cx+r*1.05} ${cy+r*.85}L${cx-r*1.05} ${cy+r*.85}Z`}};
+    case "down": return {t:"path", a:{d:`M${cx-r} ${cy-r}h${2*r}v${2*r}h${-2*r}Z M${cx-r*.5} ${cy-r*.5}L${cx+r*.5} ${cy+r*.5} M${cx+r*.5} ${cy-r*.5}L${cx-r*.5} ${cy+r*.5}`, "fill-rule":"evenodd"}, x:true};
+    case "unk": return {t:"circle", a:{cx,cy,r:r*.8}, ring:true};
+    case "mnt": return {t:"path", a:{d:`M${cx-r*.75} ${cy-r}h${r*.55}v${2*r}h${-r*.55}Z M${cx+r*.2} ${cy-r}h${r*.55}v${2*r}h${-r*.55}Z`}};
+  }
+}
+function glyphSVG(s, size=12, color){
+  const c = color || `var(--${s})`;
+  const r = size/2 - 1.5, m = size/2;
+  let inner;
+  if(s==="down") inner = `<rect x="${m-r}" y="${m-r}" width="${2*r}" height="${2*r}" fill="${c}"/><path d="M${m-r*.5} ${m-r*.5}L${m+r*.5} ${m+r*.5}M${m+r*.5} ${m-r*.5}L${m-r*.5} ${m+r*.5}" stroke="var(--surface)" stroke-width="1.6"/>`;
+  else if(s==="unk") inner = `<circle cx="${m}" cy="${m}" r="${r}" fill="none" stroke="${c}" stroke-width="1.5" stroke-dasharray="2 1.6"/><circle cx="${m}" cy="${m}" r="1.3" fill="${c}"/>`;
+  else { const g = glyphPath(s,m,m,r); inner = `<${g.t} ${Object.entries(g.a).map(([k,v])=>`${k}="${v}"`).join(" ")} fill="${c}"/>`; }
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">${inner}</svg>`;
+}
+function stChip(s, text){ return `<span class="st ${s}">${glyphSVG(s)}${text||ST[s].label}</span>`; }
+const REL = {confirmed:"Confirmed", rule:"Rule-based", suspected:"Suspected", na:"Not available yet"};
+function rel(k, extra){ return `<span class="rel ${k}">${REL[k]}${extra?` · ${extra}`:""}</span>`; }
+const esc = s => String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ================= scenario topology ================= */
+/* via = how the parent link is known (mirrors backend/services/topology.py) */
+function N(id, o, kids){ return Object.assign({id, label:o.label||id, children:kids||[]}, o); }
+const V = {
+  pve:"Proxmox snapshot · VM/LXC → node", ucl:"UniFi client table · sw_mac → switch", uap:"UniFi · AP → switch",
+  man:"Manual parent_id", probe:"Same probe (probe-bern-01)", site:"Site = collector assignment", none:"No parent (external check)"
+};
+const lat = (v)=>({latency:v});
+const SCEN = N("tenant",{label:"Muster Treuhand AG", kind:"tenant"},[
+  N("site-zh",{label:"Zürich HQ", kind:"site", note:"Polled directly by the Nodeglow server", via:V.site},[
+    N("fw-zh-01",{kind:"Firewall (pfSense)", state:"ok", via:V.site, ip:"10.10.10.1", latency:0.4, suspected:true},[
+      N("SW-ZH-CORE-01",{kind:"Switch (core)", state:"ok", via:V.man, ip:"10.10.10.2", latency:0.3},[
+        N("SW-ZH-ACC-01",{kind:"Switch (access)", state:"ok", via:V.ucl, ip:"10.10.10.11", latency:0.3},[
+          N("AP-ZH-OG1",{kind:"Wireless AP", state:"ok", via:V.uap, ip:"10.10.40.11", latency:0.6}),
+          N("PRN-ZH-01",{kind:"Printer", state:"ok", via:V.ucl, ip:"10.10.20.31", latency:0.7})
+        ]),
+        N("SW-ZH-ACC-02",{kind:"Switch (access)", state:"ok", via:V.ucl, ip:"10.10.10.12", latency:0.3},[
+          N("AP-ZH-OG2",{kind:"Wireless AP", state:"ok", via:V.uap, ip:"10.10.40.12", latency:0.5})
+        ]),
+        N("pve-zh-01",{kind:"Hypervisor (Proxmox)", state:"ok", via:V.ucl, ip:"10.10.30.11", latency:0.3, note:"Hosts 21 guests across both nodes; monitored guests shown"},[
+          N("web-01",{kind:"Linux VM", state:"warn", via:V.pve, ip:"10.10.30.41", latency:0.4, issue:"Port 443 check failed"}),
+          N("web-02",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.42", latency:0.4}),
+          N("db-01",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.43", latency:0.3}),
+          N("proxy-01",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.44", latency:0.3}),
+          N("SRV-FILE-01",{kind:"Windows server", state:"ok", via:V.pve, ip:"10.10.30.21", latency:0.4, issue:"Volume D: 91 %, projected full in ~5 days", trend:true})
+        ]),
+        N("pve-zh-02",{kind:"Hypervisor (Proxmox)", state:"ok", via:V.ucl, ip:"10.10.30.12", latency:0.3},[
+          N("SRV-BACKUP-01",{kind:"Windows server", state:"warn", via:V.pve, ip:"10.10.30.24", latency:0.4, issue:"VeeamBackupSvc stopped (3 agent reports)", incident:1072, changed:"14:26"}),
+          N("mon-01",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.51", latency:0.3}),
+          N("git-01",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.52", latency:0.3}),
+          N("dns-01",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.53", latency:0.3}),
+          N("log-01",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.54", latency:0.3}),
+          N("ci-01",{kind:"Linux VM", state:"ok", via:V.pve, ip:"10.10.30.55", latency:0.4}),
+          N("SRV-DC-01",{kind:"Windows server", state:"ok", via:V.pve, ip:"10.10.30.20", latency:0.3})
+        ]),
+        N("NAS-ZH-01",{kind:"Storage (Synology)", state:"mnt", via:V.ucl, ip:"10.10.30.31", issue:"Maintenance window “NAS firmware update” 14:00–15:00", changed:"14:00"})
+      ]),
+      N("SW-ZH-CORE-02",{kind:"Switch (core)", state:"ok", via:V.man, ip:"10.10.10.3", latency:0.4, origin:1071, issue:"Uplink Te1/0/48 flapping: 38 × %LINK-3-UPDOWN in 10 min"},[
+        N("SRV-APP-01",{kind:"Windows server", state:"down", via:V.ucl, ip:"10.10.30.22", incident:1071, changed:"14:07"}),
+        N("PRN-ZH-02",{kind:"Printer", state:"down", via:V.ucl, ip:"10.10.20.32", incident:1071, changed:"14:07"}),
+        N("SRV-RDS-01",{kind:"Windows server", state:"deg", via:V.ucl, ip:"10.10.30.23", latency:38, incident:1071, changed:"14:05", note:"Agent updated to 0.4.2 today"}),
+        N("AP-ZH-OG3",{kind:"Wireless AP", state:"deg", via:V.ucl, ip:"10.10.40.13", latency:22, incident:1071, changed:"14:05", recovered:{at:"11:09", what:"#1068 latency spike 11:02–11:09", within:["24h","7d"]}}),
+        N("SW-ZH-ACC-03",{kind:"Switch (access)", state:"deg", via:V.ucl, ip:"10.10.10.13", latency:12, incident:1071, changed:"14:05"}),
+        N("IOT-ZH-01",{kind:"IoT sensor", state:"deg", via:V.ucl, ip:"10.10.50.21", latency:7.1, incident:1071, changed:"14:05"}),
+        N("AP-ZH-OG4",{kind:"Wireless AP", state:"deg", via:V.ucl, ip:"10.10.40.14", latency:3.4, incident:1071, changed:"14:05"})
+      ])
+    ])
+  ]),
+  N("site-be",{label:"Bern branch", kind:"site", note:"Network gear over site VPN; clients via remote probe", via:V.site},[
+    N("fw-be-01",{kind:"Firewall", state:"ok", via:V.site, ip:"10.20.10.1", latency:6.2},[
+      N("SW-BE-01",{kind:"Switch", state:"ok", via:V.man, ip:"10.20.10.2", latency:6.4},[
+        N("NAS-BE-01",{kind:"Storage (Synology)", state:"ok", via:V.ucl, ip:"10.20.30.31", latency:6.5}),
+        N("AP-BE-01",{kind:"Wireless AP", state:"ok", via:V.uap, ip:"10.20.40.11", latency:6.6}),
+        N("AP-BE-02",{kind:"Wireless AP", state:"ok", via:V.uap, ip:"10.20.40.12", latency:6.7}),
+        N("AP-BE-03",{kind:"Wireless AP", state:"ok", via:V.uap, ip:"10.20.40.13", latency:6.5}),
+        N("AP-BE-04",{kind:"Wireless AP", state:"ok", via:V.uap, ip:"10.20.40.14", latency:6.8})
+      ])
+    ]),
+    N("probe-bern-01",{label:"probe-bern-01", kind:"probe", state:"unk", via:V.site, collector:true, issue:"Probe silent since 14:21 (threshold 3 min)", changed:"14:24"},
+      ["BE-PC-01","BE-PC-02","BE-PC-03","BE-PC-04","BE-PC-05","BE-PRN-01","BE-NVR-01","BE-VOIP-01","BE-SCAN-01"].map(n=>
+        N(n,{kind: n.includes("PRN")?"Printer":n.includes("NVR")?"Video recorder":n.includes("VOIP")?"VoIP gateway":n.includes("SCAN")?"Scanner":"Client", state:"unk", via:V.probe, ip:"10.20.20."+(n.length*3), lastSeen:"14:21", changed:"14:24"}))
+    )
+  ]),
+  N("site-cloud",{label:"Cloud / Internet", kind:"site", note:"HTTP and SSL checks", via:V.site},[
+    N("portal.mustertreuhand.ch",{kind:"HTTP endpoint", state:"ok", via:V.none, latency:182, issue:"Certificate expires in 9 days"}),
+    N("intranet",{kind:"HTTP endpoint", state:"ok", via:V.none, latency:64, recovered:{at:"13:48", what:"#1069 HTTP 503 13:36–13:48", within:["1h","24h","7d"]}})
+  ])
+]);
+
+/* ================= synthetic 10,000 preview ================= */
+function rng(seed){ return function(){ seed|=0; seed=seed+0x6D2B79F5|0; let t=Math.imul(seed^seed>>>15,1|seed); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function buildSynthetic(){
+  const R = rng(1071);
+  const sites = ["Zürich","Bern","Basel","Genève","Lausanne","Luzern","St. Gallen","Lugano","Winterthur","Chur","Aarau","Sion"];
+  const wts = sites.map(()=>0.6+R()*0.8), wsum = wts.reduce((a,b)=>a+b,0);
+  const shares = wts.map(w=>Math.floor(10000*w/wsum)); shares[0] += 10000 - shares.reduce((a,b)=>a+b,0);
+  const siteNodes = sites.map((s, si)=>{
+    const share = shares[si];
+    const stale = s==="Lugano";
+    const mk = (id,o,k)=>N(id,Object.assign({via:V.man},o),k);
+    const leafSet = (pfx, n, opts={})=>{
+      const arr=[]; for(let i=0;i<n;i++){
+        let state = "ok";
+        if(stale) state="unk";
+        else if(opts.down) state = i < Math.max(1,Math.round(n*.15)) ? "down" : "deg";
+        else { const x=R(); state = x<.0015?"down": x<.005?"warn": x<.009?"deg": x<.011?"mnt":"ok"; }
+        arr.push(N(`${pfx}-${String(i+1).padStart(3,"0")}`,{kind:"Host", state, via:V.ucl, synthetic:true}));
+      }
+      return arr;
+    };
+    const code = s.slice(0,3).toUpperCase().replace(/[ÜÈ]/g,"U");
+    const nDist = 3 + Math.floor(R()*5), nHv = 2 + Math.floor(R()*4), groups = nDist + nHv;
+    const leaves = share - (2 + groups);            // fw + core + group parents are hosts too
+    const per = Math.floor(leaves/groups), extra = leaves - per*groups;
+    const dists = [], hvs = [];
+    for(let i=0;i<nDist;i++){
+      const failing = s==="Basel" && i===1;
+      dists.push(mk(`SW-${code}-D${i+1}`,{kind:"Switch", state: stale?"unk":"ok", synthetic:true, origin: failing?"syn":undefined}, leafSet(`${code}-D${i+1}`, per + (i===0?extra:0), {down:failing})));
+    }
+    for(let i=0;i<nHv;i++) hvs.push(mk(`pve-${code.toLowerCase()}-${i+1}`,{kind:"Hypervisor", state: stale?"unk":"ok", via:V.ucl, synthetic:true}, leafSet(`${code.toLowerCase()}-vm${i+1}`, per, {})));
+    const core = mk(`SW-${code}-CORE`,{kind:"Switch (core)", state: stale?"unk":"ok", synthetic:true}, dists.concat(hvs));
+    const fw = mk(`fw-${code.toLowerCase()}`,{kind:"Firewall", state: stale?"unk":"ok", via:V.site, synthetic:true}, [core]);
+    return N(`syn-${si}`,{label:s, kind:"site", via:V.site, synthetic:true, note: stale?"Synthetic: collector silent":"Synthetic site"}, stale?[N(`probe-${code.toLowerCase()}`,{label:`probe-${code.toLowerCase()}`, kind:"probe", state:"unk", collector:true, synthetic:true, via:V.site},[fw])]:[fw]);
+  });
+  return N("syn-root",{label:"Synthetic estate", kind:"tenant", synthetic:true}, siteNodes);
+}
+let SYN = null;
+
+/* ================= derived model ================= */
+let DATA = SCEN, isSyn = false;
+const byId = new Map();
+function index(root){
+  byId.clear();
+  (function walk(n, p, d){
+    n.parent = p; n.depth = d; byId.set(n.id, n);
+    n.isHost = !!n.state && n.kind!=="probe" && n.kind!=="site" && n.kind!=="tenant";
+    let cnt = {down:0,warn:0,deg:0,unk:0,mnt:0,ok:0}, hosts = 0;
+    if(n.isHost){ cnt[n.state]++; hosts++; }
+    n.children.forEach(c=>{ walk(c, n, d+1); ORDER.forEach(s=>cnt[s]+=c.cnt[s]); hosts+=c.hosts; });
+    n.cnt = cnt; n.hosts = hosts;
+    n.worst = ORDER.find(s=>cnt[s]>0) || n.state || "ok";
+  })(root, null, 0);
+}
+index(DATA);
+
+/* visible children under grouping mode */
+let grouped = false;
+const runCache = new Map();
+function kids(n){
+  if(n.run) return [];
+  const inner = n.children.filter(c=>c.children.length);
+  let leaves = n.children.filter(c=>!c.children.length).slice().sort((a,b)=>ST[b.state].sev-ST[a.state].sev);
+  if(!(grouped||isSyn) || leaves.length<2) return inner.concat(leaves);
+  const key = n.id;
+  if(!runCache.has(key)){
+    const runs = [];
+    ORDER.forEach(s=>{
+      const m = leaves.filter(l=>l.state===s);
+      if(m.length){ const r = {id:`${n.id}::${s}`, run:true, state:s, members:m, count:m.length, parent:n, children:[], label:`${m.length} ${ST[s].label.toLowerCase()}`, hosts:m.length, isHost:false}; r.depth=n.depth+1; r.cnt={...{down:0,warn:0,deg:0,unk:0,mnt:0,ok:0},[s]:m.length}; r.worst=s; runs.push(r); byId.set(r.id, r); }
+    });
+    runCache.set(key, runs);
+  }
+  return inner.concat(runCache.get(key));
+}
+
+/* ================= layout ================= */
+function measure(n, floor){
+  const self = n.isHost ? (n.state==="ok"?1:Math.max(1,floor)) : 0;
+  if(n.run){ n.u = n.state==="ok" ? n.count : Math.max(n.count, floor); return n.u; }
+  let u = self; kids(n).forEach(k=>u+=measure(k,floor));
+  n.u = Math.max(u, 0.0001); return n.u;
+}
+function place(n, x0, x1, d, out){
+  out.push({n, x0, x1, d});
+  const ks = kids(n); if(!ks.length) return d;
+  const k = (x1-x0)/n.u; let cx = x0, maxD = d;
+  ks.forEach(c=>{ const w=c.u*k; maxD=Math.max(maxD, place(c, cx, cx+w, d+1, out)); cx+=w; });
+  return maxD;
+}
+
+/* ================= rendering: strata ================= */
+const svg = document.getElementById("strata");
+const stage = document.getElementById("stage");
+let zoomId = "tenant", selId = null, hoverId = null, layout = [], geo = new Map();
+let opt = {blast:true, delta:false, range:"live"};
+
+function el(t, a, parent){ const e=document.createElementNS(NS,t); for(const k in a) e.setAttribute(k,a[k]); if(parent) parent.appendChild(e); return e; }
+function fitText(s, w){ const cw=6.3; const max=Math.floor((w-6)/cw); if(max>=s.length) return s; if(max<4) return ""; return s.slice(0,max-1)+"…"; }
+/* exact fit using the rendered font; returns rendered width (0 if removed) */
+function fitEl(t, s, maxW){
+  t.textContent = s;
+  if(maxW < 18){ t.remove(); return 0; }
+  let w = t.getComputedTextLength();
+  if(w <= maxW) return w;
+  let lo = 0, hi = s.length;
+  while(lo < hi){ const mid=(lo+hi+1)>>1; t.textContent = s.slice(0,mid)+"…"; if(t.getComputedTextLength()<=maxW) lo=mid; else hi=mid-1; }
+  if(lo < 3){ t.remove(); return 0; }
+  t.textContent = s.slice(0,lo)+"…"; return t.getComputedTextLength();
+}
+
+function lineageSet(id){ const s=new Set(); let n=byId.get(id); while(n){ s.add(n.id); n=n.parent; } return s; }
+function descSet(id){ const s=new Set(); const n=byId.get(id); if(!n) return s; (function w(x){ s.add(x.id); kids(x).forEach(w); })(n); return s; }
+
+function render(animate){
+  const W = Math.max(300, stage.clientWidth - 28);
+  const narrow = W < 560;
+  const gutter = narrow ? 0 : 46;
+  const root = byId.get(zoomId) || DATA;
+  const floor = (root.hosts||1) * 4 / Math.max(1, W-gutter);
+  measure(root, floor);
+  layout = []; geo.clear();
+  const maxD = place(root, gutter, W, root.depth, layout);
+  const levels = maxD - root.depth + 1;
+  const rowH = narrow ? 44 : Math.max(46, Math.min(70, Math.round(360/levels)));
+  const top = 44, H = top + levels*rowH + 18;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.textContent = "";
+  if(animate && !RM.matches){ svg.classList.remove("fade"); void svg.getBoundingClientRect(); svg.classList.add("fade"); }
+
+  const defs = el("defs",{},svg);
+  const hatch = el("pattern",{id:"p-unk",width:6,height:6,patternUnits:"userSpaceOnUse",patternTransform:"rotate(45)"},defs);
+  el("rect",{width:6,height:6,style:"fill:var(--unk-fill)"},hatch);
+  el("line",{x1:0,y1:0,x2:0,y2:6,style:"stroke:var(--unk-hatch);stroke-width:2.2"},hatch);
+  const dots = el("pattern",{id:"p-mnt",width:5,height:5,patternUnits:"userSpaceOnUse"},defs);
+  el("rect",{width:5,height:5,style:"fill:var(--mnt-fill)"},dots);
+  el("circle",{cx:2.5,cy:2.5,r:1,style:"fill:var(--mnt)"},dots);
+  const shaft = el("pattern",{id:"p-shaft",width:7,height:7,patternUnits:"userSpaceOnUse",patternTransform:"rotate(-45)"},defs);
+  el("line",{x1:0,y1:0,x2:0,y2:7,style:"stroke:var(--down);stroke-width:1;opacity:.45"},shaft);
+
+  const yOf = d => top + (levels - 1 - (d - root.depth)) * rowH;
+
+  // ground line + row labels
+  el("line",{x1:gutter,x2:W,y1:H-16,y2:H-16,style:"stroke:var(--rule-strong);stroke-width:1"},svg);
+  if(!narrow){
+    for(let i=0;i<levels;i++){
+      const d = root.depth + i;
+      const name = d===0?"TENANT":d===1?"SITE":`DEPTH ${d-1}`;
+      el("text",{x:0,y:yOf(d)+rowH/2+3,class:"rowlab"},svg).textContent=name;
+    }
+  }
+
+  const lin = hoverId ? lineageSet(hoverId) : null;
+  const desc = hoverId ? descSet(hoverId) : null;
+
+  // blast shaft background
+  const overlays = [];
+  layout.forEach(L=>{
+    const n=L.n;
+    if(opt.blast && n.origin){
+      const sub = descSet(n.id); let minY = yOf(L.d);
+      layout.forEach(M=>{ if(sub.has(M.n.id)) minY=Math.min(minY, yOf(M.d)); });
+      overlays.push({kind:"blast", L, minY, n});
+    }
+    if(opt.blast && n.collector && n.state==="unk"){
+      const sub = descSet(n.id); let minY = yOf(L.d);
+      layout.forEach(M=>{ if(sub.has(M.n.id)) minY=Math.min(minY, yOf(M.d)); });
+      overlays.push({kind:"stale", L, minY, n});
+    }
+  });
+  overlays.forEach(o=>{
+    if(o.kind==="blast") el("rect",{x:o.L.x0, y:o.minY-6, width:o.L.x1-o.L.x0, height:yOf(o.L.d)+rowH-o.minY+6, fill:"url(#p-shaft)"},svg);
+  });
+
+  // cells
+  const gap = 1.5;
+  layout.forEach(L=>{
+    const n = L.n, x=L.x0+gap/2, w=Math.max(0.6, L.x1-L.x0-gap), y=yOf(L.d)+gap/2, h=rowH-gap;
+    geo.set(n.id, {x, y, w, h, d:L.d});
+    const g = el("g",{class:"cell","data-id":n.id},svg);
+    if(lin && !lin.has(n.id) && !desc.has(n.id)) g.classList.add("dim");
+    const agg = !n.isHost && !n.run && n.kind!=="probe";
+    const s = n.run ? n.state : (n.state||"ok");
+    let fill;
+    if(agg) fill = "var(--stratum)";
+    else if(s==="unk") fill = "url(#p-unk)";
+    else if(s==="mnt") fill = "url(#p-mnt)";
+    else fill = `var(--${s}-fill)`;
+    el("rect",{class:"b",x,y,width:w,height:h,rx:1,style:`fill:${fill}`},g);
+    if(s==="unk"&&!agg) el("rect",{x:x+.5,y:y+.5,width:Math.max(0,w-1),height:h-1,rx:1,style:"fill:none;stroke:var(--unk);stroke-dasharray:3 2;stroke-width:1"},g);
+    if(agg){
+      // core sample: distribution of states in this subtree
+      const bh = 5, tot = n.hosts||1; let cx = x;
+      ORDER.forEach(st=>{ const c=n.cnt[st]; if(!c) return; const bw=Math.max(c? (st==="ok"?0:2):0, w*c/tot); el("rect",{x:cx,y:y+h-bh,width:Math.min(bw, x+w-cx),height:bh,style:`fill:${st==="unk"?"var(--unk-hatch)":st==="mnt"?"var(--mnt)":`var(--${st}-fill)`}`},g); cx+=bw; });
+      const tx=el("text",{x:x+6,y:y+h/2,style:"fill:var(--stratum-ink)"},g); fitEl(tx, `${n.label} · ${n.hosts} hosts`, w-12);
+    } else {
+      const onC = s==="unk"?"var(--unk-on)":s==="mnt"?"var(--mnt-on)":`var(--${s}-on)`;
+      const gr = Math.min(5, (w-4)/2, h/5);
+      const label = n.run ? String(n.count) : (n.kind==="probe" ? `${n.label} · silent` : n.label);
+      const showGlyph = w >= 9 && gr>=2;
+      let showText = false, usedW = 0;
+      if(w >= 30){
+        const probe = el("text",{x:0,y:-50},g); probe.textContent = label;
+        const tw = probe.getComputedTextLength(); probe.remove();
+        showText = w >= tw + (showGlyph?24:10) || (!n.run && w >= 60);
+      }
+      if(showGlyph){
+        const gx = showText ? x+4+gr+1 : x+w/2, gy = y+h/2;
+        const gp = glyphPath(s, gx, gy, gr);
+        if(s==="down"){ el("rect",{x:gx-gr,y:gy-gr,width:gr*2,height:gr*2,style:`fill:${onC}`},g); el("path",{d:`M${gx-gr*.5} ${gy-gr*.5}L${gx+gr*.5} ${gy+gr*.5}M${gx+gr*.5} ${gy-gr*.5}L${gx-gr*.5} ${gy+gr*.5}`,style:`stroke:var(--down-fill);stroke-width:1.5`},g); }
+        else if(s==="unk"){ el("circle",{cx:gx,cy:gy,r:gr*.85,style:`fill:none;stroke:${onC};stroke-width:1.4;stroke-dasharray:2 1.5`},g); }
+        else el(gp.t, Object.assign({style:`fill:${onC}`}, gp.a), g);
+      }
+      const tx0 = x + (showGlyph? gr*2+10 : 5);
+      if(showText){
+        const tx = el("text",{x: tx0, y: y+h/2+3.6, style:`fill:${onC}`}, g);
+        usedW = fitEl(tx, label, x + w - tx0 - 6);
+      } else if(n.run && w>=14 && h>20){
+        const tx = el("text",{x:x+w/2, y:y+h-5, "text-anchor":"middle", style:`fill:${onC};font-size:9.5px`}, g); fitEl(tx, label, w-2);
+      }
+      if(n.isHost && n.children.length && h>34){
+        const sub = n.hosts-1, aff = sub - (n.cnt.ok - (n.state==="ok"?1:0));
+        const avail = x + w - 8 - (tx0 + usedW + 14);
+        if(avail > 40){ const tx=el("text",{x:x+w-8,y:y+h/2+3.6,"text-anchor":"end",style:`fill:${onC};opacity:.8;font-weight:500`},g); fitEl(tx, `${sub} below${aff>0?` · ${aff} not healthy`:""}`, avail); }
+      }
+    }
+    // suspected relation marker on fw-zh-01
+    if(opt.blast && n.suspected){
+      el("rect",{x:x+2,y:y+2,width:w-4,height:h-4,style:"fill:none;stroke:var(--ink-2);stroke-width:1.4;stroke-dasharray:5 3"},g);
+      if(w>260){ const tx=el("text",{x:x+w-8,y:y+14,"text-anchor":"end",style:"fill:var(--ink-2);font-size:10px"},g); fitEl(tx, "Suspected link · filterlog +420 %", w*.45); }
+    }
+    // delta marker
+    if(opt.delta && (n.changed || (n.run && n.members.some(m=>m.changed)))){
+      el("path",{d:`M${x+w-9} ${y}h9v9z`,style:"fill:var(--accent)"},g);
+    }
+    // recovered within window
+    const rc = n.recovered || null;
+    if(rc && rc.within.includes(opt.range)){
+      el("circle",{cx:x+w-7,cy:y+h-7,r:3.5,style:"fill:none;stroke:var(--ink);stroke-width:1.6"},g);
+    }
+  });
+
+  // overlay outlines + labels in top margin
+  const labels = [];
+  overlays.forEach(o=>{
+    const x=o.L.x0, w=o.L.x1-o.L.x0, yb=yOf(o.L.d)+rowH, yt=o.minY-6;
+    const blast = o.kind==="blast";
+    el("rect",{x:x+.75,y:yt,width:Math.max(0,w-1.5),height:yb-yt,style:`fill:none;stroke:${blast?"var(--down)":"var(--unk)"};stroke-width:${blast?2:1.6};${blast?"":"stroke-dasharray:6 3"}`},svg);
+    const n=o.n, aff = n.hosts - (n.isHost?1:0);
+    const txt = blast
+      ? (n.origin===1071 ? `#1071 · blast radius ${aff} hosts · Confirmed` : `Synthetic incident · ${aff} hosts behind ${n.label}`)
+      : `No data ${n.synthetic?"":"11 min "}· ${aff} hosts unknown`;
+    labels.push({x, w, txt, blast, id: n.origin===1071 ? "inc-1071" : n.id, yt});
+  });
+  labels.sort((a,b)=>a.x-b.x);
+  let lastEnd = [-1e9,-1e9];
+  labels.forEach(l=>{
+    const tw = l.txt.length*5.9 + 18;
+    let lx = Math.min(l.x, W - tw); lx=Math.max(gutter, lx);
+    let line = lx > lastEnd[0] + 8 ? 0 : 1;
+    if(line===1 && lx <= lastEnd[1]+8) lx = lastEnd[1]+8;
+    lastEnd[line] = lx + tw;
+    const ly = line===0 ? 26 : 10;
+    el("line",{x1:l.x+8,x2:l.x+8,y1:ly+4,y2:l.yt,style:`stroke:${l.blast?"var(--down)":"var(--unk)"};stroke-width:1`},svg);
+    const g = el("g",{class:"ov-hit","data-ov":l.id},svg);
+    el("rect",{x:lx,y:ly-10,width:tw,height:15,style:`fill:var(--surface);stroke:${l.blast?"var(--down)":"var(--unk)"};stroke-width:1;${l.blast?"":"stroke-dasharray:3 2"}`},g);
+    const gx = lx+8, gy = ly-2.5;
+    if(l.blast){ el("rect",{x:gx-4,y:gy-4,width:8,height:8,style:"fill:var(--down)"},g); }
+    else el("circle",{cx:gx,cy:gy,r:3.6,style:"fill:none;stroke:var(--unk);stroke-width:1.4;stroke-dasharray:2 1.4"},g);
+    const t = el("text",{x:lx+16,y:ly+1.3,class:"ov-label",style:`fill:${l.blast?"var(--down)":"var(--unk)"}`},g); t.textContent=l.txt;
+  });
+
+  // selection outline + lineage ticks
+  const sid = selId;
+  if(sid && geo.has(sid)){
+    const q = geo.get(sid);
+    el("rect",{x:q.x-1,y:q.y-1,width:q.w+2,height:q.h+2,class:"sel"},svg);
+    lineageSet(sid).forEach(id=>{ if(id!==sid && geo.has(id)){ const a=geo.get(id); el("rect",{x:Math.max(a.x,q.x),y:a.y,width:Math.min(q.w, a.w),height:2.5,class:"lin"},svg); } });
+  }
+}
+
+/* ================= inspector ================= */
+const insp = document.getElementById("inspector");
+function lineageHTML(n){
+  const chain=[]; let p=n; while(p){ chain.unshift(p); p=p.parent; }
+  return `<span class="lineage">${chain.map((c,i)=>`${i?'<span class="sep">›</span>':""}<span class="${c===n?"":"mono"}" style="${c===n?"font-weight:700":""}">${esc(c.label)}</span>`).join("")}</span>`;
+}
+function summaryCounts(n){
+  return ORDER.filter(s=>n.cnt[s]).map(s=>`${n.cnt[s]} ${ST[s].label.toLowerCase().replace(" (stale)","")}`).join(", ");
+}
+function showInspector(id){
+  const n = byId.get(id);
+  if(!n){ insp.innerHTML = `<div class="t">Hover or focus a stratum to inspect it</div><div class="line">Click a branch to zoom in, click a host to open its details. The outline on the left is the same structure as a keyboard-friendly list.</div>`; return; }
+  const s = n.run ? n.state : (n.state || n.worst);
+  let head, lines=[], acts=[];
+  if(n.run){
+    head = `${stChip(s, n.label)}<span class="k">grouped leaves under ${esc(n.parent.label)}</span>`;
+    lines.push(`<span class="memberlist">${n.members.slice(0,14).map(m=>`<button type="button" data-open="${esc(m.id)}">${esc(m.label)}</button>`).join("")}${n.members.length>14?`<span class="ack-note">+${n.members.length-14} more</span>`:""}</span>`);
+    lines.push(`${rel("confirmed", "common parent "+esc(n.parent.label))}`);
+  } else if(n.isHost || n.kind==="probe"){
+    head = `${esc(n.label)} ${stChip(s)}<span class="k">${esc(n.kind==="probe"?"Remote probe (collector)":n.kind)}</span>`;
+    lines.push(lineageHTML(n));
+    const facts=[];
+    if(n.latency!=null && n.state!=="unk" && n.state!=="down") facts.push(`latency <b class="num">${n.latency} ms</b>${n.state==="deg"?" (normal ~0.3 ms)":""}`);
+    if(n.state==="down") facts.push(`no reply since <b class="num">14:07</b>`);
+    if(n.lastSeen) facts.push(`last data <b class="num">${n.lastSeen}</b>`);
+    if(n.issue) facts.push(esc(n.issue));
+    if(n.children.length) facts.push(`${n.hosts - (n.isHost?1:0)} hosts below: ${summaryCounts({cnt:Object.fromEntries(ORDER.map(k=>[k,n.cnt[k]-(n.isHost&&n.state===k?1:0)]))})}`);
+    lines.push(facts.join(" · "));
+    const r=[]; if(n.via) r.push(rel(n.synthetic?"na":"confirmed", esc(n.via))); if(n.incident===1071||n.origin===1071) r.push(rel("rule","#1071 multi_host_down")); if(n.suspected) r.push(rel("suspected","filterlog +420 % overlaps #1071 in time only"));
+    if(n.recovered && n.recovered.within.includes(opt.range)) r.push(`<span class="st ok">recovered ${esc(n.recovered.what)}</span>`);
+    if(r.length) lines.push(r.join(" "));
+    if(n.children.length) acts.push(`<button class="btn" type="button" data-zoom="${esc(n.id)}">Zoom into branch</button>`);
+    if(n.isHost && !n.synthetic) acts.push(`<button class="btn primary" type="button" data-open="${esc(n.id)}">Open details</button>`);
+    if(n.incident || n.origin===1071) acts.push(`<button class="btn" type="button" data-inc="${n.incident||n.origin}">Incident #${n.incident||n.origin}</button>`);
+  } else {
+    head = `${esc(n.label)} <span class="k">${n.kind==="tenant"?"Tenant":"Site"} · ${n.hosts} hosts</span>`;
+    lines.push(summaryCounts(n));
+    if(n.note) lines.push(esc(n.note) + (n.kind==="site" && !n.synthetic ? ` ${rel("confirmed","collector assignment")}`:""));
+    if(n.id!==zoomId && n.children.length) acts.push(`<button class="btn" type="button" data-zoom="${esc(n.id)}">Zoom into ${esc(n.label)}</button>`);
+  }
+  insp.innerHTML = `<div class="t">${head}</div>${lines.map(l=>`<div class="line">${l}</div>`).join("")}<div class="acts">${acts.join("")}</div>`;
+}
+
+/* ================= outline tree (keyboard alternative) ================= */
+const treeEl = document.getElementById("tree");
+function treeItem(n, level){
+  const ks = kids(n);
+  const li = document.createElement("li");
+  li.setAttribute("role","treeitem"); li.id = "ti-"+cssId(n.id); li.dataset.id = n.id;
+  li.setAttribute("aria-level", level); li.tabIndex = -1;
+  li.setAttribute("aria-selected", n.id===selId ? "true":"false");
+  const s = n.run ? n.state : (n.state || n.worst);
+  const isAgg = !n.isHost && !n.run && n.kind!=="probe";
+  const stateTxt = n.run ? "" : isAgg ? `, ${summaryCounts(n)}` : `, ${ST[s].label}`;
+  li.setAttribute("aria-label", `${n.label}${stateTxt}${ks.length?`, ${n.hosts} hosts in branch`:""}${n.changed&&opt.delta?", changed since 09:12":""}`);
+  const row = document.createElement("div"); row.className="ti";
+  row.innerHTML = `<span class="tw" aria-hidden="true">${ks.length? "▸":""}</span>${isAgg? glyphSVG(n.worst,11) : glyphSVG(s,11)}<span class="nm">${esc(n.label)}</span><span class="ct">${ks.length? n.hosts : n.run? "" : ""}</span>`;
+  li.appendChild(row);
+  if(ks.length){
+    const open = level <= (isSyn?2:3) || (selId && lineageSet(selId).has(n.id));
+    li.setAttribute("aria-expanded", open ? "true":"false");
+    row.querySelector(".tw").textContent = open ? "▾" : "▸";
+    const ul = document.createElement("ul"); ul.setAttribute("role","group"); ul.className="tg";
+    if(open || !isSyn) ks.forEach(k=>ul.appendChild(treeItem(k, level+1)));
+    else ul.dataset.lazy="1";
+    li.appendChild(ul);
+  }
+  return li;
+}
+function cssId(id){ return id.replace(/[^a-zA-Z0-9_-]/g,"_"); }
+function buildTree(){
+  treeEl.textContent = "";
+  treeEl.appendChild(treeItem(DATA, 1));
+  const first = treeEl.querySelector('[role="treeitem"]');
+  const cur = selId && document.getElementById("ti-"+cssId(selId));
+  (cur||first).tabIndex = 0;
+}
+function visibleItems(){ return [...treeEl.querySelectorAll('[role="treeitem"]')].filter(li=>li.offsetParent!==null); }
+function expand(li, open){
+  if(!li.hasAttribute("aria-expanded")) return;
+  li.setAttribute("aria-expanded", open?"true":"false");
+  li.querySelector(".tw").textContent = open?"▾":"▸";
+  const ul = li.querySelector(':scope > [role="group"]');
+  if(open && ul && ul.dataset.lazy){ delete ul.dataset.lazy; const n=byId.get(li.dataset.id); kids(n).forEach(k=>ul.appendChild(treeItem(k, +li.getAttribute("aria-level")+1))); }
+}
+function syncTree(id, focus){
+  // expand ancestors
+  const chain=[]; let n=byId.get(id); while(n){ chain.unshift(n); n=n.parent; }
+  chain.forEach(c=>{ const li=document.getElementById("ti-"+cssId(c.id)); if(li && c.id!==id) expand(li,true); });
+  treeEl.querySelectorAll('[aria-selected="true"]').forEach(x=>x.setAttribute("aria-selected","false"));
+  treeEl.querySelectorAll('[tabindex="0"]').forEach(x=>x.tabIndex=-1);
+  const li = document.getElementById("ti-"+cssId(id));
+  if(li){ li.setAttribute("aria-selected","true"); li.tabIndex=0; if(focus) li.focus(); else { const wrap=treeEl.parentElement; const r=li.getBoundingClientRect(), wr=wrap.getBoundingClientRect(); if(r.top<wr.top||r.bottom>wr.bottom) wrap.scrollTop += r.top - wr.top - 40; } }
+}
+treeEl.addEventListener("click", e=>{
+  const li = e.target.closest('[role="treeitem"]'); if(!li) return;
+  e.stopPropagation();
+  if(e.target.closest(".tw") && li.hasAttribute("aria-expanded")){ expand(li, li.getAttribute("aria-expanded")!=="true"); return; }
+  select(li.dataset.id, {fromTree:true});
+  li.focus();
+});
+treeEl.addEventListener("keydown", e=>{
+  const li = e.target.closest('[role="treeitem"]'); if(!li) return;
+  const items = visibleItems(); const i = items.indexOf(li);
+  const go = t=>{ if(!t) return; e.preventDefault(); select(t.dataset.id,{fromTree:true}); t.focus(); };
+  switch(e.key){
+    case "ArrowDown": go(items[i+1]); break;
+    case "ArrowUp": go(items[i-1]); break;
+    case "Home": go(items[0]); break;
+    case "End": go(items[items.length-1]); break;
+    case "ArrowRight": e.preventDefault(); if(li.getAttribute("aria-expanded")==="false") expand(li,true); else if(li.hasAttribute("aria-expanded")) go(li.querySelector('[role="treeitem"]')); break;
+    case "ArrowLeft": e.preventDefault(); if(li.getAttribute("aria-expanded")==="true") expand(li,false); else go(li.parentElement.closest('[role="treeitem"]')); break;
+    case "Enter": case " ": e.preventDefault(); activate(li.dataset.id); break;
+  }
+});
+
+/* ================= selection / zoom ================= */
+function select(id, o={}){
+  selId = id; hoverId = null;
+  const n = byId.get(id);
+  // make sure the node is visible in the current zoom
+  if(n && !lineageSet(id).has(zoomId)){ zoomId = DATA.id; renderCrumbs(); }
+  render(false); showInspector(id);
+  if(!o.fromTree) syncTree(id, false); else syncTree(id, false);
+}
+function activate(id){
+  const n = byId.get(id); if(!n) return;
+  if(n.isHost && !n.children.length && !n.synthetic) openHost(id);
+  else if(kids(n).length) zoom(id);
+  else showInspector(id);
+}
+function zoom(id){
+  const n = byId.get(id); if(!n || !kids(n).length) return;
+  zoomId = id; if(!selId || !lineageSet(selId).has(id)) selId = id;
+  renderCrumbs(); render(true); showInspector(selId);
+  syncTree(selId,false);
+}
+const crumbsEl = document.getElementById("crumbs");
+function renderCrumbs(){
+  const chain=[]; let n=byId.get(zoomId); while(n){ chain.unshift(n); n=n.parent; }
+  crumbsEl.innerHTML = chain.map((c,i)=>`${i?'<span class="sep" aria-hidden="true">/</span>':""}<button type="button" data-crumb="${esc(c.id)}" ${c.id===zoomId?'aria-current="true"':""}>${esc(c.label)}</button>`).join("") + `<span class="hint">Click a branch to zoom · Backspace zooms out</span>`;
+}
+crumbsEl.addEventListener("click", e=>{ const b=e.target.closest("[data-crumb]"); if(b && b.dataset.crumb!==zoomId) zoom(b.dataset.crumb); });
+
+/* pointer on strata */
+svg.addEventListener("pointermove", e=>{
+  const g = e.target.closest(".cell"); const id = g ? g.dataset.id : null;
+  if(id!==hoverId){ hoverId=id; render(false); showInspector(id || selId); }
+});
+svg.addEventListener("pointerleave", ()=>{ if(hoverId){ hoverId=null; render(false); showInspector(selId); } });
+svg.addEventListener("click", e=>{
+  const ov = e.target.closest("[data-ov]");
+  if(ov){ const v=ov.dataset.ov; if(v.startsWith("inc-")) openIncident(+v.slice(4)); else { select(v); } return; }
+  const g = e.target.closest(".cell"); if(!g) return;
+  const id = g.dataset.id; const n = byId.get(id);
+  selId = id;
+  if(n.run){ hoverId=null; render(false); showInspector(id); syncTree(id,false); return; }
+  if(id===zoomId){ select(id); return; }
+  activate(id); syncTree(id,false);
+});
+svg.style.touchAction = "manipulation";
+/* keyboard on strata */
+stage.addEventListener("keydown", e=>{
+  const cur = byId.get(selId) || byId.get(zoomId);
+  const inView = layout.map(L=>L.n);
+  const pick = n=>{ if(n){ e.preventDefault(); select(n.id); } };
+  if(e.key==="Backspace" || (e.key==="Escape" && zoomId!==DATA.id)){
+    e.preventDefault(); const z=byId.get(zoomId); if(z && z.parent) zoom(z.parent.id); return;
+  }
+  if(!cur) return;
+  const g = geo.get(cur.id);
+  if(e.key==="ArrowLeft"||e.key==="ArrowRight"){
+    const row = layout.filter(L=>L.d===cur.depth || (cur.run && L.d===cur.parent.depth+1)).sort((a,b)=>a.x0-b.x0).map(L=>L.n);
+    const i = row.indexOf(cur); pick(row[i + (e.key==="ArrowRight"?1:-1)]);
+  } else if(e.key==="ArrowUp"){ pick(kids(cur)[0]); }
+  else if(e.key==="ArrowDown"){ if(cur.parent && inView.includes(cur.parent)) pick(cur.parent); }
+  else if(e.key==="Enter"){ e.preventDefault(); activate(cur.id); }
+  else if(e.key===" "){ e.preventDefault(); if(cur.isHost && !cur.synthetic) openHost(cur.id); }
+});
+stage.addEventListener("focus", ()=>{ if(!selId){ select(zoomId); } });
+
+insp.addEventListener("click", e=>{
+  const z=e.target.closest("[data-zoom]"); if(z){ zoom(z.dataset.zoom); return; }
+  const o=e.target.closest("[data-open]"); if(o){ openHost(o.dataset.open); return; }
+  const i=e.target.closest("[data-inc]"); if(i){ openIncident(+i.dataset.inc); }
+});
+
+/* ================= options ================= */
+const $ = id=>document.getElementById(id);
+$("optBlast").addEventListener("change", e=>{ opt.blast=e.target.checked; render(false); });
+$("optDelta").addEventListener("change", e=>{ opt.delta=e.target.checked; render(false); buildTree(); });
+$("optGroup").addEventListener("change", e=>{ grouped=e.target.checked; runCache.clear(); index(DATA); if(selId && !byId.has(selId)) selId=null; render(true); buildTree(); showInspector(selId); });
+$("rangeSeg").addEventListener("click", e=>{
+  const b=e.target.closest("button"); if(!b) return;
+  [...$("rangeSeg").children].forEach(x=>x.setAttribute("aria-pressed", x===b?"true":"false"));
+  opt.range=b.dataset.r; render(false); showInspector(selId);
+  const n = {live:0,"1h":1,"24h":2,"7d":2}[opt.range];
+  toast(opt.range==="live" ? "Showing current state" : `Window ${b.textContent}: ${n} host${n===1?"":"s"} recovered in this window (ring marker)`);
+});
+function setScale(syn){
+  isSyn = syn;
+  $("scaleReal").setAttribute("aria-pressed", syn?"false":"true");
+  $("scaleSyn").setAttribute("aria-pressed", syn?"true":"false");
+  if(syn && !SYN) SYN = buildSynthetic();
+  DATA = syn ? SYN : SCEN; runCache.clear(); index(DATA);
+  zoomId = DATA.id; selId = null; hoverId=null;
+  const og=$("optGroup"); og.disabled = syn; og.checked = syn || grouped;
+  og.parentElement.title = syn ? "At 10,000 hosts leaves are always grouped by state per parent" : "";
+  renderCrumbs(); render(true); buildTree(); showInspector(null); renderLegend();
+}
+$("scaleReal").addEventListener("click", ()=>setScale(false));
+$("scaleSyn").addEventListener("click", ()=>setScale(true));
+
+function renderLegend(){
+  const sw = s => s==="unk" ? `background:repeating-linear-gradient(45deg,var(--unk-fill) 0 2px,var(--unk-hatch) 2px 4px);outline:1px dashed var(--unk)` : s==="mnt" ? `background:radial-gradient(var(--mnt) 1px,var(--mnt-fill) 1.2px) 0 0/5px 5px` : `background:var(--${s}-fill)`;
+  $("legend").innerHTML = ORDER.map(s=>`<span><i class="sw" style="${sw(s)}"></i>${glyphSVG(s,11)}${ST[s].label}</span>`).join("") +
+    `<span><i class="sw" style="background:var(--stratum)"></i>Location / tenant (bar = state mix)</span>` +
+    `<span><svg width="16" height="12" aria-hidden="true"><rect x="1" y="1" width="14" height="10" fill="none" stroke="var(--down)" stroke-width="2"/></svg>Blast radius (confirmed parent)</span>` +
+    `<span><svg width="16" height="12" aria-hidden="true"><rect x="1" y="1" width="14" height="10" fill="none" stroke="var(--ink-2)" stroke-width="1.4" stroke-dasharray="4 2"/></svg>Suspected relation</span>` +
+    `<span class="note">${isSyn ? "Synthetic preview: 12 sites, 10,000 hosts, layout demonstration only. Leaves collapse into one cell per state and parent; problem cells keep at least 4 px, so widths are not strictly proportional. Zoom into a site to read names." : "Width = number of hosts in the branch. A gap above a parent is the parent itself. Parent links come from Proxmox (VM → node), UniFi (gateway → switch → AP, client table) and manual parent_id; sites come from the collector assignment."}</span>`;
+}
+
+/* ================= ledger ================= */
+function renderLedger(){
+  const order = ["down","warn","deg","unk","mnt","ok"];
+  const c = {down:2,warn:2,deg:5,unk:9,mnt:1,ok:29};
+  const fillOf = s => s==="unk" ? "repeating-linear-gradient(45deg,var(--unk-fill) 0 2px,var(--unk-hatch) 2px 4px)" : s==="mnt" ? "radial-gradient(var(--mnt) 1px,var(--mnt-fill) 1.2px) 0 0/4px 4px" : `var(--${s}-fill)`;
+  $("ledger").innerHTML = order.map(s=>Array.from({length:c[s]},()=>`<i style="background:${fillOf(s)}${s==="ok"?";opacity:.9":""}"></i>`).join("")).join("");
+  $("ledgerKey").innerHTML = order.map(s=>`<span>${glyphSVG(s,11)}<b>${c[s]}</b> ${ST[s].label.toLowerCase()}</span>`).join("");
+}
+
+/* ================= attention queue ================= */
+const acked = new Set();
+try{ JSON.parse(localStorage.getItem("ng-c-acked")||"[]").forEach(x=>acked.add(x)); }catch(_){}
+function renderQueue(){
+  const ackBtn = id => acked.has(id) ? `<button class="btn done" type="button" data-ack="${id}" aria-pressed="true">Acknowledged</button>` : `<button class="btn" type="button" data-ack="${id}" aria-pressed="false">Acknowledge</button>`;
+  $("queue").innerHTML = `
+  <article class="qi crit" aria-labelledby="q1">
+    <div class="ico">${glyphSVG("down",16)}</div>
+    <div>
+      <h3 id="q1"><span class="id">#1071</span>Uplink flapping on SW-ZH-CORE-02</h3>
+      <div class="meta"><span class="st down">Critical</span><span>open 25 min · since <span class="num">14:07</span></span>${acked.has(1071)?'<span class="ack-note">acknowledged by you</span>':""}</div>
+      <div class="meta"><span><b class="num">2</b> down</span><span><b class="num">5</b> degraded</span><span><b class="num">7</b> downstream alerts folded in</span></div>
+      <div class="rels">${rel("confirmed","shared parent")}${rel("rule","syslog burst")}${rel("suspected","fw-zh-01")}</div>
+      <div class="next"><b>Next step</b>Check the syslog of SW-ZH-CORE-02: 38 × %LINK-3-UPDOWN on Te1/0/48 in 10 min. Optic or cable on that port is the first suspect.</div>
+      <div class="acts"><button class="btn primary" type="button" data-inc="1071">Open incident</button>${ackBtn(1071)}<button class="btn" type="button" data-show="SW-ZH-CORE-02">Show in strata</button></div>
+    </div>
+  </article>
+  <article class="qi" aria-labelledby="q2">
+    <div class="ico">${glyphSVG("unk",16)}</div>
+    <div>
+      <h3 id="q2">Bern is unobserved: probe-bern-01 silent</h3>
+      <div class="meta"><span class="st unk">No data 11 min</span><span>last heartbeat <span class="num">14:21</span> · threshold 3 min</span></div>
+      <div class="meta"><span><b class="num">9</b> hosts unknown, not counted as up</span></div>
+      <div class="rels">${rel("confirmed","same probe")}<span class="rel na">Link to #1071 · none found</span></div>
+      <div class="next"><b>Next step</b>Check the probe host and the Bern WAN link. Bern network gear over VPN still answers, so the site itself is reachable.</div>
+      <div class="acts"><button class="btn" type="button" data-show="probe-bern-01">Show in strata</button></div>
+    </div>
+  </article>
+  <article class="qi" aria-labelledby="q3">
+    <div class="ico">${glyphSVG("warn",16)}</div>
+    <div>
+      <h3 id="q3"><span class="id">#1072</span>VeeamBackupSvc stopped on SRV-BACKUP-01</h3>
+      <div class="meta"><span class="st warn">Warning</span><span>open 6 min · since <span class="num">14:26</span></span>${acked.has(1072)?'<span class="ack-note">acknowledged by you</span>':""}</div>
+      <div class="rels">${rel("rule","3 consecutive agent reports")}</div>
+      <div class="next"><b>Next step</b>Start the service on SRV-BACKUP-01 and check the last backup job. <span class="planned">Restart via agent · planned</span></div>
+      <div class="acts"><button class="btn primary" type="button" data-inc="1072">Open incident</button>${ackBtn(1072)}</div>
+    </div>
+  </article>
+  <article class="qi" aria-labelledby="q4">
+    <div class="ico">${glyphSVG("warn",16)}</div>
+    <div>
+      <h3 id="q4">Port 443 check failed on web-01</h3>
+      <div class="meta"><span class="st warn">Warning</span><span>check, no incident</span></div>
+      <div class="acts"><button class="btn" type="button" data-open="web-01">Open details</button></div>
+    </div>
+  </article>
+  <div class="qsec">Coming up</div>
+  <article class="qi" aria-labelledby="q5">
+    <div class="ico">${glyphSVG("deg",16)}</div>
+    <div><h3 id="q5">SRV-FILE-01 volume D: full in ~5 days</h3>
+    <div class="meta"><span class="num">91 %</span><span>linear projection from 14 days</span></div></div>
+  </article>
+  <article class="qi" aria-labelledby="q6">
+    <div class="ico">${glyphSVG("deg",16)}</div>
+    <div><h3 id="q6">Certificate portal.mustertreuhand.ch expires in 9 days</h3></div>
+  </article>
+  <article class="qi" aria-labelledby="q7">
+    <div class="ico">${glyphSVG("mnt",16)}</div>
+    <div><h3 id="q7">NAS-ZH-01 in maintenance until 15:00</h3><div class="meta"><span>“NAS firmware update”, alerts paused</span></div></div>
+  </article>`;
+}
+document.addEventListener("click", e=>{
+  const a=e.target.closest("[data-ack]");
+  if(a){ const id=+a.dataset.ack; if(acked.has(id)) acked.delete(id); else acked.add(id);
+    try{ localStorage.setItem("ng-c-acked", JSON.stringify([...acked])); }catch(_){}
+    const inQueue = !!a.closest("#queue");
+    renderQueue(); toast(acked.has(id)?`Acknowledged #${id} (simulated)`:`Acknowledgement removed for #${id}`);
+    if(!inQueue){ a.textContent = acked.has(id)?"Acknowledged":"Acknowledge"; a.setAttribute("aria-pressed", acked.has(id)); }
+    else { const again=document.querySelector(`#queue [data-ack="${id}"]`); if(again) again.focus(); } return; }
+  const s=e.target.closest("[data-show]");
+  if(s){ if(isSyn) setScale(false); const n=byId.get(s.dataset.show); zoomId = n.parent && n.parent.parent ? n.parent.id : DATA.id; renderCrumbs(); buildTree(); select(s.dataset.show); stage.scrollIntoView({block:"nearest",behavior:RM.matches?"auto":"smooth"}); stage.focus({preventScroll:true}); return; }
+  if(e.target.closest("#queue [data-inc], .drawer [data-inc]")){ openIncident(+e.target.closest("[data-inc]").dataset.inc); return; }
+  if(e.target.closest("#queue [data-open], .drawer [data-open], .cmd [data-open]")){ openHost(e.target.closest("[data-open]").dataset.open); }
+});
+
+/* ================= changes & drift ================= */
+function renderChanges(){
+  const items = [
+    ["14:26","warn","#1072 opened","VeeamBackupSvc stopped on SRV-BACKUP-01"],
+    ["14:24","unk","9 Bern hosts became unknown","probe-bern-01 last heartbeat 14:21"],
+    ["14:07","down","#1071 opened","multi_host_down + host_down_syslog, 7 hosts behind SW-ZH-CORE-02"],
+    ["14:00","mnt","Maintenance started","NAS firmware update on NAS-ZH-01, until 15:00"],
+    ["13:48","ok","#1069 resolved","intranet HTTP 503 from 13:36"],
+    ["13:36","warn","#1069 opened","HTTP check intranet returned 503"],
+    ["11:09","ok","#1068 resolved","latency spike on AP-ZH-OG3 from 11:02"],
+    ["today","ok","2 new hosts discovered","subnet scanner, awaiting your review"],
+    ["today","ok","Agent SRV-RDS-01 updated","now version 0.4.2"]
+  ];
+  $("changes").innerHTML = `<li><span></span><span></span><span class="what"><b>4 incidents opened (#1069–#1072), 2 resolved (#1068, #1069)</b></span></li>` +
+    items.map(([t,s,w,d])=>`<li><time>${t}</time>${glyphSVG(s,12)}<span class="what">${esc(w)}<small>${esc(d)}</small></span></li>`).join("");
+}
+function chartBars(vals, opts){
+  const W=300, H=opts.h||56, pad=14, n=vals.length, bw=(W)/n;
+  const max = opts.max || Math.max(...vals);
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H+pad}" role="img" aria-label="${esc(opts.aria)}">`;
+  [0.5,1].forEach(f=>{ const y=H - f*H; s+=`<line x1="0" x2="${W}" y1="${y}" y2="${y}" stroke="var(--rule)" stroke-width="1"/>`; });
+  if(opts.baseline){ const y0=H-opts.baseline[1]/max*H, y1=H-opts.baseline[0]/max*H; s+=`<rect x="0" y="${y0}" width="${W}" height="${y1-y0}" fill="var(--sunken)"/>`; }
+  vals.forEach((v,i)=>{ const h=Math.max(1, v/max*H); const hot = opts.hot && opts.hot(v,i); s+=`<rect x="${i*bw+bw*.15}" y="${H-h}" width="${Math.max(1,bw*.7)}" height="${h}" fill="${hot?"var(--down-fill)":"var(--ink-3)"}" opacity="${hot?1:.55}"/>`; });
+  s+=`<line x1="0" x2="${W}" y1="${H}" y2="${H}" stroke="var(--rule-strong)"/>`;
+  (opts.ticks||[]).forEach(([i,t,anchor])=>{ s+=`<text x="${i*bw+(anchor==="end"?bw:0)}" y="${H+11}" text-anchor="${anchor||"start"}">${t}</text>`; });
+  return s+"</svg>";
+}
+function renderDrift(){
+  // syslog 24h, 96 x 15 min buckets ending 14:30
+  const R = rng(46); const sys=[];
+  for(let i=0;i<96;i++){ const hr=(14.5 - (95-i)*0.25 + 48)%24; let v = 8 + R()*6; if(hr>1 && hr<6) v -= 2.5; sys.push(+v.toFixed(1)); }
+  sys[93]=19; sys[94]=46; sys[95]=46;
+  // incidents per day
+  const inc = [2,1,0,3,1,1,0,2,4,1,0,1,2,4];
+  // latency affected 2h (log)
+  const lat = latencySeries();
+  const disk = [80.2,80.9,81.6,82.3,83.0,83.9,84.6,85.4,86.2,87.1,88.0,88.9,90.0,91.0];
+  $("drift").innerHTML = `
+  <div class="dc"><h3>Latency, 7 hosts behind CORE-02 <span class="rel rule">#1071</span></h3><div class="big">3–40 <small>ms · was 0.3</small></div>${latencyChart(lat, 300, 70, true)}<div class="cap">last 2 h, log scale; band = min–max of hosts still answering</div></div>
+  <div class="dc"><h3>Syslog rate</h3><div class="big">46 <small>msg/min · baseline 8–14</small></div>${chartBars(sys,{max:50,baseline:[8,14],hot:(v)=>v>20,aria:"Syslog messages per minute in 15 minute buckets over 24 hours, baseline 8 to 14, now 46",ticks:[[0,"14:30 yday"],[95,"now","end"]]})}<div class="cap">24 h: 11,622 messages, 214 error or worse</div></div>
+  <div class="dc"><h3>Volume D: on SRV-FILE-01 <span class="rel rule">projection</span></h3><div class="big">91 <small>% · full in ~5 days</small></div>${diskChart(disk)}<div class="cap">14 days measured, dashed = linear projection</div></div>
+  <div class="dc"><h3>Incidents per day</h3><div class="big">4 <small>today · 22 in 14 days</small></div>${chartBars(inc,{max:5,hot:(v,i)=>i===13,aria:"Incidents per day over 14 days: 2,1,0,3,1,1,0,2,4,1,0,1,2,4",ticks:[[0,"27.09"],[13,"today","end"]],h:46})}</div>
+  <div class="dc"><h3>Certificate portal.mustertreuhand.ch</h3><div class="big">9 <small>days left</small></div>${certChart(9)}<div class="cap">warning threshold 14 days</div></div>
+  <div class="dc"><h3>Availability, all hosts, 30 days</h3><div class="big">99.94 <small>% · target 99.90 %</small></div>${availChart()}<div class="cap">Internet (Speedtest): <span class="num">942 / 98 Mbit/s, 6 ms</span></div></div>`;
+}
+function latencySeries(){
+  const R = rng(7); const pts=[];
+  for(let i=0;i<=120;i++){ // 12:32 .. 14:32
+    const t = 12*60+32+i; const vals=[];
+    for(let h=0;h<7;h++){
+      if(t<14*60+5) vals.push(0.25+R()*0.12);
+      else if(h<2 && t>=14*60+7) vals.push(null);
+      else { let v = 3 + Math.pow(R(),2.2)*30 + (R()<.08?10:0); vals.push(Math.min(40, v)); }
+    }
+    pts.push({t, vals});
+  }
+  return pts;
+}
+function latencyChart(pts, W, H, compact){
+  const pad=compact?0:44, lo=Math.log10(0.1), hi=Math.log10(100), T=10;
+  const x = i => pad + i/(pts.length-1)*(W-pad);
+  const y = v => T + H - (Math.log10(v)-lo)/(hi-lo)*H;
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H+T+14}" role="img" aria-label="Latency of the 7 affected hosts over 2 hours, about 0.3 ms until 14:05, then 3 to 40 ms; two hosts stop answering at 14:07">`;
+  [0.1,1,10,100].forEach(v=>{ s+=`<line x1="${pad}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="var(--rule)"/>`; s+=`<text x="${compact?W:pad-4}" y="${y(v)-2}" text-anchor="end">${v} ms</text>`; });
+  let up="", dn="", med="";
+  pts.forEach((p,i)=>{ const v=p.vals.filter(a=>a!=null).sort((a,b)=>a-b); const mx=v[v.length-1], mn=v[0], md=v[Math.floor(v.length/2)];
+    up += `${i?"L":"M"}${x(i).toFixed(1)} ${y(mx).toFixed(1)}`; dn = `L${x(i).toFixed(1)} ${y(mn).toFixed(1)}` + dn; med += `${i?"L":"M"}${x(i).toFixed(1)} ${y(md).toFixed(1)}`; });
+  s += `<path d="${up}${dn.replace(/^L/,"L")}Z" fill="var(--deg-fill)" opacity=".35"/>`;
+  s += `<path d="${med}" fill="none" stroke="var(--deg)" stroke-width="1.5"/>`;
+  const iInc = 14*60+7 - (12*60+32);
+  s += `<line x1="${x(iInc)}" x2="${x(iInc)}" y1="${T}" y2="${T+H}" stroke="var(--down)" stroke-dasharray="3 2"/><text x="${x(iInc)-3}" y="${T+H+11}" text-anchor="end" style="fill:var(--down)">14:07 · 2 hosts stop answering</text>`;
+  s += `<text x="${pad}" y="${T+H+11}">12:32</text>`;
+  s += `<circle cx="${x(pts.length-1)}" cy="${y(pts[pts.length-1].vals.filter(a=>a!=null).sort((a,b)=>a-b)[2])}" r="2.5" fill="var(--deg)"/>`;
+  return s+"</svg>";
+}
+function diskChart(d){
+  const W=300,H=56, n=d.length+5, x=i=>i/(n-1)*W, y=v=>H-(v-75)/25*H;
+  let s=`<svg class="chart" viewBox="0 0 ${W} ${H+14}" role="img" aria-label="Volume D: usage rising from 80 to 91 percent in 14 days, projected to reach 100 percent in about 5 days">`;
+  s+=`<line x1="0" x2="${W}" y1="${y(100)}" y2="${y(100)}" stroke="var(--down)" stroke-dasharray="2 2"/><text x="0" y="${y(100)+10}">100 %</text>`;
+  s+=`<path d="${d.map((v,i)=>`${i?"L":"M"}${x(i)} ${y(v)}`).join("")} L${x(d.length-1)} ${H} L0 ${H}Z" fill="var(--ink-3)" opacity=".14"/>`;
+  s+=`<path d="${d.map((v,i)=>`${i?"L":"M"}${x(i)} ${y(v)}`).join("")}" fill="none" stroke="var(--ink-2)" stroke-width="1.5"/>`;
+  s+=`<path d="M${x(d.length-1)} ${y(91)} L${x(n-1)} ${y(100)}" stroke="var(--deg)" stroke-width="1.5" stroke-dasharray="4 3" fill="none"/>`;
+  s+=`<circle cx="${x(d.length-1)}" cy="${y(91)}" r="2.8" fill="var(--ink)"/><text x="${x(d.length-1)}" y="${H+11}" text-anchor="middle">today</text><text x="${W}" y="${H+11}" text-anchor="end">+5 d</text>`;
+  return s+"</svg>";
+}
+function certChart(days){
+  const W=300,H=18, x=v=>v/90*W;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H+14}" role="img" aria-label="9 of 90 days of certificate lifetime left, below the 14 day threshold"><rect x="0" y="4" width="${W}" height="10" fill="var(--sunken)"/><rect x="0" y="4" width="${x(days)}" height="10" fill="var(--warn-fill)"/><line x1="${x(14)}" x2="${x(14)}" y1="0" y2="${H}" stroke="var(--ink)" stroke-width="1.5"/><text x="${x(14)+3}" y="${H+11}">14 d threshold</text><text x="${W}" y="${H+11}" text-anchor="end">90 d</text></svg>`;
+}
+function availChart(){
+  const W=300,H=18, lo=99.5, x=v=>(v-lo)/0.5*W;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H+14}" role="img" aria-label="Availability 99.94 percent against a 99.90 percent target"><rect x="0" y="4" width="${W}" height="10" fill="var(--sunken)"/><rect x="0" y="4" width="${x(99.94)}" height="10" fill="var(--ok-fill)" stroke="var(--ok)" stroke-width="1"/><line x1="${x(99.9)}" x2="${x(99.9)}" y1="0" y2="${H}" stroke="var(--ink)" stroke-width="1.5"/><text x="0" y="${H+11}">99.5 %</text><text x="${x(99.9)-3}" y="${H+11}" text-anchor="end">target</text><text x="${W}" y="${H+11}" text-anchor="end">100 %</text></svg>`;
+}
+
+/* ================= drawer (single drill-down) ================= */
+const layer = $("layer"); let lastFocus = null;
+function openDrawer(html, label){
+  lastFocus = document.activeElement;
+  layer.innerHTML = `<div class="scrim" data-close></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dwH">${html}</aside>`;
+  const d = layer.querySelector(".drawer");
+  d.querySelector("[data-close-btn]").focus();
+  d.addEventListener("keydown", trap);
+}
+function closeLayer(){ layer.innerHTML=""; if(lastFocus && document.contains(lastFocus)) lastFocus.focus(); }
+function trap(e){
+  if(e.key==="Escape"){ e.preventDefault(); closeLayer(); return; }
+  if(e.key!=="Tab") return;
+  const f=[...e.currentTarget.querySelectorAll('button,[href],input,[tabindex]:not([tabindex="-1"])')].filter(x=>!x.disabled);
+  if(!f.length) return; const a=f[0], z=f[f.length-1];
+  if(e.shiftKey && document.activeElement===a){ e.preventDefault(); z.focus(); } else if(!e.shiftKey && document.activeElement===z){ e.preventDefault(); a.focus(); }
+}
+layer.addEventListener("click", e=>{ if(e.target.closest("[data-close]")||e.target.closest("[data-close-btn]")) closeLayer(); });
+const closeBtn = `<button class="icon-btn" type="button" data-close-btn aria-label="Close details">Close <span class="kbd">Esc</span></button>`;
+
+function openHost(id){
+  const n = SCEN_INDEX.get(id) || byId.get(id); if(!n) return;
+  const parentChain=[]; let p=n.parent; while(p){ parentChain.unshift(p); p=p.parent; }
+  const affected = n.incident===1071;
+  const sparkPts = affected ? latencySeries().map(q=>{ let v = q.vals[2]; if(q.t>=14*60+5 && n.latency) v = v*n.latency/20; if(n.state==="down" && q.t>=14*60+7) v = 0.1; return {t:q.t, vals:[v,v,v]}; }) : null;
+  openDrawer(`
+    <div class="drawer-h"><div><div class="eyebrow">Host · ${esc(n.kind)}</div><h2 id="dwH">${esc(n.label)}</h2><div style="margin-top:6px">${stChip(n.state)}</div></div>${closeBtn}</div>
+    <div class="drawer-b">
+      <section><h3>Where it sits</h3><div class="line" style="font-size:13px">${lineageHTML(n)}</div>
+        <div style="margin-top:6px">${rel("confirmed", esc(n.via||""))}</div></section>
+      <section><h3>Facts</h3><dl class="facts">
+        ${n.ip?`<dt>Address</dt><dd class="mono">${n.ip}</dd>`:""}
+        <dt>State</dt><dd>${ST[n.state].label}${n.state==="unk"?" (no data since "+(n.lastSeen||"?")+", never shown as up)":""}</dd>
+        ${n.latency!=null&&n.state!=="unk"&&n.state!=="down"?`<dt>Latency now</dt><dd class="num">${n.latency} ms${n.state==="deg"?" · normal ~0.3 ms":""}</dd>`:""}
+        ${n.state==="down"?`<dt>Last reply</dt><dd class="num">14:06</dd>`:""}
+        ${n.issue?`<dt>Finding</dt><dd>${esc(n.issue)}</dd>`:""}
+        ${n.note?`<dt>Note</dt><dd>${esc(n.note)}</dd>`:""}
+        ${n.recovered?`<dt>Recently</dt><dd>${esc(n.recovered.what)}, resolved ${n.recovered.at}</dd>`:""}
+        ${n.changed?`<dt>Changed</dt><dd class="num">${n.changed} (after your last visit)</dd>`:""}
+      </dl></section>
+      ${sparkPts?`<section><h3>Latency, last 2 h</h3>${latencyChart(sparkPts, 460, 90, false)}<p class="ack-note">Simulated series for this host.${n.state==="down"?" Drawn at the floor after 14:07: no replies.":""}</p></section>`:""}
+      ${n.incident?`<section><h3>Incident</h3><div class="relrow"><div>${n.incident===1071?stChip("down","#1071 critical · uplink flapping on SW-ZH-CORE-02"):stChip("warn","#1072 warning · VeeamBackupSvc stopped")}</div><div>${n.incident===1071?rel("confirmed","parent SW-ZH-CORE-02")+" "+rel("rule","multi_host_down"):rel("rule","3 agent reports")}</div><div><button class="btn" type="button" data-inc="${n.incident}">Open incident #${n.incident}</button></div></div></section>`:""}
+      <section><h3>Not in this prototype</h3><p class="ack-note" style="margin:0">Full host page (checks, agent, logs). <span class="planned">Root-cause ranking · planned</span></p></section>
+    </div>`);
+}
+function openIncident(id){
+  const i1071 = id===1071;
+  openDrawer(i1071 ? `
+    <div class="drawer-h"><div><div class="eyebrow">Incident #1071 · open 25 min</div><h2 id="dwH">Uplink flapping on SW-ZH-CORE-02</h2><div style="margin-top:6px">${stChip("down","Critical")} <span class="ack-note">since 14:07 · rules multi_host_down + host_down_syslog</span></div></div>${closeBtn}</div>
+    <div class="drawer-b">
+      <section><h3>Impact</h3><dl class="facts"><dt>Down</dt><dd>SRV-APP-01, PRN-ZH-02</dd><dt>Degraded</dt><dd>SRV-RDS-01, AP-ZH-OG3, SW-ZH-ACC-03, IOT-ZH-01, AP-ZH-OG4 (3–40 ms, normal ~0.3 ms)</dd><dt>Alerts</dt><dd>7 downstream alerts folded into this incident</dd></dl>
+        <div class="memberlist" style="margin-top:8px">${["SRV-APP-01","PRN-ZH-02","SRV-RDS-01","AP-ZH-OG3","SW-ZH-ACC-03","IOT-ZH-01","AP-ZH-OG4"].map(h=>`<button type="button" data-open="${h}">${h}</button>`).join("")}</div></section>
+      <section><h3>Latency of the 7 hosts</h3>${latencyChart(latencySeries(), 460, 100, false)}</section>
+      <section><h3>Why these belong together</h3>
+        <div class="relrow">${rel("confirmed")}<div>All 7 hosts have the parent SW-ZH-CORE-02 in the topology (UniFi client table / manual parent_id). Downstream alerts are suppressed.</div></div>
+        <div class="relrow">${rel("rule")}<div>Syslog burst on the parent inside the incident window: 38 × %LINK-3-UPDOWN on Te1/0/48 in 10 min.</div></div>
+        <div class="relrow">${rel("suspected")}<div>fw-zh-01 filterlog volume +420 % against the Friday 14:00 baseline. Overlaps in time only, no structural link.</div></div>
+        <div class="relrow">${rel("na")}<div>Cross-metric root-cause ranking. <span class="planned">planned</span></div></div>
+      </section>
+      <section><h3>Timeline</h3><ol class="tl">
+        <li><time>14:05</time>Latency behind SW-ZH-CORE-02 rises from 0.3 ms to 3–40 ms</li>
+        <li><time>14:07</time>SRV-APP-01 and PRN-ZH-02 stop answering · incident opened</li>
+        <li><time>14:15</time>Syslog rate 46 msg/min (baseline 8–14)</li>
+        <li><time>14:32</time>Still open · 38 link flaps in the last 10 min</li>
+      </ol></section>
+      <section><h3>Next step</h3><p style="margin:0;font-size:13px">Inspect optic and cable on Te1/0/48. If the port keeps flapping, move the uplink to the redundant port on SW-ZH-CORE-01.</p>
+        <div class="acts" style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap"><button class="btn" type="button" data-ack="1071" aria-pressed="${acked.has(1071)}">${acked.has(1071)?"Acknowledged":"Acknowledge"}</button><button class="btn" type="button" disabled title="Not part of this prototype">Open syslog filtered to SW-ZH-CORE-02</button></div></section>
+    </div>` : `
+    <div class="drawer-h"><div><div class="eyebrow">Incident #1072 · open 6 min</div><h2 id="dwH">VeeamBackupSvc stopped on SRV-BACKUP-01</h2><div style="margin-top:6px">${stChip("warn","Warning")} <span class="ack-note">since 14:26</span></div></div>${closeBtn}</div>
+    <div class="drawer-b">
+      <section><h3>Finding</h3><p style="margin:0;font-size:13px">The Windows service VeeamBackupSvc was reported as stopped in 3 consecutive agent reports.</p></section>
+      <section><h3>Relations</h3><div class="relrow">${rel("rule")}<div>Agent service rule: 3 consecutive reports.</div></div><div class="relrow">${rel("na")}<div>No structural or temporal link to #1071 found. SRV-BACKUP-01 sits under pve-zh-02 → SW-ZH-CORE-01.</div></div></section>
+      <section><h3>Next step</h3><p style="margin:0;font-size:13px">Start the service and confirm the next backup job runs. <span class="planned">Restart via agent · planned</span></p>
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap"><button class="btn" type="button" data-open="SRV-BACKUP-01">Host details</button><button class="btn" type="button" data-ack="1072">${acked.has(1072)?"Acknowledged":"Acknowledge"}</button></div></section>
+    </div>`);
+}
+const SCEN_INDEX = new Map(); (function w(n,p){ SCEN_INDEX.set(n.id,n); if(!n.parent) n.parent=p; n.children.forEach(c=>w(c,n)); })(SCEN,null);
+
+/* ================= command palette ================= */
+function openCmd(){
+  lastFocus = document.activeElement;
+  const hosts=[]; SCEN_INDEX.forEach(n=>{ if(n.state && n.kind!=="probe" && n.kind!=="site" && n.kind!=="tenant") hosts.push(n); });
+  const all = [
+    {t:"Incident #1071 · Uplink flapping on SW-ZH-CORE-02", k:"incident", s:"down", run:()=>openIncident(1071)},
+    {t:"Incident #1072 · VeeamBackupSvc stopped", k:"incident", s:"warn", run:()=>openIncident(1072)},
+    {t:"Zoom out to tenant", k:"command", run:()=>{ if(isSyn) setScale(false); zoom("tenant"); }},
+    {t:"Show blast radius of #1071", k:"command", run:()=>{ $("optBlast").checked=true; opt.blast=true; document.querySelector('[data-show="SW-ZH-CORE-02"]').click(); }},
+    {t:"Toggle colour theme", k:"command", run:()=>$("themeBtn").click()},
+    {t:"Preview at 10,000 hosts", k:"command", run:()=>setScale(true)}
+  ].concat(hosts.sort((a,b)=>ST[b.state].sev-ST[a.state].sev).map(h=>({t:h.label, k:h.kind, s:h.state, run:()=>openHost(h.id)})));
+  layer.innerHTML = `<div class="scrim cmd-scrim" data-close></div><div class="cmd" role="dialog" aria-modal="true" aria-label="Search"><input id="cmdIn" type="text" role="combobox" aria-expanded="true" aria-controls="cmdList" aria-autocomplete="list" placeholder="Host, incident or command" autocomplete="off"><ul id="cmdList" role="listbox" aria-label="Results"></ul><div class="foot"><span>↑ ↓ choose</span><span>Enter open</span><span>Esc close</span><span>Search across tenants · planned</span></div></div>`;
+  const inp=$("cmdIn"), list=$("cmdList"); let res=[], ai=0;
+  const draw=()=>{ const q=inp.value.trim().toLowerCase(); res = all.filter(r=>!q || r.t.toLowerCase().includes(q) || r.k.toLowerCase().includes(q)).slice(0,30); ai=Math.min(ai, Math.max(0,res.length-1));
+    list.innerHTML = res.length ? res.map((r,i)=>`<li role="option" id="co-${i}" aria-selected="${i===ai}" data-i="${i}">${r.s?glyphSVG(r.s,12):'<span style="width:12px;display:inline-block;text-align:center;color:var(--ink-3)">›</span>'}<span>${esc(r.t)}</span><span class="kind">${esc(r.k)}</span></li>`).join("") : `<li aria-disabled="true">No match. Try a host name like “SRV” or “AP-ZH”.</li>`;
+    inp.setAttribute("aria-activedescendant", res.length?`co-${ai}`:""); const a=$("co-"+ai); if(a) a.scrollIntoView({block:"nearest"}); };
+  const go=i=>{ const r=res[i]; if(!r) return; layer.innerHTML=""; r.run(); };
+  inp.addEventListener("input", ()=>{ ai=0; draw(); });
+  inp.addEventListener("keydown", e=>{
+    if(e.key==="ArrowDown"){ e.preventDefault(); ai=Math.min(res.length-1, ai+1); draw(); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); ai=Math.max(0, ai-1); draw(); }
+    else if(e.key==="Enter"){ e.preventDefault(); go(ai); }
+    else if(e.key==="Escape"){ e.preventDefault(); closeLayer(); }
+    else if(e.key==="Tab"){ e.preventDefault(); }
+  });
+  list.addEventListener("click", e=>{ const li=e.target.closest("[data-i]"); if(li) go(+li.dataset.i); });
+  draw(); inp.focus();
+}
+$("searchBtn").addEventListener("click", openCmd);
+document.addEventListener("keydown", e=>{
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="k"){ e.preventDefault(); openCmd(); }
+  else if(e.key==="/" && !/input|textarea/i.test(document.activeElement.tagName) && !layer.innerHTML){ e.preventDefault(); openCmd(); }
+});
+
+/* ================= theme ================= */
+const root = document.documentElement;
+function applyTheme(t){
+  if(t) root.setAttribute("data-theme", t); else root.removeAttribute("data-theme");
+  $("themeLabel").textContent = t==="dark"?"Dark":t==="light"?"Light":"System";
+}
+let theme = null; try{ theme = localStorage.getItem("ng-c-theme"); }catch(_){}
+applyTheme(theme);
+$("themeBtn").addEventListener("click", ()=>{
+  const dark = root.getAttribute("data-theme") ? root.getAttribute("data-theme")==="dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  theme = dark ? "light" : "dark"; applyTheme(theme);
+  try{ localStorage.setItem("ng-c-theme", theme); }catch(_){}
+  render(false);
+});
+
+/* ================= toast ================= */
+let tt=null;
+function toast(msg){ let t=document.querySelector(".toast"); if(!t){ t=document.createElement("div"); t.className="toast"; t.setAttribute("role","status"); document.body.appendChild(t); } t.textContent=msg; clearTimeout(tt); tt=setTimeout(()=>t.remove(), 2600); }
+
+/* ================= boot ================= */
+function autoGroup(){ const narrow = stage.clientWidth < 560; if(narrow && !grouped && !isSyn){ grouped=true; $("optGroup").checked=true; runCache.clear(); index(DATA); buildTree(); } }
+renderLedger(); renderQueue(); renderChanges(); renderDrift(); renderLegend(); renderCrumbs();
+autoGroup(); buildTree(); render(false); showInspector(null);
+if(document.fonts && document.fonts.ready) document.fonts.ready.then(()=>render(false));
+let rw = stage.clientWidth;
+new ResizeObserver(()=>{ if(Math.abs(stage.clientWidth-rw)>2){ rw=stage.clientWidth; autoGroup(); render(false); } }).observe(stage);
+})();
+</script>
