@@ -72,7 +72,7 @@ const config: Config = {
       colors,
       textColor: textOverrides,
       // Type scale (rem, 1rem = user font size, default 14px). Names do not
-      // collide with Tailwind's xs/sm/base so unmigrated pages keep working.
+      // collide with Tailwind's xs/sm/base.
       fontSize: {
         micro: ['var(--ng-fs-micro)', { lineHeight: '1.35' }],
         meta: ['var(--ng-fs-meta)', { lineHeight: '1.4' }],

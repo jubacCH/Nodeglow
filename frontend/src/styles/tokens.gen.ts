@@ -301,22 +301,6 @@ export const ngTokensRaw = {
   }
 } as const;
 
-/** @deprecated Pre-E3 palette (dark values). Use lib/chart-theme (runtime, theme-aware). */
-export const ngColors = {
-  "bg": "#101217",
-  "surface": "#181A20",
-  "elevated": "#1F222A",
-  "border": "#363A45",
-  "primary": "#7C6CFF",
-  "accent": "#7C6CFF",
-  "success": "#3CC37A",
-  "warning": "#F2923C",
-  "critical": "#F2545B",
-  "text-primary": "#ECEEF2",
-  "text-secondary": "#A2A6B1",
-  "text-muted": "#8A8F9B"
-} as const;
-
 export const ngRadius = {
   "card": "10px",
   "sm": "7px",

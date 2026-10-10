@@ -91,20 +91,8 @@
   font-feature-settings: "tnum" 1;
 }
 
-/* ── Shared component classes (legacy names, restyled to E3) ─────────── */
+/* ── Shared component classes ─────────────────────────────────────────── */
 @layer components {
-  .glass-card,
-  .glass-elevated {
-    background: var(--ng-surface);
-    border: 1px solid var(--ng-border);
-    border-radius: var(--ng-radius);
-    transition: border-color var(--ng-dur) ease-out, background-color var(--ng-dur) ease-out;
-  }
-  .glass-elevated {
-    background: var(--ng-surface-2);
-    border-color: var(--ng-border-2);
-  }
-
   /* Form controls. The <Input>/<Select>/<Textarea> components use these. */
   .ng-input {
     display: block;
@@ -157,14 +145,6 @@
   }
 }
 
-/* Accent helpers kept for unmigrated pages. */
-.nav-active {
-  background: var(--ng-accent-soft);
-  color: var(--ng-accent-text);
-}
-.accent-text { color: var(--ng-accent-text); }
-.accent-bg { background: var(--ng-accent-btn); color: var(--ng-on-accent); }
-
 /* Enterprise table defaults (the <Table> primitives set the same values). */
 table thead th {
   text-align: left;
@@ -180,17 +160,6 @@ table tbody tr:hover {
 }
 table tbody td {
   color: var(--ng-text);
-}
-
-.stat-card-hover {
-  transition: border-color var(--ng-dur) ease-out;
-}
-.stat-card-hover:hover {
-  border-color: var(--ng-border-2);
-}
-a:hover .glass-card,
-a:hover .glass-elevated {
-  border-color: var(--ng-border-2);
 }
 
 /* ── Scrollbars ────────────────────────────────────────────────────────── */
@@ -235,12 +204,6 @@ a:hover .glass-elevated {
   100% { box-shadow: 0 0 0 0 transparent; }
 }
 .ng-just-changed { animation: ng-just-changed 1.6s ease-out; }
-
-@keyframes glow-pulse {
-  0%, 100% { opacity: 0.7; }
-  50% { opacity: 1; }
-}
-.animate-glow-pulse { animation: glow-pulse 2s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -351,47 +314,4 @@ a:hover .glass-elevated {
   border-top: 1px solid var(--ng-border);
   font-size: 0.8571rem;
   color: var(--ng-text-3);
-}
-
-/* ── Legacy bridge: light mode for unmigrated slate/white utilities ────────
-   Remove once docs/design/04-design-system.md §Migration is done everywhere. */
-[data-theme="light"] {
-  .text-slate-100, .text-slate-200, .text-white\/90 { color: var(--ng-text); }
-  .text-slate-300, .text-slate-400 { color: var(--ng-text-2); }
-  .text-slate-500, .text-slate-600 { color: var(--ng-text-3); }
-  .placeholder\:text-slate-500::placeholder,
-  .placeholder\:text-slate-600::placeholder { color: var(--ng-text-3); }
-
-  .bg-white\/\[0\.02\], .bg-white\/\[0\.03\], .bg-white\/\[0\.04\],
-  .bg-white\/5, .bg-white\/\[0\.05\], .bg-white\/\[0\.06\] { background-color: var(--ng-surface-2); }
-  .bg-white\/\[0\.08\], .bg-white\/\[0\.10\], .bg-white\/10, .bg-white\/\[0\.14\] { background-color: var(--ng-surface-3); }
-
-  .hover\:bg-white\/\[0\.03\]:hover, .hover\:bg-white\/\[0\.04\]:hover,
-  .hover\:bg-white\/5:hover, .hover\:bg-white\/\[0\.05\]:hover,
-  .hover\:bg-white\/\[0\.06\]:hover { background-color: var(--ng-surface-2); }
-  .hover\:bg-white\/\[0\.08\]:hover, .hover\:bg-white\/\[0\.10\]:hover,
-  .hover\:bg-white\/\[0\.14\]:hover, .hover\:bg-white\/\[0\.30\]:hover { background-color: var(--ng-surface-3); }
-
-  .border-white\/\[0\.06\], .border-white\/\[0\.08\] { border-color: var(--ng-border); }
-  .border-white\/10, .border-white\/\[0\.10\], .border-white\/\[0\.12\],
-  .border-white\/\[0\.14\] { border-color: var(--ng-border-2); }
-
-  .bg-slate-700, .bg-slate-800, .bg-slate-800\/80 { background-color: var(--ng-surface-3); }
-  .bg-slate-700\/50, .bg-slate-800\/60 { background-color: var(--ng-surface-2); }
-  .bg-slate-900, .bg-slate-900\/80, .bg-slate-900\/90 { background-color: var(--ng-surface); }
-
-  .hover\:text-slate-200:hover, .hover\:text-slate-300:hover { color: var(--ng-text); }
-  .hover\:text-sky-300:hover { color: var(--ng-accent-text); }
-
-  .text-emerald-400, .text-green-400 { color: var(--ng-st-ok-text); }
-  .text-red-400, .text-rose-400 { color: var(--ng-st-down-text); }
-  .text-amber-400, .text-yellow-400 { color: var(--ng-st-degraded-text); }
-  .text-orange-400 { color: var(--ng-st-warning-text); }
-  .text-sky-400, .text-sky-300, .text-sky-200, .text-blue-400,
-  .text-violet-400, .text-indigo-400 { color: var(--ng-accent-text); }
-  .text-cyan-400, .text-teal-400 { color: var(--ng-text-2); }
-
-  .from-sky-400 { --tw-gradient-from: var(--ng-accent-text); }
-  .to-violet-400 { --tw-gradient-to: var(--ng-accent); }
-  .focus\:ring-offset-1:focus { --tw-ring-offset-color: var(--ng-bg); }
 }
