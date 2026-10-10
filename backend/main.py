@@ -3,6 +3,8 @@ import time
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
+from logging_config import configure_logging  # first: later imports log at import time
+configure_logging()
 # Before anything resolves hostnames: cache getaddrinfo process-wide.
 from utils import dns_cache
 
@@ -60,6 +62,7 @@ async def lifespan(app: FastAPI):
 
 _debug = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
 from config import get_version
+from request_id import install as install_request_id
 app = FastAPI(
     title="NODEGLOW",
     version=get_version(),
@@ -69,6 +72,7 @@ app = FastAPI(
     openapi_url="/api/openapi.json" if _debug else None,
     lifespan=lifespan,
 )
+install_request_id(app)  # outermost layer, regardless of where this line sits
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
