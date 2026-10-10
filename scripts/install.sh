@@ -336,8 +336,9 @@ obtain_offline() {
     fi
     tar -xzf "$OFFLINE_BUNDLE" -C "$WORK_DIR"
     SRC_DIR=$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d -name 'nodeglow-*-offline-*' | head -n1)
-    [ -n "$SRC_DIR" ] && is_deploy_dir "$SRC_DIR" && [ -f "$SRC_DIR/images.tar" ] \
-        || die "$bundle_name is not a Nodeglow offline bundle"
+    if [ -z "$SRC_DIR" ] || ! is_deploy_dir "$SRC_DIR" || [ ! -f "$SRC_DIR/images.tar" ]; then
+        die "$bundle_name is not a Nodeglow offline bundle"
+    fi
     check_all_sums "$SRC_DIR"
     ok "bundle contents match their checksums"
     bundle_version=$(head -n1 "$SRC_DIR/VERSION")
