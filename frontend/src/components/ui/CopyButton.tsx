@@ -36,10 +36,10 @@ export function CopyButton({ text, className = '', size = 14 }: CopyButtonProps)
   return (
     <button
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleCopy(); }}
-      className={`inline-flex items-center justify-center p-1 rounded text-slate-500 hover:text-slate-300 hover:bg-white/[0.06] transition-colors ${className}`}
+      className={`inline-flex items-center justify-center p-1 rounded-chip text-fg-3 hover:text-fg hover:bg-surface-2 transition-colors ${className}`}
       title="Copy to clipboard"
     >
-      {copied ? <Check size={size} className="text-emerald-400" /> : <Copy size={size} />}
+      {copied ? <Check size={size} className="text-ok" /> : <Copy size={size} />}
     </button>
   );
 }

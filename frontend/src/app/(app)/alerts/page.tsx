@@ -13,7 +13,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryErrorState, QueryState, StaleDataBanner } from '@/components/ui/QueryState';
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Wrench, Clock, ShieldCheck, Bell, Search } from 'lucide-react';
 import { timeAgo } from '@/lib/utils';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -40,7 +40,18 @@ function AlertsPageInner() {
   const tabParam = searchParams.get('tab') as Tab | null;
   const initialTab = tabParam && VALID_TABS.includes(tabParam) ? tabParam : 'alerts';
   useEffect(() => { document.title = 'Alerts | Nodeglow'; }, []);
-  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  const [activeTab, setActiveTabState] = useState<Tab>(initialTab);
+  const router = useRouter();
+  // The tab lives in the URL so the shell sub-navigation (Incidents /
+  // Maintenance) and the page tabs stay in sync.
+  useEffect(() => {
+    if (tabParam && VALID_TABS.includes(tabParam)) setActiveTabState(tabParam);
+    else if (!tabParam) setActiveTabState('alerts');
+  }, [tabParam]);
+  const setActiveTab = (tab: Tab) => {
+    setActiveTabState(tab);
+    router.replace(tab === 'alerts' ? '/alerts' : `/alerts?tab=${tab}`, { scroll: false });
+  };
   const [incidentSearch, setIncidentSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');

@@ -17,8 +17,8 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
   const to = Math.min((page + 1) * pageSize, total);
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-white/[0.06]">
-      <span className="text-xs text-slate-500">
+    <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+      <span className="text-meta text-fg-3 num">
         {from}–{to} of {total}
       </span>
       <div className="flex items-center gap-1">
@@ -26,15 +26,15 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
           onClick={() => onPageChange(page - 1)}
           disabled={page === 0}
           aria-label="Previous page"
-          className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-white/[0.08] transition-colors disabled:opacity-30 disabled:pointer-events-none"
+          className="p-1.5 rounded-ctl text-fg-2 hover:text-fg hover:bg-surface-2 transition-colors disabled:opacity-40 disabled:pointer-events-none"
         >
           <ChevronLeft size={16} />
         </button>
         {Array.from({ length: totalPages }).map((_, i) => {
           // Show first, last, and pages near current
           if (totalPages > 7 && i > 1 && i < totalPages - 2 && Math.abs(i - page) > 1) {
-            if (i === 2 && page > 3) return <span key={i} className="px-1 text-xs text-slate-600">...</span>;
-            if (i === totalPages - 3 && page < totalPages - 4) return <span key={i} className="px-1 text-xs text-slate-600">...</span>;
+            if (i === 2 && page > 3) return <span key={i} className="px-1 text-meta text-fg-3">...</span>;
+            if (i === totalPages - 3 && page < totalPages - 4) return <span key={i} className="px-1 text-meta text-fg-3">...</span>;
             return null;
           }
           return (
@@ -43,10 +43,10 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
               onClick={() => onPageChange(i)}
               aria-label={`Page ${i + 1}`}
               aria-current={i === page ? 'page' : undefined}
-              className={`min-w-[28px] h-7 rounded-md text-xs font-medium transition-colors ${
+              className={`num min-w-[28px] h-[28px] rounded-ng-sm text-meta font-medium transition-colors ${
                 i === page
-                  ? 'accent-bg text-white'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.08]'
+                  ? 'bg-accent-soft text-accent'
+                  : 'text-fg-2 hover:text-fg hover:bg-surface-2'
               }`}
             >
               {i + 1}
@@ -57,7 +57,7 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages - 1}
           aria-label="Next page"
-          className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-white/[0.08] transition-colors disabled:opacity-30 disabled:pointer-events-none"
+          className="p-1.5 rounded-ctl text-fg-2 hover:text-fg hover:bg-surface-2 transition-colors disabled:opacity-40 disabled:pointer-events-none"
         >
           <ChevronRight size={16} />
         </button>

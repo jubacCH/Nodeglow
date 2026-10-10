@@ -9,15 +9,15 @@ interface HeatmapGridProps {
 }
 
 function cellColor(pct: number | null): string {
-  if (pct === null) return 'bg-slate-500/20';
-  if (pct >= 99.9) return 'bg-emerald-500/70';
-  if (pct >= 95) return 'bg-amber-500/70';
-  return 'bg-red-500/70';
+  if (pct === null) return 'ng-hatch'; // no data never looks healthy
+  if (pct >= 99.9) return 'bg-ok';
+  if (pct >= 95) return 'bg-degraded';
+  return 'bg-down';
 }
 
 export function HeatmapGrid({ data, days }: HeatmapGridProps) {
   if (!data.length) {
-    return <p className="text-sm text-slate-500 text-center py-4">No heatmap data</p>;
+    return <p className="text-ui text-fg-3 text-center py-4">No heatmap data</p>;
   }
 
   return (
@@ -25,13 +25,13 @@ export function HeatmapGrid({ data, days }: HeatmapGridProps) {
       <table className="w-full text-xs">
         <thead>
           <tr>
-            <th className="text-left px-2 py-1 text-slate-500 font-normal w-32">Host</th>
+            <th className="text-left px-2 py-1 text-fg-3 font-normal w-32">Host</th>
             {days.map((d, i) => (
               <th key={i} className="px-0 py-1" title={d}>
                 <span className="sr-only">{d}</span>
               </th>
             ))}
-            <th className="text-right px-2 py-1 text-slate-500 font-normal w-16">Avg</th>
+            <th className="text-right px-2 py-1 text-fg-3 font-normal w-16">Avg</th>
           </tr>
         </thead>
         <tbody>
@@ -42,7 +42,7 @@ export function HeatmapGrid({ data, days }: HeatmapGridProps) {
               : '—';
             return (
               <tr key={host.host_id} className="group">
-                <td className="px-2 py-1 text-slate-300 truncate max-w-[120px]" title={host.name}>
+                <td className="px-2 py-1 text-fg truncate max-w-[120px]" title={host.name}>
                   {host.name}
                 </td>
                 {host.days.map((pct, i) => (
@@ -56,11 +56,11 @@ export function HeatmapGrid({ data, days }: HeatmapGridProps) {
                     />
                   </td>
                 ))}
-                <td className={cn('text-right px-2 py-1 font-mono', {
-                  'text-emerald-400': Number(avg) >= 99.9,
-                  'text-amber-400': Number(avg) >= 95 && Number(avg) < 99.9,
-                  'text-red-400': Number(avg) < 95 && avg !== '—',
-                  'text-slate-500': avg === '—',
+                <td className={cn('text-right px-2 py-1 font-mono num', {
+                  'text-ok': Number(avg) >= 99.9,
+                  'text-degraded': Number(avg) >= 95 && Number(avg) < 99.9,
+                  'text-down': Number(avg) < 95 && avg !== '—',
+                  'text-fg-3': avg === '—',
                 })}>
                   {avg}{avg !== '—' ? '%' : ''}
                 </td>

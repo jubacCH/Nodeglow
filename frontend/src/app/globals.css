@@ -3,349 +3,245 @@
 @tailwind utilities;
 
 /*
- * Color tokens come from design-tokens/tokens.json via the auto-generated
- * tokens.gen.css. To change a brand color, edit the JSON and run
- * `npm run build:tokens` — never hardcode hex values in this file.
- *
- * The handful of card/glass/gradient/hover tokens that are theme-specific
- * but NOT primary brand colors stay inline below — they're either runtime-
- * computed (rgba alpha tweaks) or one-offs that don't justify a JSON entry.
+ * Nodeglow design system (concept E3, accent Glow Violet).
+ * All colours, glows, radii and fonts come from design-tokens/tokens.json via
+ * the generated tokens.gen.css. Never hardcode hex values here or in
+ * components; reference: docs/design/04-design-system.md.
  */
 @import './../styles/tokens.gen.css';
 
-:root,
-[data-theme="dark"] {
-  --accent: var(--ng-primary);
-  --ng-hover: rgba(255, 255, 255, 0.08);
-  --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.03) 0%, transparent 60%);
-
-  /* Bento card tokens (theme-specific, not in tokens.json) */
-  --ng-card-bg: #131820;
-  --ng-card-bg-elevated: #171D2A;
-  --ng-card-border: rgba(255, 255, 255, 0.10);
-  --ng-card-border-hover: rgba(255, 255, 255, 0.16);
-  --ng-card-radius: var(--ng-radius-card);
-  --ng-card-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2);
-  --ng-card-shadow-hover: 0 2px 8px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25);
-
-  /* Aliases for backward compat (46+ consumers) */
-  --ng-glass-bg: var(--ng-card-bg);
-  --ng-glass-border: var(--ng-card-border);
-  --ng-glass-bg-elevated: var(--ng-card-bg-elevated);
-  --ng-glass-border-elevated: var(--ng-card-border-hover);
-}
-
-[data-theme="light"] {
-  --accent: var(--ng-primary);
-  --ng-hover: rgba(0, 0, 0, 0.04);
-  --ng-body-gradient: radial-gradient(ellipse at 50% 0%, rgba(56, 189, 248, 0.08) 0%, rgba(139, 92, 246, 0.03) 40%, transparent 70%);
-
-  /* Bento card tokens — light */
-  --ng-card-bg: #FFFFFF;
-  --ng-card-bg-elevated: #FFFFFF;
-  --ng-card-border: rgba(0, 0, 0, 0.08);
-  --ng-card-border-hover: rgba(0, 0, 0, 0.14);
-  --ng-card-radius: var(--ng-radius-card);
-  --ng-card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
-  --ng-card-shadow-hover: 0 2px 8px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06);
-
-  /* Aliases */
-  --ng-glass-bg: var(--ng-card-bg);
-  --ng-glass-border: var(--ng-card-border);
-  --ng-glass-bg-elevated: var(--ng-card-bg-elevated);
-  --ng-glass-border-elevated: var(--ng-card-border-hover);
-}
-
-html, body {
-  background: var(--ng-bg);
-  /* The radial gradient lives on the scrolling <main> in AppShell so it
-     stays consistent with the content surface. body just provides the
-     solid base color so any element that escapes the AppShell tree
-     (modals, portals) still has a sane background underneath. */
-}
-
-body {
-  color: var(--ng-text-primary);
-  font-family: var(--font-inter), system-ui, sans-serif;
-}
-
-/* ── Light mode: remap dark-first Tailwind utilities ── */
-[data-theme="light"] {
-  /* Invert the slate text scale: light→dark equivalents */
-  .text-slate-100 { color: #0F172A; }
-  .text-slate-200 { color: #1E293B; }
-  .text-slate-300 { color: #334155; }
-  .text-slate-400 { color: #475569; }
-  .text-slate-500 { color: #64748B; }
-  .text-slate-600 { color: #94A3B8; }
-  /* text-white intentionally NOT remapped — used on colored bg buttons/badges */
-
-  /* Placeholder text */
-  .placeholder\:text-slate-500::placeholder { color: #94A3B8; }
-  .placeholder\:text-slate-600::placeholder { color: #94A3B8; }
-
-  /* Semi-transparent white backgrounds → semi-transparent black */
-  .bg-white\/\[0\.02\] { background-color: rgba(0, 0, 0, 0.02); }
-  .bg-white\/\[0\.03\] { background-color: rgba(0, 0, 0, 0.025); }
-  .bg-white\/\[0\.04\] { background-color: rgba(0, 0, 0, 0.03); }
-  .bg-white\/5,
-  .bg-white\/\[0\.05\] { background-color: rgba(0, 0, 0, 0.03); }
-  .bg-white\/\[0\.06\] { background-color: rgba(0, 0, 0, 0.04); }
-  .bg-white\/\[0\.08\] { background-color: rgba(0, 0, 0, 0.05); }
-  .bg-white\/\[0\.10\] { background-color: rgba(0, 0, 0, 0.06); }
-  .bg-white\/\[0\.14\] { background-color: rgba(0, 0, 0, 0.08); }
-
-  /* Hover states */
-  .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(0, 0, 0, 0.035); }
-  .hover\:bg-white\/\[0\.04\]:hover { background-color: rgba(0, 0, 0, 0.04); }
-  .hover\:bg-white\/5:hover,
-  .hover\:bg-white\/\[0\.05\]:hover { background-color: rgba(0, 0, 0, 0.04); }
-  .hover\:bg-white\/\[0\.06\]:hover { background-color: rgba(0, 0, 0, 0.05); }
-  .hover\:bg-white\/\[0\.08\]:hover { background-color: rgba(0, 0, 0, 0.06); }
-  .hover\:bg-white\/\[0\.10\]:hover { background-color: rgba(0, 0, 0, 0.07); }
-  .hover\:bg-white\/\[0\.14\]:hover { background-color: rgba(0, 0, 0, 0.09); }
-  .hover\:bg-white\/\[0\.30\]:hover { background-color: rgba(0, 0, 0, 0.08); }
-
-  /* Borders */
-  .border-white\/\[0\.06\] { border-color: rgba(0, 0, 0, 0.08); }
-  .border-white\/\[0\.08\] { border-color: rgba(0, 0, 0, 0.10); }
-  .border-white\/10,
-  .border-white\/\[0\.10\] { border-color: rgba(0, 0, 0, 0.10); }
-  .border-white\/\[0\.12\] { border-color: rgba(0, 0, 0, 0.12); }
-  .border-white\/\[0\.14\] { border-color: rgba(0, 0, 0, 0.14); }
-
-  /* Solid slate backgrounds — used on progress bars, toggles, and other
-     elements that hardcoded a dark canvas color. Remap so light mode gets
-     a visible muted bar instead of a dark rectangle on a light bg. */
-  .bg-slate-700 { background-color: rgba(0, 0, 0, 0.12); }
-  .bg-slate-700\/50 { background-color: rgba(0, 0, 0, 0.07); }
-  .bg-slate-800 { background-color: rgba(0, 0, 0, 0.10); }
-  .bg-slate-800\/60 { background-color: rgba(0, 0, 0, 0.07); }
-  .bg-slate-800\/80 { background-color: rgba(0, 0, 0, 0.10); }
-  .bg-slate-900 { background-color: #F4F7FA; }
-  .bg-slate-900\/80 { background-color: rgba(255, 255, 255, 0.92); }
-  .bg-slate-900\/90 { background-color: rgba(255, 255, 255, 0.94); }
-
-  /* Hover text */
-  .hover\:text-slate-200:hover { color: #1E293B; }
-  .hover\:text-slate-300:hover { color: #334155; }
-  .hover\:text-sky-300:hover { color: #0369A1; }
-
-  /* Semantic status colors — darken slightly for light bg readability */
-  .text-emerald-400 { color: #059669; }
-  .text-red-400 { color: #DC2626; }
-  .text-amber-400 { color: #D97706; }
-  .text-sky-400 { color: #0284C7; }
-  .text-violet-400 { color: #7C3AED; }
-  .text-cyan-400 { color: #0891B2; }
-  .text-orange-400 { color: #EA580C; }
-  .text-indigo-400 { color: #4F46E5; }
-  .text-teal-400 { color: #0D9488; }
-  .text-green-400 { color: #16A34A; }
-  .text-yellow-400 { color: #CA8A04; }
-  .text-rose-400 { color: #E11D48; }
-  .text-blue-400 { color: #2563EB; }
-  .text-sky-300\/60 { color: rgba(2, 132, 199, 0.7); }
-
-  /* The 200/300 tints sit on tinted chips (bg-sky-500/20 and friends), which
-     stay pale in light mode. Keeping the dark-theme value there leaves the
-     label barely readable — the active timespan button was the visible case.
-     Go darker than the -400 remap so the contrast holds on the tint. */
-  .text-sky-300 { color: #0369A1; }
-  .text-sky-200 { color: #075985; }
-
-  /* Gradient text stays vivid */
-  .from-sky-400 { --tw-gradient-from: #0284C7; }
-  .to-violet-400 { --tw-gradient-to: #7C3AED; }
-
-  /* Divider/separator borders */
-  .border-b.border-white\/\[0\.06\] { border-color: rgba(0, 0, 0, 0.08); }
-
-  /* Scrollbar for light mode */
-  ::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.12);
+/* ── Base ─────────────────────────────────────────────────────────────── */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    background: var(--ng-bg);
   }
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.20);
+  body {
+    background: var(--ng-bg);
+    color: var(--ng-text);
+    font-family: var(--ng-font-ui);
+    line-height: 1.45;
+    font-feature-settings: "tnum" 1, "cv11" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-
-  /* Ring offset */
-  .focus\:ring-offset-1:focus { --tw-ring-offset-color: #E8EEF4; }
+  ::placeholder {
+    color: var(--ng-text-3);
+    opacity: 1;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--ng-accent) 32%, transparent);
+    color: var(--ng-text);
+  }
 }
 
-/* Custom scrollbar — thin, theme-aware, accent on hover */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* ── Focus: one visible ring everywhere (keyboard only) ────────────────── */
+:focus-visible {
+  outline: 2px solid var(--ng-focus);
+  outline-offset: 2px;
 }
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-  transition: background-color 0.15s ease-out;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--ng-primary) 40%, transparent);
-  background-clip: padding-box;
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-/* Firefox */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
+/* Elements that draw their own focus treatment opt out explicitly. */
+.ng-focus-inset:focus-visible {
+  outline-offset: -2px;
 }
 
-/* Text selection — branded sky tint */
-::selection {
-  background: color-mix(in srgb, var(--ng-primary) 32%, transparent);
-  color: var(--ng-text-primary);
+/* ── Glow (signature) ──────────────────────────────────────────────────
+   Only critical and warning glow. Healthy, maintenance and unknown never do
+   ("no light = no data"). Critical breathes slowly in dark mode only; the
+   --ng-breathe token is `none` in light mode and reduced motion stops it. */
+@keyframes ng-breathe {
+  0%, 100% { opacity: 0.62; }
+  50% { opacity: 1; }
 }
-::-moz-selection {
-  background: color-mix(in srgb, var(--ng-primary) 32%, transparent);
-  color: var(--ng-text-primary);
+.ng-glow-crit,
+.ng-glow-warn {
+  position: relative;
+}
+.ng-glow-crit::after,
+.ng-glow-warn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.ng-glow-crit::after {
+  box-shadow: var(--ng-glow-crit);
+  animation: var(--ng-breathe);
+}
+.ng-glow-warn::after {
+  box-shadow: var(--ng-glow-warn);
+}
+/* Acknowledged: the halo stays at half strength but stops breathing. */
+.ng-glow-acked::after {
+  animation: none;
+  opacity: 0.5;
 }
 
-/* Glass card styles */
+/* Hatched "no data" fill (graphics only, always paired with a text label). */
+.ng-hatch {
+  background-color: var(--ng-hatch-2);
+  background-image: var(--ng-hatch);
+}
+
+/* Tabular figures for numbers that update in place. */
+.num,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ── Shared component classes (legacy names, restyled to E3) ─────────── */
 @layer components {
-  .glass-card {
-    background: var(--ng-card-bg);
-    border-color: var(--ng-card-border);
-    border-width: 1.5px;
-    border-radius: var(--ng-card-radius);
-    box-shadow: var(--ng-card-shadow);
-    @apply border transition-all;
+  .glass-card,
+  .glass-elevated {
+    background: var(--ng-surface);
+    border: 1px solid var(--ng-border);
+    border-radius: var(--ng-radius);
+    transition: border-color var(--ng-dur) ease-out, background-color var(--ng-dur) ease-out;
   }
   .glass-elevated {
-    background: var(--ng-card-bg-elevated);
-    border-color: var(--ng-card-border-hover);
-    border-width: 1.5px;
-    border-radius: var(--ng-card-radius);
-    box-shadow: var(--ng-card-shadow-hover);
-    @apply border transition-all;
+    background: var(--ng-surface-2);
+    border-color: var(--ng-border-2);
   }
+
+  /* Form controls. The <Input>/<Select>/<Textarea> components use these. */
   .ng-input {
-    @apply w-full px-3.5 py-2.5 text-sm rounded-lg border focus:outline-none focus:ring-2 transition-all;
-    background: var(--ng-glass-bg);
-    border-color: var(--ng-glass-border);
-    color: var(--ng-text-primary);
-    --tw-ring-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    display: block;
+    width: 100%;
+    min-height: 36px;
+    padding: 7px 12px;
+    font-size: 0.9286rem;
+    line-height: 1.4;
+    color: var(--ng-text);
+    background: var(--ng-surface);
+    border: 1px solid var(--ng-border-2);
+    border-radius: var(--ng-radius-ctl);
+    transition: border-color var(--ng-dur) ease-out, box-shadow var(--ng-dur) ease-out;
   }
-  .ng-input::placeholder {
-    color: var(--ng-text-muted);
+  .ng-input:hover {
+    border-color: var(--ng-line);
   }
-  .ng-input:focus {
-    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  .ng-input:focus,
+  .ng-input:focus-visible {
+    outline: none;
+    border-color: var(--ng-focus);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ng-focus) 22%, transparent);
+  }
+  .ng-input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .ng-input[aria-invalid="true"] {
+    border-color: var(--ng-st-down);
+  }
+  select.ng-input {
+    appearance: none;
+    padding-right: 32px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--ng-text-3) 50%),
+      linear-gradient(135deg, var(--ng-text-3) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 52%, calc(100% - 11px) 52%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+  textarea.ng-input {
+    min-height: 80px;
+    resize: vertical;
   }
   .ng-label {
-    @apply block text-xs font-medium mb-1.5 uppercase tracking-wider;
-    color: var(--ng-text-secondary);
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.8571rem;
+    font-weight: 500;
+    color: var(--ng-text-2);
   }
 }
 
-/* Accent color overrides — driven by theme store */
+/* Accent helpers kept for unmigrated pages. */
 .nav-active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  background: var(--ng-accent-soft);
+  color: var(--ng-accent-text);
 }
-.accent-text { color: var(--accent); }
-.accent-bg { background: var(--accent); }
+.accent-text { color: var(--ng-accent-text); }
+.accent-bg { background: var(--ng-accent-btn); color: var(--ng-on-accent); }
 
-/* Enterprise table styles */
+/* Enterprise table defaults (the <Table> primitives set the same values). */
 table thead th {
-  @apply text-left text-xs font-semibold uppercase tracking-wider;
-  color: var(--ng-text-secondary);
+  text-align: left;
+  font-size: 0.8571rem;
+  font-weight: 500;
+  color: var(--ng-text-2);
 }
 table tbody tr {
-  @apply transition-colors;
+  transition: background-color var(--ng-dur) ease-out;
 }
-[data-theme="dark"] table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.03);
-}
-[data-theme="light"] table tbody tr:hover {
-  background: rgba(0, 0, 0, 0.02);
+table tbody tr:hover {
+  background: var(--ng-hover);
 }
 table tbody td {
-  @apply text-sm;
-  color: var(--ng-text-primary);
+  color: var(--ng-text);
 }
 
-/* Stat card hover */
 .stat-card-hover {
-  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  transition: border-color var(--ng-dur) ease-out;
 }
 .stat-card-hover:hover {
-  border-color: var(--ng-card-border-hover);
-  box-shadow: var(--ng-card-shadow-hover);
-  transform: translateY(-1px);
-}
-
-/* ── Link-wrapped card microinteraction ─────────────────────────────────────
-   Any <a>/<Link> that wraps a GlassCard gets a subtle hover lift + press-
-   down feedback without the cards having to opt in individually. Uses
-   descendant selector `a > .glass-card` so static cards (not inside a link)
-   stay static.
-
-   Also apply to the common "navigable glass card" pattern used across the
-   app: divs that have cursor-pointer and contain a GlassCard. */
-a:not(.no-lift) .glass-card,
-a:not(.no-lift) .glass-elevated {
-  transition: transform 0.15s ease-out, border-color 0.15s ease-out, box-shadow 0.15s ease-out;
-  will-change: transform;
+  border-color: var(--ng-border-2);
 }
 a:hover .glass-card,
 a:hover .glass-elevated {
-  transform: translateY(-1px);
-  border-color: var(--ng-card-border-hover);
-  box-shadow: var(--ng-card-shadow-hover);
-}
-a:active .glass-card,
-a:active .glass-elevated {
-  transform: translateY(0) scale(0.998);
-  transition-duration: 0.05s;
+  border-color: var(--ng-border-2);
 }
 
-/* ── Global focus ring ──────────────────────────────────────────────────────
-   Keyboard-focus rings that transition in rather than snapping. Applied
-   via :focus-visible so mouse clicks don't trigger it. */
-*:focus-visible {
-  outline: none;
+/* ── Scrollbars ────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--ng-border-2);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
-a:focus-visible,
-button:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
-[role="button"]:focus-visible {
-  outline: 2px solid rgba(56, 189, 248, 0.55);
-  outline-offset: 2px;
-  border-radius: inherit;
-  transition: outline-color 0.15s ease-out, outline-offset 0.15s ease-out;
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ng-line);
+  background-clip: padding-box;
 }
+::-webkit-scrollbar-corner { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--ng-border-2) transparent; }
 
-/* Press-down feedback on clickable-looking divs (cards wrapped in <div
-   onClick> or <Link>). Pair with cursor-pointer in markup. */
-.cursor-pointer:active {
-  transform: scale(0.995);
-  transition: transform 0.05s ease-out;
-}
-
-/* Page transition */
+/* ── Motion ────────────────────────────────────────────────────────────── */
 @keyframes page-enter {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.animate-page-enter {
-  animation: page-enter 0.2s ease-out;
+.animate-page-enter { animation: page-enter 0.18s ease-out; }
+
+@keyframes ng-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.ng-shimmer {
+  background-color: var(--ng-surface-2);
+  background-image: linear-gradient(90deg, transparent 0%, var(--ng-hover) 50%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: ng-shimmer 1.6s ease-in-out infinite;
 }
 
-/* Respect the OS "reduce motion" setting: no entrance/pulse/shimmer
-   animations and near-instant transitions. */
+/* Only for real state changes, never on every render. */
+@keyframes ng-just-changed {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ng-accent) 45%, transparent); }
+  60% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.ng-just-changed { animation: ng-just-changed 1.6s ease-out; }
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+.animate-glow-pulse { animation: glow-pulse 2s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -355,176 +251,147 @@ textarea:focus-visible,
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  .ng-glow-crit::after,
+  .animate-breathe {
+    animation: none !important;
+  }
 }
 
-/* Glow pulse animation */
-@keyframes glow-pulse {
-  0%, 100% { box-shadow: 0 0 4px 1px currentColor; }
-  50% { box-shadow: 0 0 8px 3px currentColor; }
-}
-.animate-glow-pulse {
-  animation: glow-pulse 2s ease-in-out infinite;
-}
-
-
-/* Glow panel markdown theme classes */
-.glow-heading { color: var(--ng-primary); }
-.glow-bold { color: var(--ng-text-primary); }
-.glow-code { background: var(--ng-glass-bg); color: var(--ng-primary); }
-.glow-bullet { color: var(--ng-text-muted); }
-
-
-/* ── Tabular nums ────────────────────────────────────────────────────────── */
-/* Lock numeric digits to a fixed width so live-updating values
-   (latencies, counts, percentages, ms timestamps) don't trigger
-   layout shift as their digits change. Apply to any element that
-   displays numbers that update in place. */
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
-}
-
-
-/* ── Skeleton shimmer ────────────────────────────────────────────────────── */
-/* Horizontal shimmer that sweeps across a placeholder every 1.6s. More
-   alive than pulse, and reads as "data is coming" rather than "thing is
-   idle". Applied via the .ng-shimmer class on Skeleton. */
-@keyframes ng-shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-.ng-shimmer {
-  background-image: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.04) 0%,
-    rgba(255, 255, 255, 0.10) 50%,
-    rgba(255, 255, 255, 0.04) 100%
-  );
-  background-size: 200% 100%;
-  background-repeat: no-repeat;
-  animation: ng-shimmer 1.6s ease-in-out infinite;
-}
-[data-theme="light"] .ng-shimmer {
-  background-image: linear-gradient(
-    90deg,
-    rgba(0, 0, 0, 0.03) 0%,
-    rgba(0, 0, 0, 0.08) 50%,
-    rgba(0, 0, 0, 0.03) 100%
-  );
-}
-
-
-/* ── Just-changed pulse ──────────────────────────────────────────────────── */
-/* Subtle sky-tinged border ring that fades over 1.6s. Apply via the
-   .ng-just-changed class — typically toggled for ~5s after fresh data
-   arrives. Discipline rule (DESIGN_GUIDE): only use for actual state
-   changes, not on every render. */
-@keyframes ng-just-changed {
-  0%   { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.45); }
-  60%  { box-shadow: 0 0 0 6px rgba(56, 189, 248, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
-}
-.ng-just-changed {
-  animation: ng-just-changed 1.6s ease-out;
-}
-
+/* Glow (AI) panel markdown */
+.glow-heading { color: var(--ng-accent-text); }
+.glow-bold { color: var(--ng-text); }
+.glow-code { background: var(--ng-surface-2); color: var(--ng-accent-text); }
+.glow-bullet { color: var(--ng-text-3); }
 
 /* ── Command palette (cmdk) ────────────────────────────────────────────── */
 [cmdk-overlay] {
   position: fixed;
   inset: 0;
-  background: rgba(6, 8, 16, 0.78);
-  backdrop-filter: blur(6px);
-  z-index: 100;
-  animation: page-enter 0.15s ease-out;
+  background: var(--ng-scrim);
+  z-index: 74;
 }
 .cmdk-dialog {
   position: fixed;
-  top: 18%;
+  top: 12vh;
   left: 50%;
   transform: translateX(-50%);
-  width: 100%;
-  max-width: 640px;
-  z-index: 101;
-  animation: page-enter 0.2s ease-out;
+  width: min(620px, calc(100% - 32px));
+  z-index: 75;
+  animation: page-enter 0.14s ease-out;
 }
 .cmdk-shell {
-  background: var(--ng-surface-container);
-  border: 1px solid var(--ng-card-border);
-  border-radius: 12px;
-  box-shadow:
-    0 20px 50px -10px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(56, 189, 248, 0.08);
+  background: var(--ng-surface);
+  border: 1px solid var(--ng-border-2);
+  border-radius: var(--ng-radius-lg);
+  box-shadow: var(--ng-shadow);
   overflow: hidden;
 }
 .cmdk-input-wrap {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--ng-card-border);
+  height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--ng-border);
+  color: var(--ng-text-3);
 }
 .cmdk-input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: 0;
   outline: 0;
-  font-size: 14px;
-  color: var(--ng-text-primary);
+  font-size: 1.0714rem;
+  color: var(--ng-text);
 }
-.cmdk-input::placeholder { color: var(--ng-text-muted); }
-.cmdk-kbd {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--ng-glass-bg);
-  border: 1px solid var(--ng-card-border);
-  color: var(--ng-text-muted);
-  font-family: var(--font-geist-mono, monospace);
-}
+.cmdk-input:focus-visible { outline: none; }
 .cmdk-list {
-  max-height: min(60vh, 480px);
+  max-height: min(420px, 60vh);
   overflow-y: auto;
-  padding: 6px;
-  scroll-padding: 6px;
+  padding: 8px;
+  scroll-padding: 8px;
 }
-.cmdk-empty {
-  padding: 32px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--ng-text-muted);
-}
-.cmdk-group {
-  padding: 4px 0;
+.cmdk-empty,
+[cmdk-loading] {
+  display: block;
+  padding: 18px 10px;
+  font-size: 0.9286rem;
+  color: var(--ng-text-3);
 }
 .cmdk-group [cmdk-group-heading] {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ng-text-muted);
-  padding: 8px 12px 4px;
-  font-weight: 600;
+  padding: 8px 10px 4px;
+  font-size: 0.7857rem;
+  font-weight: 500;
+  color: var(--ng-text-3);
 }
 .cmdk-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--ng-text-secondary);
+  padding: 8px 10px;
+  border-radius: var(--ng-radius-sm);
+  font-size: 0.9286rem;
+  color: var(--ng-text);
   cursor: pointer;
   user-select: none;
 }
-.cmdk-item[data-selected="true"] {
-  background: rgba(56, 189, 248, 0.12);
-  color: var(--ng-text-primary);
-  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.18);
-}
-.cmdk-item[data-selected="true"] svg { color: var(--ng-primary); }
+.cmdk-item svg { color: var(--ng-text-2); }
+.cmdk-item[data-selected="true"] { background: var(--ng-accent-soft); }
+.cmdk-item[data-selected="true"] svg { color: var(--ng-accent-text); }
 .cmdk-meta {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--ng-text-muted);
-  font-family: var(--font-geist-mono, monospace);
+  font-size: 0.8571rem;
+  color: var(--ng-text-3);
+}
+.cmdk-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--ng-border);
+  font-size: 0.8571rem;
+  color: var(--ng-text-3);
+}
+
+/* ── Legacy bridge: light mode for unmigrated slate/white utilities ────────
+   Remove once docs/design/04-design-system.md §Migration is done everywhere. */
+[data-theme="light"] {
+  .text-slate-100, .text-slate-200, .text-white\/90 { color: var(--ng-text); }
+  .text-slate-300, .text-slate-400 { color: var(--ng-text-2); }
+  .text-slate-500, .text-slate-600 { color: var(--ng-text-3); }
+  .placeholder\:text-slate-500::placeholder,
+  .placeholder\:text-slate-600::placeholder { color: var(--ng-text-3); }
+
+  .bg-white\/\[0\.02\], .bg-white\/\[0\.03\], .bg-white\/\[0\.04\],
+  .bg-white\/5, .bg-white\/\[0\.05\], .bg-white\/\[0\.06\] { background-color: var(--ng-surface-2); }
+  .bg-white\/\[0\.08\], .bg-white\/\[0\.10\], .bg-white\/10, .bg-white\/\[0\.14\] { background-color: var(--ng-surface-3); }
+
+  .hover\:bg-white\/\[0\.03\]:hover, .hover\:bg-white\/\[0\.04\]:hover,
+  .hover\:bg-white\/5:hover, .hover\:bg-white\/\[0\.05\]:hover,
+  .hover\:bg-white\/\[0\.06\]:hover { background-color: var(--ng-surface-2); }
+  .hover\:bg-white\/\[0\.08\]:hover, .hover\:bg-white\/\[0\.10\]:hover,
+  .hover\:bg-white\/\[0\.14\]:hover, .hover\:bg-white\/\[0\.30\]:hover { background-color: var(--ng-surface-3); }
+
+  .border-white\/\[0\.06\], .border-white\/\[0\.08\] { border-color: var(--ng-border); }
+  .border-white\/10, .border-white\/\[0\.10\], .border-white\/\[0\.12\],
+  .border-white\/\[0\.14\] { border-color: var(--ng-border-2); }
+
+  .bg-slate-700, .bg-slate-800, .bg-slate-800\/80 { background-color: var(--ng-surface-3); }
+  .bg-slate-700\/50, .bg-slate-800\/60 { background-color: var(--ng-surface-2); }
+  .bg-slate-900, .bg-slate-900\/80, .bg-slate-900\/90 { background-color: var(--ng-surface); }
+
+  .hover\:text-slate-200:hover, .hover\:text-slate-300:hover { color: var(--ng-text); }
+  .hover\:text-sky-300:hover { color: var(--ng-accent-text); }
+
+  .text-emerald-400, .text-green-400 { color: var(--ng-st-ok-text); }
+  .text-red-400, .text-rose-400 { color: var(--ng-st-down-text); }
+  .text-amber-400, .text-yellow-400 { color: var(--ng-st-degraded-text); }
+  .text-orange-400 { color: var(--ng-st-warning-text); }
+  .text-sky-400, .text-sky-300, .text-sky-200, .text-blue-400,
+  .text-violet-400, .text-indigo-400 { color: var(--ng-accent-text); }
+  .text-cyan-400, .text-teal-400 { color: var(--ng-text-2); }
+
+  .from-sky-400 { --tw-gradient-from: var(--ng-accent-text); }
+  .to-violet-400 { --tw-gradient-to: var(--ng-accent); }
+  .focus\:ring-offset-1:focus { --tw-ring-offset-color: var(--ng-bg); }
 }

@@ -5,6 +5,11 @@ import { applyLiveUpdates, liveRefetchInterval } from '@/lib/liveUpdates';
 
 interface WsState {
   isConnected: boolean;
+  /** Has the socket been open at least once since connect()? Lets the UI tell
+   *  "connecting" (first attempt) from "lost" (dropped, reconnecting). */
+  everConnected: boolean;
+  /** ms timestamp of the last change of isConnected (for "since 14:31"). */
+  changedAt: number | null;
   /** Open the socket. Live events are folded into `queryClient`'s cache. */
   connect: (queryClient: QueryClient) => void;
   disconnect: () => void;
@@ -44,6 +49,8 @@ function scheduleFlush() {
 
 export const useWsStore = create<WsState>((set, getState) => ({
   isConnected: false,
+  everConnected: false,
+  changedAt: null,
 
   connect: (queryClient) => {
     client = queryClient;
@@ -63,7 +70,7 @@ export const useWsStore = create<WsState>((set, getState) => ({
     ws = sock;
 
     sock.onopen = () => {
-      set({ isConnected: true });
+      set({ isConnected: true, everConnected: true, changedAt: Date.now() });
       backoff = 1000;
     };
 
@@ -85,7 +92,7 @@ export const useWsStore = create<WsState>((set, getState) => ({
     sock.onclose = () => {
       // A socket replaced by a newer connect() must not clobber its state.
       if (ws !== sock && ws !== null) return;
-      set({ isConnected: false });
+      set({ isConnected: false, changedAt: Date.now() });
       ws = null;
       // Do not reconnect if the socket was closed by an intentional disconnect.
       if (intentionalDisconnect) return;
@@ -111,7 +118,7 @@ export const useWsStore = create<WsState>((set, getState) => ({
     ws = null;
     pendingPings.clear();
     pendingAgents.clear();
-    set({ isConnected: false });
+    set({ isConnected: false, everConnected: false, changedAt: null });
   },
 }));
 

@@ -6,6 +6,7 @@
     "dev": "node scripts/build-tokens.mjs && next dev",
     "build": "node scripts/build-tokens.mjs && next build",
     "build:tokens": "node scripts/build-tokens.mjs",
+    "check:contrast": "vitest run scripts/check-contrast.test.ts --silent=false",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run"

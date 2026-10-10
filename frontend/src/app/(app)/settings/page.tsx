@@ -18,6 +18,8 @@ import { api, apiErrorBody, apiErrorMessage, get, post, del } from '@/lib/api';
 import { MIN_BACKUP_PASSPHRASE, isEncryptedBackup } from '@/lib/backup';
 import { useToastStore } from '@/stores/toast';
 import { useThemeStore } from '@/stores/theme';
+import { SegmentedControl } from '@/components/ui/Tabs';
+import type { ColorMode } from '@/lib/theme';
 import { useConfirm } from '@/hooks/useConfirm';
 
 /* ---------- Types ---------- */
@@ -161,15 +163,6 @@ const TIMEZONES = [
   'Asia/Seoul', 'Asia/Kolkata', 'Asia/Dubai', 'Asia/Bangkok',
   'Australia/Sydney', 'Australia/Melbourne', 'Australia/Perth',
   'Pacific/Auckland', 'Africa/Cairo', 'Africa/Johannesburg',
-];
-
-const ACCENT_COLORS = [
-  { name: 'Sky', value: '#0ea5e9' },
-  { name: 'Violet', value: '#8b5cf6' },
-  { name: 'Emerald', value: '#10b981' },
-  { name: 'Rose', value: '#f43f5e' },
-  { name: 'Amber', value: '#f59e0b' },
-  { name: 'Cyan', value: '#06b6d4' },
 ];
 
 const TAB_ICONS: Record<Tab, typeof Settings> = {
@@ -380,8 +373,8 @@ export default function SettingsPage() {
 
   /* ---- Appearance state (from Zustand theme store) ---- */
   const themeStore = useThemeStore();
-  const [accentColor, setAccentColor] = useState(themeStore.accentColor);
-  const [sidebarPosition, setSidebarPosition] = useState<'left' | 'right'>(themeStore.sidebarPosition);
+  const colorMode = useThemeStore((s) => s.colorMode);
+  const setColorMode = useThemeStore((s) => s.setColorMode);
   const [density, setDensity] = useState<'comfortable' | 'compact'>(themeStore.density);
   const [fontSize, setFontSize] = useState<'sm' | 'base' | 'lg'>(
     themeStore.fontSize <= 12 ? 'sm' : themeStore.fontSize >= 16 ? 'lg' : 'base'
@@ -703,8 +696,6 @@ export default function SettingsPage() {
   }
 
   function handleSaveAppearance() {
-    themeStore.setAccentColor(accentColor);
-    themeStore.setSidebarPosition(sidebarPosition);
     themeStore.setDensity(density);
     const sizeMap = { sm: 12, base: 14, lg: 16 } as const;
     themeStore.setFontSize(sizeMap[fontSize]);
@@ -1681,39 +1672,20 @@ export default function SettingsPage() {
       {activeTab === 'appearance' && (
         <div className="space-y-4">
           <GlassCard className="p-4">
-            <h3 className="text-base font-semibold text-slate-200 mb-3">Accent Color</h3>
-            <div className="flex gap-3">
-              {ACCENT_COLORS.map((c) => (
-                <button
-                  key={c.value}
-                  onClick={() => setAccentColor(c.value)}
-                  className={`w-8 h-8 rounded-full border-2 transition-all ${
-                    accentColor === c.value ? 'border-white scale-110' : 'border-transparent'
-                  }`}
-                  style={{ backgroundColor: c.value }}
-                  title={c.name}
-                />
-              ))}
-            </div>
-          </GlassCard>
-
-          <GlassCard className="p-4">
-            <h3 className="text-base font-semibold text-slate-200 mb-3">Sidebar Position</h3>
-            <div className="flex gap-2">
-              {(['left', 'right'] as const).map((pos) => (
-                <button
-                  key={pos}
-                  onClick={() => setSidebarPosition(pos)}
-                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                    sidebarPosition === pos
-                      ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
-                      : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
-                  }`}
-                >
-                  {pos.charAt(0).toUpperCase() + pos.slice(1)}
-                </button>
-              ))}
-            </div>
+            <h3 className="text-base font-semibold text-slate-200 mb-1">Theme</h3>
+            <p className="text-meta text-fg-3 mb-3">
+              Applies immediately on this device. &quot;System&quot; follows your operating system. The accent colour is fixed (Glow Violet).
+            </p>
+            <SegmentedControl<ColorMode>
+              label="Theme"
+              value={colorMode}
+              onChange={setColorMode}
+              options={[
+                { value: 'dark', label: 'Dark' },
+                { value: 'light', label: 'Light' },
+                { value: 'system', label: 'System' },
+              ]}
+            />
           </GlassCard>
 
           <GlassCard className="p-4">
