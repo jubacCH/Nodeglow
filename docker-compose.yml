@@ -103,9 +103,10 @@ services:
       - backups:/backups
     environment:
       UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with backend)}
-      # Postgres container to dump before migrating. Leave unset to let the
-      # sidecar resolve it via `docker compose ps -q db`; the legacy production
-      # stack in /opt/vigil uses `vigil-db-1`.
+      # Postgres container to dump. Leave unset: the sidecar finds the `db`
+      # service of the running compose project via its labels (this also works
+      # for the legacy stack started as project "vigil"). Set it only if that
+      # fails, e.g. DB_CONTAINER=vigil-db-1.
       DB_CONTAINER: ${DB_CONTAINER:-}
       POSTGRES_USER: ${POSTGRES_USER:-nodeglow}
       POSTGRES_DB: ${POSTGRES_DB:-nodeglow}

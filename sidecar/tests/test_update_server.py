@@ -100,6 +100,63 @@ def test_status_recovers_from_state_file_after_restart(monkeypatch, tmp_path):
     assert status["step"] == "migrate"
 
 
+def _fake_docker(answers, calls):
+    """A _run_cmd stand-in keyed on the first few argv tokens."""
+    def run_cmd(argv, timeout=60, cwd=None):
+        calls.append(argv)
+        for prefix, result in answers:
+            if argv[:len(prefix)] == prefix:
+                return result
+        return _cmd(1, "", "unexpected")
+    return run_cmd
+
+
+def _cmd(*args):
+    from orchestrator import CmdResult
+    return CmdResult(*args)
+
+
+def test_db_container_explicit_env_wins(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(server, "_run_cmd", _fake_docker([], calls))
+    assert server._resolve_db_container("vigil") == "vigil-db-1"
+    assert calls == []
+
+
+def test_db_container_resolved_from_compose_labels(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.delenv("DB_CONTAINER")
+    calls = []
+    monkeypatch.setattr(server, "_run_cmd", _fake_docker(
+        [(["docker", "ps"], _cmd(0, "abc123\n", ""))], calls))
+
+    assert server._resolve_db_container("vigil") == "abc123"
+    assert "label=com.docker.compose.project=vigil" in calls[0]
+    assert "label=com.docker.compose.service=db" in calls[0]
+
+
+def test_db_container_falls_back_to_compose_ps_with_project(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.delenv("DB_CONTAINER")
+    calls = []
+    monkeypatch.setattr(server, "_run_cmd", _fake_docker([
+        (["docker", "ps"], _cmd(0, "", "")),
+        (["docker", "compose"], _cmd(0, "def456\n", "")),
+    ], calls))
+
+    assert server._resolve_db_container("vigil") == "def456"
+    # Without -p, compose would look up the project "repo" (the mount dir).
+    assert calls[1][:4] == ["docker", "compose", "-p", "vigil"]
+
+
+def test_db_container_has_no_hardcoded_legacy_default(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.delenv("DB_CONTAINER")
+    monkeypatch.setattr(server, "_run_cmd", _fake_docker([], []))
+    assert server._resolve_db_container("nodeglow") == ""
+
+
 def test_build_ctx_reads_settings_from_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("POSTGRES_USER", "nodeglow")
     monkeypatch.setenv("POSTGRES_DB", "nodeglow")

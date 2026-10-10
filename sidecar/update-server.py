@@ -116,26 +116,48 @@ def _resolve_compose_project() -> str:
     return os.path.basename(REPO_PATH.rstrip("/")) or "nodeglow"
 
 
-def _resolve_db_container() -> str:
-    """Prefer an explicit DB_CONTAINER, else ask compose, else the prod default."""
+def _first_line(result: CmdResult) -> str:
+    lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+    return lines[0] if result.returncode == 0 and lines else ""
+
+
+def _resolve_db_container(project: str) -> str:
+    """Find the Postgres container of the running stack.
+
+    Order: an explicit ``DB_CONTAINER``; the container labelled as service
+    ``db`` of the running compose project; ``docker compose ps -q db`` for that
+    project. Returns ``""`` when nothing is found, and the preflight then fails
+    with a message naming DB_CONTAINER.
+
+    There is deliberately no hardcoded fallback any more. The old default
+    ``vigil-db-1`` only matched the legacy production stack, and that stack
+    resolves correctly through its compose labels (project ``vigil``) anyway;
+    anyone who still wants it can set ``DB_CONTAINER=vigil-db-1``.
+    """
     explicit = os.environ.get("DB_CONTAINER", "").strip()
     if explicit:
         return explicit
-    try:
-        result = _run_cmd(
-            ["docker", "compose", "-f", COMPOSE_FILE, "ps", "-q", "db"],
-            timeout=15, cwd=REPO_PATH,
-        )
-        lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
-        if lines:
-            return lines[0]
-    except Exception as exc:  # noqa: BLE001
-        _log(f"could not resolve db container via compose: {exc}")
-    return "vigil-db-1"
+    attempts = (
+        ["docker", "ps", "-q",
+         "--filter", f"label=com.docker.compose.project={project}",
+         "--filter", "label=com.docker.compose.service=db"],
+        ["docker", "compose", "-p", project, "-f", COMPOSE_FILE, "ps", "-q", "db"],
+    )
+    for argv in attempts:
+        try:
+            found = _first_line(_run_cmd(argv, timeout=15, cwd=REPO_PATH))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"could not resolve db container via {' '.join(argv[:2])}: {exc}")
+            continue
+        if found:
+            return found
+    _log(f"no db container found for compose project {project!r}; set DB_CONTAINER")
+    return ""
 
 
 def build_ctx(run_id: str) -> Ctx:
     """Assemble the orchestrator context with real I/O."""
+    project = _resolve_compose_project()
     return Ctx(
         run_cmd=_run_cmd,
         run_dump=_run_dump,
@@ -145,10 +167,10 @@ def build_ctx(run_id: str) -> Ctx:
         log=_log,
         repo_path=REPO_PATH,
         compose_file=COMPOSE_FILE,
-        compose_project=_resolve_compose_project(),
+        compose_project=project,
         backup_dir=BACKUP_DIR,
         backup_retention=BACKUP_RETENTION,
-        db_container=_resolve_db_container(),
+        db_container=_resolve_db_container(project),
         db_user=DB_USER,
         db_name=DB_NAME,
         state_path=STATE_PATH,
