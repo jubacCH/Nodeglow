@@ -8,6 +8,20 @@ Informationsarchitektur (`02-information-architecture.md`).
 Dashboard-Aufbau), ergänzt um die Strata-Landschaft aus Konzept C als Infrastruktur-Signatur
 und um die Evidenzkette mit Quellenangabe aus Konzept B im Incident-Workspace.
 
+## Nachtrag: Konzept D „Calm“
+
+Rückmeldung zu A–C: zu unübersichtlich. Konzept D vereinfacht A radikal
+(`directions/concept-d.md`, `prototypes/concept-d/index.html`):
+
+- Die Startseite zeigt nur noch drei Dinge: Lage in einem Satz mit Host-Balken,
+  „Jetzt zu tun“ (höchstens 4 Einträge, je eine Zeile) und „Neu seit 09:12“ (3 Zeilen).
+- Zeitachse, Zusammenhänge und Logs stehen im Drawer, je ein Abschnitt offen.
+- Bestand und Trends liegen unter Infrastruktur; die Navigation hat 5 Punkte.
+
+**Neue Empfehlung:** D als Startseite und Grundton. Die Elemente aus A–C (Causality
+Strip, Strata, Evidenzkette) kommen nur dort zum Einsatz, wo jemand bewusst tiefer
+schaut: im Drawer, im Incident-Workspace und unter Infrastruktur.
+
 ## Die drei Konzepte
 
 | | A · Precision Operations | B · Operational Intelligence | C · Strata |
@@ -100,7 +114,8 @@ Aus den drei Richtungsdokumenten zusammengefasst; Details und Prioritäten in
 
 Bitte eine der Optionen wählen, bevor Phase D (Designsystem) beginnt:
 
-- [ ] Kombination wie empfohlen (A + Strata aus C + Evidenzkette aus B)
+- [ ] Konzept D „Calm“ als Startseite, Tiefe aus A–C nur auf Klick (neue Empfehlung)
+- [ ] Kombination A + Strata aus C + Evidenzkette aus B
 - [ ] Konzept A
 - [ ] Konzept B
 - [ ] Konzept C
