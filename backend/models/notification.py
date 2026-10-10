@@ -11,7 +11,7 @@ class NotificationLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
-    channel = Column(String(32), nullable=False)     # telegram | discord | webhook | email
+    channel = Column(String(32), nullable=False)     # telegram | discord | webhook | email | teams | slack | ntfy
     title = Column(String(256), nullable=False)
     message = Column(Text, nullable=True)
     severity = Column(String(16), nullable=False, default="info")

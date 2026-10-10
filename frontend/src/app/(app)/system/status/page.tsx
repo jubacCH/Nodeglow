@@ -114,7 +114,7 @@ interface SystemStatus {
       msg_per_min?: number;
     };
     ssl_expiring: Array<{ name: string; hostname: string; days: number }>;
-    notification_channels: { telegram?: boolean; discord?: boolean; email?: boolean };
+    notification_channels: { telegram?: boolean; discord?: boolean; email?: boolean; teams?: boolean; slack?: boolean; ntfy?: boolean };
     incidents: { open?: number; acknowledged?: number; resolved?: number; total?: number };
     alert_rules: { total?: number; enabled?: number; syslog_rules?: number; last_triggered?: string };
     maintenance: { active?: number; timed?: number; indefinite?: number };
@@ -490,7 +490,10 @@ export default function SystemStatusPage() {
                   {ops.notification_channels.telegram && <Badge>Telegram</Badge>}
                   {ops.notification_channels.discord && <Badge>Discord</Badge>}
                   {ops.notification_channels.email && <Badge>Email</Badge>}
-                  {!ops.notification_channels.telegram && !ops.notification_channels.discord && !ops.notification_channels.email && (
+                  {ops.notification_channels.teams && <Badge>Teams</Badge>}
+                  {ops.notification_channels.slack && <Badge>Slack</Badge>}
+                  {ops.notification_channels.ntfy && <Badge>ntfy</Badge>}
+                  {!Object.values(ops.notification_channels).some(Boolean) && (
                     <span className="text-xs text-slate-600">none configured</span>
                   )}
                 </div>

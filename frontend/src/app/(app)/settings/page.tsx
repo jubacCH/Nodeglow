@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { api, apiErrorMessage, get, post, del } from '@/lib/api';
+import { api, apiErrorBody, apiErrorMessage, get, post, del } from '@/lib/api';
 import { MIN_BACKUP_PASSPHRASE, isEncryptedBackup } from '@/lib/backup';
 import { useToastStore } from '@/stores/toast';
 import { useThemeStore } from '@/stores/theme';
@@ -69,6 +69,19 @@ interface SettingsData {
   notify_discord_min_severity: string;
   notify_webhook_min_severity: string;
   notify_email_min_severity: string;
+  // Teams / Slack / ntfy (webhook URLs + token are write-only: flags only)
+  public_url?: string;
+  teams_enabled?: string;
+  teams_has_url?: boolean;
+  notify_teams_min_severity?: string;
+  slack_enabled?: string;
+  slack_has_url?: boolean;
+  notify_slack_min_severity?: string;
+  ntfy_enabled?: string;
+  ntfy_server_url?: string;
+  ntfy_topic?: string;
+  ntfy_has_token?: boolean;
+  notify_ntfy_min_severity?: string;
   // LDAP
   ldap_enabled: string;
   ldap_server: string;
@@ -227,6 +240,55 @@ const SEVERITY_OPTIONS = [
 
 /* ---------- Helpers ---------- */
 
+/** `message` of a failed notification save/test response, if any. */
+function notifErrorMessage(err: unknown): string {
+  const msg = apiErrorBody(err)?.message;
+  return typeof msg === 'string' ? msg : '';
+}
+
+/** Small on/off switch used in the header of a notification channel card. */
+function ChannelSwitch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+        checked ? 'bg-sky-500' : 'bg-white/[0.1]'
+      }`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+          checked ? 'translate-x-[18px]' : 'translate-x-[3px]'
+        }`}
+      />
+    </button>
+  );
+}
+
+/** "(set)" marker plus a Remove toggle for a write-only secret field. */
+function StoredSecretLabel({ label, stored, cleared, onClear }: {
+  label: string; stored: boolean; cleared: boolean; onClear: (v: boolean) => void;
+}) {
+  return (
+    <label className="ng-label">
+      {label}
+      {stored && !cleared && <span className="text-emerald-400 ml-1">(set)</span>}
+      {stored && (
+        <button
+          type="button"
+          onClick={() => onClear(!cleared)}
+          className="ml-2 text-[11px] text-slate-500 hover:text-rose-300 underline-offset-2 hover:underline"
+        >
+          {cleared ? 'Undo remove' : 'Remove'}
+        </button>
+      )}
+    </label>
+  );
+}
+
 function blacklistAsLines(jsonStr: string): string {
   try {
     const arr = JSON.parse(jsonStr);
@@ -335,6 +397,21 @@ export default function SettingsPage() {
   const [discordMinSev, setDiscordMinSev] = useState('all');
   const [webhookMinSev, setWebhookMinSev] = useState('all');
   const [emailMinSev, setEmailMinSev] = useState('all');
+  const [publicUrl, setPublicUrl] = useState('');
+  const [teamsEnabled, setTeamsEnabled] = useState(false);
+  const [teamsUrl, setTeamsUrl] = useState('');
+  const [teamsUrlClear, setTeamsUrlClear] = useState(false);
+  const [teamsMinSev, setTeamsMinSev] = useState('all');
+  const [slackEnabled, setSlackEnabled] = useState(false);
+  const [slackUrl, setSlackUrl] = useState('');
+  const [slackUrlClear, setSlackUrlClear] = useState(false);
+  const [slackMinSev, setSlackMinSev] = useState('all');
+  const [ntfyEnabled, setNtfyEnabled] = useState(false);
+  const [ntfyServer, setNtfyServer] = useState('https://ntfy.sh');
+  const [ntfyTopic, setNtfyTopic] = useState('');
+  const [ntfyToken, setNtfyToken] = useState('');
+  const [ntfyTokenClear, setNtfyTokenClear] = useState(false);
+  const [ntfyMinSev, setNtfyMinSev] = useState('all');
 
   /* ---- Appearance state (from Zustand theme store) ---- */
   const themeStore = useThemeStore();
@@ -427,6 +504,21 @@ export default function SettingsPage() {
     setDiscordMinSev(s.notify_discord_min_severity || 'all');
     setWebhookMinSev(s.notify_webhook_min_severity || 'all');
     setEmailMinSev(s.notify_email_min_severity || 'all');
+    setPublicUrl(s.public_url || '');
+    setTeamsEnabled(s.teams_enabled === '1');
+    setTeamsUrl('');
+    setTeamsUrlClear(false);
+    setTeamsMinSev(s.notify_teams_min_severity || 'all');
+    setSlackEnabled(s.slack_enabled === '1');
+    setSlackUrl('');
+    setSlackUrlClear(false);
+    setSlackMinSev(s.notify_slack_min_severity || 'all');
+    setNtfyEnabled(s.ntfy_enabled === '1');
+    setNtfyServer(s.ntfy_server_url || 'https://ntfy.sh');
+    setNtfyTopic(s.ntfy_topic || '');
+    setNtfyToken('');
+    setNtfyTokenClear(false);
+    setNtfyMinSev(s.notify_ntfy_min_severity || 'all');
     setDailyAiEnabled(s.daily_ai_summary_enabled === '1');
     setDailyAiHour(s.daily_ai_summary_hour || '8');
     setDailyAiChannels(new Set((s.daily_ai_summary_channels || 'telegram,discord,webhook,email').split(',').filter(Boolean)));
@@ -499,7 +591,7 @@ export default function SettingsPage() {
       qc.invalidateQueries({ queryKey: ['settings'] });
       toast.show('Notification settings saved', 'success');
     },
-    onError: () => toast.show('Failed to save notification settings', 'error'),
+    onError: (err) => toast.show(notifErrorMessage(err) || 'Failed to save notification settings', 'error'),
   });
 
   const saveDigestMut = useMutation({
@@ -520,9 +612,11 @@ export default function SettingsPage() {
       setTestingChannel(null);
       qc.invalidateQueries({ queryKey: ['notification-history'] });
     },
-    onError: () => {
-      toast.show('Test notification failed', 'error');
+    onError: (err) => {
+      const detail = notifErrorMessage(err);
+      toast.show(detail ? `Test notification failed: ${detail}` : 'Test notification failed', 'error');
       setTestingChannel(null);
+      qc.invalidateQueries({ queryKey: ['notification-history'] });
     },
   });
 
@@ -580,7 +674,7 @@ export default function SettingsPage() {
     saveSettingsMut.mutate(buildAllSettingsParams());
   }
 
-  function handleSaveNotifications() {
+  function buildNotificationParams(): URLSearchParams {
     const params = new URLSearchParams();
     params.set('notify_enabled', notifyEnabled ? 'on' : '0');
     params.set('notify_grace_minutes', graceMinutes);
@@ -601,33 +695,33 @@ export default function SettingsPage() {
     params.set('notify_discord_min_severity', discordMinSev);
     params.set('notify_webhook_min_severity', webhookMinSev);
     params.set('notify_email_min_severity', emailMinSev);
-    saveNotifMut.mutate(params);
+    params.set('public_url', publicUrl);
+    // Teams / Slack / ntfy secrets: blank keeps the stored value.
+    params.set('teams_enabled', teamsEnabled ? '1' : '0');
+    params.set('teams_webhook_url', teamsUrlClear ? '' : teamsUrl);
+    if (teamsUrlClear) params.set('teams_webhook_url_clear', '1');
+    params.set('notify_teams_min_severity', teamsMinSev);
+    params.set('slack_enabled', slackEnabled ? '1' : '0');
+    params.set('slack_webhook_url', slackUrlClear ? '' : slackUrl);
+    if (slackUrlClear) params.set('slack_webhook_url_clear', '1');
+    params.set('notify_slack_min_severity', slackMinSev);
+    params.set('ntfy_enabled', ntfyEnabled ? '1' : '0');
+    params.set('ntfy_server_url', ntfyServer);
+    params.set('ntfy_topic', ntfyTopic);
+    params.set('ntfy_token', ntfyTokenClear ? '' : ntfyToken);
+    if (ntfyTokenClear) params.set('ntfy_token_clear', '1');
+    params.set('notify_ntfy_min_severity', ntfyMinSev);
+    return params;
+  }
+
+  function handleSaveNotifications() {
+    saveNotifMut.mutate(buildNotificationParams());
   }
 
   function handleTestChannel(channel: string) {
     setTestingChannel(channel);
     // Auto-save notification settings before testing so the DB has current values
-    const params = new URLSearchParams();
-    params.set('notify_enabled', notifyEnabled ? 'on' : '0');
-    params.set('notify_grace_minutes', graceMinutes);
-    params.set('correlation_min_failures', corrMinFailures);
-    params.set('correlation_min_cycles', corrMinCycles);
-    params.set('telegram_bot_token', telegramToken);
-    params.set('telegram_chat_id', telegramChat);
-    params.set('discord_webhook_url', discordWebhook);
-    params.set('webhook_url', webhookUrl);
-    params.set('webhook_secret', webhookSecret);
-    params.set('smtp_host', smtpHost);
-    params.set('smtp_port', smtpPort);
-    params.set('smtp_user', smtpUser);
-    params.set('smtp_password', smtpPassword);
-    params.set('smtp_from', smtpFrom);
-    params.set('smtp_to', smtpTo);
-    params.set('notify_telegram_min_severity', telegramMinSev);
-    params.set('notify_discord_min_severity', discordMinSev);
-    params.set('notify_webhook_min_severity', webhookMinSev);
-    params.set('notify_email_min_severity', emailMinSev);
-    saveNotifMut.mutate(params, {
+    saveNotifMut.mutate(buildNotificationParams(), {
       onSuccess: () => testNotifMut.mutate(channel),
       onError: () => setTestingChannel(null),
     });
@@ -1294,6 +1388,173 @@ export default function SettingsPage() {
                 </select>
               </div>
             </div>
+          </GlassCard>
+
+          {/* Microsoft Teams */}
+          <GlassCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <ChannelSwitch checked={teamsEnabled} onChange={setTeamsEnabled} label="Enable Microsoft Teams" />
+                <h3 className="text-base font-semibold text-slate-200">Microsoft Teams</h3>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => handleTestChannel('teams')}
+                disabled={testingChannel === 'teams'}
+              >
+                <Send size={12} />
+                {testingChannel === 'teams' ? 'Sending...' : 'Test'}
+              </Button>
+            </div>
+            <SetupGuide steps={[
+              <>In the Teams channel, open <strong>Workflows</strong> (… &gt; <strong>Workflows</strong>)</>,
+              <>Choose the template <strong>Post to a channel when a webhook request is received</strong></>,
+              <>Pick team and channel, then finish — Teams shows the <strong>webhook URL</strong></>,
+              <>Paste the URL below and click <strong>Test</strong>. Alerts arrive as Adaptive Cards.</>,
+            ]} />
+            <div className="space-y-3">
+              <div>
+                <StoredSecretLabel label="Workflow Webhook URL" stored={!!settings?.teams_has_url} cleared={teamsUrlClear} onClear={setTeamsUrlClear} />
+                <input
+                  type="password"
+                  value={teamsUrl}
+                  onChange={(e) => setTeamsUrl(e.target.value)}
+                  className={inputCls}
+                  disabled={teamsUrlClear}
+                  placeholder={settings?.teams_has_url ? 'Leave blank to keep' : 'https://…logic.azure.com/workflows/…'}
+                />
+              </div>
+              <div>
+                <label className="ng-label">Minimum Severity</label>
+                <select value={teamsMinSev} onChange={(e) => setTeamsMinSev(e.target.value)} className={selectSmCls}>
+                  {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            </div>
+          </GlassCard>
+
+          {/* Slack */}
+          <GlassCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <ChannelSwitch checked={slackEnabled} onChange={setSlackEnabled} label="Enable Slack" />
+                <h3 className="text-base font-semibold text-slate-200">Slack</h3>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => handleTestChannel('slack')}
+                disabled={testingChannel === 'slack'}
+              >
+                <Send size={12} />
+                {testingChannel === 'slack' ? 'Sending...' : 'Test'}
+              </Button>
+            </div>
+            <SetupGuide steps={[
+              <>Create a Slack app at <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">api.slack.com/apps</code> (or open an existing one)</>,
+              <>Enable <strong>Incoming Webhooks</strong> and click <strong>Add New Webhook to Workspace</strong></>,
+              <>Pick the channel — the URL looks like <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">https://hooks.slack.com/services/T…/B…/…</code></>,
+              <>Paste it below and click <strong>Test</strong></>,
+            ]} />
+            <div className="space-y-3">
+              <div>
+                <StoredSecretLabel label="Webhook URL" stored={!!settings?.slack_has_url} cleared={slackUrlClear} onClear={setSlackUrlClear} />
+                <input
+                  type="password"
+                  value={slackUrl}
+                  onChange={(e) => setSlackUrl(e.target.value)}
+                  className={inputCls}
+                  disabled={slackUrlClear}
+                  placeholder={settings?.slack_has_url ? 'Leave blank to keep' : 'https://hooks.slack.com/services/...'}
+                />
+              </div>
+              <div>
+                <label className="ng-label">Minimum Severity</label>
+                <select value={slackMinSev} onChange={(e) => setSlackMinSev(e.target.value)} className={selectSmCls}>
+                  {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            </div>
+          </GlassCard>
+
+          {/* ntfy */}
+          <GlassCard className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <ChannelSwitch checked={ntfyEnabled} onChange={setNtfyEnabled} label="Enable ntfy" />
+                <h3 className="text-base font-semibold text-slate-200">ntfy</h3>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => handleTestChannel('ntfy')}
+                disabled={testingChannel === 'ntfy'}
+              >
+                <Send size={12} />
+                {testingChannel === 'ntfy' ? 'Sending...' : 'Test'}
+              </Button>
+            </div>
+            <SetupGuide steps={[
+              <>Use <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">https://ntfy.sh</code> or your own ntfy server</>,
+              <>Pick a topic name — on the public server it acts like a password, so make it hard to guess</>,
+              <>Subscribe to the topic in the ntfy app; for protected topics create an <strong>access token</strong> (<code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">tk_…</code>) or use <code className="px-1.5 py-0.5 rounded bg-white/[0.06] text-xs font-mono">user:password</code></>,
+              <>Severity sets the push priority (critical = urgent)</>,
+            ]} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="ng-label">Server URL</label>
+                <input
+                  type="text"
+                  value={ntfyServer}
+                  onChange={(e) => setNtfyServer(e.target.value)}
+                  className={inputCls}
+                  placeholder="https://ntfy.sh"
+                />
+              </div>
+              <div>
+                <label className="ng-label">Topic</label>
+                <input
+                  type="text"
+                  value={ntfyTopic}
+                  onChange={(e) => setNtfyTopic(e.target.value)}
+                  className={inputCls}
+                  placeholder="nodeglow-alerts-x7k2"
+                />
+              </div>
+              <div>
+                <StoredSecretLabel label="Access Token" stored={!!settings?.ntfy_has_token} cleared={ntfyTokenClear} onClear={setNtfyTokenClear} />
+                <input
+                  type="password"
+                  value={ntfyToken}
+                  onChange={(e) => setNtfyToken(e.target.value)}
+                  className={inputCls}
+                  disabled={ntfyTokenClear}
+                  placeholder={settings?.ntfy_has_token ? 'Leave blank to keep' : 'Optional'}
+                />
+              </div>
+              <div>
+                <label className="ng-label">Minimum Severity</label>
+                <select value={ntfyMinSev} onChange={(e) => setNtfyMinSev(e.target.value)} className={selectSmCls}>
+                  {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            </div>
+          </GlassCard>
+
+          {/* Public URL for links */}
+          <GlassCard className="p-4">
+            <h3 className="text-base font-semibold text-slate-200">Public URL</h3>
+            <p className="text-xs text-slate-500 mt-0.5 mb-3">
+              Address of this Nodeglow as users open it. Teams, Slack and ntfy alerts link to the incident when set.
+            </p>
+            <input
+              type="text"
+              value={publicUrl}
+              onChange={(e) => setPublicUrl(e.target.value)}
+              className={inputCls}
+              placeholder="https://nodeglow.example.com"
+            />
           </GlassCard>
 
           <div className="flex justify-end">

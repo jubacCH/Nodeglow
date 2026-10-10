@@ -353,7 +353,7 @@ async def _fire_rule(db: AsyncSession, rule: AlertRule, value, now: datetime):
     channels = None
     if rule.notify_channels:
         channels = [c.strip() for c in rule.notify_channels.split(",") if c.strip()]
-    await notify(title, message, rule.severity, channels=channels)
+    await notify(title, message, rule.severity, channels=channels, link_path="/rules")
 
     # Update last_triggered_at
     await db.execute(

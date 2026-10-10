@@ -377,6 +377,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         settings = {}
         s_rows = (await db.execute(text(
             "SELECT key, value FROM settings WHERE key LIKE 'alert_%' OR key LIKE 'smtp_%' OR key LIKE 'telegram_%' OR key LIKE 'discord_%'"
+            " OR key LIKE 'teams_%' OR key LIKE 'slack_%' OR key LIKE 'ntfy_%'"
         ))).all()
         for s in s_rows:
             settings[s.key] = s.value
@@ -385,6 +386,9 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "telegram": bool(settings.get("telegram_bot_token") and settings.get("telegram_chat_id")),
             "discord": bool(settings.get("discord_webhook_url")),
             "email": bool(settings.get("smtp_host") and settings.get("smtp_to")),
+            "teams": settings.get("teams_enabled") == "1" and bool(settings.get("teams_webhook_url")),
+            "slack": settings.get("slack_enabled") == "1" and bool(settings.get("slack_webhook_url")),
+            "ntfy": settings.get("ntfy_enabled") == "1" and bool(settings.get("ntfy_topic")),
         }
     except Exception:
         pass
