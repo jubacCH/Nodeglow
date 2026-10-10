@@ -1,11 +1,15 @@
-"""Auto-postmortem generation for resolved incidents."""
+"""AI postmortem drafts for resolved incidents (enterprise).
+
+Runs from the core's incident-resolved hook (manual resolve and correlation
+auto-resolve) and from POST /api/v1/incidents/{id}/postmortem.
+"""
 import logging
 from datetime import datetime
 
 from models.base import AsyncSessionLocal
 from models.incident import Incident
 from services.ai_config import is_ai_enabled
-from services.ai_context import gather_incident_context
+from nodeglow_ee.ai.context import gather_incident_context
 from services.ai_client import generate_completion
 
 log = logging.getLogger("nodeglow.postmortem")

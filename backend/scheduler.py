@@ -4,17 +4,16 @@ Background scheduler – generic integration collection + ping checks + cleanup.
 import asyncio
 import logging
 import os
-import socket
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import delete, select
 
 import config
+import extensions
 from database import AsyncSessionLocal, PingHost
 from models.integration import IntegrationConfig
 from services import integration as int_svc
-from services import shared_state
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
 
@@ -35,49 +34,10 @@ CRON_MISFIRE_GRACE_SECONDS = 3600
 scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS)
 
 # ── Scheduler leadership (multi-worker / HA safety) ──────────────────────────
-# Without a leader lock every uvicorn worker / replica would start its own
-# scheduler and run correlation, ping, etc. concurrently → duplicate incidents
-# and duplicate work. When REDIS_URL is set, all instances contend for a single
-# Redis lease and only the holder runs jobs. Without Redis (the default,
-# single-process deployment) there is exactly one process which is always the
-# leader, so behaviour is unchanged.
-_SCHEDULER_LEADER_LOCK = "nodeglow:scheduler:leader"
-_LEADER_TTL_SECONDS = 30
-_LEADER_RENEW_SECONDS = 10
-_instance_id = f"{socket.gethostname()}:{os.getpid()}"
-_leader_task: "asyncio.Task | None" = None
-_is_leader = False
-
-
-def _apply_leadership(leader: bool) -> None:
-    """Resume or pause the scheduler on a leadership transition (idempotent)."""
-    global _is_leader
-    if leader and not _is_leader:
-        scheduler.resume()
-        _is_leader = True
-        logger.info("Acquired scheduler leadership — jobs running (instance=%s)", _instance_id)
-    elif not leader and _is_leader:
-        scheduler.pause()
-        _is_leader = False
-        logger.warning("Lost scheduler leadership — jobs paused (instance=%s)", _instance_id)
-
-
-async def _leadership_loop():
-    """Periodically acquire/renew the Redis lease; resume jobs only while leader."""
-    while True:
-        try:
-            leader = await shared_state.try_acquire_leader(
-                _SCHEDULER_LEADER_LOCK, _instance_id, _LEADER_TTL_SECONDS
-            )
-            _apply_leadership(leader)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            # Preserve current leadership state on transient errors: never grant
-            # leadership to everyone (split-brain) nor stop a healthy leader. A
-            # genuinely dead leader frees the lease via its TTL.
-            logger.error("Scheduler leadership loop error: %s", e)
-        await asyncio.sleep(_LEADER_RENEW_SECONDS)
+# The core runs single-instance: this process is always the leader and runs
+# every job. Leader election across several workers/replicas (a Redis lease,
+# only the holder runs jobs) is an enterprise feature; it plugs in as the
+# scheduler coordinator in ``extensions.registry`` (see ee/README.md).
 
 
 # ── Generic integration collection ───────────────────────────────────────────
@@ -1097,196 +1057,6 @@ async def run_weekly_digest():
         logger.error("Weekly digest email failed: %s", exc)
 
 
-async def run_daily_ai_summary():
-    """Build AI-powered daily summary and send via configured notification channels."""
-    from database import get_setting, set_setting
-    from services.digest import (
-        build_daily_summary_data, format_daily_summary_prompt,
-        _DAILY_SUMMARY_SYSTEM_PROMPT,
-    )
-    from services.ai_client import generate_completion
-    from notifications import (
-        _send_telegram, _send_discord, _log_notification,
-        _send_webhook, _send_email, _build_html_email,
-    )
-    from models.ai_usage import AiUsageLog
-
-    async with AsyncSessionLocal() as db:
-        enabled = await get_setting(db, "daily_ai_summary_enabled", "0")
-        if enabled != "1":
-            return
-
-        # ── Duplicate protection: skip if already sent today ──────────────
-        last_sent_str = await get_setting(db, "daily_ai_summary_last_sent", "")
-        if last_sent_str:
-            try:
-                last_sent = datetime.fromisoformat(last_sent_str)
-                if (datetime.utcnow() - last_sent).total_seconds() < 20 * 3600:
-                    logger.info("Daily AI summary skipped: already sent at %s", last_sent_str)
-                    return
-            except ValueError:
-                pass  # corrupted value, proceed
-
-        # Opt-in and provider: nothing is collected or sent without them.
-        from services.ai_config import load_ai_config
-        ai_cfg = await load_ai_config(db)
-        if not ai_cfg.enabled:
-            logger.info("Daily AI summary skipped: AI features are disabled (Settings > AI)")
-            return
-        if not ai_cfg.configured:
-            logger.warning("Daily AI summary skipped: AI provider not configured")
-            return
-
-        # Collect 24h data
-        data = await build_daily_summary_data(db)
-
-    # Skip if nothing happened
-    inc_total = data.get("incidents", {}).get("total", 0)
-    down_hosts = len(data.get("hosts", {}).get("down", []))
-    syslog_errors = data.get("syslog", {}).get("errors", 0)
-    unhealthy_int = len(data.get("integrations", []))
-    ssl_expiring = len(data.get("ssl_expiring", []))
-
-    if inc_total == 0 and down_hosts == 0 and syslog_errors == 0 and unhealthy_int == 0 and ssl_expiring == 0:
-        logger.info("Daily AI summary skipped: no events in last 24h")
-        return
-
-    # ── Generate AI analysis (with token tracking) ────────────────────────
-    prompt = format_daily_summary_prompt(data)
-    try:
-        summary, usage = await generate_completion(
-            _DAILY_SUMMARY_SYSTEM_PROMPT, prompt, max_tokens=1500,
-            return_usage=True, config=ai_cfg,
-        )
-    except Exception as exc:
-        logger.error("Daily AI summary generation failed: %s", exc)
-        await _log_notification("ai", "Daily AI Summary", "AI generation failed", "info", "failed", str(exc))
-        return
-
-    # ── Log token usage ───────────────────────────────────────────────────
-    try:
-        from services.ai_client import estimate_cost_usd
-        cost = estimate_cost_usd(usage)
-        async with AsyncSessionLocal() as db:
-            db.add(AiUsageLog(
-                feature="daily_summary",
-                model=usage.get("model", "unknown"),
-                input_tokens=usage["input_tokens"],
-                output_tokens=usage["output_tokens"],
-                cost_usd=round(cost, 6),
-            ))
-            await db.commit()
-        logger.info("Daily AI summary: %d in + %d out tokens ($%.4f)",
-                     usage["input_tokens"], usage["output_tokens"], cost)
-    except Exception as exc:
-        logger.warning("Failed to log AI usage: %s", exc)
-
-    # ── Read channel config + selected channels ───────────────────────────
-    title = "Daily AI Summary"
-    sent = False
-
-    async with AsyncSessionLocal() as db:
-        notify_enabled = await get_setting(db, "notify_enabled", "0")
-        if notify_enabled != "1":
-            logger.warning("Daily AI summary: notifications disabled")
-            return
-
-        # Which channels should receive the summary (default: all)
-        from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
-        from notification_channels import load_config as load_channel_config
-        from services.channel_secrets import reveal
-        channels_csv = (await get_setting(db, "daily_ai_summary_channels", "")
-                        or DAILY_SUMMARY_DEFAULT_CHANNELS)
-        selected = {c.strip() for c in channels_csv.split(",") if c.strip()}
-
-        tg_token = reveal(await get_setting(db, "telegram_bot_token", ""))
-        tg_chat = await get_setting(db, "telegram_chat_id", "")
-        dc_webhook = reveal(await get_setting(db, "discord_webhook_url", ""))
-        wh_url = reveal(await get_setting(db, "webhook_url", ""))
-        wh_secret = reveal(await get_setting(db, "webhook_secret", ""))
-        smtp_host = await get_setting(db, "smtp_host", "")
-        smtp_user = await get_setting(db, "smtp_user", "")
-        smtp_pw_enc = await get_setting(db, "smtp_password", "")
-        smtp_to = await get_setting(db, "smtp_to", "")
-        smtp_port = int(await get_setting(db, "smtp_port", "587"))
-        smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
-        from database import decrypt_value as _decrypt
-        channel_cfg = await load_channel_config(db, get_setting, _decrypt)
-
-    # Telegram
-    if "telegram" in selected and tg_token and tg_chat:
-        try:
-            tg_text = f"<b>🤖 {title}</b>\n\n{summary}"
-            if len(tg_text) > 4096:
-                tg_text = tg_text[:4090] + "\n[…]"
-            await _send_telegram(tg_token, tg_chat, tg_text)
-            await _log_notification("telegram", title, summary[:200], "info", "sent")
-            sent = True
-        except Exception as exc:
-            logger.error("Daily AI summary Telegram failed: %s", exc)
-            await _log_notification("telegram", title, summary[:200], "info", "failed", str(exc))
-
-    # Discord
-    if "discord" in selected and dc_webhook:
-        try:
-            desc = summary[:4090] if len(summary) > 4090 else summary
-            await _send_discord(dc_webhook, f"🤖 {title}", desc, 0x8B5CF6)
-            await _log_notification("discord", title, summary[:200], "info", "sent")
-            sent = True
-        except Exception as exc:
-            logger.error("Daily AI summary Discord failed: %s", exc)
-            await _log_notification("discord", title, summary[:200], "info", "failed", str(exc))
-
-    # Webhook
-    if "webhook" in selected and wh_url:
-        try:
-            await _send_webhook(wh_url, wh_secret, title, summary, "info")
-            await _log_notification("webhook", title, summary[:200], "info", "sent")
-            sent = True
-        except Exception as exc:
-            logger.error("Daily AI summary Webhook failed: %s", exc)
-            await _log_notification("webhook", title, summary[:200], "info", "failed", str(exc))
-
-    # Email
-    if "email" in selected and smtp_host and smtp_user and smtp_pw_enc and smtp_to:
-        try:
-            from database import decrypt_value
-            try:
-                smtp_pw = decrypt_value(smtp_pw_enc)
-            except Exception:
-                smtp_pw = smtp_pw_enc
-            html_body = _build_html_email(title, summary, "info")
-            await _send_email(
-                smtp_host, smtp_port, smtp_user, smtp_pw,
-                smtp_from, smtp_to,
-                f"[Nodeglow] {title}", f"{title}\n\n{summary}", html_body,
-            )
-            await _log_notification("email", title, summary[:200], "info", "sent")
-            sent = True
-        except Exception as exc:
-            logger.error("Daily AI summary Email failed: %s", exc)
-            await _log_notification("email", title, summary[:200], "info", "failed", str(exc))
-
-    # Teams / Slack / ntfy
-    from notification_channels import send_to_selected
-    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary):
-        if exc is None:
-            await _log_notification(ch, title, summary[:200], "info", "sent")
-            sent = True
-        else:
-            logger.error("Daily AI summary %s failed: %s", ch, exc)
-            await _log_notification(ch, title, summary[:200], "info", "failed", str(exc))
-
-    # ── Mark as sent (duplicate protection) ───────────────────────────────
-    if sent:
-        async with AsyncSessionLocal() as db:
-            await set_setting(db, "daily_ai_summary_last_sent", datetime.utcnow().isoformat())
-            await db.commit()
-        logger.info("Daily AI summary sent successfully")
-    else:
-        logger.warning("Daily AI summary: no notification channel configured or selected")
-
-
 async def update_geoip():
     """Weekly GeoIP database update (if enabled and license key is set)."""
     from database import get_setting, decrypt_value
@@ -1504,7 +1274,6 @@ async def start_scheduler():
         # through `db` after its context had already closed.
         digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
         digest_hour = int(await get_setting(db, "digest_hour", "9"))
-        ai_summary_hour = int(await get_setting(db, "daily_ai_summary_hour", "8"))
 
     scheduler.add_job(run_ping_checks, "interval", seconds=ping_interval,
                       id="ping_checks", replace_existing=True)
@@ -1582,20 +1351,25 @@ async def start_scheduler():
                       id="weekly_digest", replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
-    # Daily AI summary (default: 08:00, configurable)
-    scheduler.add_job(run_daily_ai_summary, "cron",
-                      hour=ai_summary_hour, minute=0,
-                      id="daily_ai_summary", replace_existing=True,
-                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
+    # Jobs contributed by plugins (e.g. the enterprise AI daily summary).
+    for hook in extensions.registry.scheduler_hooks:
+        try:
+            await hook(scheduler)
+        except Exception:
+            logger.exception("Plugin scheduler hook %r failed — its jobs are not scheduled", hook)
 
-    if getattr(config, "REDIS_URL", ""):
-        # HA mode: start paused; the leadership loop resumes jobs once this
-        # instance wins the Redis lease, and pauses them if it loses it.
-        global _leader_task
-        scheduler.start(paused=True)
-        _leader_task = asyncio.create_task(_leadership_loop())
-        logger.info("Scheduler started in leader-election mode (instance=%s)", _instance_id)
+    coordinator = extensions.registry.scheduler_coordinator
+    if coordinator is not None and coordinator.wants_control():
+        # HA mode (enterprise): the coordinator starts the scheduler, typically
+        # paused, and resumes it only while this instance holds the lease.
+        await coordinator.start(scheduler)
     else:
+        if getattr(config, "REDIS_URL", ""):
+            logger.warning(
+                "REDIS_URL is set, but scheduler leader election across several "
+                "instances is not part of this edition. Running single-instance: "
+                "run exactly one backend process, or jobs run more than once."
+            )
         # Single-process deployment: always leader, run jobs immediately.
         scheduler.start()
 
@@ -1611,10 +1385,10 @@ async def start_scheduler():
 
 
 def stop_scheduler():
-    global _leader_task
-    if _leader_task is not None:
-        _leader_task.cancel()
-        _leader_task = None
-    # The Redis lease (if any) is left to expire via its TTL, which hands
-    # leadership to a standby within _LEADER_TTL_SECONDS.
+    coordinator = extensions.registry.scheduler_coordinator
+    if coordinator is not None:
+        try:
+            coordinator.stop()
+        except Exception:
+            logger.exception("Scheduler coordinator failed to stop")
     scheduler.shutdown(wait=False)
