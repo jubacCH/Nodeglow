@@ -146,7 +146,7 @@ export default function AuditLogPage() {
         >
           {(d) => (
             <>
-              <TableContainer>
+              <TableContainer className="relative">
                 <Table density="compact">
                   <THead>
                     <Tr>

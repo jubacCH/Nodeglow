@@ -74,7 +74,7 @@ function SecretField({
           onClick={() => onClear(!cleared)}
           className="mt-1 rounded-chip text-meta text-fg-3 underline-offset-2 hover:text-down hover:underline"
         >
-          {cleared ? 'Undo remove' : `Remove stored ${label.toLowerCase()}`}
+          {cleared ? 'Undo remove' : 'Remove stored value'}
         </button>
       )}
     </div>
@@ -400,7 +400,7 @@ export function NotificationsTab({
           empty={<EmptyState compact title="No notifications sent yet" description="Deliveries and test messages appear here." />}
         >
           {(rows) => (
-            <TableContainer maxHeight={360}>
+            <TableContainer className="relative" maxHeight={360}>
               <Table density="compact">
                 <THead sticky>
                   <Tr>

@@ -62,9 +62,11 @@ export function buildTrees(nodes: TopoNode[], edges: TopoEdge[]): { trees: TreeN
   const withChildren = roots.filter((r) => (parentToChildren.get(r.id) ?? []).length > 0);
   const orphans = roots.filter((r) => (parentToChildren.get(r.id) ?? []).length === 0);
 
+  // Largest trees first (by all descendants, not just direct children).
   const trees = withChildren
-    .sort((a, b) => (parentToChildren.get(b.id)?.length ?? 0) - (parentToChildren.get(a.id)?.length ?? 0) || a.name.localeCompare(b.name))
-    .map((r) => build(r));
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((r) => build(r))
+    .sort((a, b) => countDescendants(b) - countDescendants(a));
 
   return { trees, orphans: orphans.sort((a, b) => a.name.localeCompare(b.name)) };
 }

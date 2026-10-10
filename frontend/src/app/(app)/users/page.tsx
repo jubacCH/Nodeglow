@@ -193,7 +193,7 @@ export default function UsersPage() {
           empty={<EmptyState icon={Users} title="No users" description="Add the first account to give someone access." />}
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table>
                 <THead>
                   <Tr>

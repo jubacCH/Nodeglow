@@ -221,7 +221,7 @@ export default function TasksPage() {
                     )}
                   />
                 </div>
-                <TableContainer>
+                <TableContainer className="relative">
                   <Table>
                     <THead>
                       <Tr>
@@ -273,7 +273,7 @@ export default function TasksPage() {
                     )}
                   />
                 </div>
-                <TableContainer>
+                <TableContainer className="relative">
                   <Table>
                     <THead>
                       <Tr>
@@ -318,7 +318,7 @@ export default function TasksPage() {
               <div>
                 <SectionHeader title="History" subtitle={`${resolvedPorts.length + resolvedSsl.length} decided items`} />
                 <Card padding="none">
-                  <TableContainer>
+                  <TableContainer className="relative">
                     <Table density="compact">
                       <THead>
                         <Tr>
