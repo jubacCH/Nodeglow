@@ -8,7 +8,8 @@ An image-mode installation is a directory holding ``docker-compose.yml`` (the
 release compose file), ``.env`` and ``clickhouse/``. The version that runs is
 ``NODEGLOW_VERSION`` in ``.env``; every image tag in the compose file derives
 from it. An update therefore means: find a newer release, verify the images'
-signatures, back up, pull, migrate, pin the new version in ``.env``, restart.
+signatures, back up, pull, put the release's compose file in place, pin the
+new version in ``.env``, migrate, restart.
 
 Steps:
 
@@ -17,13 +18,19 @@ Steps:
 ``verify``     cosign keyless verification of every Nodeglow image; fail closed
 ``backup``     pg_dump, shared with git mode
 ``pull``       ``docker compose pull`` at the new version; digests must match
-``migrate``    shared with git mode, run from the new backend image
-``pin``        rewrite ``NODEGLOW_VERSION`` in ``.env`` (old file kept as a copy)
+``stage``      copy the new compose file + ClickHouse config out of the new
+               (verified) updater image into ``.release-staging/``
+``install``    move them into place, pin ``NODEGLOW_VERSION`` in ``.env``; old
+               files kept as ``*.bak-<run id>``; /data mount re-checked
+``migrate``    shared with git mode, run from the new backend image; on failure
+               the files of ``install`` are restored
 ``restart``    shared with git mode
 ``handoff``    recreate the updater itself from a short-lived helper container
 
-Nothing is changed before ``backup``; nothing the running stack uses is
-changed before ``pin``. Like the git mode, there is no automatic rollback.
+Nothing is changed before ``backup``; the files the running stack is defined
+by change in ``install`` and are reverted if the migration fails. The database
+is never rolled back automatically — like the git mode, the pre-update dump is
+the recovery path.
 
 Stdlib only, all I/O through :class:`orchestrator.Ctx` (plus an injectable
 ``fetch_json``), so the steps are unit-testable without Docker or network.
@@ -49,8 +56,14 @@ from orchestrator import (
     step_restart,
 )
 
-IMAGE_STEP_NAMES = ["preflight", "resolve", "verify", "backup", "pull",
-                    "migrate", "pin", "restart", "handoff"]
+IMAGE_STEP_NAMES = ["preflight", "resolve", "verify", "backup", "pull", "stage",
+                    "install", "migrate", "restart", "handoff"]
+
+# Release-owned files of an installation directory. The release workflow bakes
+# them into the updater image at DEPLOY_DIR_IN_IMAGE (sidecar/Dockerfile).
+DEPLOY_DIR_IN_IMAGE = "/app/deploy"
+DEPLOY_FILES = ["docker-compose.yml", "clickhouse/config.xml", "clickhouse/init.sql"]
+STAGING_DIRNAME = ".release-staging"
 
 DEFAULT_RELEASES_URL = "https://api.github.com/repos/jubacCH/Nodeglow/releases?per_page=50"
 # Images built by .github/workflows/release.yml are signed keylessly by that
@@ -399,17 +412,107 @@ def step_image_pull(ctx: Ctx) -> str:
     return f"pulled {', '.join(PULL_SERVICES)} at {ctx.plan.get('target')}"
 
 
-def step_pin(ctx: Ctx) -> str:
-    """Make the new version the configured one, keeping a copy of the old .env."""
-    path = env_path(ctx)
-    target = ctx.plan["target"]
-    backup = f"{path}.bak-{ctx.run_id}"
+def staging_dir(ctx: Ctx) -> str:
+    return os.path.join(ctx.repo_path, STAGING_DIRNAME)
+
+
+def step_stage(ctx: Ctx) -> str:
+    """Copy the new release's deploy files out of the (verified) updater image.
+
+    A release may change the compose file or the ClickHouse config, so bumping
+    the version alone is not enough. The release workflow bakes exactly those
+    files into the updater image under /app/deploy, which makes them covered by
+    the image signature checked in ``verify``. ``docker cp`` writes to the
+    filesystem of the CLI — this container — so the files land in the
+    installation directory through the /opt/repo mount.
+    """
+    image = ctx.plan["images"]["updater"]
+    dest = staging_dir(ctx)
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest, exist_ok=True)
+    name = f"{ctx.compose_project}-deploy-{ctx.run_id}".replace(":", "-")
+    created = ctx.run_cmd(["docker", "create", "--name", name, image], timeout=60)
+    if created.returncode != 0:
+        raise StepError(f"docker create {image} failed: {created.stderr[-MAX_ERROR_CHARS:]}")
     try:
-        shutil.copy2(path, backup)
-        write_env_value(path, VERSION_KEY, target)
+        copied = ctx.run_cmd(["docker", "cp", f"{name}:{DEPLOY_DIR_IN_IMAGE}/.", dest], timeout=60)
+    finally:
+        ctx.run_cmd(["docker", "rm", "-f", name], timeout=30)
+    if copied.returncode != 0:
+        raise StepError(f"could not copy deploy files from {image}: "
+                        f"{copied.stderr[-MAX_ERROR_CHARS:]}")
+    missing = [f for f in DEPLOY_FILES if not os.path.isfile(os.path.join(dest, f))]
+    if missing:
+        raise StepError(f"{image} carries no deploy files ({', '.join(missing)} missing) — "
+                        "not an image built by the release workflow")
+    staged = os.path.join(dest, "docker-compose.yml")
+    cfg = ctx.run_cmd(["env", *(f"{k}={v}" for k, v in sorted(ctx.compose_env.items())),
+                       "docker", "compose", "-p", ctx.compose_project,
+                       "--env-file", env_path(ctx), "-f", staged, "config", "--quiet"],
+                      timeout=60, cwd=ctx.repo_path)
+    if cfg.returncode != 0:
+        raise StepError("the new compose file does not render with this .env: "
+                        f"{cfg.stderr[-MAX_ERROR_CHARS:]}")
+    return f"{len(DEPLOY_FILES)} deploy files of {ctx.plan['target']} staged"
+
+
+def _install_targets(ctx: Ctx):
+    for rel in DEPLOY_FILES:
+        yield (os.path.join(staging_dir(ctx), rel), os.path.join(ctx.repo_path, rel))
+
+
+def revert_install(ctx: Ctx) -> None:
+    """Put back the files :func:`step_install` replaced (never the database)."""
+    for src, dst in ctx.plan.get("replaced", []):
+        try:
+            if src is None:
+                os.remove(dst)
+            else:
+                shutil.copy2(src, dst)
+        except OSError as exc:
+            ctx.log(f"could not restore {dst}: {exc}")
+    ctx.plan["replaced"] = []
+    ctx.log("restored the previous compose file, ClickHouse config and .env")
+
+
+def step_install(ctx: Ctx) -> str:
+    """Put the new deploy files in place and pin the new version in .env.
+
+    Every replaced file is kept as ``<file>.bak-<run id>``; a failed migration
+    (next step) puts them back automatically.
+    """
+    target = ctx.plan["target"]
+    replaced = ctx.plan["replaced"] = []
+    suffix = f".bak-{ctx.run_id}"
+    try:
+        for src, dst in [*_install_targets(ctx), (None, env_path(ctx))]:
+            if os.path.exists(dst):
+                shutil.copy2(dst, dst + suffix)
+                replaced.append((dst + suffix, dst))
+            else:
+                replaced.append((None, dst))
+            if src is not None:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+        write_env_value(env_path(ctx), VERSION_KEY, target)
     except OSError as exc:
-        raise StepError(f"could not update {VERSION_KEY} in .env: {exc}") from exc
-    return f"{VERSION_KEY}={target} (previous .env kept as {os.path.basename(backup)})"
+        revert_install(ctx)
+        raise StepError(f"could not install the deploy files: {exc}") from exc
+    try:
+        data = check_data_mount(ctx)
+    except StepError:
+        revert_install(ctx)
+        raise
+    shutil.rmtree(staging_dir(ctx), ignore_errors=True)
+    return f"{VERSION_KEY}={target}, compose file updated (previous files kept as *{suffix}); {data}"
+
+
+def step_image_migrate(ctx: Ctx) -> str:
+    try:
+        return step_migrate(ctx)
+    except Exception:
+        revert_install(ctx)
+        raise
 
 
 def step_handoff(ctx: Ctx) -> str:
@@ -450,8 +553,9 @@ def image_steps(fetch_json=http_get_json, cfg_fn=settings, which=shutil.which):
         ("verify", make_step_verify(cfg_fn, which)),
         ("backup", step_backup),
         ("pull", step_image_pull),
-        ("migrate", step_migrate),
-        ("pin", step_pin),
+        ("stage", step_stage),
+        ("install", step_install),
+        ("migrate", step_image_migrate),
         ("restart", step_restart),
         ("handoff", step_handoff),
     ]
