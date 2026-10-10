@@ -32,6 +32,38 @@ def _session_user_id(request: Request) -> int:
     return int(user_id)
 
 
+# ── Dashboard + summary ──────────────────────────────────────────────────────
+
+
+@router.get("/dashboard", summary="Everything the E3 dashboard shows, in one call")
+async def dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    key: ApiKey = Depends(require_api_key),
+    since: str = Query(None, description="Override 'since your last visit' (ISO-8601); "
+                                         "default: the user's stored last visit"),
+):
+    from fastapi.responses import JSONResponse
+
+    from services import dashboard_v2
+
+    user = getattr(request.state, "current_user", None)
+    data = await dashboard_v2.build_dashboard(
+        db, user_id=getattr(user, "id", None), is_admin=key.role == "admin",
+        since_override=_parse_iso_utc(since, "since"),
+    )
+    return JSONResponse(data, headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/summary", summary="Consistent counts for the rail and sidebar badges")
+async def summary(db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import JSONResponse
+
+    from services import dashboard_v2
+
+    return JSONResponse(await dashboard_v2.build_summary(db), headers={"Cache-Control": "no-cache"})
+
+
 # ── Me ───────────────────────────────────────────────────────────────────────
 
 

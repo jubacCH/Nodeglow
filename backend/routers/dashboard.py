@@ -163,57 +163,8 @@ router = APIRouter()
 
 
 async def _predict_agent_disks(db, days_back: int = 14) -> dict[str, dict]:
-    """Predict disk-full for agent disks using historical agent_metrics data."""
-    from models.agent import Agent
-    from services.predictions import _linear_predict
-    from services.clickhouse_client import get_agent_history
-
-    predictions: dict[str, dict] = {}
-
-    result = await db.execute(select(Agent).where(Agent.enabled == True))
-    agents = result.scalars().all()
-
-    for agent in agents:
-        snapshots = await get_agent_history(agent.id, limit=10000, hours=days_back * 24)
-        if len(snapshots) < 3:
-            continue
-
-        # Build time-series per mount: {mount: [(epoch, pct), ...]}
-        mount_series: dict[str, list[tuple[float, float]]] = {}
-        for snap in snapshots:
-            data_json = snap.get("data_json")
-            if not data_json:
-                continue
-            try:
-                data = json.loads(data_json)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            ts_val = snap.get("timestamp")
-            if not isinstance(ts_val, datetime):
-                continue
-            ts = ts_val.timestamp()
-            for disk in data.get("disks", []):
-                mount = disk.get("mount", "/")
-                pct = disk.get("pct")
-                total = disk.get("total_gb", 0)
-                if pct is not None and total > 0.5:
-                    mount_series.setdefault(mount, []).append((ts, float(pct)))
-
-        for mount, series in mount_series.items():
-            if len(series) < 3:
-                continue
-            pred = _linear_predict(series)
-            if pred is None:
-                continue
-            key = f"agent-{agent.id}:{mount}"
-            predictions[key] = {
-                "current_pct": pred["current"],
-                "trend_pct_per_day": pred["slope_per_day"],
-                "days_until_full": pred["days_until_full"],
-                "confidence": pred["r_squared"],
-            }
-
-    return predictions
+    """Predict disk-full for agent disks (moved to services.predictions)."""
+    return await pred_svc.predict_agent_disks(db, days_back)
 
 
 # ── Default dashboard widget layout (gridstack 12-col, cellHeight=40px) ──────

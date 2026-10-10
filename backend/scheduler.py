@@ -876,6 +876,17 @@ def compute_disk_forecast(history: list[dict], total_gb: float) -> dict | None:
     }
 
 
+@instrument_job("disk_predictions")
+async def refresh_disk_predictions():
+    """Recompute disk-full predictions (integrations + agent disks) into the
+    in-process cache that the dashboards read. Reads days of history, which is
+    why it runs here and not on a request."""
+    from services import predictions as pred_svc
+
+    async with AsyncSessionLocal() as db:
+        await pred_svc.refresh_cache(db)
+
+
 @instrument_job("disk_space_check")
 async def check_disk_space():
     """Monitor disk usage and create incidents when thresholds are exceeded."""
@@ -1542,6 +1553,10 @@ async def start_scheduler():
                       id="port_discovery", replace_existing=True)
     scheduler.add_job(check_disk_space, "interval", minutes=30,
                       id="disk_space", replace_existing=True)
+    scheduler.add_job(refresh_disk_predictions, "interval", minutes=15,
+                      id="disk_predictions", replace_existing=True,
+                      max_instances=1, coalesce=True,
+                      next_run_time=datetime.now() + timedelta(seconds=60))
     scheduler.add_job(run_backup_compliance, "interval", hours=1,
                       id="backup_compliance", replace_existing=True)
     scheduler.add_job(cleanup_legacy_api_keys, "cron", hour=3, minute=30,
