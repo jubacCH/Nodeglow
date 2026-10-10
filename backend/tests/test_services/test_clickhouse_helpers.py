@@ -389,3 +389,82 @@ async def test_get_previous_bandwidth_sample_returns_first(fake_query):
         "sid": "1",
         "iface": "eth0",
     }
+
+
+# ── syslog time windows ─────────────────────────────────────────────────────
+
+
+def test_received_since_clause_keeps_received_at_and_adds_prune_bound():
+    from datetime import timedelta
+
+    since = datetime(2026, 4, 10, 12, 0)
+    sql, params = ch.received_since_clause(since, skew_hours=6)
+
+    assert "received_at >= {since:DateTime64(3)}" in sql
+    # The pruning predicate is on the partition / sort-key column.
+    assert "timestamp >= {since_prune:DateTime64(3)}" in sql
+    assert params == {"since": since, "since_prune": since - timedelta(hours=6)}
+
+
+def test_where_clauses_prunes_on_timestamp():
+    since = datetime(2026, 4, 10, 12, 0)
+    where, params = ch._where_clauses(since, q="error")
+
+    assert "received_at >= {since:DateTime64(3)}" in where
+    assert "timestamp >= {since_prune:DateTime64(3)}" in where
+    assert params["since"] == since
+    assert params["since_prune"] < since
+    # Free-text search keeps substring semantics.
+    assert "positionCaseInsensitive(message, {q0:String}) > 0" in where
+
+
+async def test_get_syslog_events_for_host_prunes_on_timestamp(fake_query):
+    since = datetime(2026, 4, 10, 0, 0)
+    await ch.get_syslog_events_for_host(
+        host_id=1, host_name="", host_source_ip="", since=since,
+    )
+    sql = fake_query.last_sql
+    assert "received_at >= {since:DateTime64(3)}" in sql
+    assert "timestamp >= {since_prune:DateTime64(3)}" in sql
+    assert fake_query.last_params["since_prune"] < since
+
+
+async def test_count_syslog_by_host_is_one_grouped_query(fake_query):
+    fake_query.returns([{"host_id": 3, "cnt": 7}, {"host_id": None, "cnt": 1}])
+    since = datetime(2026, 4, 10, 12, 0)
+    result = await ch.count_syslog_by_host([3, 4], since, max_severity=3)
+
+    assert len(fake_query.calls) == 1
+    sql = fake_query.last_sql.lower()
+    assert "group by host_id" in sql
+    assert "severity <= {max_sev:int8}" in sql
+    assert fake_query.last_params == {"hids": [3, 4], "t": since, "max_sev": 3}
+    assert result == {3: 7}
+
+
+async def test_count_syslog_by_host_short_circuits(fake_query):
+    assert await ch.count_syslog_by_host([], datetime(2026, 4, 10)) == {}
+    assert fake_query.calls == []
+
+
+async def test_count_syslog_received_by_source(fake_query):
+    fake_query.returns([{"source_ip": "10.0.0.1", "cnt": 42}])
+    since = datetime(2026, 4, 10, 12, 0)
+    result = await ch.count_syslog_received_by_source(since, ["10.0.0.1", "10.0.0.2"])
+
+    sql = fake_query.last_sql
+    assert "received_at >= {since:DateTime64(3)}" in sql
+    assert "timestamp >= {since_prune:DateTime64(3)}" in sql
+    assert "source_ip IN ({ips:Array(String)})" in sql
+    assert "GROUP BY source_ip" in sql
+    assert result == {"10.0.0.1": 42}
+    # An explicitly empty filter means "nobody", not "everybody".
+    assert await ch.count_syslog_received_by_source(since, []) == {}
+    assert len(fake_query.calls) == 1
+
+
+async def test_count_syslog_received_by_host(fake_query):
+    fake_query.returns([{"host_id": 9, "cnt": 5}])
+    result = await ch.count_syslog_received_by_host(datetime(2026, 4, 10), [9])
+    assert "host_id IN ({hids:Array(Int32)})" in fake_query.last_sql
+    assert result == {9: 5}

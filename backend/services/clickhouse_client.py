@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 log = logging.getLogger("nodeglow.clickhouse")
@@ -467,6 +467,111 @@ async def get_ping_status_transitions(
     return await query(sql, {"hid": int(host_id), "h": int(hours)})
 
 
+# ── Syslog time windows ──────────────────────────────────────────────────────
+# syslog_messages has two clocks:
+#   timestamp   — what the device wrote into the message. RFC 3164 carries no
+#                 year and no zone, so this is the device's local wall time
+#                 read as UTC (hours off for any device not on UTC), and a
+#                 device without NTP can be anywhere.
+#   received_at — when Nodeglow ingested the message; monotonic and trustworthy.
+# Windows like "the last hour" must therefore filter on received_at. But the
+# table is PARTITION BY toYYYYMM(timestamp) ORDER BY (severity, source_ip,
+# timestamp): received_at prunes nothing, so every such query read every
+# partition. Each received_at window now also carries a lower bound on
+# timestamp, loosened by a skew margin so a device whose clock runs behind is
+# still found. Rows with a device clock further behind than the margin fall
+# out of these windows — they are also the rows the timestamp-based TTL
+# deletes first, so they were never reliably queryable anyway.
+SYSLOG_CLOCK_SKEW_HOURS = int(os.environ.get("NODEGLOW_SYSLOG_CLOCK_SKEW_HOURS", "24"))
+
+
+def received_since_clause(
+    since: datetime, param: str = "since", skew_hours: int | None = None,
+) -> tuple[str, dict]:
+    """``received_at >= since`` plus a partition/primary-key pruning bound.
+
+    Returns (sql_fragment, params). The fragment keeps received_at semantics
+    exactly; the timestamp predicate only lets ClickHouse skip partitions and
+    granules that cannot contain a match within the skew margin.
+    """
+    skew = SYSLOG_CLOCK_SKEW_HOURS if skew_hours is None else skew_hours
+    prune = f"{param}_prune"
+    sql = (
+        f"received_at >= {{{param}:DateTime64(3)}} "
+        f"AND timestamp >= {{{prune}:DateTime64(3)}}"
+    )
+    return sql, {param: since, prune: since - timedelta(hours=skew)}
+
+
+async def count_syslog_by_host(
+    host_ids: list[int],
+    since: datetime,
+    max_severity: int | None = None,
+) -> dict[int, int]:
+    """{host_id: message count} since ``since`` (device clock), one query.
+
+    Replaces one count() round trip per host in the correlation engine.
+    """
+    if not host_ids:
+        return {}
+    clauses = [
+        "host_id IN ({hids:Array(Int32)})",
+        "timestamp >= {t:DateTime64(3)}",
+    ]
+    params: dict = {"hids": [int(h) for h in host_ids], "t": since}
+    if max_severity is not None:
+        clauses.append("severity <= {max_sev:Int8}")
+        params["max_sev"] = int(max_severity)
+    sql = f"""
+        SELECT host_id, count() AS cnt
+        FROM syslog_messages
+        WHERE {' AND '.join(clauses)}
+        GROUP BY host_id
+    """
+    rows = await query(sql, params)
+    return {int(r["host_id"]): int(r["cnt"]) for r in rows if r.get("host_id") is not None}
+
+
+async def count_syslog_received_by_source(
+    since: datetime, source_ips: list[str] | None = None,
+) -> dict[str, int]:
+    """{source_ip: messages ingested since ``since``} in one query.
+
+    Uses received_at — these counts are compared against the hourly volume
+    baselines, which are learned on ingest time as well. ``source_ips=None``
+    counts every source.
+    """
+    where, params = received_since_clause(since)
+    if source_ips is not None:
+        if not source_ips:
+            return {}
+        where += " AND source_ip IN ({ips:Array(String)})"
+        params["ips"] = list(source_ips)
+    rows = await query(
+        f"SELECT source_ip, count() AS cnt FROM syslog_messages "
+        f"WHERE {where} GROUP BY source_ip",
+        params,
+    )
+    return {r["source_ip"]: int(r["cnt"]) for r in rows}
+
+
+async def count_syslog_received_by_host(
+    since: datetime, host_ids: list[int],
+) -> dict[int, int]:
+    """{host_id: messages ingested since ``since``} in one query."""
+    if not host_ids:
+        return {}
+    where, params = received_since_clause(since)
+    params["hids"] = [int(h) for h in host_ids]
+    rows = await query(
+        f"SELECT host_id, count() AS cnt FROM syslog_messages "
+        f"WHERE {where} AND host_id IN ({{hids:Array(Int32)}}) "
+        f"GROUP BY host_id",
+        params,
+    )
+    return {int(r["host_id"]): int(r["cnt"]) for r in rows if r.get("host_id") is not None}
+
+
 async def get_syslog_events_for_host(
     host_id: int | None,
     host_name: str,
@@ -497,8 +602,10 @@ async def get_syslog_events_for_host(
         matchers.append("source_ip = {hsip:String}")
         params["hsip"] = host_source_ip
 
+    since_sql, since_params = received_since_clause(since)
+    params.update(since_params)
     where = (
-        "received_at >= {since:DateTime64(3)} "
+        f"{since_sql} "
         f"AND ({' OR '.join(matchers)}) "
         "AND severity <= {max_sev:Int8}"
     )
@@ -780,8 +887,8 @@ def _where_clauses(
     - field:key=value  — search extracted_fields Map column
     - country:XX       — filter by geo_country
     """
-    clauses = ["received_at >= {since:DateTime64(3)}"]
-    params: dict = {"since": since}
+    since_sql, params = received_since_clause(since)
+    clauses = [since_sql]
 
     if sev is not None:
         clauses.append("severity = {sev:Int8}")
@@ -818,6 +925,16 @@ def _where_clauses(
                 clauses.append("geo_country = {geo_c:String}")
                 params["geo_c"] = token[8:]
             else:
+                # Substring, case-insensitive — deliberately. The tokenbf_v1
+                # index on `message` cannot serve this: it holds whole,
+                # case-sensitive tokens of the raw text, so it only helps
+                # hasToken()/LIKE on complete tokens. Adding such a predicate
+                # would silently change what a search for "fail" finds
+                # ("failed" would no longer match). An index the substring
+                # search can use would be an ngrambf_v1 on lower(message),
+                # which needs a MATERIALIZE INDEX mutation over the whole
+                # table — out of scope here. The timestamp bound above is
+                # what keeps these scans small.
                 key = f"q{i}"
                 clauses.append(f"positionCaseInsensitive(message, {{{key}:String}}) > 0")
                 params[key] = token
