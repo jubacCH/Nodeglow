@@ -1,0 +1,43 @@
+{
+  "text": "🟡 [WARNING] Rule: Disk usage: disk = 93 (&gt; 90) on proxmox/&lt;pve1&gt; &amp; co",
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "Rule: Disk usage",
+        "emoji": true
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "disk = 93 (&gt; 90) on proxmox/&lt;pve1&gt; &amp; co"
+      }
+    },
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": {
+            "type": "plain_text",
+            "text": "Open in Nodeglow",
+            "emoji": true
+          },
+          "url": "https://nodeglow.example.ch/rules"
+        }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "🟡 *WARNING* · Nodeglow"
+        }
+      ]
+    }
+  ]
+}

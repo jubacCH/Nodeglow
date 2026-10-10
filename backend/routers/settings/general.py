@@ -31,6 +31,9 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "smtp_host", "smtp_port", "smtp_user", "smtp_from", "smtp_to",
         "notify_telegram_min_severity", "notify_discord_min_severity",
         "notify_webhook_min_severity", "notify_email_min_severity",
+        "public_url", "teams_enabled", "slack_enabled", "ntfy_enabled",
+        "ntfy_server_url", "ntfy_topic",
+        "notify_teams_min_severity", "notify_slack_min_severity", "notify_ntfy_min_severity",
         "ping_retention_days", "proxmox_retention_days", "integration_retention_days",
         "incident_event_retention_days",
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
@@ -60,6 +63,8 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "digest_day": "0", "digest_hour": "9",
         "daily_ai_summary_hour": "8",
         "daily_ai_summary_channels": "telegram,discord,webhook,email",
+        "ntfy_server_url": "https://ntfy.sh",
+        "teams_enabled": "0", "slack_enabled": "0", "ntfy_enabled": "0",
     }
     for key, default in defaults.items():
         if not result.get(key):
@@ -68,6 +73,10 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         from services.predictor_config import DEFAULT_BLACKLIST_PATTERNS
         result["predictor_template_blacklist"] = json.dumps(DEFAULT_BLACKLIST_PATTERNS)
     result["smtp_has_pw"] = bool(await get_setting(db, "smtp_password", ""))
+    # Teams/Slack webhook URLs and the ntfy token are secrets: flags only.
+    result["teams_has_url"] = bool(await get_setting(db, "teams_webhook_url", ""))
+    result["slack_has_url"] = bool(await get_setting(db, "slack_webhook_url", ""))
+    result["ntfy_has_token"] = bool(await get_setting(db, "ntfy_token", ""))
     result["claude_has_key"] = bool(await get_setting(db, "claude_api_key", ""))
     result["geoip_has_key"] = bool(await get_setting(db, "geoip_license_key", ""))
     ldap_keys = [
