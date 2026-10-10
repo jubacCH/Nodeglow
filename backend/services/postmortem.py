@@ -4,6 +4,7 @@ from datetime import datetime
 
 from models.base import AsyncSessionLocal
 from models.incident import Incident
+from services.ai_config import is_ai_enabled
 from services.ai_context import gather_incident_context
 from services.ai_client import generate_completion
 
@@ -27,6 +28,12 @@ async def generate_postmortem(incident_id: int) -> None:
     """
     try:
         async with AsyncSessionLocal() as db:
+            # Opt-in: without it nothing about the incident leaves Nodeglow.
+            # Nothing is stored either, so enabling AI later and pressing
+            # "Generate" still works for this incident.
+            if not await is_ai_enabled(db):
+                log.debug("Postmortem skipped for incident %d: AI features disabled", incident_id)
+                return
             incident = await db.get(Incident, incident_id)
             if not incident:
                 log.warning("Postmortem: incident %d not found", incident_id)

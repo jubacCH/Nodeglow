@@ -1105,10 +1105,14 @@ async def run_daily_ai_summary():
             except ValueError:
                 pass  # corrupted value, proceed
 
-        # Check if AI key is configured
-        claude_key = await get_setting(db, "claude_api_key", "")
-        if not claude_key:
-            logger.warning("Daily AI summary skipped: no Claude API key configured")
+        # Opt-in and provider: nothing is collected or sent without them.
+        from services.ai_config import load_ai_config
+        ai_cfg = await load_ai_config(db)
+        if not ai_cfg.enabled:
+            logger.info("Daily AI summary skipped: AI features are disabled (Settings > AI)")
+            return
+        if not ai_cfg.configured:
+            logger.warning("Daily AI summary skipped: AI provider not configured")
             return
 
         # Collect 24h data
@@ -1130,7 +1134,7 @@ async def run_daily_ai_summary():
     try:
         summary, usage = await generate_completion(
             _DAILY_SUMMARY_SYSTEM_PROMPT, prompt, max_tokens=1500,
-            return_usage=True,
+            return_usage=True, config=ai_cfg,
         )
     except Exception as exc:
         logger.error("Daily AI summary generation failed: %s", exc)
@@ -1139,11 +1143,8 @@ async def run_daily_ai_summary():
 
     # ── Log token usage ───────────────────────────────────────────────────
     try:
-        # Haiku pricing: $1/MTok input, $5/MTok output
-        _COST_PER_INPUT = 1.0 / 1_000_000
-        _COST_PER_OUTPUT = 5.0 / 1_000_000
-        cost = (usage["input_tokens"] * _COST_PER_INPUT
-                + usage["output_tokens"] * _COST_PER_OUTPUT)
+        from services.ai_client import estimate_cost_usd
+        cost = estimate_cost_usd(usage)
         async with AsyncSessionLocal() as db:
             db.add(AiUsageLog(
                 feature="daily_summary",
