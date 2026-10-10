@@ -31,6 +31,7 @@ from ratelimit import rate_limit
 from services import ping as ping_svc
 from services import snapshot as snap_svc
 from services.audit import log_action
+from utils import http_options as http_opts
 
 logger = logging.getLogger(__name__)
 
@@ -475,6 +476,8 @@ async def get_host(
         "parent_id": host.parent_id,
         "port_error": host.port_error or False,
         "check_detail": json.loads(host.check_detail) if host.check_detail else None,
+        "check_errors": _json_or_none(host.check_errors),
+        "http_options": http_opts.load(host.http_options).to_dict(),
         "created_at": host.created_at.isoformat() if host.created_at else None,
         "latest": {
             "online": bool(lr.get("success")) if lr else None,
@@ -735,6 +738,23 @@ async def host_timeline(
     }
 
 
+def _json_or_none(raw: str | None):
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+async def _http_options_from_body(body: dict) -> dict | None:
+    """Validated http_options from a request body (400 on bad input)."""
+    try:
+        return await http_opts.normalize_checked(body.get("http_options"))
+    except ValueError as exc:
+        raise HTTPException(400, f"http_options: {exc}") from None
+
+
 @router.post("/hosts", summary="Create a new host")
 async def create_host(
     request: Request,
@@ -746,6 +766,12 @@ async def create_host(
     hostname = (body.get("hostname") or "").strip()
     if not name or not hostname:
         raise HTTPException(400, "name and hostname are required")
+    # Same SSRF rules as the UI's create route: the core will connect there.
+    from routers.integrations import validate_host_async
+    host_err = await validate_host_async(hostname)
+    if host_err:
+        raise HTTPException(400, host_err)
+    clean_http = await _http_options_from_body(body)
 
     host = PingHost(
         name=name,
@@ -754,6 +780,7 @@ async def create_host(
         port=body.get("port"),
         latency_threshold_ms=body.get("latency_threshold_ms"),
         enabled=body.get("enabled", True),
+        http_options=http_opts.dump(clean_http),
     )
     db.add(host)
     await db.commit()
@@ -845,12 +872,23 @@ async def update_host(
         raise HTTPException(404, "Host not found")
     body = await request.json()
     old_check_type = host.check_type
+    if "hostname" in body and (body["hostname"] or "") != host.hostname:
+        hostname = (body["hostname"] or "").strip()
+        if not hostname:
+            raise HTTPException(400, "hostname must not be empty")
+        from routers.integrations import validate_host_async
+        host_err = await validate_host_async(hostname)
+        if host_err:
+            raise HTTPException(400, host_err)
+        body["hostname"] = hostname
+    if "http_options" in body:
+        body["http_options"] = http_opts.dump(await _http_options_from_body(body))
     # Record what actually changed, so the host timeline can show the edit
     # rather than just the fact that an edit happened. Fields present in the
     # body but unchanged are left out — they are noise, not history.
     changes: dict[str, dict] = {}
     for field in ("name", "hostname", "check_type", "port", "latency_threshold_ms",
-                  "enabled", "maintenance", "maintenance_until"):
+                  "enabled", "maintenance", "maintenance_until", "http_options"):
         if field in body:
             val = body[field]
             if field == "maintenance_until" and isinstance(val, str):
@@ -862,9 +900,10 @@ async def update_host(
     # Reset port_error state when check types change. The scheduler's
     # hysteresis streaks have to go with it — they describe the old check set,
     # and a stale fail streak would re-latch the flag on the next cycle.
-    if "check_type" in body and body["check_type"] != old_check_type:
+    if ("check_type" in body and body["check_type"] != old_check_type) or "http_options" in changes:
         host.port_error = False
         host.check_detail = None
+        host.check_errors = None
         from scheduler import reset_port_error_state
         reset_port_error_state(host.id)
 

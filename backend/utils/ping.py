@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from utils.http_options import BODY_LIMIT, MAX_REDIRECTS, build_url, of_host, status_matches
+
 if TYPE_CHECKING:
     from database import PingHost
 
@@ -77,7 +79,41 @@ async def ping_host(hostname: str, timeout: float = 2.0) -> tuple[bool, float | 
 # check still opens its own connection, so the latency it reports keeps
 # including connect + TLS handshake, and a host that went away cannot hide
 # behind a pooled connection.
+#
+# The clients never follow redirects themselves: check_http follows them hop by
+# hop so each target can be vetted first (see _redirect_block_reason).
 _http_clients: dict[tuple[int, bool], httpx.AsyncClient] = {}
+
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+
+
+class CheckResult(tuple):
+    """``(ok, latency_ms)`` that also says why a failed check failed.
+
+    A plain 2-tuple to every caller that unpacks it; ``reason`` is extra.
+    """
+
+    reason: str | None
+
+    def __new__(cls, ok: bool, latency: float | None, reason: str | None = None):
+        self = super().__new__(cls, (ok, latency))
+        self.reason = reason
+        return self
+
+
+class HostCheck(tuple):
+    """``(online, port_error, latency_ms, detail)`` plus ``errors``.
+
+    ``errors`` maps each failed check's label to its reason, e.g.
+    ``{"https": "status 503"}``.
+    """
+
+    errors: dict[str, str]
+
+    def __new__(cls, online, port_error, latency, detail, errors=None):
+        self = super().__new__(cls, (online, port_error, latency, detail))
+        self.errors = errors or {}
+        return self
 
 
 def _http_client(verify_ssl: bool) -> httpx.AsyncClient:
@@ -91,7 +127,7 @@ def _http_client(verify_ssl: bool) -> httpx.AsyncClient:
             _http_clients.pop(stale, None)
         client = httpx.AsyncClient(
             verify=verify_ssl,
-            follow_redirects=True,
+            follow_redirects=False,
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
         )
         _http_clients[key] = client
@@ -109,16 +145,113 @@ async def close_http_clients() -> None:
             pass
 
 
-async def check_http(url: str, timeout: float = 5.0, verify_ssl: bool = True) -> tuple[bool, float | None]:
-    """HTTP(S) GET check. Returns (success, latency_ms). Success = 2xx/3xx."""
+async def _redirect_block_reason(url: httpx.URL) -> str | None:
+    """Why a redirect target must not be followed, or None if it may be.
+
+    The same rules as for adding a host (routers.integrations._validate_host):
+    RFC1918 stays allowed — Nodeglow monitors LANs — but loopback, link-local,
+    cloud metadata and our own compose service names are refused, by literal
+    and by what the name resolves to. Without this a monitored host could
+    answer "302 Location: http://169.254.169.254/" and have us fetch it.
+    """
+    if url.scheme not in ("http", "https"):
+        return f"unsupported scheme '{url.scheme}'"
+    from routers.integrations import _validate_host  # lazy: routers import utils
+
+    return await asyncio.to_thread(_validate_host, url.host)
+
+
+def _short(text: str, limit: int = 60) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+async def _read_body(resp: httpx.Response, limit: int) -> str:
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in resp.aiter_bytes():
+        chunks.append(chunk)
+        size += len(chunk)
+        if size >= limit:
+            break
+    raw = b"".join(chunks)[:limit]
     try:
-        client = _http_client(verify_ssl)
+        return raw.decode(resp.encoding or "utf-8", errors="replace")
+    except LookupError:  # unknown charset in Content-Type
+        return raw.decode("utf-8", errors="replace")
+
+
+def _status_label(ranges: list[tuple[int, int]]) -> str:
+    return ",".join(str(lo) if lo == hi else f"{lo}-{hi}" for lo, hi in ranges)
+
+
+async def check_http(
+    url: str,
+    timeout: float = 5.0,
+    verify_ssl: bool = True,
+    *,
+    method: str = "GET",
+    expected_status: list[tuple[int, int]] | None = None,
+    keyword: str | None = None,
+    keyword_absent: str | None = None,
+    follow_redirects: bool = True,
+    max_redirects: int = MAX_REDIRECTS,
+    body_limit: int = BODY_LIMIT,
+) -> CheckResult:
+    """HTTP(S) check. Returns ``CheckResult(ok, latency_ms)`` with ``.reason``.
+
+    Without ``expected_status`` any status below 500 counts as up (the
+    historical rule). Keywords are case-insensitive substrings searched in the
+    first ``body_limit`` bytes of the body — never a regex, so no pattern can
+    stall the event loop. Redirects are followed hop by hop, at most
+    ``max_redirects``, and every hop's target is vetted against SSRF first.
+    Latency is measured to the final response's headers.
+    """
+    client = _http_client(verify_ssl)
+    want_body = method != "HEAD" and bool(keyword or keyword_absent)
+    try:
+        request = client.build_request(method, url, timeout=timeout)
         start = time.perf_counter()
-        resp = await client.get(url, timeout=timeout)
-        latency = round((time.perf_counter() - start) * 1000, 2)
-        return resp.status_code < 500, latency
-    except (httpx.HTTPError, OSError, asyncio.TimeoutError):
-        return False, None
+        hops = 0
+        while True:
+            resp = await client.send(request, stream=True)
+            try:
+                if (follow_redirects and resp.status_code in _REDIRECT_CODES
+                        and resp.next_request is not None):
+                    if hops >= max_redirects:
+                        return CheckResult(False, None, f"more than {max_redirects} redirects")
+                    nxt = resp.next_request
+                    blocked = await _redirect_block_reason(nxt.url)
+                    if blocked:
+                        target = _short(nxt.url.host or "?")
+                        return CheckResult(False, None, f"redirect to {target} blocked: {blocked}")
+                    hops += 1
+                    request = nxt
+                    continue
+
+                latency = round((time.perf_counter() - start) * 1000, 2)
+                code = resp.status_code
+                if not status_matches(code, expected_status):
+                    reason = f"status {code}"
+                    if expected_status is not None:
+                        reason += f" (expected {_status_label(expected_status)})"
+                    return CheckResult(False, latency, reason)
+                if want_body:
+                    body = (await _read_body(resp, body_limit)).casefold()
+                    if keyword and keyword.casefold() not in body:
+                        return CheckResult(False, latency, f"keyword '{_short(keyword)}' missing")
+                    if keyword_absent and keyword_absent.casefold() in body:
+                        return CheckResult(False, latency, f"keyword '{_short(keyword_absent)}' present")
+                return CheckResult(True, latency)
+            finally:
+                await resp.aclose()
+    except httpx.TimeoutException:
+        return CheckResult(False, None, f"timeout after {timeout:g}s")
+    except httpx.ConnectError as exc:
+        if "certificate verify failed" in str(exc).lower():
+            return CheckResult(False, None, "TLS certificate verification failed")
+        return CheckResult(False, None, "connection failed")
+    except (httpx.HTTPError, OSError, asyncio.TimeoutError) as exc:
+        return CheckResult(False, None, f"request failed ({type(exc).__name__})")
 
 
 # ── TCP ───────────────────────────────────────────────────────────────────────
@@ -224,37 +357,57 @@ async def get_ssl_expiry_days(hostname: str, port: int = 443) -> int | None:
 
 # ── Dispatcher ─────────────────────────────────────────────────────────────────
 
+def http_check_url(host: "PingHost", ct: str) -> str:
+    """The URL an http/https check of this host requests."""
+    # Use hostname (FQDN) for HTTP/HTTPS — SSL certs need the domain name
+    hostname = host.hostname
+    if hostname.startswith("http://") or hostname.startswith("https://"):
+        base = hostname
+    else:
+        scheme = "https" if ct == "https" else "http"
+        base = f"{scheme}://{hostname}"
+    return build_url(base, of_host(host))
+
+
 async def _check_single(host: "PingHost", ct: str) -> tuple[bool, float | None]:
-    """Run a single check type for the given host."""
+    """Run a single check type for the given host.
+
+    The result may be a :class:`CheckResult` carrying a failure reason.
+    """
     ct = ct.lower()
     # Prefer ip_address for network checks, fall back to hostname
     target = getattr(host, "ip_address", None) or host.hostname
     if ct == "icmp":
         return await ping_host(target)
     if ct in ("http", "https"):
-        # Use hostname (FQDN) for HTTP/HTTPS — SSL certs need the domain name
-        hostname = host.hostname
-        if hostname.startswith("http://") or hostname.startswith("https://"):
-            url = hostname
-        else:
-            scheme = "https" if ct == "https" else "http"
-            url = f"{scheme}://{hostname}"
-        # verify_ssl=False for monitoring: internal hosts often use self-signed certs
-        return await check_http(url, verify_ssl=False)
+        opts = of_host(host)
+        # verify_tls defaults to False: internal hosts often use self-signed certs
+        return await check_http(
+            http_check_url(host, ct),
+            timeout=opts.timeout,
+            verify_ssl=opts.verify_tls,
+            method=opts.method,
+            expected_status=opts.status_ranges,
+            keyword=opts.keyword,
+            keyword_absent=opts.keyword_absent,
+            follow_redirects=opts.follow_redirects,
+        )
     # TCP — supports both "tcp" (uses host.port) and "tcp:PORT" format
     if ct == "tcp" or ct.startswith("tcp:"):
         if ":" in ct:
             port = int(ct.split(":")[1])
         else:
             port = host.port or 80
-        return await check_tcp(target, port)
+        ok, lat = await check_tcp(target, port)
+        return CheckResult(ok, lat, None if ok else f"port {port} unreachable")
     # DNS — "dns:NAME" asks the host (as a DNS server) to resolve NAME
     if ct.startswith("dns:") and ct[4:]:
-        return await check_dns(target, ct[4:])
+        ok, lat = await check_dns(target, ct[4:])
+        return CheckResult(ok, lat, None if ok else f"no answer for {_short(ct[4:])}")
     return await ping_host(target)
 
 
-async def check_host(host: "PingHost") -> tuple[bool, bool, float | None, dict]:
+async def check_host(host: "PingHost") -> HostCheck:
     """Run all check types in parallel.
 
     Returns (online, port_error, latency_ms, check_detail):
@@ -262,6 +415,8 @@ async def check_host(host: "PingHost") -> tuple[bool, bool, float | None, dict]:
       - port_error: True if host is online but a port/http/https check failed
       - latency_ms: ICMP latency preferred, else first available
       - check_detail: per-check results dict, e.g. {"icmp": true, "https": false}
+    The returned tuple's ``errors`` attribute maps failed checks to a reason
+    ({"https": "status 503"}); ICMP failures have none (the host is down).
     """
     types = [t.strip() for t in (host.check_type or "icmp").split(",") if t.strip()]
     results: list[tuple[bool, float | None]] = await asyncio.gather(
@@ -270,12 +425,17 @@ async def check_host(host: "PingHost") -> tuple[bool, bool, float | None, dict]:
 
     # Build per-check detail
     detail: dict = {}
-    for ct, (ok, lat) in zip(types, results):
+    errors: dict[str, str] = {}
+    for ct, res in zip(types, results):
+        ok = res[0]
         label = ct
         # Legacy "tcp" without port suffix — add host.port for clarity
         if ct == "tcp" and host.port and ":" not in ct:
             label = f"tcp:{host.port}"
         detail[label] = ok
+        reason = getattr(res, "reason", None)
+        if not ok and reason:
+            errors[label] = reason
 
     # Determine online status from ICMP only
     icmp_types = [i for i, t in enumerate(types) if t == "icmp"]
@@ -298,4 +458,4 @@ async def check_host(host: "PingHost") -> tuple[bool, bool, float | None, dict]:
         primary = results[icmp_types[0]][1]
     if primary is None:
         primary = next((r[1] for r in results if r[1] is not None), None)
-    return online, port_error, primary, detail
+    return HostCheck(online, port_error, primary, detail, errors)
