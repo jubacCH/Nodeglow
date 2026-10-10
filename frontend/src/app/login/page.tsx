@@ -4,6 +4,7 @@ import { useState, useEffect, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/stores/auth';
+import { safeNextPath } from '@/lib/redirect';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -37,7 +38,9 @@ export default function LoginPage() {
 
       if (res.ok) {
         await fetchUser();
-        router.push('/');
+        // Return to the page that sent us here (?next=), same-origin only.
+        const next = safeNextPath(new URLSearchParams(window.location.search).get('next'));
+        router.push(next ?? '/');
         router.refresh();
       } else {
         const data = await res.json().catch(() => ({}));

@@ -12,6 +12,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useWsStore } from '@/stores/websocket';
 import { useThemeStore } from '@/stores/theme';
 import { cn } from '@/lib/utils';
+import { loginHref } from '@/lib/redirect';
 import { Menu, X } from 'lucide-react';
 
 interface AppShellProps {
@@ -41,7 +42,7 @@ export function AppShell({ children }: AppShellProps) {
   // Redirect to /login once auth state resolves and there is no user.
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace('/login');
+      router.replace(loginHref(window.location.pathname + window.location.search));
     }
   }, [isLoading, user, router]);
 
