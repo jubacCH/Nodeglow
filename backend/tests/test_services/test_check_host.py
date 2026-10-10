@@ -168,6 +168,43 @@ def test_build_dns_query_wire_format():
     assert q[12:] == b"\x01a\x07example\x03com\x00" + bytes.fromhex("00010001")
 
 
+class _FakeProc:
+    returncode = 0
+
+    async def communicate(self):
+        return b"64 bytes from 10.0.0.7: icmp_seq=1 ttl=64 time=0.42 ms\n", b""
+
+
+@pytest.mark.asyncio
+async def test_ping_host_pings_the_resolved_ip():
+    """The name is resolved in-process (cacheable); ping only ever sees the IP."""
+    import socket
+    from utils import ping as ping_mod
+
+    infos = [(socket.AF_INET, socket.SOCK_RAW, 0, "", ("10.0.0.7", 0))]
+    with (
+        patch("asyncio.base_events.BaseEventLoop.getaddrinfo", new_callable=AsyncMock, return_value=infos),
+        patch("utils.ping.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=_FakeProc()) as spawn,
+    ):
+        ok, latency = await ping_mod.ping_host("host.example.com")
+    assert (ok, latency) == (True, 0.42)
+    assert spawn.call_args.args[-1] == "10.0.0.7"
+
+
+@pytest.mark.asyncio
+async def test_ping_host_unresolvable_name_is_down_without_spawning():
+    import socket
+    from utils import ping as ping_mod
+
+    with (
+        patch("asyncio.base_events.BaseEventLoop.getaddrinfo", new_callable=AsyncMock,
+              side_effect=socket.gaierror(socket.EAI_NONAME, "unknown")),
+        patch("utils.ping.asyncio.create_subprocess_exec", new_callable=AsyncMock) as spawn,
+    ):
+        assert await ping_mod.ping_host("missing.example.com") == (False, None)
+    spawn.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_check_host_offline_no_port_error():
     """When ICMP fails, port_error should be False even if services fail too."""
