@@ -82,6 +82,30 @@ async def resolve_server_url(request: Request) -> str:
     return f"{scheme}://{host}"
 
 
+def _presented_agent_token_matches(request: Request, body: dict, agent) -> bool:
+    """Does the enrol request carry ``agent``'s current bearer token?
+
+    Accepted in the body (``agent_token``, what the installers send) or as
+    ``Authorization: Bearer``. Compared as HMAC (or legacy SHA256) hashes in
+    constant time.
+    """
+    presented = body.get("agent_token") if isinstance(body, dict) else None
+    if not presented:
+        auth = request.headers.get("authorization", "")
+        if auth.startswith("Bearer "):
+            presented = auth[7:]
+    if not presented or not isinstance(presented, str):
+        return False
+    presented = presented.strip()
+    stored = agent.token or ""
+    if not presented or not stored:
+        return False
+    return (
+        hmac.compare_digest(_hash_agent_token(presented), stored)
+        or hmac.compare_digest(_hash_agent_token_legacy(presented), stored)
+    )
+
+
 async def _get_enrollment_key() -> str:
     """Legacy shared enrollment key. Only used when
     NODEGLOW_ALLOW_SHARED_ENROLLMENT=1 is set on the backend container.
@@ -196,6 +220,28 @@ async def agent_enroll(request: Request):
         result = await db.execute(select(Agent).where(sa_func.lower(Agent.hostname) == hostname.lower()))
         existing = result.scalars().first()
         if existing:
+            # Re-enrolment of a known hostname must prove it IS that agent.
+            # It used to rotate the token and hand the new one to whoever
+            # asked — so anyone holding an install token (or the legacy shared
+            # key) could take over any enrolled agent by naming its hostname,
+            # and the real agent was locked out with a dead token.
+            # Legitimate re-runs of the installer send the token from the
+            # existing config; a host that lost its config must be deleted by
+            # an admin first, after which it enrols as new.
+            if not _presented_agent_token_matches(request, body, existing):
+                logger.warning(
+                    "Refused re-enrollment of existing agent %s (id=%d) from %s: "
+                    "no valid current agent token presented",
+                    hostname, existing.id, client_ip_log,
+                )
+                return JSONResponse({
+                    "error": (
+                        "An agent with this hostname is already enrolled. Re-run the "
+                        "installer on that host with its existing config, or delete "
+                        "the agent in Nodeglow first."
+                    ),
+                    "code": "agent_exists",
+                }, status_code=409)
             # Rotate token on re-enrollment for security
             raw_token = secrets.token_hex(24)
             existing.token = _hash_agent_token(raw_token)
@@ -717,10 +763,20 @@ HOSTNAME=$(hostname)
 echo "  [1/5] Creating install directory..."
 mkdir -p "$INSTALL_DIR"
 
+# Re-running the installer on an enrolled host: prove it is the same agent
+# with the token from the existing config (the server refuses to re-enrol a
+# known hostname without it).
+EXISTING_TOKEN=""
+if [ -f "$CONFIG_FILE" ]; then
+    EXISTING_TOKEN=$(python3 -c "import sys,json; print(json.load(open(sys.argv[1])).get('token',''))" "$CONFIG_FILE" 2>/dev/null || \\
+        grep -o '"token": *"[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
+fi
+EXISTING_TOKEN=$(printf '%s' "$EXISTING_TOKEN" | tr -cd '0-9a-fA-F')
+
 echo "  [2/5] Enrolling agent ($HOSTNAME)..."
 ENROLL_RESPONSE=$(curl -sSL -X POST "$SERVER/api/agent/enroll" \\
     -H "Content-Type: application/json" \\
-    -d "{{\\"enrollment_key\\": \\"$ENROLLMENT_KEY\\", \\"hostname\\": \\"$HOSTNAME\\", \\"platform\\": \\"Linux\\", \\"arch\\": \\"$(uname -m)\\"}}")
+    -d "{{\\"enrollment_key\\": \\"$ENROLLMENT_KEY\\", \\"hostname\\": \\"$HOSTNAME\\", \\"platform\\": \\"Linux\\", \\"arch\\": \\"$(uname -m)\\", \\"agent_token\\": \\"$EXISTING_TOKEN\\"}}")
 
 # Extract token from JSON response (try python3 first, then grep fallback)
 TOKEN=$(echo "$ENROLL_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || \\
@@ -862,12 +918,21 @@ if (Test-Path "$OldDir\\config.json") {{
 Remove-Item -Path "$InstallDir\\nodeglow-agent.exe.old" -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$InstallDir\\nodeglow-agent.exe.new" -Force -ErrorAction SilentlyContinue
 
+# Re-running the installer on an enrolled host: prove it is the same agent
+# with the token from the existing config (the server refuses to re-enrol a
+# known hostname without it).
+$ExistingToken = ""
+if (Test-Path "$InstallDir\\config.json") {{
+    try {{ $ExistingToken = [string](Get-Content "$InstallDir\\config.json" -Raw | ConvertFrom-Json).token }} catch {{ $ExistingToken = "" }}
+}}
+
 Write-Host "  [3/8] Enrolling agent ($Hostname)..."
 $body = @{{
     enrollment_key = $EnrollmentKey
     hostname = $Hostname
     platform = "Windows"
     arch = $env:PROCESSOR_ARCHITECTURE
+    agent_token = $ExistingToken
 }} | ConvertTo-Json
 
 $response = Invoke-RestMethod -Uri "$Server/api/agent/enroll" -Method Post -Body $body -ContentType "application/json"
