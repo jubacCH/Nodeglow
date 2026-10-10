@@ -282,14 +282,31 @@ async def system_status(
 # ── Hosts ────────────────────────────────────────────────────────────────────
 
 
+def _csv_filter(raw: str | None, allowed, name: str) -> set[str] | None:
+    """'a,b' → {'a','b'}, validated against ``allowed`` (400 on unknown values)."""
+    if raw is None or not raw.strip():
+        return None
+    values = {v.strip() for v in raw.split(",") if v.strip()}
+    bad = sorted(values - set(allowed))
+    if bad:
+        raise HTTPException(400, f"unknown {name} value(s): {', '.join(bad)}; "
+                                 f"allowed: {', '.join(allowed)}")
+    return values
+
+
 @router.get("/hosts", summary="List all hosts with current status")
 async def list_hosts(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
-    status: str = Query(None, description="Filter: online, offline, maintenance, disabled"),
+    status: str = Query(None, description="Filter: online, offline, unknown, maintenance, disabled"),
+    state: str = Query(None, description="Filter by unified state, comma-separated: "
+                                          "up, degraded, warning, down, unknown, maintenance, disabled"),
     source: str = Query(None, description="Filter by source: manual, proxmox, agent, phpipam"),
     enabled: bool = Query(None, description="Filter by enabled status"),
 ):
+    from services import host_state as hs
+
+    wanted_states = _csv_filter(state, hs.STATES, "state")
     q = select(PingHost).order_by(PingHost.name)
     if enabled is not None:
         q = q.where(PingHost.enabled == enabled)
@@ -302,20 +319,18 @@ async def list_hosts(
     uptime_map = await ping_svc.get_uptime_map()
     now = datetime.utcnow()
     windows = await maint_svc.load_windows(db)
+    # One probe-aware rule for every list: a host behind a silent probe is
+    # "unknown", not its last value (it used to stay "online" here forever).
+    states = await hs.host_states(db, hosts, now, latest=latest_map, windows=windows)
 
     out = []
     for h in hosts:
         lr = latest_map.get(h.id)
-        is_online = bool(lr.get("success")) if lr else None
-        in_maint = maint_svc.is_in_maintenance(h, now, windows)
-        host_status = (
-            "disabled" if not h.enabled
-            else "maintenance" if in_maint
-            else "online" if is_online
-            else "offline" if is_online is False
-            else "unknown"
-        )
+        st = states[h.id]
+        host_status = hs.legacy_status(st.state)
         if status and host_status != status:
+            continue
+        if wanted_states and st.state not in wanted_states:
             continue
         um = uptime_map.get(h.id, {})
         _lat = lr.get("latency_ms") if lr else None
@@ -325,6 +340,8 @@ async def list_hosts(
             "name": h.name,
             "hostname": h.hostname,
             "status": host_status,
+            **st.fields(),
+            "probe_id": h.probe_id,
             "check_type": h.check_type or "icmp",
             "port": h.port,
             "source": h.source or "manual",
@@ -450,11 +467,14 @@ async def get_host(
     _now = datetime.utcnow()
     _windows = await maint_svc.load_windows(db)
     _maint = maint_svc.api_fields(host, _now, _windows)
-    if _online is False:
+    from services import host_state as hs
+    _state = (await hs.host_states(db, [host], _now, latest=latest_map, windows=_windows,
+                                   topology=None))[host.id]
+    if _state.state == hs.STATE_DOWN:
         health_score = 1.0
     elif _maint["maintenance"]:
         health_score = 0.5
-    elif _online is None:
+    elif _online is None or _state.state == hs.STATE_UNKNOWN:
         health_score = 0.8
     else:
         _hs = 0.0
@@ -480,6 +500,9 @@ async def get_host(
         "check_type": host.check_type or "icmp",
         "port": host.port,
         "enabled": host.enabled,
+        "status": hs.legacy_status(_state.state),
+        **_state.fields(),
+        "probe_id": host.probe_id,
         **_maint,
         "maintenance_until": host.maintenance_until.isoformat() if host.maintenance_until else None,
         "source": host.source or "manual",
@@ -2062,9 +2085,11 @@ async def get_topology(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
 ):
+    from services import host_state as hs
     from services.topology import build_topology
 
-    topo = await build_topology(db)
+    provenance: dict[int, str] = {}
+    topo = await build_topology(db, provenance)
 
     # Load hosts for metadata
     result = await db.execute(select(PingHost))
@@ -2078,6 +2103,7 @@ async def get_topology(
     from services.probes import statuses_for
     statuses = await statuses_for(db, hosts, now.timestamp())
     windows = await maint_svc.load_windows(db)
+    states = await hs.host_states(db, hosts, now, windows=windows, topology=topo)
 
     nodes = []
     edges = []
@@ -2087,13 +2113,15 @@ async def get_topology(
             "name": h.name,
             "hostname": h.hostname,
             "status": statuses.get(h.id, "unknown"),
+            **states[h.id].fields(),
             "check_type": h.check_type,
             "source": h.source,
             "maintenance": maint_svc.is_in_maintenance(h, now, windows),
         })
         parent = topo.get(h.id)
         if parent is not None:
-            edges.append({"source": parent, "target": h.id})
+            edges.append({"source": parent, "target": h.id,
+                          "provenance": provenance.get(h.id)})
 
     return {"nodes": nodes, "edges": edges}
 

@@ -16,26 +16,39 @@ from services import snapshot as snap_svc
 logger = logging.getLogger(__name__)
 
 
-async def build_topology(db: AsyncSession) -> dict[int, int | None]:
+async def build_topology(
+    db: AsyncSession,
+    provenance: dict[int, str] | None = None,
+    gateways: set[int] | None = None,
+) -> dict[int, int | None]:
     """Build topology tree: {host_id: parent_host_id or None}.
 
     Auto-detects parent-child from:
     - PingHost.parent_id (manual)
     - Proxmox cluster: VM/LXC → node
     - UniFi: Gateway → Switch → AP
+
+    Pass a dict as ``provenance`` to learn where each link came from
+    ({child_id: "manual" | "proxmox" | "unifi"}), and a set as ``gateways``
+    to collect the hosts UniFi reports as gateways.
     """
+    if provenance is None:
+        provenance = {}
+    if gateways is None:
+        gateways = set()
     # Load all hosts
     result = await db.execute(select(PingHost))
     all_hosts = result.scalars().all()
 
     topology: dict[int, int | None] = {}
-    host_by_id = {h.id: h for h in all_hosts}
 
     # Name → id mapping (lowercase)
     name_map: dict[str, int] = {}
     ip_map: dict[str, int] = {}
     for h in all_hosts:
         topology[h.id] = getattr(h, "parent_id", None)
+        if topology[h.id] is not None:
+            provenance[h.id] = "manual"
         name_map[h.name.lower()] = h.id
         raw = h.hostname
         for pfx in ("https://", "http://"):
@@ -76,6 +89,7 @@ async def build_topology(db: AsyncSession) -> dict[int, int | None]:
                 if guest_id and node_id and guest_id != node_id:
                     if topology.get(guest_id) is None:
                         topology[guest_id] = node_id
+                        provenance[guest_id] = "proxmox"
 
         elif cfg.type == "unifi":
             devices = data.get("devices", [])
@@ -102,13 +116,16 @@ async def build_topology(db: AsyncSession) -> dict[int, int | None]:
                 elif dtype == "uap":
                     ap_ids.append(ph_id)
             if gw_id:
+                gateways.add(gw_id)
                 for sw_id in sw_ids:
                     if topology.get(sw_id) is None:
                         topology[sw_id] = gw_id
+                        provenance[sw_id] = "unifi"
                 parent_for_ap = sw_ids[0] if sw_ids else gw_id
                 for ap_id in ap_ids:
                     if topology.get(ap_id) is None:
                         topology[ap_id] = parent_for_ap
+                        provenance[ap_id] = "unifi"
 
             # Match non-UniFi hosts to switches via UniFi client table
             # UniFi clients have sw_mac (which switch they're on) and ip/mac
@@ -138,8 +155,47 @@ async def build_topology(db: AsyncSession) -> dict[int, int | None]:
                 # Only set if no parent yet (don't override Proxmox node→VM)
                 if topology.get(cl_host_id) is None:
                     topology[cl_host_id] = sw_host_id
+                    provenance[cl_host_id] = "unifi"
 
     return topology
+
+
+# ── Short-lived cache ────────────────────────────────────────────────────────
+# build_topology parses the latest proxmox and unifi snapshots (hundreds of kB
+# of JSON each). Status pages ask for it on every request; the links change on
+# the integration cadence (a minute or more), so a 60 s cache is invisible.
+# Keyed by the session's engine, so two databases (tests) never share entries.
+
+TOPOLOGY_CACHE_TTL = 60.0
+# id(bind) -> (bind, monotonic ts, topology, provenance, gateways). The bind is
+# held so its id cannot be reused by another engine while the entry exists.
+_topology_cache: dict[int, tuple] = {}
+
+
+async def cached_topology(db: AsyncSession, ttl: float = TOPOLOGY_CACHE_TTL):
+    """(topology, provenance, gateways), at most ``ttl`` seconds old."""
+    import time
+
+    try:
+        bind = db.get_bind()
+    except Exception:  # noqa: BLE001 — unbound session: just do not cache
+        bind = None
+    now = time.monotonic()
+    hit = _topology_cache.get(id(bind)) if bind is not None else None
+    if hit and hit[0] is bind and now - hit[1] < ttl:
+        return hit[2], hit[3], hit[4]
+    provenance: dict[int, str] = {}
+    gateways: set[int] = set()
+    topo = await build_topology(db, provenance, gateways)
+    if bind is not None:
+        if len(_topology_cache) > 8:
+            _topology_cache.clear()
+        _topology_cache[id(bind)] = (bind, now, topo, provenance, gateways)
+    return topo, provenance, gateways
+
+
+def invalidate_topology_cache() -> None:
+    _topology_cache.clear()
 
 
 def get_ancestors(topology: dict[int, int | None], host_id: int) -> list[int]:
