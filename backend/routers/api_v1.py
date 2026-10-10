@@ -15,7 +15,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1780,39 +1780,9 @@ async def resolve_incident(
     ))
     await log_action(db, request, "incident.resolve", "incident", incident_id, incident.title)
     await db.commit()
-    try:
-        from services.postmortem import generate_postmortem
-        asyncio.create_task(generate_postmortem(incident.id))
-    except Exception:
-        pass
+    from extensions import fire_incident_resolved
+    fire_incident_resolved([incident.id])
     return {"ok": True, "status": "resolved"}
-
-
-@router.post("/incidents/{incident_id}/postmortem", summary="Generate or regenerate postmortem")
-async def regenerate_postmortem(
-    incident_id: int,
-    db: AsyncSession = Depends(get_db),
-    _key: ApiKey = Depends(require_editor),
-):
-    incident = await db.get(Incident, incident_id)
-    if not incident:
-        raise HTTPException(404, "Incident not found")
-    if incident.status != "resolved":
-        raise HTTPException(400, "Postmortem can only be generated for resolved incidents")
-
-    from services.ai_config import load_ai_config
-    ai_cfg = await load_ai_config(db)
-    if not ai_cfg.enabled:
-        return _ai_unavailable("ai_disabled")
-    if not ai_cfg.configured:
-        return _ai_unavailable("ai_not_configured")
-
-    try:
-        from services.postmortem import generate_postmortem
-        asyncio.create_task(generate_postmortem(incident.id))
-    except Exception:
-        pass
-    return {"ok": True, "message": "Postmortem generation started"}
 
 
 @router.post("/incidents/{incident_id}/feedback", summary="Label an incident real or noise")
@@ -2432,81 +2402,10 @@ async def set_watched_services(
     return {"ok": True, "services": services}
 
 
-# ── Glow (AI Assistant) ───────────────────────────────────────────────────────
-
-_glow_log = logging.getLogger("glow")
-
-GLOW_SYSTEM_PROMPT = """Nodeglow Glow assistant. Analyse the infrastructure data below and answer concisely.
-Rules: be specific, use bullet points, reference host/incident names. Never invent data not in context.
-
-{context}"""
-
-_MAX_HISTORY = 10  # keep last N messages to limit token usage
-
-
-@router.post("/glow/chat", summary="Glow AI chat (streaming SSE)")
-async def glow_chat(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    _key: ApiKey = Depends(require_api_key),
-):
-    """Stream an AI copilot response as SSE events."""
-    from services.ai_client import stream_completion
-    from services.ai_config import AIError, load_ai_config
-    from services.ai_context import gather_infrastructure_context
-
-    body = await request.json()
-    user_message = (body.get("message") or "").strip()
-    history = body.get("history") or []
-
-    if not user_message:
-        raise HTTPException(400, "message is required")
-
-    # Opt-in + provider check before gathering any context.
-    ai_cfg = await load_ai_config(db)
-    if not ai_cfg.enabled:
-        return _ai_unavailable("ai_disabled")
-    if not ai_cfg.configured:
-        return _ai_unavailable("ai_not_configured")
-
-    # Gather live infrastructure context
-    try:
-        context = await gather_infrastructure_context(db)
-    except Exception as e:
-        _glow_log.warning("Failed to gather context: %s", e)
-        context = "Infrastructure context unavailable."
-
-    system_prompt = GLOW_SYSTEM_PROMPT.format(context=context)
-
-    # Build messages: keep only last N history entries to limit tokens
-    messages = []
-    for h in history[-_MAX_HISTORY:]:
-        role = h.get("role")
-        content = h.get("content", "")
-        if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": user_message})
-
-    async def event_stream():
-        try:
-            async for delta in stream_completion(system_prompt, messages, config=ai_cfg):
-                yield f"data: {json.dumps({'delta': delta})}\n\n"
-            yield f"data: {json.dumps({'done': True})}\n\n"
-        except AIError as e:
-            _glow_log.warning("Glow request failed: %s", e)
-            yield f"data: {json.dumps({'error': str(e), 'code': e.code, 'done': True})}\n\n"
-        except Exception:
-            _glow_log.exception("Glow stream error")
-            yield f"data: {json.dumps({'error': 'An unexpected error occurred.', 'done': True})}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-def _ai_unavailable(code: str) -> JSONResponse:
-    """Uniform answer of every AI endpoint when AI is off or not set up."""
-    from services.ai_config import AI_DISABLED_MESSAGE, AI_NOT_CONFIGURED_MESSAGE
-    message = AI_DISABLED_MESSAGE if code == "ai_disabled" else AI_NOT_CONFIGURED_MESSAGE
-    return JSONResponse({"error": message, "code": code}, status_code=409)
+# ── AI status ────────────────────────────────────────────────────────────────
+# The AI features themselves (Glow chat, postmortems, daily summary) are
+# enterprise features (ee/backend/nodeglow_ee/ai); the opt-in and provider
+# settings they build on are core.
 
 
 @router.get("/ai/status", summary="Whether AI features are enabled")

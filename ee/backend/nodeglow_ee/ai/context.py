@@ -1,4 +1,4 @@
-"""Gather infrastructure context for AI features (copilot + postmortem).
+"""Gather infrastructure context for AI features (Glow + postmortem) — enterprise.
 
 Token budget: keep infra context under ~800 tokens to minimize API costs.
 Only include actionable data — counts and anomalies, not full lists.

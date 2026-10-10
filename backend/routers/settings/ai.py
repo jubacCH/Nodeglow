@@ -1,4 +1,10 @@
-"""AI settings — opt-in, provider, redaction, test connection, daily summary, usage."""
+"""AI settings — opt-in, provider, redaction, test connection, daily summary, usage.
+
+These are the core AI building blocks every edition has. The features built on
+them (Glow chat, postmortems, the daily summary job and its test send) live in
+the enterprise package; the daily-summary *settings* are stored here so the
+settings tab keeps one save path.
+"""
 from dataclasses import replace
 from datetime import datetime
 
@@ -11,7 +17,6 @@ from database import encrypt_value, get_db, get_setting, set_setting
 from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
 from ratelimit import rate_limit
 from services.ai_config import (
-    AI_DISABLED_MESSAGE,
     DEFAULT_ANTHROPIC_MODEL,
     PROVIDER_OPENAI,
     PROVIDERS,
@@ -217,136 +222,6 @@ async def test_ai_connection(request: Request, db: AsyncSession = Depends(get_db
     cfg = _merge_form(await load_ai_config(db), form)
     result = await check_connection(cfg)
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
-
-
-@router.post("/ai/test-summary")
-@rate_limit(max_requests=3, window_seconds=60)
-async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get_db)):
-    """Trigger a one-off daily AI summary (ignores schedule + duplicate protection)."""
-    if err := require_admin(request):
-        return err
-
-    from services.digest import (
-        build_daily_summary_data, format_daily_summary_prompt,
-        _DAILY_SUMMARY_SYSTEM_PROMPT,
-    )
-    from services.ai_client import estimate_cost_usd, generate_completion
-    from notifications import (
-        _send_telegram, _send_discord, _send_webhook, _send_email, _build_html_email,
-    )
-    from database import decrypt_value
-
-    ai_cfg = await load_ai_config(db)
-    if not ai_cfg.enabled:
-        return JSONResponse({"ok": False, "code": "ai_disabled", "message": AI_DISABLED_MESSAGE},
-                            status_code=409)
-    if not ai_cfg.configured:
-        return JSONResponse({"ok": False, "code": "ai_not_configured",
-                             "message": "AI provider not configured"}, status_code=400)
-
-    data = await build_daily_summary_data(db)
-
-    prompt = format_daily_summary_prompt(data)
-    try:
-        summary, usage = await generate_completion(
-            _DAILY_SUMMARY_SYSTEM_PROMPT, prompt, max_tokens=1500,
-            return_usage=True, config=ai_cfg,
-        )
-    except Exception as exc:
-        log.error("Test AI summary generation failed: %s", exc)
-        return JSONResponse({"ok": False, "message": f"AI generation failed: {exc}"}, status_code=500)
-
-    try:
-        from models.ai_usage import AiUsageLog
-        cost = estimate_cost_usd(usage)
-        db.add(AiUsageLog(
-            feature="daily_summary_test",
-            model=usage.get("model", "unknown"),
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            cost_usd=round(cost, 6),
-        ))
-        await db.commit()
-    except Exception as exc:
-        log.warning("Failed to log AI usage: %s", exc)
-
-    title = "Daily AI Summary (Test)"
-    channels_csv = await get_setting(db, "daily_ai_summary_channels", "") or DAILY_SUMMARY_DEFAULT_CHANNELS
-    selected = {c.strip() for c in channels_csv.split(",") if c.strip()}
-    sent = False
-    errors = []
-
-    from services.channel_secrets import reveal
-    tg_token = reveal(await get_setting(db, "telegram_bot_token", ""))
-    tg_chat = await get_setting(db, "telegram_chat_id", "")
-    dc_webhook = reveal(await get_setting(db, "discord_webhook_url", ""))
-    wh_url = reveal(await get_setting(db, "webhook_url", ""))
-    wh_secret = reveal(await get_setting(db, "webhook_secret", ""))
-    smtp_host = await get_setting(db, "smtp_host", "")
-    smtp_user = await get_setting(db, "smtp_user", "")
-    smtp_pw_enc = await get_setting(db, "smtp_password", "")
-    smtp_to = await get_setting(db, "smtp_to", "")
-    smtp_port = int(await get_setting(db, "smtp_port", "587"))
-    smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
-
-    if "telegram" in selected and tg_token and tg_chat:
-        try:
-            tg_text = f"<b>🤖 {title}</b>\n\n{summary}"
-            if len(tg_text) > 4096:
-                tg_text = tg_text[:4090] + "\n[…]"
-            await _send_telegram(tg_token, tg_chat, tg_text)
-            sent = True
-        except Exception as exc:
-            errors.append(f"Telegram: {exc}")
-
-    if "discord" in selected and dc_webhook:
-        try:
-            desc = summary[:4090] if len(summary) > 4090 else summary
-            await _send_discord(dc_webhook, f"🤖 {title}", desc, 0x8B5CF6)
-            sent = True
-        except Exception as exc:
-            errors.append(f"Discord: {exc}")
-
-    if "webhook" in selected and wh_url:
-        try:
-            await _send_webhook(wh_url, wh_secret, title, summary, "info")
-            sent = True
-        except Exception as exc:
-            errors.append(f"Webhook: {exc}")
-
-    if "email" in selected and smtp_host and smtp_user and smtp_pw_enc and smtp_to:
-        try:
-            try:
-                smtp_pw = decrypt_value(smtp_pw_enc)
-            except Exception:
-                smtp_pw = smtp_pw_enc
-            html_body = _build_html_email(title, summary, "info")
-            await _send_email(
-                smtp_host, smtp_port, smtp_user, smtp_pw,
-                smtp_from, smtp_to,
-                f"[Nodeglow] {title}", f"{title}\n\n{summary}", html_body,
-            )
-            sent = True
-        except Exception as exc:
-            errors.append(f"Email: {exc}")
-
-    from notification_channels import load_config as load_channel_config, send_to_selected
-    channel_cfg = await load_channel_config(db, get_setting, decrypt_value)
-    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary):
-        if exc is None:
-            sent = True
-        else:
-            errors.append(f"{ch}: {exc}")
-
-    if sent:
-        msg = "Test summary sent"
-        if errors:
-            msg += f" (some channels failed: {'; '.join(errors)})"
-        return JSONResponse({"ok": True, "message": msg})
-    elif errors:
-        return JSONResponse({"ok": False, "message": f"All channels failed: {'; '.join(errors)}"}, status_code=500)
-    else:
-        return JSONResponse({"ok": False, "message": "No notification channels configured"}, status_code=400)
 
 
 @router.get("/ai/usage")

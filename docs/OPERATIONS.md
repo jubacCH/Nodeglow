@@ -38,8 +38,16 @@ from that experience, not from a load test.
   `max_instances=1`: a round that overruns is skipped, not stacked, and the
   self-check raises an incident when a job stops completing.
 - Scaling out is not supported out of the box. `REDIS_URL` makes the rate
-  limiter and job leadership multi-process safe, but the syslog listener and
-  the compose file assume a single backend.
+  limiter multi-process safe; scheduler leader election across several
+  backend processes (only one runs the jobs) is an enterprise feature
+  (`ee/`). Without it the backend runs single-instance and logs a warning
+  when `REDIS_URL` is set. The syslog listener and the compose file assume a
+  single backend either way.
+- Edition: the image built by the shipped compose file includes the
+  enterprise features in `ee/` (see [LICENSING.md](../LICENSING.md)).
+  `NODEGLOW_DISABLE_EE=1` runs the community edition; the log line
+  `Nodeglow edition: ...` at startup and `GET /api/v2/features` show which
+  one is running.
 
 ### Ports and firewall
 
