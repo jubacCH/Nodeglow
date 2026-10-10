@@ -1,14 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Activity, Bell, Plug, Send, ShieldCheck, Sparkles } from 'lucide-react';
-import { GlassCard } from '@/components/ui/GlassCard';
+import { Plug, Send } from 'lucide-react';
+import { BigNumber } from '@/components/ui/BigNumber';
 import { Button } from '@/components/ui/Button';
+import { Checkbox, Field, Input, Select } from '@/components/ui/Field';
+import { QueryState } from '@/components/ui/QueryState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { SegmentedControl } from '@/components/ui/Tabs';
 import { api, apiErrorBody, apiErrorMessage, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { AI_STATUS_KEY } from '@/hooks/queries/useAiStatus';
 import { describeDestination, type AiProvider as Provider } from '@/lib/ai';
+import { Code, Notice, SaveBar, SettingsSection, useSaveStatus, useSectionForm } from './formKit';
 
 /* ---------- Types ---------- */
 
@@ -44,45 +49,92 @@ interface AiUsageBucket {
   month?: string;
 }
 
-const inputCls = 'ng-input max-w-sm';
-const selectSmCls = 'w-full max-w-[180px] px-2 py-1.5 rounded-md bg-[var(--ng-surface)] border border-white/[0.06] text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-colors [&>option]:text-[var(--ng-text-primary)]';
-const checkboxCls = 'rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50';
 const ALL_CHANNELS = ['telegram', 'discord', 'webhook', 'email', 'teams', 'slack', 'ntfy'] as const;
+
+interface AiForm {
+  enabled: boolean;
+  provider: Provider;
+  claudeKey: string;
+  anthropicModel: string;
+  baseUrl: string;
+  openaiKey: string;
+  clearOpenaiKey: boolean;
+  openaiModel: string;
+  apiVersion: string;
+  redact: boolean;
+  redactHosts: boolean;
+  restore: boolean;
+  dailyEnabled: boolean;
+  dailyHour: string;
+  /** Channel names in ALL_CHANNELS order. */
+  dailyChannels: string[];
+}
+
+function formFromConfig(cfg: AiConfig): AiForm {
+  const channels = new Set((cfg.daily_ai_summary_channels || ALL_CHANNELS.join(',')).split(',').filter(Boolean));
+  return {
+    enabled: cfg.ai_enabled,
+    provider: cfg.ai_provider,
+    claudeKey: '',
+    anthropicModel: cfg.ai_anthropic_model,
+    baseUrl: cfg.ai_openai_base_url,
+    openaiKey: '',
+    clearOpenaiKey: false,
+    openaiModel: cfg.ai_openai_model,
+    apiVersion: cfg.ai_openai_api_version,
+    redact: cfg.ai_redact_enabled,
+    redactHosts: cfg.ai_redact_hostnames,
+    restore: cfg.ai_restore_placeholders,
+    dailyEnabled: cfg.daily_ai_summary_enabled,
+    dailyHour: cfg.daily_ai_summary_hour || '8',
+    dailyChannels: [...ALL_CHANNELS.filter((c) => channels.has(c)), ...[...channels].filter((c) => !(ALL_CHANNELS as readonly string[]).includes(c))],
+  };
+}
+
+function providerParams(f: AiForm): URLSearchParams {
+  const p = new URLSearchParams();
+  p.set('ai_provider', f.provider);
+  if (f.provider === 'anthropic') {
+    if (f.claudeKey.trim()) p.set('claude_api_key', f.claudeKey.trim());
+    p.set('ai_anthropic_model', f.anthropicModel.trim());
+  } else {
+    p.set('ai_openai_base_url', f.baseUrl.trim());
+    p.set('ai_openai_model', f.openaiModel.trim());
+    p.set('ai_openai_api_version', f.apiVersion.trim());
+    if (f.clearOpenaiKey) p.set('clear_openai_api_key', '1');
+    else if (f.openaiKey.trim()) p.set('ai_openai_api_key', f.openaiKey.trim());
+  }
+  return p;
+}
 
 /* ---------- Usage card ---------- */
 
 function AiUsageCard() {
-  const { data } = useQuery<{ monthly: AiUsageBucket; total: AiUsageBucket }>({
+  const usage = useQuery<{ monthly: AiUsageBucket; total: AiUsageBucket }>({
     queryKey: ['ai-usage'],
     queryFn: () => get('/settings/ai/usage'),
   });
-
-  if (!data) return null;
-
-  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+  const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
 
   return (
-    <GlassCard className="p-4">
-      <h3 className="text-base font-semibold text-slate-200 mb-3 flex items-center gap-2">
-        <Activity size={16} className="text-violet-400" />
-        AI Token Usage
-      </h3>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">This Month</div>
-          <div className="text-lg font-bold text-[var(--ng-text-primary)]">{fmt(data.monthly.input_tokens + data.monthly.output_tokens)}</div>
-          <div className="text-[11px] text-slate-500">tokens &middot; {data.monthly.calls} calls</div>
-          <div className="text-xs text-emerald-400 mt-1">${data.monthly.cost_usd.toFixed(4)}</div>
-        </div>
-        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">All Time</div>
-          <div className="text-lg font-bold text-[var(--ng-text-primary)]">{fmt(data.total.input_tokens + data.total.output_tokens)}</div>
-          <div className="text-[11px] text-slate-500">tokens &middot; {data.total.calls} calls</div>
-          <div className="text-xs text-emerald-400 mt-1">${data.total.cost_usd.toFixed(4)}</div>
-        </div>
-      </div>
-      <p className="text-[11px] text-slate-500 mt-2">Cost is estimated for Anthropic only; other providers bill separately.</p>
-    </GlassCard>
+    <SettingsSection id="ai-usage" title="Token usage" description="Cost is estimated for Anthropic only; other providers bill separately.">
+      <QueryState
+        query={usage}
+        compact
+        loading={<div className="grid grid-cols-2 gap-4"><Skeleton className="h-20" /><Skeleton className="h-20" /></div>}
+      >
+        {(data) => (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {([['This month', data.monthly], ['All time', data.total]] as const).map(([label, b]) => (
+              <div key={label} className="rounded-ctl border border-border bg-surface-2 p-4">
+                <p className="mb-2 text-meta text-fg-2">{label}</p>
+                <BigNumber size="sm" value={fmt(b.input_tokens + b.output_tokens)} unit="tokens" label={`${b.calls} calls · $${b.cost_usd.toFixed(4)}`} />
+              </div>
+            ))}
+          </div>
+        )}
+      </QueryState>
+    </SettingsSection>
   );
 }
 
@@ -91,97 +143,54 @@ function AiUsageCard() {
 export function AiSettingsTab() {
   const toast = useToastStore();
   const qc = useQueryClient();
-  const { data: cfg } = useQuery<AiConfig>({
+  const cfgQuery = useQuery<AiConfig>({
     queryKey: ['ai-config'],
     queryFn: () => get('/settings/ai/config'),
   });
-
-  const [enabled, setEnabled] = useState(false);
-  const [provider, setProvider] = useState<Provider>('anthropic');
-  const [claudeKey, setClaudeKey] = useState('');
-  const [anthropicModel, setAnthropicModel] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [clearOpenaiKey, setClearOpenaiKey] = useState(false);
-  const [openaiModel, setOpenaiModel] = useState('');
-  const [apiVersion, setApiVersion] = useState('');
-  const [redact, setRedact] = useState(true);
-  const [redactHosts, setRedactHosts] = useState(false);
-  const [restore, setRestore] = useState(true);
-  const [dailyEnabled, setDailyEnabled] = useState(false);
-  const [dailyHour, setDailyHour] = useState('8');
-  const [dailyChannels, setDailyChannels] = useState<Set<string>>(new Set(ALL_CHANNELS));
-  const [saving, setSaving] = useState(false);
+  const cfg = cfgQuery.data;
+  const form = useSectionForm(cfg, cfgQuery.dataUpdatedAt, formFromConfig);
+  const save = useSaveStatus(form.dirty);
   const [testing, setTesting] = useState(false);
   const [testingSummary, setTestingSummary] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
-  useEffect(() => {
-    if (!cfg) return;
-    setEnabled(cfg.ai_enabled);
-    setProvider(cfg.ai_provider);
-    setAnthropicModel(cfg.ai_anthropic_model);
-    setBaseUrl(cfg.ai_openai_base_url);
-    setOpenaiModel(cfg.ai_openai_model);
-    setApiVersion(cfg.ai_openai_api_version);
-    setRedact(cfg.ai_redact_enabled);
-    setRedactHosts(cfg.ai_redact_hostnames);
-    setRestore(cfg.ai_restore_placeholders);
-    setDailyEnabled(cfg.daily_ai_summary_enabled);
-    setDailyHour(cfg.daily_ai_summary_hour || '8');
-    setDailyChannels(new Set((cfg.daily_ai_summary_channels || ALL_CHANNELS.join(',')).split(',').filter(Boolean)));
-    setClaudeKey('');
-    setOpenaiKey('');
-    setClearOpenaiKey(false);
-  }, [cfg]);
+  const f = form.value;
 
-  function providerParams(): URLSearchParams {
-    const p = new URLSearchParams();
-    p.set('ai_provider', provider);
-    if (provider === 'anthropic') {
-      if (claudeKey.trim()) p.set('claude_api_key', claudeKey.trim());
-      p.set('ai_anthropic_model', anthropicModel.trim());
-    } else {
-      p.set('ai_openai_base_url', baseUrl.trim());
-      p.set('ai_openai_model', openaiModel.trim());
-      p.set('ai_openai_api_version', apiVersion.trim());
-      if (clearOpenaiKey) p.set('clear_openai_api_key', '1');
-      else if (openaiKey.trim()) p.set('ai_openai_api_key', openaiKey.trim());
-    }
-    return p;
-  }
-
-  async function save(): Promise<boolean> {
-    setSaving(true);
+  async function doSave(): Promise<boolean> {
+    if (!f) return false;
+    save.start();
     try {
-      const p = providerParams();
-      p.set('ai_enabled', enabled ? '1' : '0');
-      p.set('ai_redact_enabled', redact ? '1' : '0');
-      p.set('ai_redact_hostnames', redactHosts ? '1' : '0');
-      p.set('ai_restore_placeholders', restore ? '1' : '0');
-      p.set('daily_ai_summary_enabled', dailyEnabled ? 'on' : '0');
-      p.set('daily_ai_summary_hour', dailyHour);
-      p.set('daily_ai_summary_channels', Array.from(dailyChannels).join(','));
+      const p = providerParams(f);
+      p.set('ai_enabled', f.enabled ? '1' : '0');
+      p.set('ai_redact_enabled', f.redact ? '1' : '0');
+      p.set('ai_redact_hostnames', f.redactHosts ? '1' : '0');
+      p.set('ai_restore_placeholders', f.restore ? '1' : '0');
+      p.set('daily_ai_summary_enabled', f.dailyEnabled ? 'on' : '0');
+      p.set('daily_ai_summary_hour', f.dailyHour);
+      p.set('daily_ai_summary_channels', f.dailyChannels.join(','));
       await api('/settings/ai/save', { method: 'POST', body: p });
+      form.markSaved();
+      save.succeed();
       qc.invalidateQueries({ queryKey: ['ai-config'] });
       qc.invalidateQueries({ queryKey: AI_STATUS_KEY });
       qc.invalidateQueries({ queryKey: ['settings'] });
       toast.show('AI settings saved', 'success');
       return true;
     } catch (e) {
-      toast.show(apiErrorMessage(e, 'Failed to save AI settings'), 'error');
+      const msg = apiErrorMessage(e, 'Failed to save AI settings');
+      save.fail(msg);
+      toast.show(msg, 'error');
       return false;
-    } finally {
-      setSaving(false);
     }
   }
 
   async function testConnection() {
+    if (!f) return;
     setTesting(true);
     setTestResult(null);
     try {
       const res = await api<{ ok: boolean; message: string }>('/settings/ai/test-connection', {
-        method: 'POST', body: providerParams(),
+        method: 'POST', body: providerParams(f),
       });
       setTestResult(res);
     } catch (e) {
@@ -192,309 +201,239 @@ export function AiSettingsTab() {
     }
   }
 
-  const destination = describeDestination(provider, baseUrl, apiVersion);
-  const keyMissing = provider === 'anthropic' ? !cfg?.claude_has_key && !claudeKey.trim() : false;
+  async function testSummary() {
+    setTestingSummary(true);
+    try {
+      // Saves first, as before, so the summary uses the values on screen.
+      if (!(await doSave())) return;
+      const res = await post<{ ok: boolean; message: string }>('/settings/ai/test-summary');
+      toast.show(res.message || 'Test summary sent', 'success');
+    } catch (e) {
+      const body = apiErrorBody(e);
+      toast.show((typeof body?.message === 'string' && body.message) || 'Test summary failed — check server logs', 'error');
+    } finally {
+      setTestingSummary(false);
+    }
+  }
 
   return (
-    <div className="space-y-4">
-      {/* Opt-in */}
-      <GlassCard className="p-4">
-        <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
-          <Sparkles size={16} className="text-violet-400" />
-          AI features
-        </h3>
-        <p className="text-xs text-slate-400 mb-4">
-          Glow (chat), automatic postmortems and the daily AI summary. Off by default; nothing is sent to an AI provider unless you switch this on.
-        </p>
-        <label className="flex items-center gap-2 cursor-pointer mb-3">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            className={checkboxCls}
+    <QueryState
+      query={cfgQuery}
+      isEmpty={() => !f}
+      empty={<div className="space-y-4" aria-busy="true" aria-label="Loading"><Skeleton className="h-40 w-full" /><Skeleton className="h-56 w-full" /></div>}
+      loading={<div className="space-y-4" aria-busy="true" aria-label="Loading"><Skeleton className="h-40 w-full" /><Skeleton className="h-56 w-full" /></div>}
+    >
+      {() => f && renderForm(f)}
+    </QueryState>
+  );
+
+  // A render helper, not a component: a nested component type would remount
+  // (and drop input focus) on every keystroke.
+  function renderForm(f: AiForm) {
+    const destination = describeDestination(f.provider, f.baseUrl, f.apiVersion);
+    const keyMissing = f.provider === 'anthropic' ? !cfg?.claude_has_key && !f.claudeKey.trim() : false;
+    const azure = !!f.apiVersion.trim();
+
+    return (
+      <div className="space-y-4">
+        <SettingsSection
+          id="ai-optin"
+          title="AI features"
+          description="Glow (chat), automatic postmortems and the daily AI summary. Off by default; nothing is sent to an AI provider unless you switch this on."
+        >
+          <Checkbox
+            label="Enable AI features for this installation"
+            checked={f.enabled}
+            onChange={(e) => form.set('enabled', e.target.checked)}
             data-testid="ai-enabled"
           />
-          <span className="text-sm text-[var(--ng-text-primary)]">Enable AI features for this installation</span>
-        </label>
-        {cfg?.ai_enabled && cfg.ai_enabled_by && (
-          <p className="text-[11px] text-slate-500 mb-3">
-            Enabled by {cfg.ai_enabled_by}{cfg.ai_enabled_at ? ` on ${new Date(cfg.ai_enabled_at + 'Z').toLocaleString()}` : ''}.
-          </p>
-        )}
-        <div className="rounded-md border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-xs text-[var(--ng-text-secondary)] space-y-1" data-testid="ai-data-notice">
-          <p className="font-medium text-[var(--ng-text-primary)]">What is sent, and to whom</p>
-          <p>
-            When a feature runs, Nodeglow sends to <strong>{destination}</strong>: host and incident counts, names of
-            offline hosts and unhealthy integrations, incident titles and timelines, a few example syslog messages
-            per error pattern, and in Glow your question plus the last 10 chat messages.
-          </p>
-          <p>
-            {redact
-              ? 'Before sending, IP and MAC addresses, e-mail addresses, usernames in common log formats and secrets (passwords, tokens, keys) are replaced by placeholders such as <IP_1>. Redaction is pattern-based and best effort, not a guarantee.'
-              : 'Redaction is OFF: log lines are sent as they are, including IP addresses and usernames.'}
-          </p>
-        </div>
-      </GlassCard>
-
-      {/* Provider */}
-      <GlassCard className="p-4">
-        <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
-          <Plug size={16} className="text-violet-400" />
-          Provider
-        </h3>
-        <p className="text-xs text-slate-400 mb-4">
-          Anthropic, or any endpoint that speaks the OpenAI Chat Completions API: Azure OpenAI (e.g. Switzerland North), Ollama, vLLM, LM Studio.
-        </p>
-        <div className="space-y-3">
-          <div className="flex flex-wrap gap-4" role="radiogroup" aria-label="AI provider">
-            {([
-              ['anthropic', 'Anthropic (Claude)'],
-              ['openai_compatible', 'OpenAI-compatible / Azure / local'],
-            ] as const).map(([value, label]) => (
-              <label key={value} className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="ai-provider"
-                  value={value}
-                  checked={provider === value}
-                  onChange={() => { setProvider(value); setTestResult(null); }}
-                  className="border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50"
-                />
-                <span className="text-sm text-[var(--ng-text-primary)]">{label}</span>
-              </label>
-            ))}
+          {cfg?.ai_enabled && cfg.ai_enabled_by && (
+            <p className="mt-2 text-meta text-fg-3">
+              Enabled by {cfg.ai_enabled_by}{cfg.ai_enabled_at ? ` on ${new Date(cfg.ai_enabled_at + 'Z').toLocaleString()}` : ''}.
+            </p>
+          )}
+          <div className="mt-4 space-y-1 rounded-ctl border border-border-2 bg-surface-2 px-3 py-2 text-meta text-fg-2" data-testid="ai-data-notice">
+            <p className="font-medium text-fg">What is sent, and to whom</p>
+            <p>
+              When a feature runs, Nodeglow sends to <strong className="text-fg">{destination}</strong>: host and incident counts, names of
+              offline hosts and unhealthy integrations, incident titles and timelines, a few example syslog messages
+              per error pattern, and in Glow your question plus the last 10 chat messages.
+            </p>
+            <p>
+              {f.redact
+                ? 'Before sending, IP and MAC addresses, e-mail addresses, usernames in common log formats and secrets (passwords, tokens, keys) are replaced by placeholders such as <IP_1>. Redaction is pattern-based and best effort, not a guarantee.'
+                : 'Redaction is OFF: log lines are sent as they are, including IP addresses and usernames.'}
+            </p>
           </div>
+        </SettingsSection>
 
-          {provider === 'anthropic' ? (
-            <>
-              <div>
-                <label className="ng-label" htmlFor="ai-claude-key">API key</label>
-                <div className="flex items-center gap-2">
-                  <input
+        <SettingsSection
+          id="ai-provider"
+          title="Provider"
+          description="Anthropic, or any endpoint that speaks the OpenAI Chat Completions API: Azure OpenAI (e.g. Switzerland North), Ollama, vLLM, LM Studio."
+        >
+          <div className="space-y-4">
+            <SegmentedControl<Provider>
+              label="AI provider"
+              value={f.provider}
+              onChange={(v) => { form.set('provider', v); setTestResult(null); }}
+              options={[
+                { value: 'anthropic', label: 'Anthropic (Claude)' },
+                { value: 'openai_compatible', label: 'OpenAI-compatible / Azure / local' },
+              ]}
+              className="max-w-full flex-wrap"
+            />
+
+            {f.provider === 'anthropic' ? (
+              <div className="grid max-w-xl gap-4">
+                <Field
+                  label={<>API key {cfg?.claude_has_key ? <span className="ml-1.5 font-normal text-ok">· configured</span> : <span className="ml-1.5 font-normal text-fg-3">· no key configured</span>}</>}
+                  hint={<>From <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">console.anthropic.com</a>. Stored encrypted.</>}
+                >
+                  <Input
                     id="ai-claude-key"
                     type="password"
-                    value={claudeKey}
-                    onChange={(e) => setClaudeKey(e.target.value)}
-                    className={inputCls}
+                    autoComplete="off"
+                    value={f.claudeKey}
+                    onChange={(e) => form.set('claudeKey', e.target.value)}
                     placeholder={cfg?.claude_has_key ? '•••••••• (keep current key)' : 'sk-ant-...'}
-                    autoComplete="off"
                   />
-                  <span className={`text-xs whitespace-nowrap ${cfg?.claude_has_key ? 'text-emerald-400' : 'text-slate-500'}`}>
-                    {cfg?.claude_has_key ? 'Key configured' : 'No key configured'}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  From{' '}
-                  <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">console.anthropic.com</a>.
-                  Stored encrypted.
-                </p>
+                </Field>
+                <Field label="Model">
+                  <Input id="ai-anthropic-model" className="font-mono" value={f.anthropicModel} onChange={(e) => form.set('anthropicModel', e.target.value)} placeholder={cfg?.ai_anthropic_default_model} />
+                </Field>
               </div>
-              <div>
-                <label className="ng-label" htmlFor="ai-anthropic-model">Model</label>
-                <input
-                  id="ai-anthropic-model"
-                  value={anthropicModel}
-                  onChange={(e) => setAnthropicModel(e.target.value)}
-                  className={inputCls}
-                  placeholder={cfg?.ai_anthropic_default_model}
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <label className="ng-label" htmlFor="ai-base-url">Base URL</label>
-                <input
-                  id="ai-base-url"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  className={inputCls}
-                  placeholder="http://10.0.0.5:11434/v1"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Ollama <code>http://host:11434/v1</code> · LM Studio <code>http://host:1234/v1</code> · vLLM <code>http://host:8000/v1</code> ·
-                  Azure <code>https://&lt;resource&gt;.openai.azure.com</code>. Local and private addresses are allowed;
-                  <code> localhost</code> is the Nodeglow container itself.
-                </p>
-              </div>
-              <div>
-                <label className="ng-label" htmlFor="ai-openai-model">Model {apiVersion.trim() ? '(Azure deployment name)' : ''}</label>
-                <input
-                  id="ai-openai-model"
-                  value={openaiModel}
-                  onChange={(e) => setOpenaiModel(e.target.value)}
-                  className={inputCls}
-                  placeholder={apiVersion.trim() ? 'gpt-4o-mini-chn' : 'llama3.1:8b'}
-                />
-              </div>
-              <div>
-                <label className="ng-label" htmlFor="ai-api-version">Azure API version (Azure OpenAI only)</label>
-                <input
-                  id="ai-api-version"
-                  value={apiVersion}
-                  onChange={(e) => setApiVersion(e.target.value)}
-                  className={inputCls}
-                  placeholder="2024-10-21 (leave empty for non-Azure)"
-                />
-              </div>
-              <div>
-                <label className="ng-label" htmlFor="ai-openai-key">API key {apiVersion.trim() ? '' : '(optional for local servers)'}</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    id="ai-openai-key"
-                    type="password"
-                    value={openaiKey}
-                    onChange={(e) => { setOpenaiKey(e.target.value); setClearOpenaiKey(false); }}
-                    className={inputCls}
-                    placeholder={cfg?.ai_openai_has_key ? '•••••••• (keep current key)' : ''}
-                    autoComplete="off"
-                    disabled={clearOpenaiKey}
-                  />
+            ) : (
+              <div className="grid max-w-xl gap-4">
+                <Field
+                  label="Base URL"
+                  hint={<>Ollama <Code>http://host:11434/v1</Code> · LM Studio <Code>http://host:1234/v1</Code> · vLLM <Code>http://host:8000/v1</Code> · Azure <Code>https://&lt;resource&gt;.openai.azure.com</Code>. Local and private addresses are allowed; <Code>localhost</Code> is the Nodeglow container itself.</>}
+                >
+                  <Input id="ai-base-url" className="font-mono" inputMode="url" value={f.baseUrl} onChange={(e) => form.set('baseUrl', e.target.value)} placeholder="http://ollama.local:11434/v1" />
+                </Field>
+                <Field label={`Model${azure ? ' (Azure deployment name)' : ''}`}>
+                  <Input id="ai-openai-model" className="font-mono" value={f.openaiModel} onChange={(e) => form.set('openaiModel', e.target.value)} placeholder={azure ? 'gpt-4o-mini-chn' : 'llama3.1:8b'} />
+                </Field>
+                <Field label="Azure API version" hint="Azure OpenAI only; leave empty for other servers.">
+                  <Input id="ai-api-version" className="font-mono" value={f.apiVersion} onChange={(e) => form.set('apiVersion', e.target.value)} placeholder="2024-10-21" />
+                </Field>
+                <div>
+                  <Field label={`API key${azure ? '' : ' (optional for local servers)'}`}>
+                    <Input
+                      id="ai-openai-key"
+                      type="password"
+                      autoComplete="off"
+                      value={f.openaiKey}
+                      onChange={(e) => form.patch({ openaiKey: e.target.value, clearOpenaiKey: false })}
+                      placeholder={cfg?.ai_openai_has_key ? '•••••••• (keep current key)' : ''}
+                      disabled={f.clearOpenaiKey}
+                    />
+                  </Field>
                   {cfg?.ai_openai_has_key && (
-                    <label className="flex items-center gap-1.5 text-xs text-slate-400 whitespace-nowrap cursor-pointer">
-                      <input type="checkbox" checked={clearOpenaiKey} onChange={(e) => setClearOpenaiKey(e.target.checked)} className={checkboxCls} />
-                      Remove key
-                    </label>
+                    <Checkbox className="mt-2" label="Remove stored key" checked={f.clearOpenaiKey} onChange={(e) => form.set('clearOpenaiKey', e.target.checked)} />
                   )}
                 </div>
               </div>
-            </>
-          )}
+            )}
 
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <Button size="sm" variant="secondary" onClick={testConnection} disabled={testing || keyMissing} data-testid="ai-test-connection">
-              <Plug size={12} />
-              {testing ? 'Testing…' : 'Test connection'}
-            </Button>
-            <span className="text-[11px] text-slate-500">Sends a fixed “Reply with OK” prompt, no infrastructure data.</span>
-          </div>
-          {testResult && (
-            <p
-              role="status"
-              className={`text-xs rounded-md px-3 py-2 border ${testResult.ok
-                ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                : 'text-red-300 bg-red-500/10 border-red-500/20'}`}
-            >
-              {testResult.message}
-            </p>
-          )}
-        </div>
-      </GlassCard>
-
-      {/* Redaction */}
-      <GlassCard className="p-4">
-        <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
-          <ShieldCheck size={16} className="text-violet-400" />
-          Redaction
-        </h3>
-        <p className="text-xs text-slate-400 mb-4">
-          Personal data is replaced by stable placeholders before anything leaves Nodeglow; the same value always gets the same placeholder within one request, so the model can still correlate.
-        </p>
-        <div className="space-y-2">
-          <label className="flex items-start gap-2 cursor-pointer">
-            <input type="checkbox" checked={redact} onChange={(e) => setRedact(e.target.checked)} className={`${checkboxCls} mt-0.5`} />
-            <span className="text-sm text-[var(--ng-text-primary)]">
-              Redact personal data and secrets
-              <span className="block text-[11px] text-slate-500">IPv4/IPv6, MAC, e-mail, usernames (sshd, PAM, sudo, Windows events, nginx), Windows SIDs and workstation names, passwords/tokens/API keys.</span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 cursor-pointer">
-            <input type="checkbox" checked={redactHosts} disabled={!redact} onChange={(e) => setRedactHosts(e.target.checked)} className={`${checkboxCls} mt-0.5`} />
-            <span className="text-sm text-[var(--ng-text-primary)]">
-              Also redact hostnames and FQDNs
-              <span className="block text-[11px] text-slate-500">Includes the names of your monitored hosts and integrations. Answers become less specific.</span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 cursor-pointer">
-            <input type="checkbox" checked={restore} disabled={!redact} onChange={(e) => setRestore(e.target.checked)} className={`${checkboxCls} mt-0.5`} />
-            <span className="text-sm text-[var(--ng-text-primary)]">
-              Show real values in answers
-              <span className="block text-[11px] text-slate-500">Placeholders are mapped back inside Nodeglow only; the mapping is never sent. Secrets always stay masked.</span>
-            </span>
-          </label>
-        </div>
-      </GlassCard>
-
-      {/* Daily AI Summary */}
-      <GlassCard className="p-4">
-        <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
-          <Bell size={16} className="text-violet-400" />
-          Daily AI Summary
-        </h3>
-        <p className="text-xs text-slate-400 mb-4">
-          Sends a daily AI-generated briefing with incidents, root cause analysis, and resolution suggestions via your selected notification channels.
-        </p>
-        <div className="space-y-3">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={dailyEnabled} onChange={(e) => setDailyEnabled(e.target.checked)} className={checkboxCls} />
-            <span className="text-sm text-[var(--ng-text-primary)]">Enable daily AI summary</span>
-          </label>
-          <div>
-            <label className="ng-label" htmlFor="ai-daily-hour">Send at (UTC)</label>
-            <select id="ai-daily-hour" value={dailyHour} onChange={(e) => setDailyHour(e.target.value)} className={selectSmCls} disabled={!dailyEnabled}>
-              {Array.from({ length: 24 }, (_, i) => (
-                <option key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <p className="ng-label">Channels</p>
-            <div className="flex flex-wrap gap-3 mt-1">
-              {ALL_CHANNELS.map((ch) => (
-                <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={dailyChannels.has(ch)}
-                    disabled={!dailyEnabled}
-                    onChange={(e) => {
-                      const next = new Set(dailyChannels);
-                      if (e.target.checked) next.add(ch); else next.delete(ch);
-                      setDailyChannels(next);
-                    }}
-                    className={checkboxCls}
-                  />
-                  <span className="text-xs text-[var(--ng-text-secondary)] capitalize">{ch}</span>
-                </label>
-              ))}
+            <div className="flex flex-wrap items-center gap-3">
+              <Button size="sm" variant="secondary" onClick={testConnection} loading={testing} disabled={testing || keyMissing} data-testid="ai-test-connection">
+                {!testing && <Plug size={13} aria-hidden="true" />}
+                {testing ? 'Testing…' : 'Test connection'}
+              </Button>
+              <span className="text-meta text-fg-3">Sends a fixed “Reply with OK” prompt, no infrastructure data. Uses the values above without saving.</span>
             </div>
+            {testResult && <Notice tone={testResult.ok ? 'ok' : 'down'}>{testResult.message}</Notice>}
           </div>
-          {!cfg?.ai_enabled && (
-            <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
-              Runs only while AI features are enabled (above).
-            </p>
-          )}
-        </div>
-      </GlassCard>
+        </SettingsSection>
 
-      <AiUsageCard />
-
-      <div className="flex justify-end gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={testingSummary || !cfg?.ai_enabled}
-          title={!cfg?.ai_enabled ? 'Enable and save AI features first' : undefined}
-          onClick={async () => {
-            setTestingSummary(true);
-            try {
-              if (!(await save())) return;
-              const res = await post<{ ok: boolean; message: string }>('/settings/ai/test-summary');
-              toast.show(res.message || 'Test summary sent', 'success');
-            } catch (e) {
-              const body = apiErrorBody(e);
-              toast.show((typeof body?.message === 'string' && body.message) || 'Test summary failed — check server logs', 'error');
-            } finally {
-              setTestingSummary(false);
-            }
-          }}
+        <SettingsSection
+          id="ai-redaction"
+          title="Redaction"
+          description="Personal data is replaced by stable placeholders before anything leaves Nodeglow; the same value always gets the same placeholder within one request, so the model can still correlate."
         >
-          <Send size={12} />
-          {testingSummary ? 'Generating...' : 'Test Summary'}
-        </Button>
-        <Button size="sm" disabled={saving} onClick={() => { void save(); }} data-testid="ai-save">
-          {saving ? 'Saving...' : 'Save AI Settings'}
-        </Button>
+          <div className="space-y-3">
+            <Checkbox
+              label="Redact personal data and secrets"
+              description="IPv4/IPv6, MAC, e-mail, usernames (sshd, PAM, sudo, Windows events, nginx), Windows SIDs and workstation names, passwords/tokens/API keys."
+              checked={f.redact}
+              onChange={(e) => form.set('redact', e.target.checked)}
+            />
+            <Checkbox
+              label="Also redact hostnames and FQDNs"
+              description="Includes the names of your monitored hosts and integrations. Answers become less specific."
+              checked={f.redactHosts}
+              disabled={!f.redact}
+              onChange={(e) => form.set('redactHosts', e.target.checked)}
+            />
+            <Checkbox
+              label="Show real values in answers"
+              description="Placeholders are mapped back inside Nodeglow only; the mapping is never sent. Secrets always stay masked."
+              checked={f.restore}
+              disabled={!f.redact}
+              onChange={(e) => form.set('restore', e.target.checked)}
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          id="ai-daily"
+          title="Daily AI summary"
+          description="A daily AI-generated briefing with incidents, root cause analysis and resolution suggestions, sent via the selected notification channels."
+        >
+          <div className="space-y-4">
+            <Checkbox label="Enable daily AI summary" checked={f.dailyEnabled} onChange={(e) => form.set('dailyEnabled', e.target.checked)} />
+            <Field label="Send at (UTC)" className="max-w-[200px]">
+              <Select id="ai-daily-hour" value={f.dailyHour} onChange={(e) => form.set('dailyHour', e.target.value)} disabled={!f.dailyEnabled}>
+                {Array.from({ length: 24 }, (_, i) => (
+                  <option key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</option>
+                ))}
+              </Select>
+            </Field>
+            <fieldset>
+              <legend className="ng-label">Channels</legend>
+              <div className="mt-1 flex flex-wrap gap-x-5 gap-y-2">
+                {ALL_CHANNELS.map((ch) => (
+                  <Checkbox
+                    key={ch}
+                    label={<span className="capitalize">{ch}</span>}
+                    checked={f.dailyChannels.includes(ch)}
+                    disabled={!f.dailyEnabled}
+                    onChange={(e) => {
+                      const next = new Set(f.dailyChannels);
+                      if (e.target.checked) next.add(ch); else next.delete(ch);
+                      form.set('dailyChannels', ALL_CHANNELS.filter((c) => next.has(c)));
+                    }}
+                  />
+                ))}
+              </div>
+            </fieldset>
+            {!cfg?.ai_enabled && <Notice tone="info">Runs only while AI features are enabled and saved (above).</Notice>}
+          </div>
+        </SettingsSection>
+
+        <AiUsageCard />
+
+        <SaveBar
+          status={save.status}
+          onSave={() => { void doSave(); }}
+          onDiscard={form.discard}
+          label="Save AI settings"
+          extra={
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={testingSummary}
+              disabled={testingSummary || !cfg?.ai_enabled}
+              title={!cfg?.ai_enabled ? 'Enable and save AI features first' : undefined}
+              onClick={testSummary}
+            >
+              {!testingSummary && <Send size={13} aria-hidden="true" />}
+              {testingSummary ? 'Generating…' : 'Send test summary'}
+            </Button>
+          }
+        />
       </div>
-    </div>
-  );
+    );
+  }
 }

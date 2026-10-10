@@ -1,21 +1,26 @@
 'use client';
 
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Download, RefreshCw } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
+import { BigNumber } from '@/components/ui/BigNumber';
 import { Button } from '@/components/ui/Button';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryState, formatAsOf } from '@/components/ui/QueryState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { StatusDot } from '@/components/ui/StatusDot';
-import { useQuery } from '@tanstack/react-query';
-import { get, post } from '@/lib/api';
-import { useToastStore } from '@/stores/toast';
-import { useCallback, useEffect, useState } from 'react';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Tag } from '@/components/ui/Tag';
 import { UpdateProgress } from '@/components/system/UpdateProgress';
+import { useConfirm } from '@/hooks/useConfirm';
+import { get, post } from '@/lib/api';
+import { HEALTH_LABEL, STATE_TEXT, type HealthState } from '@/lib/status';
 import type { UpdateRunState } from '@/lib/updateSteps';
-import {
-  Database, Clock, Server, RefreshCw, Download, Cpu, HardDrive,
-  MemoryStick, Activity, Shield, AlertTriangle, Plug, Timer,
-} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { useToastStore } from '@/stores/toast';
 
 /* ---------- Types ---------- */
 
@@ -123,39 +128,114 @@ interface SystemStatus {
   };
 }
 
-/* ---------- Progress Bar ---------- */
+interface UpdateInfo {
+  update_available: boolean;
+  local: { commit?: string; version?: string };
+  remote_commit?: string;
+  remote_version?: string;
+  commits_behind?: number;
+  changelog?: { hash: string; message: string }[];
+  error?: string;
+}
 
-function ProgressBar({ value, color }: { value: number; color: string }) {
+/* ---------- Health derivation (honest: missing data is unknown, never OK) ---------- */
+
+function pctState(pct: number | null | undefined): HealthState | undefined {
+  if (pct == null) return undefined;
+  if (pct >= 90) return 'down';
+  if (pct >= 75) return 'warning';
+  return undefined; // normal utilisation is not a health claim
+}
+
+function pingState(p: SystemStatus['operational']['ping_stats']): HealthState {
+  if (!p.checks_1h || p.success_rate == null) return 'unknown';
+  if (p.success_rate >= 95) return 'ok';
+  if (p.success_rate >= 80) return 'degraded';
+  return 'down';
+}
+
+function syslogState(s: SystemStatus['operational']['syslog_status']): HealthState {
+  if (s.running === undefined) return 'unknown';
+  return s.running ? 'ok' : 'down';
+}
+
+function integrationState(ok: boolean | null): HealthState {
+  if (ok === true) return 'ok';
+  if (ok === false) return 'down';
+  return 'unknown';
+}
+
+/** `n.toLocaleString()`, or an em dash when the backend did not report it. */
+function n(v: number | undefined | null): string {
+  return v == null ? '—' : v.toLocaleString();
+}
+
+/* ---------- Small pieces ---------- */
+
+function Meter({ value, label }: { value: number; label: string }) {
   const clamped = Math.min(100, Math.max(0, value));
+  const state = pctState(value);
   return (
-    <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
+    <div
+      role="meter"
+      aria-label={label}
+      aria-valuenow={clamped}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      className="h-[6px] w-full overflow-hidden rounded-pill bg-surface-3"
+    >
       <div
-        className={`h-full rounded-full transition-all duration-500 ${color}`}
+        className={cn('h-full rounded-pill transition-[width] duration-500', state === 'down' ? 'bg-down' : state === 'warning' ? 'bg-warning' : 'bg-accent')}
         style={{ width: `${clamped}%` }}
       />
     </div>
   );
 }
 
-function pctColor(pct: number): string {
-  if (pct >= 90) return 'bg-red-500';
-  if (pct >= 75) return 'bg-amber-500';
-  return 'bg-emerald-500';
-}
-
-function pctTextColor(pct: number): string {
-  if (pct >= 90) return 'text-red-400';
-  if (pct >= 75) return 'text-amber-400';
-  return 'text-emerald-400';
-}
-
-/* ---------- Stat Row ---------- */
-
-function StatRow({ label, value }: { label: string; value: string | number }) {
+function StatRow({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
-    <div className="flex justify-between items-center py-1">
-      <span className="text-sm text-slate-400">{label}</span>
-      <span className="text-sm font-medium text-slate-200">{value}</span>
+    <div className="flex min-w-0 items-baseline justify-between gap-3 py-1">
+      <dt className="shrink-0 text-ui text-fg-2">{label}</dt>
+      <dd className={cn('min-w-0 truncate text-right text-ui text-fg', mono ? 'font-mono text-meta' : 'num')}>{value}</dd>
+    </div>
+  );
+}
+
+function ComponentRow({ name, state, detail, label }: { name: string; state: HealthState; detail: ReactNode; label?: string }) {
+  return (
+    <li className="flex min-w-0 items-center gap-3 py-2">
+      <StatusDot status={state} label="" />
+      <span className="min-w-0 flex-1 truncate text-ui text-fg">{name}</span>
+      <span className="hidden min-w-0 truncate text-meta text-fg-2 sm:inline">{detail}</span>
+      <StatusPill status={state} size="sm">{label ?? HEALTH_LABEL[state]}</StatusPill>
+    </li>
+  );
+}
+
+function UsageCard({ title, pct, primary, secondary, children }: { title: string; pct: number; primary: ReactNode; secondary?: ReactNode; children?: ReactNode }) {
+  const state = pctState(pct);
+  return (
+    <Card>
+      <CardHeader title={title} meta={primary} />
+      <div className="mb-2 flex items-end justify-between gap-2">
+        <BigNumber size="sm" value={pct} unit="%" state={state} />
+        {state && <StatusPill status={state} size="sm">{state === 'down' ? 'Critical' : 'High'}</StatusPill>}
+      </div>
+      <Meter value={pct} label={`${title} usage`} />
+      {secondary && <p className="mt-2 text-meta text-fg-2">{secondary}</p>}
+      {children}
+    </Card>
+  );
+}
+
+function PageSkeleton() {
+  return (
+    <div className="space-y-4" aria-busy="true" aria-label="Loading">
+      <Skeleton className="h-40 w-full rounded-card" />
+      <div className="grid gap-4 md:grid-cols-3">
+        <Skeleton className="h-32 rounded-card" /><Skeleton className="h-32 rounded-card" /><Skeleton className="h-32 rounded-card" />
+      </div>
+      <Skeleton className="h-56 w-full rounded-card" />
     </div>
   );
 }
@@ -164,6 +244,12 @@ function StatRow({ label, value }: { label: string; value: string | number }) {
 
 export default function SystemStatusPage() {
   useEffect(() => { document.title = 'System Status | Nodeglow'; }, []);
+  const toast = useToastStore((s) => s.show);
+  const { confirm, ConfirmDialogElement } = useConfirm();
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [runActive, setRunActive] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   // A run started in another tab (or before a reload) keeps rendering here.
   useEffect(() => {
@@ -173,21 +259,8 @@ export default function SystemStatusPage() {
       .catch(() => { /* sidecar unavailable — nothing to resume */ });
     return () => { cancelled = true; };
   }, []);
-  const toast = useToastStore((s) => s.show);
-  const [checking, setChecking] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const [runActive, setRunActive] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{
-    update_available: boolean;
-    local: { commit?: string; version?: string };
-    remote_commit?: string;
-    remote_version?: string;
-    commits_behind?: number;
-    changelog?: { hash: string; message: string }[];
-    error?: string;
-  } | null>(null);
 
-  const { data: status, isLoading } = useQuery({
+  const query = useQuery({
     queryKey: ['system-status'],
     queryFn: () => get<SystemStatus>('/api/system/status'),
     refetchInterval: 15_000,
@@ -196,7 +269,7 @@ export default function SystemStatusPage() {
   async function checkUpdate() {
     setChecking(true);
     try {
-      const info = await get<typeof updateInfo>('/api/update/check');
+      const info = await get<UpdateInfo>('/api/update/check');
       setUpdateInfo(info);
     } catch {
       toast('Failed to check for updates', 'error');
@@ -206,7 +279,12 @@ export default function SystemStatusPage() {
   }
 
   async function applyUpdate() {
-    if (!confirm('Update now? NODEGLOW will back up the database, migrate and restart.')) return;
+    const ok = await confirm({
+      title: 'Update Nodeglow now?',
+      description: 'Nodeglow backs up the database, applies migrations and restarts. The interface is unavailable for a short time.',
+      confirmLabel: 'Update now',
+    });
+    if (!ok) return;
     setUpdating(true);
     try {
       const result = await post<{ ok: boolean; run_id?: string; message?: string; error?: string }>('/api/update/apply');
@@ -232,475 +310,358 @@ export default function SystemStatusPage() {
 
   const handleRunFinished = useCallback((s: UpdateRunState) => {
     setRunActive(false);
-    if (s.status === 'done') {
-      toast('Update complete', 'success');
-    } else if (s.status === 'failed') {
-      toast(s.error || 'Update failed', 'error');
-    }
+    if (s.status === 'done') toast('Update complete', 'success');
+    else if (s.status === 'failed') toast(s.error || 'Update failed', 'error');
   }, [toast]);
 
-  const app = status?.application;
-  const sys = status?.system;
-  const db = status?.database;
-  const ops = status?.operational;
+  const asOf = formatAsOf(query.dataUpdatedAt);
 
   return (
     <div>
       <PageHeader
-        title="System Status"
-        description="Backend health, metrics and diagnostics"
+        title="System status"
+        description={asOf ? `Nodeglow backend health and diagnostics · updated ${asOf} · every 15 s` : 'Nodeglow backend health and diagnostics'}
         actions={
-          <Button size="sm" variant="ghost" onClick={() => window.location.reload()}>
-            <RefreshCw size={14} />
+          <Button variant="secondary" size="sm" onClick={() => query.refetch()} loading={query.isFetching && !query.isLoading}>
+            {!(query.isFetching && !query.isLoading) && <RefreshCw size={14} aria-hidden="true" />}
             Refresh
           </Button>
         }
       />
 
-      {/* ── Application Info ─────────────────────────────── */}
-      <GlassCard className="p-4 mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Server size={16} className="text-emerald-400" />
-          <h3 className="text-sm font-medium text-slate-300">Application</h3>
-          {app && <Badge>{app.version || 'dev'}</Badge>}
-        </div>
-        {isLoading ? (
-          <Skeleton className="h-16 w-full" />
-        ) : app ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
-            <StatRow label="Uptime" value={app.uptime_human} />
-            <StatRow label="Hostname" value={app.hostname} />
-            <StatRow label="Git Commit" value={app.git_commit} />
-            <StatRow label="Python" value={app.python_version} />
-            <StatRow label="PID" value={app.pid} />
-            <StatRow label="Started" value={app.start_time} />
-            <StatRow label="Platform" value={app.platform.split('-').slice(0, 2).join(' ')} />
-          </div>
-        ) : null}
-      </GlassCard>
+      <QueryState query={query} loading={<PageSkeleton />} errorTitle="Could not load system status">
+        {(status) => {
+          const app = status.application;
+          const sys = status.system;
+          const db = status.database;
+          const ops = status.operational;
+          const ints = status.integrations ?? [];
+          const intDown = ints.filter((i) => i.ok === false).length;
+          const intUnknown = ints.filter((i) => i.ok == null).length;
+          const intState: HealthState = ints.length === 0 ? 'unknown' : intDown > 0 ? 'down' : intUnknown > 0 ? 'unknown' : 'ok';
+          const jobs = status.scheduler_jobs ?? [];
+          const channels = Object.entries(ops.notification_channels).filter(([, on]) => on).map(([k]) => k);
+          const forecast = status.disk_forecast;
 
-      {/* ── System Metrics (CPU / Memory / Disk) ─────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        {/* CPU */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Cpu size={16} className="text-sky-400" />
-            <h3 className="text-sm font-medium text-slate-300">CPU</h3>
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-16 w-full" />
-          ) : sys ? (
-            <div>
-              <div className="flex justify-between mb-1">
-                <span className="text-xs text-slate-400">{sys.cpu_count} cores</span>
-                <span className={`text-lg font-bold ${pctTextColor(sys.cpu_pct)}`}>
-                  {sys.cpu_pct}%
-                </span>
-              </div>
-              <ProgressBar value={sys.cpu_pct} color={pctColor(sys.cpu_pct)} />
-              <div className="mt-2 text-xs text-slate-500">
-                Load: {sys.load_1m} / {sys.load_5m} / {sys.load_15m}
-              </div>
-            </div>
-          ) : null}
-        </GlassCard>
+          return (
+            <div className="space-y-4">
+              {/* Components: each says what it is based on; no data is "No data", never OK. */}
+              <div className="grid gap-4 lg:grid-cols-12">
+                <Card as="section" aria-labelledby="h-components" className="lg:col-span-7">
+                  <CardHeader title="Components" titleId="h-components" meta="Measured by the backend itself" />
+                  <ul className="divide-y divide-border">
+                    <ComponentRow
+                      name="API"
+                      state={query.isError ? 'down' : 'ok'}
+                      detail={query.isError ? `Last response ${asOf}` : `Responded ${asOf}`}
+                      label={query.isError ? 'Not responding' : 'Reachable'}
+                    />
+                    <ComponentRow
+                      name="Database"
+                      state={db.error ? 'down' : db.db_size ? 'ok' : 'unknown'}
+                      detail={db.error ?? (db.db_size ? `${db.db_size} · ${status.pool.checked_out ?? '—'} of ${status.pool.size ?? '—'} connections in use` : 'No figures reported')}
+                    />
+                    <ComponentRow
+                      name="Ping checks"
+                      state={pingState(ops.ping_stats)}
+                      detail={ops.ping_stats.checks_1h ? `${ops.ping_stats.success_rate}% success · ${n(ops.ping_stats.checks_1h)} checks in 1 h` : 'No checks in the last hour'}
+                    />
+                    <ComponentRow
+                      name="Syslog receiver"
+                      state={syslogState(ops.syslog_status)}
+                      detail={ops.syslog_status.msg_per_min !== undefined ? `${ops.syslog_status.msg_per_min} msg/min` : ops.syslog_status.running ? 'Running' : ops.syslog_status.running === false ? 'Stopped' : 'Not reported'}
+                      label={ops.syslog_status.running === false ? 'Stopped' : undefined}
+                    />
+                    <ComponentRow
+                      name="Integrations"
+                      state={intState}
+                      detail={ints.length === 0 ? 'None configured' : `${ints.length - intDown - intUnknown} ok · ${intDown} failing · ${intUnknown} no data`}
+                      label={ints.length === 0 ? 'None' : undefined}
+                    />
+                    <ComponentRow
+                      name="Background jobs"
+                      state={jobs.length > 0 ? 'ok' : 'unknown'}
+                      detail={jobs.length > 0 ? `${jobs.length} scheduled · ${jobs.filter((j) => j.next_run === 'paused').length} paused` : 'Scheduler reported no jobs'}
+                      label={jobs.length > 0 ? 'Scheduled' : undefined}
+                    />
+                  </ul>
+                </Card>
 
-        {/* Memory */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <MemoryStick size={16} className="text-violet-400" />
-            <h3 className="text-sm font-medium text-slate-300">Memory</h3>
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-16 w-full" />
-          ) : sys ? (
-            <div>
-              <div className="flex justify-between mb-1">
-                <span className="text-xs text-slate-400">
-                  {sys.mem_used_gb} / {sys.mem_total_gb} GB
-                </span>
-                <span className={`text-lg font-bold ${pctTextColor(sys.mem_pct)}`}>
-                  {sys.mem_pct}%
-                </span>
+                <Card as="section" aria-labelledby="h-app" className="lg:col-span-5">
+                  <CardHeader title="Application" titleId="h-app" actions={<Badge className="font-mono">{app.version || 'dev'}</Badge>} />
+                  <dl>
+                    <StatRow label="Uptime" value={app.uptime_human} />
+                    <StatRow label="Started" value={app.start_time} />
+                    <StatRow label="Hostname" value={app.hostname} mono />
+                    <StatRow label="Git commit" value={app.git_commit} mono />
+                    <StatRow label="Python" value={app.python_version} />
+                    <StatRow label="PID" value={app.pid} mono />
+                    <StatRow label="Platform" value={app.platform.split('-').slice(0, 2).join(' ')} />
+                  </dl>
+                </Card>
               </div>
-              <ProgressBar value={sys.mem_pct} color={pctColor(sys.mem_pct)} />
-              {sys.swap_total_gb > 0 && (
-                <div className="mt-2 text-xs text-slate-500">
-                  Swap: {sys.swap_used_gb} / {sys.swap_total_gb} GB ({sys.swap_pct}%)
-                </div>
-              )}
-            </div>
-          ) : null}
-        </GlassCard>
 
-        {/* Disk */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <HardDrive size={16} className="text-amber-400" />
-            <h3 className="text-sm font-medium text-slate-300">Disk</h3>
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-16 w-full" />
-          ) : sys ? (
-            <div>
-              <div className="flex justify-between mb-1">
-                <span className="text-xs text-slate-400">
-                  {sys.disk_used_gb} / {sys.disk_total_gb} GB
-                </span>
-                <span className={`text-lg font-bold ${pctTextColor(sys.disk_pct)}`}>
-                  {sys.disk_pct}%
-                </span>
+              {/* Resources */}
+              <div className="grid gap-4 md:grid-cols-3">
+                <UsageCard
+                  title="CPU"
+                  pct={sys.cpu_pct}
+                  primary={`${sys.cpu_count} cores`}
+                  secondary={<>Load <span className="num">{sys.load_1m} / {sys.load_5m} / {sys.load_15m}</span></>}
+                />
+                <UsageCard
+                  title="Memory"
+                  pct={sys.mem_pct}
+                  primary={<span className="num">{sys.mem_used_gb} / {sys.mem_total_gb} GB</span>}
+                  secondary={sys.swap_total_gb > 0 ? <>Swap <span className="num">{sys.swap_used_gb} / {sys.swap_total_gb} GB ({sys.swap_pct}%)</span></> : undefined}
+                />
+                <UsageCard
+                  title="Disk"
+                  pct={sys.disk_pct}
+                  primary={<span className="num">{sys.disk_used_gb} / {sys.disk_total_gb} GB</span>}
+                  secondary={sys.disk_io.read_gb !== undefined ? <>I/O <span className="num">{sys.disk_io.read_gb} GB read / {sys.disk_io.write_gb} GB write</span></> : undefined}
+                >
+                  {forecast && (
+                    <p className={cn(
+                      'mt-2 border-t border-border pt-2 text-meta',
+                      forecast.trend === 'critical' ? 'text-down' : forecast.trend === 'warning' ? 'text-warning' : 'text-fg-2',
+                    )}>
+                      {forecast.trend === 'stable' ? (
+                        'Stable — no significant growth'
+                      ) : (
+                        <>
+                          <span className="num">+{forecast.growth_gb_per_day} GB/day</span>
+                          {forecast.days_until_full != null && (
+                            <> — full in ~{forecast.days_until_full < 1
+                              ? '<1 day'
+                              : forecast.days_until_full < 30
+                                ? `${Math.round(forecast.days_until_full)}d`
+                                : `${Math.round(forecast.days_until_full / 30)}mo`}</>
+                          )}
+                        </>
+                      )}
+                    </p>
+                  )}
+                </UsageCard>
               </div>
-              <ProgressBar value={sys.disk_pct} color={pctColor(sys.disk_pct)} />
-              {sys.disk_io.read_gb !== undefined && (
-                <div className="mt-2 text-xs text-slate-500">
-                  I/O: {sys.disk_io.read_gb} GB read / {sys.disk_io.write_gb} GB write
-                </div>
-              )}
-              {status?.disk_forecast && (
-                <div className={`mt-2 pt-2 border-t border-white/[0.06] text-xs ${
-                  status.disk_forecast.trend === 'critical' ? 'text-red-400' :
-                  status.disk_forecast.trend === 'warning' ? 'text-amber-400' :
-                  status.disk_forecast.trend === 'stable' ? 'text-emerald-400' :
-                  'text-slate-400'
-                }`}>
-                  {status.disk_forecast.trend === 'stable' ? (
-                    <span>Stable — no significant growth</span>
+
+              {/* Software updates */}
+              <Card as="section" aria-labelledby="h-updates">
+                <CardHeader
+                  title="Software updates"
+                  titleId="h-updates"
+                  actions={
+                    <>
+                      <Button size="sm" variant="secondary" onClick={checkUpdate} loading={checking}>
+                        {!checking && <RefreshCw size={14} aria-hidden="true" />}
+                        {checking ? 'Checking…' : 'Check now'}
+                      </Button>
+                      {updateInfo?.update_available && (
+                        <Button size="sm" onClick={applyUpdate} loading={updating || runActive}>
+                          {!(updating || runActive) && <Download size={14} aria-hidden="true" />}
+                          {updating || runActive ? 'Updating…' : 'Update now'}
+                        </Button>
+                      )}
+                    </>
+                  }
+                />
+                {updateInfo ? (
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-ui text-fg-2">Installed</span>
+                      <Badge className="font-mono">{updateInfo.local?.version || updateInfo.local?.commit || '—'}</Badge>
+                      {updateInfo.update_available ? (
+                        <Badge tone="accent">
+                          {updateInfo.commits_behind} commit{updateInfo.commits_behind !== 1 ? 's' : ''} behind
+                        </Badge>
+                      ) : !updateInfo.error ? (
+                        <StatusPill status="ok" size="sm">Up to date</StatusPill>
+                      ) : null}
+                      {updateInfo.error && <StatusPill status="warning" size="sm">Check failed</StatusPill>}
+                    </div>
+                    {updateInfo.error && <p className="mt-2 text-meta text-warning">{updateInfo.error}</p>}
+                    {updateInfo.changelog && updateInfo.changelog.length > 0 && (
+                      <ul className="mt-3 max-h-[200px] space-y-1 overflow-y-auto rounded-ctl border border-border bg-surface-2 p-3">
+                        {updateInfo.changelog.map((entry) => (
+                          <li key={entry.hash} className="flex gap-2 text-meta">
+                            <code className="shrink-0 font-mono text-accent">{entry.hash}</code>
+                            <span className="text-fg-2">{entry.message}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-ui text-fg-2">Not checked yet in this session. “Check now” compares with the release channel.</p>
+                )}
+                <UpdateProgress active={runActive} onFinished={handleRunFinished} />
+              </Card>
+
+              {/* Operations + Database */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card as="section" aria-labelledby="h-ops">
+                  <CardHeader title="Operations" titleId="h-ops" />
+                  <dl>
+                    <StatRow label="Ping latency (avg / max)" value={ops.ping_stats.avg_latency != null ? `${ops.ping_stats.avg_latency} / ${ops.ping_stats.max_latency} ms` : '—'} />
+                    <StatRow
+                      label="Incidents (open / ack / resolved)"
+                      value={ops.incidents.total !== undefined ? (
+                        <span className={(ops.incidents.open ?? 0) > 0 ? 'text-down' : undefined}>
+                          {n(ops.incidents.open)} / {n(ops.incidents.acknowledged)} / {n(ops.incidents.resolved)}
+                        </span>
+                      ) : '—'}
+                    />
+                    <StatRow label="Alert rules (enabled / total)" value={ops.alert_rules.total !== undefined ? `${n(ops.alert_rules.enabled)} / ${n(ops.alert_rules.total)}` : '—'} />
+                    <StatRow label="Hosts in maintenance" value={<span className={(ops.maintenance.active ?? 0) > 0 ? STATE_TEXT.maint : undefined}>{n(ops.maintenance.active)}</span>} />
+                    <div className="flex min-w-0 items-baseline justify-between gap-3 py-1">
+                      <dt className="shrink-0 text-ui text-fg-2">Notification channels</dt>
+                      <dd className="flex min-w-0 flex-wrap justify-end gap-1">
+                        {channels.length > 0
+                          ? channels.map((c) => <Badge key={c} className="capitalize">{c}</Badge>)
+                          : <span className="text-meta text-fg-3">None configured</span>}
+                      </dd>
+                    </div>
+                  </dl>
+                </Card>
+
+                <Card as="section" aria-labelledby="h-db">
+                  <CardHeader title="Database" titleId="h-db" actions={db.db_size ? <Badge className="num">{db.db_size}</Badge> : undefined} />
+                  {db.error ? (
+                    <p role="alert" className="text-ui text-down">{db.error}</p>
                   ) : (
                     <>
-                      <span>+{status.disk_forecast.growth_gb_per_day} GB/day</span>
-                      {status.disk_forecast.days_until_full != null && (
-                        <span className="ml-1">
-                          — full in ~{status.disk_forecast.days_until_full < 1
-                            ? '<1 day'
-                            : status.disk_forecast.days_until_full < 30
-                              ? `${Math.round(status.disk_forecast.days_until_full)}d`
-                              : `${Math.round(status.disk_forecast.days_until_full / 30)}mo`
-                          }
-                        </span>
+                      <dl className="grid gap-x-6 sm:grid-cols-2">
+                        <StatRow label="Hosts" value={n(db.host_count)} />
+                        <StatRow label="Ping results" value={n(db.result_count)} />
+                        <StatRow label="Integrations" value={n(db.config_count)} />
+                        <StatRow label="Snapshots" value={n(db.snapshot_count)} />
+                        <StatRow label="Syslog messages" value={n(db.syslog_count)} />
+                      </dl>
+                      {status.top_tables?.length > 0 && (
+                        <div className="mt-3 border-t border-border pt-3">
+                          <p className="mb-1 text-meta text-fg-3">Largest tables</p>
+                          <ul className="space-y-0.5">
+                            {status.top_tables.slice(0, 5).map((t) => (
+                              <li key={t.name} className="flex min-w-0 justify-between gap-3 text-meta">
+                                <span className="truncate font-mono text-fg-2">{t.name}</span>
+                                <span className="num shrink-0 text-fg-3">{t.size} · {t.rows.toLocaleString()} rows</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       )}
                     </>
                   )}
-                </div>
-              )}
-            </div>
-          ) : null}
-        </GlassCard>
-      </div>
-
-      {/* ── Process + DB + Pool row ──────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        {/* Database */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Database size={16} className="text-sky-400" />
-            <h3 className="text-sm font-medium text-slate-300">Database</h3>
-            {db?.db_size && <Badge>{db.db_size}</Badge>}
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-24 w-full" />
-          ) : db && !db.error ? (
-            <div>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-1 mb-3">
-                <StatRow label="Hosts" value={(db.host_count ?? 0).toLocaleString()} />
-                <StatRow label="Ping Results" value={(db.result_count ?? 0).toLocaleString()} />
-                <StatRow label="Integrations" value={(db.config_count ?? 0).toLocaleString()} />
-                <StatRow label="Snapshots" value={(db.snapshot_count ?? 0).toLocaleString()} />
-                <StatRow label="Syslog Messages" value={(db.syslog_count ?? 0).toLocaleString()} />
-              </div>
-              {status?.top_tables && status.top_tables.length > 0 && (
-                <div className="border-t border-white/[0.06] pt-2 mt-2">
-                  <p className="text-xs text-slate-500 mb-1">Top tables by size</p>
-                  <div className="space-y-0.5">
-                    {status.top_tables.slice(0, 5).map((t) => (
-                      <div key={t.name} className="flex justify-between text-xs">
-                        <span className="text-slate-400 font-mono">{t.name}</span>
-                        <span className="text-slate-500">
-                          {t.size} ({t.rows.toLocaleString()} rows)
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : db?.error ? (
-            <p className="text-sm text-red-400">{db.error}</p>
-          ) : null}
-        </GlassCard>
-
-        {/* Operational Summary */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Activity size={16} className="text-emerald-400" />
-            <h3 className="text-sm font-medium text-slate-300">Operational Summary</h3>
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-24 w-full" />
-          ) : ops ? (
-            <div className="space-y-3">
-              {/* Ping */}
-              {ops.ping_stats.checks_1h !== undefined && (
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <StatusDot status={
-                      (ops.ping_stats.success_rate ?? 0) >= 95 ? 'online' :
-                      (ops.ping_stats.success_rate ?? 0) >= 80 ? 'maintenance' : 'offline'
-                    } />
-                    <span className="text-sm text-slate-300">Ping</span>
-                    <span className="text-xs text-slate-500 ml-auto">
-                      {ops.ping_stats.success_rate}% success ({ops.ping_stats.checks_1h} checks/1h)
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500 ml-5">
-                    Avg: {ops.ping_stats.avg_latency} ms / Max: {ops.ping_stats.max_latency} ms
-                  </div>
-                </div>
-              )}
-
-              {/* Syslog */}
-              <div className="flex items-center gap-2">
-                <StatusDot status={ops.syslog_status.running ? 'online' : 'offline'} />
-                <span className="text-sm text-slate-300">Syslog Receiver</span>
-                <span className="text-xs text-slate-500 ml-auto">
-                  {ops.syslog_status.msg_per_min !== undefined
-                    ? `${ops.syslog_status.msg_per_min} msg/min`
-                    : ops.syslog_status.running ? 'running' : 'stopped'}
-                </span>
+                </Card>
               </div>
 
-              {/* Incidents */}
-              {ops.incidents.total !== undefined && (
-                <div className="flex items-center gap-2">
-                  <AlertTriangle size={14} className={
-                    (ops.incidents.open ?? 0) > 0 ? 'text-red-400' : 'text-slate-500'
-                  } />
-                  <span className="text-sm text-slate-300">Incidents</span>
-                  <span className="text-xs text-slate-500 ml-auto">
-                    {ops.incidents.open} open / {ops.incidents.acknowledged} ack / {ops.incidents.resolved} resolved
-                  </span>
-                </div>
-              )}
-
-              {/* Notifications */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <Shield size={14} className="text-slate-500" />
-                <span className="text-sm text-slate-300">Notifications</span>
-                <div className="flex gap-1 ml-auto">
-                  {ops.notification_channels.telegram && <Badge>Telegram</Badge>}
-                  {ops.notification_channels.discord && <Badge>Discord</Badge>}
-                  {ops.notification_channels.email && <Badge>Email</Badge>}
-                  {ops.notification_channels.teams && <Badge>Teams</Badge>}
-                  {ops.notification_channels.slack && <Badge>Slack</Badge>}
-                  {ops.notification_channels.ntfy && <Badge>ntfy</Badge>}
-                  {!Object.values(ops.notification_channels).some(Boolean) && (
-                    <span className="text-xs text-slate-600">none configured</span>
+              {/* Integrations + jobs */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card as="section" aria-labelledby="h-int">
+                  <CardHeader title="Integration health" titleId="h-int" meta={ints.length ? `${ints.length} configured` : undefined} />
+                  {ints.length > 0 ? (
+                    <ul className="max-h-[280px] divide-y divide-border overflow-y-auto">
+                      {ints.map((int) => {
+                        const st = integrationState(int.ok);
+                        return (
+                          <li key={`${int.type}-${int.name}`} className="flex min-w-0 items-center gap-2 py-1.5">
+                            <StatusDot status={st} />
+                            <span className="min-w-0 flex-1 truncate text-ui text-fg">{int.name}</span>
+                            {int.error && <span className="max-w-[160px] truncate text-meta text-down" title={int.error}>{int.error}</span>}
+                            <Badge>{int.type}</Badge>
+                            <span className="num shrink-0 text-meta text-fg-3">{int.last_check}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <EmptyState compact title="No integrations configured" description="Integration checks appear here once one is added." />
                   )}
-                </div>
-              </div>
+                </Card>
 
-              {/* Maintenance */}
-              {(ops.maintenance.active ?? 0) > 0 && (
-                <div className="flex items-center gap-2">
-                  <Timer size={14} className="text-amber-400" />
-                  <span className="text-sm text-slate-300">Maintenance</span>
-                  <span className="text-xs text-slate-500 ml-auto">
-                    {ops.maintenance.active} hosts in maintenance
-                  </span>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </GlassCard>
-      </div>
-
-      {/* ── Integration Health + Background Services row ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        {/* Integration Health */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Plug size={16} className="text-sky-400" />
-            <h3 className="text-sm font-medium text-slate-300">Integration Health</h3>
-            {status?.integrations && (
-              <Badge>{status.integrations.length} active</Badge>
-            )}
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-24 w-full" />
-          ) : status?.integrations && status.integrations.length > 0 ? (
-            <div className="space-y-1.5 max-h-[260px] overflow-y-auto">
-              {status.integrations.map((int) => (
-                <div key={`${int.type}-${int.name}`} className="flex items-center gap-2">
-                  <StatusDot status={int.ok === true ? 'online' : int.ok === false ? 'offline' : 'unknown'} />
-                  <span className="text-sm text-slate-300 truncate flex-1">{int.name}</span>
-                  <Badge>{int.type}</Badge>
-                  <span className="text-xs text-slate-500">{int.last_check}</span>
-                  {int.error && (
-                    <span className="text-xs text-red-400 truncate max-w-[120px]" title={int.error}>
-                      {int.error}
-                    </span>
+                <Card as="section" aria-labelledby="h-jobs">
+                  <CardHeader title="Background jobs" titleId="h-jobs" meta={jobs.length ? `${jobs.length} jobs` : undefined} />
+                  {jobs.length > 0 ? (
+                    <ul className="max-h-[280px] divide-y divide-border overflow-y-auto">
+                      {jobs.map((job) => (
+                        <li key={job.id} className="flex min-w-0 items-center gap-2 py-1.5">
+                          <span className="min-w-0 flex-1 truncate text-ui text-fg">{job.name}</span>
+                          {job.next_run === 'paused'
+                            ? <Tag>Paused</Tag>
+                            : <span className="shrink-0 font-mono text-meta text-fg-2" title="Next run">{job.next_run}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState compact title="No scheduler jobs reported" />
                   )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">No integrations configured</p>
-          )}
-        </GlassCard>
-
-        {/* Background Services (scheduler jobs) */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Clock size={16} className="text-amber-400" />
-            <h3 className="text-sm font-medium text-slate-300">Background Services</h3>
-            {status?.scheduler_jobs && (
-              <Badge>{status.scheduler_jobs.length} jobs</Badge>
-            )}
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-24 w-full" />
-          ) : status?.scheduler_jobs && status.scheduler_jobs.length > 0 ? (
-            <div className="space-y-1.5 max-h-[260px] overflow-y-auto">
-              {status.scheduler_jobs.map((job) => (
-                <div key={job.id} className="flex items-center gap-2">
-                  <StatusDot status={job.next_run === 'paused' ? 'maintenance' : 'online'} />
-                  <span className="text-sm text-slate-300 truncate flex-1">{job.name}</span>
-                  <span className="text-xs text-slate-500 font-mono">{job.next_run}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">No scheduler jobs found</p>
-          )}
-        </GlassCard>
-      </div>
-
-      {/* ── Process Info + Connection Pool ────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        {/* Process */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Activity size={16} className="text-violet-400" />
-            <h3 className="text-sm font-medium text-slate-300">Process</h3>
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-16 w-full" />
-          ) : status?.process ? (
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1">
-              <StatRow label="RSS" value={`${status.process.rss_mb} MB`} />
-              <StatRow label="VMS" value={`${status.process.vms_mb} MB`} />
-              <StatRow label="Threads" value={status.process.threads} />
-              <StatRow label="Open Files" value={status.process.open_files} />
-              <StatRow label="Connections" value={status.process.connections} />
-              <StatRow label="CPU (user/sys)" value={`${status.process.cpu_user}s / ${status.process.cpu_system}s`} />
-            </div>
-          ) : null}
-        </GlassCard>
-
-        {/* Connection Pool */}
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Database size={16} className="text-emerald-400" />
-            <h3 className="text-sm font-medium text-slate-300">Connection Pool</h3>
-          </div>
-          {isLoading ? (
-            <Skeleton className="h-16 w-full" />
-          ) : status?.pool ? (
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1">
-              <StatRow label="Pool Size" value={status.pool.size ?? 0} />
-              <StatRow label="Checked In" value={status.pool.checked_in ?? 0} />
-              <StatRow label="Checked Out" value={status.pool.checked_out ?? 0} />
-              <StatRow label="Overflow" value={`${status.pool.overflow ?? 0} / ${status.pool.max_overflow ?? 0}`} />
-            </div>
-          ) : null}
-        </GlassCard>
-      </div>
-
-      {/* ── Software Updates ─────────────────────────────── */}
-      <GlassCard className="p-4 mb-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Download size={16} className="text-violet-400" />
-            <h3 className="text-sm font-medium text-slate-300">Software Updates</h3>
-          </div>
-          <div className="flex gap-2">
-            {updateInfo?.update_available && (
-              <Button size="sm" variant="primary" onClick={applyUpdate} disabled={updating || runActive}>
-                <Download size={14} className={updating || runActive ? 'animate-bounce' : ''} />
-                {updating || runActive ? 'Updating...' : 'Update Now'}
-              </Button>
-            )}
-            <Button size="sm" variant="ghost" onClick={checkUpdate} disabled={checking}>
-              <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
-              {checking ? 'Checking...' : 'Check Now'}
-            </Button>
-          </div>
-        </div>
-        {updateInfo ? (
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <Badge>{updateInfo.local?.version || updateInfo.local?.commit || '—'}</Badge>
-              {updateInfo.update_available ? (
-                <Badge variant="severity" severity="warning">
-                  {updateInfo.commits_behind} commit{updateInfo.commits_behind !== 1 ? 's' : ''} behind
-                </Badge>
-              ) : (
-                <Badge variant="severity" severity="info">Up to date</Badge>
-              )}
-              {updateInfo.error && (
-                <span className="text-xs text-amber-400">{updateInfo.error}</span>
-              )}
-            </div>
-            {updateInfo.changelog && updateInfo.changelog.length > 0 && (
-              <div className="bg-white/[0.02] rounded p-3 mt-2 max-h-[200px] overflow-y-auto space-y-1">
-                {updateInfo.changelog.map((entry) => (
-                  <div key={entry.hash} className="flex gap-2 text-xs">
-                    <code className="text-sky-400 shrink-0">{entry.hash}</code>
-                    <span className="text-slate-400">{entry.message}</span>
-                  </div>
-                ))}
+                </Card>
               </div>
-            )}
-          </div>
-        ) : (
-          <p className="text-sm text-slate-500">Click &quot;Check Now&quot; to check for updates</p>
-        )}
-        <UpdateProgress active={runActive} onFinished={handleRunFinished} />
-      </GlassCard>
 
-      {/* Dashboard API Performance */}
-      {status?.dashboard_perf?.sections && (
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Activity size={16} className="text-emerald-400" />
-            <h3 className="text-sm font-semibold text-slate-200">Dashboard API Performance</h3>
-          </div>
-          <div className="flex items-center gap-3 mb-3">
-            <span className="text-2xl font-bold text-slate-100">{status.dashboard_perf.total_ms}ms</span>
-            <Badge variant="severity" severity={status.dashboard_perf.total_ms < 1000 ? 'info' : status.dashboard_perf.total_ms < 3000 ? 'warning' : 'critical'}>
-              {status.dashboard_perf.total_ms < 1000 ? 'Fast' : status.dashboard_perf.total_ms < 3000 ? 'Slow' : 'Very Slow'}
-            </Badge>
-            {status.dashboard_perf.timestamp && (
-              <span className="text-xs text-slate-500 ml-auto">Last: {new Date(status.dashboard_perf.timestamp + 'Z').toLocaleTimeString('de-CH')}</span>
-            )}
-          </div>
-          <div className="space-y-1">
-            {status.dashboard_perf.sections.filter(s => s.name !== 'init' && s.name !== 'done').map((s) => {
-              const pct = status.dashboard_perf!.total_ms > 0 ? (s.ms / status.dashboard_perf!.total_ms) * 100 : 0;
-              const color = s.ms < 50 ? 'bg-emerald-500' : s.ms < 200 ? 'bg-sky-500' : s.ms < 1000 ? 'bg-amber-500' : 'bg-red-500';
-              return (
-                <div key={s.name} className="flex items-center gap-2 text-xs">
-                  <span className="w-32 text-slate-400 truncate">{s.name}</span>
-                  <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
-                    <div className={`h-full ${color} rounded-full`} style={{ width: `${Math.max(1, pct)}%` }} />
-                  </div>
-                  <span className="w-16 text-right text-slate-500 tabular-nums">{s.ms}ms</span>
-                </div>
-              );
-            })}
-          </div>
-        </GlassCard>
-      )}
+              {/* Process + pool */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card as="section" aria-labelledby="h-proc">
+                  <CardHeader title="Process" titleId="h-proc" />
+                  <dl className="grid gap-x-6 sm:grid-cols-2">
+                    <StatRow label="RSS" value={`${status.process.rss_mb} MB`} />
+                    <StatRow label="VMS" value={`${status.process.vms_mb} MB`} />
+                    <StatRow label="Threads" value={status.process.threads} />
+                    <StatRow label="Open files" value={status.process.open_files} />
+                    <StatRow label="Connections" value={status.process.connections} />
+                    <StatRow label="CPU user / sys" value={`${status.process.cpu_user}s / ${status.process.cpu_system}s`} />
+                  </dl>
+                </Card>
+                <Card as="section" aria-labelledby="h-pool">
+                  <CardHeader title="Connection pool" titleId="h-pool" />
+                  <dl className="grid gap-x-6 sm:grid-cols-2">
+                    <StatRow label="Pool size" value={n(status.pool.size)} />
+                    <StatRow label="Checked in" value={n(status.pool.checked_in)} />
+                    <StatRow label="Checked out" value={n(status.pool.checked_out)} />
+                    <StatRow label="Overflow" value={`${n(status.pool.overflow)} / ${n(status.pool.max_overflow)}`} />
+                  </dl>
+                </Card>
+              </div>
+
+              {/* Dashboard API performance */}
+              {status.dashboard_perf?.sections && (() => {
+                const perf = status.dashboard_perf;
+                const slow = perf.total_ms >= 3000 ? 'down' : perf.total_ms >= 1000 ? 'degraded' : null;
+                return (
+                  <Card as="section" aria-labelledby="h-perf">
+                    <CardHeader
+                      title="Dashboard API performance"
+                      titleId="h-perf"
+                      meta={perf.timestamp ? `Last run ${new Date(perf.timestamp + 'Z').toLocaleTimeString()}` : undefined}
+                    />
+                    <div className="mb-4 flex items-end gap-3">
+                      <BigNumber size="sm" value={perf.total_ms} unit="ms" />
+                      {slow
+                        ? <StatusPill status={slow} size="sm">{slow === 'down' ? 'Very slow' : 'Slow'}</StatusPill>
+                        : <Badge>Fast</Badge>}
+                    </div>
+                    <ul className="space-y-1.5">
+                      {perf.sections.filter((s) => s.name !== 'init' && s.name !== 'done').map((s) => {
+                        const pct = perf.total_ms > 0 ? (s.ms / perf.total_ms) * 100 : 0;
+                        const fill = s.ms >= 1000 ? 'bg-down' : s.ms >= 200 ? 'bg-degraded' : 'bg-accent';
+                        return (
+                          <li key={s.name} className="flex items-center gap-2 text-meta">
+                            <span className="w-32 shrink-0 truncate font-mono text-fg-2">{s.name}</span>
+                            <span aria-hidden="true" className="h-[6px] flex-1 overflow-hidden rounded-pill bg-surface-3">
+                              <span className={cn('block h-full rounded-pill', fill)} style={{ width: `${Math.max(1, pct)}%` }} />
+                            </span>
+                            <span className="num w-16 shrink-0 text-right text-fg-2">{s.ms} ms</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </Card>
+                );
+              })()}
+            </div>
+          );
+        }}
+      </QueryState>
+      {ConfirmDialogElement}
     </div>
   );
 }

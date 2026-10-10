@@ -60,6 +60,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-2 text-center">
           <Lockup size={40} wordmarkClassName="text-[26px]" />
+          <h1 className="sr-only">Sign in to Nodeglow</h1>
           <p className="text-ui text-fg-2">Infrastructure monitoring</p>
         </div>
 
