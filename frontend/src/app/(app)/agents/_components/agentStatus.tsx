@@ -25,15 +25,15 @@ const FILL: Record<HealthState, string> = {
  * never an empty green bar. `stale` dims the value (agent offline, last report).
  */
 export function UsageBar({
-  label, value, stale, className,
-}: { label: string; value: number | null | undefined; stale?: boolean; className?: string }) {
+  label, value, stale, hideLabel, className,
+}: { label: string; value: number | null | undefined; stale?: boolean; hideLabel?: boolean; className?: string }) {
   const has = value != null && Number.isFinite(value);
   const pct = has ? Math.max(0, Math.min(100, value as number)) : 0;
   const state = has ? usageState(pct) : 'unknown';
   return (
     <div className={cn('min-w-0', className)}>
-      <div className="mb-1 flex justify-between gap-2 text-meta">
-        <span className="text-fg-2">{label}</span>
+      <div className={cn('mb-1 flex gap-2 text-meta', hideLabel ? 'justify-end' : 'justify-between')}>
+        <span className={hideLabel ? 'sr-only' : 'text-fg-2'}>{label}</span>
         <span className={cn('num', has ? 'text-fg' : 'text-fg-3', stale && 'opacity-60')}>
           {has ? `${Math.round(pct)}%` : '—'}
           {stale && has && <span className="sr-only"> (last report, outdated)</span>}

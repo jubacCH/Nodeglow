@@ -88,7 +88,7 @@ export function TechnitiumDetail({ data }: { data: TechnitiumData }) {
             }
             className="mb-2 px-4 pt-4"
           />
-          <TableContainer>
+          <TableContainer className="relative">
             <Table density="compact">
               <THead>
                 <Tr>

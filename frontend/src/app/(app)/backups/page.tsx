@@ -271,7 +271,7 @@ export default function BackupsPage() {
           }
         >
           {(rows) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[900px]">
                 <THead>
                   <Tr>
@@ -381,7 +381,7 @@ function JobHistory({ jobId }: { jobId: number }) {
   return (
     <section aria-labelledby="backup-history-title">
       <h3 id="backup-history-title" className="mb-2 text-ui font-medium text-fg">Recent runs</h3>
-      <TableContainer>
+      <TableContainer className="relative">
         <Table density="compact">
           <THead>
             <Tr>

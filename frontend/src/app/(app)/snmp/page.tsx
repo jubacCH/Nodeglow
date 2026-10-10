@@ -325,7 +325,7 @@ function MibLibraryTab() {
           }
         >
           {(d) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[520px]">
                 <THead>
                   <Tr>
@@ -521,7 +521,7 @@ function HostConfigsTab() {
           }
         >
           {(d) => (
-            <TableContainer>
+            <TableContainer className="relative">
               <Table className="min-w-[760px]">
                 <THead>
                   <Tr>
@@ -969,7 +969,7 @@ function OidBrowserTab() {
         }
       >
         {(list) => (
-          <TableContainer>
+          <TableContainer className="relative">
             <Table className={hasResults ? 'min-w-[860px]' : 'min-w-[640px]'}>
               <THead>
                 <Tr>

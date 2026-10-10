@@ -140,7 +140,7 @@ function ZoneCard({ zone }: { zone: Zone }) {
             </button>
             {showDns && (
               <div id={dnsId} className="mt-2">
-                <TableContainer maxHeight={300}>
+                <TableContainer className="relative" maxHeight={300}>
                   <Table density="compact">
                     <THead sticky>
                       <Tr>
