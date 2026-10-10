@@ -1972,34 +1972,103 @@ async def backup_info(
     return await get_backup_info(db)
 
 
-@router.get("/backup", summary="Download full database backup as JSON")
+@router.post("/backup", summary="Download full database backup (passphrase-encrypted)")
 @rate_limit(max_requests=3, window_seconds=60)
 async def download_backup(
     request: Request,
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_admin),
 ):
-    from services.backup import export_backup
+    """Body: ``{"passphrase": "..."}`` (min. 12 characters).
+
+    The export contains password hashes, API key hashes, settings and the
+    stored credentials, so it is only ever handed out encrypted (scrypt +
+    AES-256-GCM). The same passphrase is needed to restore it.
+    """
+    import asyncio
+    from services.backup import (
+        MIN_PASSPHRASE_LENGTH, BackupCryptoError, encrypt_backup, export_backup,
+    )
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    passphrase = body.get("passphrase") if isinstance(body, dict) else None
+    if not isinstance(passphrase, str) or len(passphrase) < MIN_PASSPHRASE_LENGTH:
+        return JSONResponse({
+            "error": f"A backup passphrase of at least {MIN_PASSPHRASE_LENGTH} characters is required",
+            "code": "passphrase_required",
+        }, status_code=400)
     data = await export_backup(db)
-    await log_action(db, request, "backup.export", details={"tables": len(data.get("tables", {}))})
+    try:
+        envelope = await asyncio.to_thread(encrypt_backup, data, passphrase)
+    except BackupCryptoError as exc:
+        return JSONResponse({"error": str(exc), "code": exc.code}, status_code=400)
+    await log_action(db, request, "backup.export",
+                     details={"tables": len(data.get("tables", {})), "encrypted": True})
     await db.commit()
     return JSONResponse(
-        content=data,
-        headers={"Content-Disposition": f"attachment; filename=nodeglow-backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.json"},
+        content=envelope,
+        headers={"Content-Disposition": f"attachment; filename=nodeglow-backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.ngbackup.json"},
     )
 
 
-@router.post("/backup/restore", summary="Restore database from backup JSON")
+@router.post("/backup/restore", summary="Restore database from a backup")
 @rate_limit(max_requests=3, window_seconds=60)
 async def restore_backup(
     request: Request,
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_admin),
 ):
-    from services.backup import import_backup
-    body = await request.json()
-    result = await import_backup(db, body)
-    await log_action(db, request, "backup.restore", details={"rows": result.get("total_rows", 0)})
+    """Body: ``{"backup": <file contents>, "passphrase": "..."}``.
+
+    Old unencrypted exports are still accepted, but only with
+    ``"allow_unencrypted": true`` — an explicit acknowledgement that the file
+    was stored in plaintext. (The file contents may also be posted directly
+    as the body, with ``?allow_unencrypted=true`` for an old export.)
+    """
+    import asyncio
+    from services.backup import (
+        BackupCryptoError, decrypt_backup, import_backup, is_encrypted_backup,
+    )
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Body must be JSON", "code": "invalid_backup"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Invalid backup format", "code": "invalid_backup"}, status_code=400)
+
+    if "backup" in body:
+        backup = body.get("backup")
+        passphrase = body.get("passphrase")
+        allow_unencrypted = body.get("allow_unencrypted") is True
+    else:  # raw file contents as the body
+        backup, passphrase = body, None
+        allow_unencrypted = False
+    if request.query_params.get("allow_unencrypted", "").lower() in ("1", "true"):
+        allow_unencrypted = True
+
+    encrypted = is_encrypted_backup(backup)
+    if encrypted:
+        try:
+            backup = await asyncio.to_thread(decrypt_backup, backup, passphrase)
+        except BackupCryptoError as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=400)
+    elif not allow_unencrypted:
+        return JSONResponse({
+            "error": ("This is an unencrypted backup from an older version. Restoring "
+                      "it requires explicit confirmation (allow_unencrypted)."),
+            "code": "unencrypted_backup",
+        }, status_code=400)
+
+    if not isinstance(backup, dict):
+        return JSONResponse({"error": "Invalid backup format", "code": "invalid_backup"}, status_code=400)
+    try:
+        result = await import_backup(db, backup)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc), "code": "invalid_backup"}, status_code=400)
+    await log_action(db, request, "backup.restore",
+                     details={"rows": result.get("total_rows", 0), "encrypted": encrypted})
     await db.commit()
     return result
 

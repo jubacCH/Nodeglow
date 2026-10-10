@@ -344,9 +344,17 @@ python3 -c "import getpass,hashlib; k=getpass.getpass('key: ').encode(); \
   print(hashlib.sha256(b'nodeglow-secret-key-fingerprint:'+k).hexdigest()[:16])"
 ```
 
-The JSON export (`GET /api/v1/backup`) records the fingerprint of the key it
-was made with; a JSON restore under a different key logs an error and returns
-a `warning` field.
+The JSON export (`POST /api/v1/backup` with `{"passphrase": "…"}`) records the
+fingerprint of the key it was made with; a JSON restore under a different key
+logs an error and returns a `warning` field.
+
+The export contains password hashes, API key hashes, settings and the stored
+credentials, so it is always encrypted with a passphrase chosen at export time
+(at least 12 characters; scrypt + AES-256-GCM). Keep the passphrase with the
+escrowed `SECRET_KEY` — without it the file cannot be restored. Restore with
+`POST /api/v1/backup/restore` and `{"backup": <file>, "passphrase": "…"}`.
+Unencrypted exports from older versions are still accepted, but only with
+`"allow_unencrypted": true` in the body.
 
 ### Changing it
 

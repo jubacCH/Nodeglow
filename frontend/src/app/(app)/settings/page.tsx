@@ -13,7 +13,8 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { api, get, post, del } from '@/lib/api';
+import { api, apiErrorMessage, get, post, del } from '@/lib/api';
+import { MIN_BACKUP_PASSPHRASE, isEncryptedBackup } from '@/lib/backup';
 import { useToastStore } from '@/stores/toast';
 import { useThemeStore } from '@/stores/theme';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -475,6 +476,9 @@ export default function SettingsPage() {
 
   const [backupLoading, setBackupLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [exportPassphrase, setExportPassphrase] = useState('');
+  const [exportPassphrase2, setExportPassphrase2] = useState('');
+  const [restorePassphrase, setRestorePassphrase] = useState('');
 
   /* ---- Mutations ---- */
 
@@ -2105,26 +2109,60 @@ export default function SettingsPage() {
               Export Backup
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              Download a full JSON backup of all PostgreSQL tables. This includes all hosts, agents, integrations, incidents, settings, and more.
+              Download a full backup of all PostgreSQL tables. This includes all hosts, agents, integrations, incidents, settings, and more —
+              also user password hashes and stored credentials, so the file is encrypted with a passphrase you choose.
+              Keep the passphrase safe: without it the backup cannot be restored.
             </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3 max-w-xl">
+              <div>
+                <label htmlFor="backup-export-pass" className="block text-xs text-slate-400 mb-1">Passphrase (min. {MIN_BACKUP_PASSPHRASE} characters)</label>
+                <input
+                  id="backup-export-pass"
+                  type="password"
+                  className="ng-input"
+                  autoComplete="new-password"
+                  value={exportPassphrase}
+                  onChange={(e) => setExportPassphrase(e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="backup-export-pass2" className="block text-xs text-slate-400 mb-1">Repeat passphrase</label>
+                <input
+                  id="backup-export-pass2"
+                  type="password"
+                  className="ng-input"
+                  autoComplete="new-password"
+                  value={exportPassphrase2}
+                  onChange={(e) => setExportPassphrase2(e.target.value)}
+                />
+              </div>
+            </div>
+            {exportPassphrase2 && exportPassphrase !== exportPassphrase2 && (
+              <p className="text-xs text-red-300 mb-3">Passphrases do not match.</p>
+            )}
             <Button
               size="sm"
-              disabled={backupLoading}
+              disabled={
+                backupLoading
+                || exportPassphrase.length < MIN_BACKUP_PASSPHRASE
+                || exportPassphrase !== exportPassphrase2
+              }
               onClick={async () => {
                 setBackupLoading(true);
                 try {
-                  const res = await fetch('/api/v1/backup', { credentials: 'include' });
-                  if (!res.ok) throw new Error('Backup failed');
-                  const blob = await res.blob();
+                  const envelope = await post<unknown>('/api/v1/backup', { passphrase: exportPassphrase });
+                  const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `nodeglow-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.download = `nodeglow-backup-${new Date().toISOString().slice(0, 10)}.ngbackup.json`;
                   a.click();
                   URL.revokeObjectURL(url);
-                  toast.show('Backup downloaded', 'success');
-                } catch {
-                  toast.show('Backup failed', 'error');
+                  setExportPassphrase('');
+                  setExportPassphrase2('');
+                  toast.show('Encrypted backup downloaded', 'success');
+                } catch (err) {
+                  toast.show(apiErrorMessage(err, 'Backup failed'), 'error');
                 } finally {
                   setBackupLoading(false);
                 }
@@ -2147,34 +2185,69 @@ export default function SettingsPage() {
                 Make sure to export a backup first.
               </p>
             </div>
+            <div className="mb-3 max-w-xs">
+              <label htmlFor="backup-restore-pass" className="block text-xs text-slate-400 mb-1">Backup passphrase</label>
+              <input
+                id="backup-restore-pass"
+                type="password"
+                className="ng-input"
+                autoComplete="off"
+                value={restorePassphrase}
+                onChange={(e) => setRestorePassphrase(e.target.value)}
+              />
+            </div>
             <input
               type="file"
               accept=".json"
               id="backup-file"
               className="hidden"
               onChange={async (e) => {
-                const file = e.target.files?.[0];
+                const input = e.target;
+                const file = input.files?.[0];
                 if (!file) return;
+                const reset = () => { input.value = ''; };
+                let data: unknown;
+                try {
+                  data = JSON.parse(await file.text());
+                } catch {
+                  toast.show('This file is not a Nodeglow backup', 'error');
+                  reset();
+                  return;
+                }
+                const encrypted = isEncryptedBackup(data);
+                if (encrypted && !restorePassphrase) {
+                  toast.show('This backup is encrypted — enter its passphrase first', 'error');
+                  reset();
+                  return;
+                }
                 const ok = await confirm({
-                  title: 'Restore Backup',
-                  description: `Are you sure you want to restore from "${file.name}"? This will replace ALL existing data.`,
+                  title: encrypted ? 'Restore Backup' : 'Restore UNENCRYPTED Backup',
+                  description: encrypted
+                    ? `Are you sure you want to restore from "${file.name}"? This will replace ALL existing data.`
+                    : `"${file.name}" is an unencrypted backup from an older version: it contains password hashes and `
+                      + 'credentials in plaintext. Restoring it will replace ALL existing data. Delete the file afterwards.',
                   variant: 'danger',
-                  confirmLabel: 'Restore',
+                  confirmLabel: encrypted ? 'Restore' : 'Restore unencrypted backup',
                 });
-                if (!ok) { e.target.value = ''; return; }
+                if (!ok) { reset(); return; }
                 setRestoreLoading(true);
                 try {
-                  const text = await file.text();
-                  const data = JSON.parse(text);
                   // Through api(): it sends the CSRF token the backend requires.
-                  const result = await post<{ total_rows: number }>('/api/v1/backup/restore', data);
+                  const result = await post<{ total_rows: number; warning?: string }>(
+                    '/api/v1/backup/restore',
+                    encrypted
+                      ? { backup: data, passphrase: restorePassphrase }
+                      : { backup: data, allow_unencrypted: true },
+                  );
                   toast.show(`Restored ${result.total_rows} rows successfully`, 'success');
+                  if (result.warning) toast.show(result.warning, 'warning');
+                  setRestorePassphrase('');
                   qc.invalidateQueries({ queryKey: ['backup-info'] });
-                } catch {
-                  toast.show('Restore failed — check file format', 'error');
+                } catch (err) {
+                  toast.show(apiErrorMessage(err, 'Restore failed — check file format'), 'error');
                 } finally {
                   setRestoreLoading(false);
-                  e.target.value = '';
+                  reset();
                 }
               }}
             />
