@@ -460,6 +460,16 @@ def reset_port_error_state(host_id: int) -> None:
     _port_pass_streak.pop(host_id, None)
 
 
+async def _broadcast_ping_updates(updates: list[tuple]) -> None:
+    """Send (host_id, name, online, latency_ms) updates to WebSocket clients."""
+    from services.websocket import broadcast_ping_update
+    for host_id, name, online, latency in updates:
+        try:
+            await broadcast_ping_update(host_id, name, online, latency)
+        except Exception:
+            logger.debug("WebSocket ping broadcast failed", exc_info=True)
+
+
 @instrument_job("ping_checks")
 async def run_ping_checks():
     """Ping all enabled hosts concurrently and store results."""
@@ -509,27 +519,33 @@ async def run_ping_checks():
         from models.agent import Agent
         from sqlalchemy import func as sa_func
         agent_ping_rows: list[dict] = []
+        # One query for every agent-sourced host instead of one per host.
+        # Matching is by name (PingHost.name == Agent.hostname, case-insensitive);
+        # if several agents share a hostname the most recently seen one counts.
+        names = {h.name.lower() for h in agent_hosts}
+        last_seen_by_name: dict[str, datetime] = {}
         async with AsyncSessionLocal() as db:
-            for host in agent_hosts:
-                # Find matching agent by name (PingHost.name == Agent.hostname)
-                agent_r = await db.execute(
-                    select(Agent).where(sa_func.lower(Agent.hostname) == host.name.lower())
-                )
-                agent = agent_r.scalar_one_or_none()
-                success = False
-                if agent and agent.last_seen:
-                    success = (datetime.utcnow() - agent.last_seen).total_seconds() < 120
-                ts_now = datetime.utcnow()
-                latency_val = 0 if success else None
-                agent_ping_rows.append({
-                    "timestamp": ts_now,
-                    "host_id": host.id,
-                    "host_name": host.name,
-                    "success": success,
-                    "latency_ms": latency_val,
-                })
-                from services.websocket import broadcast_ping_update
-                _asyncio.create_task(broadcast_ping_update(host.id, host.name, success, 0 if success else None))
+            for hostname, last_seen in (await db.execute(
+                select(Agent.hostname, Agent.last_seen)
+                .where(sa_func.lower(Agent.hostname).in_(names))
+            )).all():
+                key = (hostname or "").lower()
+                if last_seen and (key not in last_seen_by_name or last_seen > last_seen_by_name[key]):
+                    last_seen_by_name[key] = last_seen
+        ts_now = datetime.utcnow()
+        agent_updates = []
+        for host in agent_hosts:
+            last_seen = last_seen_by_name.get(host.name.lower())
+            success = bool(last_seen) and (ts_now - last_seen).total_seconds() < 120
+            agent_ping_rows.append({
+                "timestamp": ts_now,
+                "host_id": host.id,
+                "host_name": host.name,
+                "success": success,
+                "latency_ms": 0 if success else None,
+            })
+            agent_updates.append((host.id, host.name, success, 0 if success else None))
+        _asyncio.create_task(_broadcast_ping_updates(agent_updates))
 
         try:
             await insert_ping_checks(agent_ping_rows)
@@ -567,7 +583,16 @@ async def run_ping_checks():
     went_offline: list[str] = []
     came_online: list[str] = []
     icmp_rows: list[dict] = []
+    ws_updates: list[tuple] = []
     async with AsyncSessionLocal() as db:
+        # All host rows in one query; the ORM then flushes only the rows whose
+        # port_error / check_detail actually changed, batched. This used to be
+        # one db.get() round trip per host per cycle.
+        host_rows = {
+            h.id: h for h in (await db.execute(
+                select(PingHost).where(PingHost.id.in_([r[0].id for r in results]))
+            )).scalars().all()
+        } if results else {}
         for host, online, port_error, latency, detail in results:
             icmp_rows.append({
                 "timestamp": now,
@@ -584,7 +609,7 @@ async def run_ping_checks():
             # engine. Only count cycles where ICMP succeeded and a non-ICMP
             # check actually ran — otherwise we can't tell anything about
             # service health and must not adjust the streaks.
-            host_obj = await db.get(PingHost, host.id)
+            host_obj = host_rows.get(host.id)
             if host_obj:
                 has_service_check = any(k != "icmp" for k in (detail or {}).keys())
                 if not has_service_check:
@@ -614,9 +639,7 @@ async def run_ping_checks():
                 host_obj.port_error = latched
                 host_obj.check_detail = _json.dumps(detail) if detail else None
 
-            # Broadcast live update via WebSocket
-            from services.websocket import broadcast_ping_update
-            _asyncio.create_task(broadcast_ping_update(host.id, host.name, online, latency))
+            ws_updates.append((host.id, host.name, online, latency))
 
             # Track state changes for grace-period notification
             if not online:
@@ -633,6 +656,11 @@ async def run_ping_checks():
                     came_online.append(host.name)
 
         await db.commit()
+
+    # Broadcast live updates via WebSocket — one task for the whole cycle
+    # rather than one per host.
+    if ws_updates:
+        _asyncio.create_task(_broadcast_ping_updates(ws_updates))
 
     # ClickHouse is the authoritative store for ping check time-series.
     if icmp_rows:
