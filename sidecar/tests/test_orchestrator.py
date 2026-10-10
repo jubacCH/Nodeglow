@@ -29,7 +29,11 @@ from orchestrator import (  # noqa: E402
     step_pull,
     step_restart,
     read_version,
+    parse_schedule,
+    run_scheduled_backup,
+    seconds_until_next,
 )
+from datetime import datetime  # noqa: E402
 
 
 def make_ctx(tmp_path, **overrides):
@@ -503,3 +507,82 @@ def test_migrate_does_not_restart_dependencies(tmp_path):
 
     step_migrate(make_ctx(tmp_path, run_cmd=run_cmd))
     assert "--no-deps" in seen["argv"]
+
+
+# ── Scheduled backups ────────────────────────────────────────────────────────
+
+def test_scheduled_backup_writes_its_own_kind(tmp_path):
+    ctx = make_ctx(tmp_path, run_dump=_fake_dump(1024))
+    result = run_scheduled_backup(ctx)
+    assert result["ok"] is True
+    assert result["name"] == "scheduled-2026-06-10T14-02-11.dump.gz"
+    entries = list_backups(ctx.backup_dir)
+    assert [e["kind"] for e in entries] == ["scheduled"]
+
+
+def test_scheduled_backup_failure_is_reported_not_raised(tmp_path):
+    def run_dump(argv, dest, timeout=1800):
+        return DumpResult(1, 0, "connection refused")
+
+    ctx = make_ctx(tmp_path, run_dump=run_dump)
+    result = run_scheduled_backup(ctx)
+    assert result["ok"] is False
+    assert "connection refused" in result["error"]
+    assert os.listdir(ctx.backup_dir) == []
+
+
+def test_scheduled_backup_without_db_container_fails_cleanly(tmp_path):
+    result = run_scheduled_backup(make_ctx(tmp_path, db_container=""))
+    assert result["ok"] is False
+    assert "DB_CONTAINER" in result["error"]
+
+
+def test_retention_is_counted_per_kind(tmp_path):
+    """Daily dumps must never push the last pre-update dump out."""
+    ctx = make_ctx(tmp_path, run_dump=_fake_dump(10), backup_retention=2)
+    pre = os.path.join(ctx.backup_dir, "pre-update-old.dump.gz")
+    with open(pre, "wb") as fh:
+        fh.write(b"x")
+    os.utime(pre, (1, 1))
+    for i, name in enumerate(["a", "b", "c"]):
+        path = os.path.join(ctx.backup_dir, f"scheduled-{name}.dump.gz")
+        with open(path, "wb") as fh:
+            fh.write(b"x")
+        os.utime(path, (1000 + i, 1000 + i))
+
+    run_scheduled_backup(ctx)
+
+    names = sorted(os.listdir(ctx.backup_dir))
+    assert "pre-update-old.dump.gz" in names
+    assert sorted(n for n in names if n.startswith("scheduled-")) == [
+        "scheduled-2026-06-10T14-02-11.dump.gz", "scheduled-c.dump.gz"]
+
+
+@pytest.mark.parametrize("spec,expected", [
+    (None, ("daily", 3, 30)),
+    ("", ("daily", 3, 30)),
+    ("02:15", ("daily", 2, 15)),
+    ("every 6h", ("interval", 21600)),
+    ("Every 90m", ("interval", 5400)),
+    ("off", None),
+    ("0", None),
+])
+def test_parse_schedule(spec, expected):
+    assert parse_schedule(spec) == expected
+
+
+@pytest.mark.parametrize("spec", ["25:00", "every 5m", "nightly", "3:3"])
+def test_parse_schedule_rejects_garbage(spec):
+    with pytest.raises(ValueError):
+        parse_schedule(spec)
+
+
+def test_seconds_until_next_daily():
+    now = datetime(2026, 10, 10, 2, 0, 0)
+    assert seconds_until_next(("daily", 3, 30), now) == 90 * 60
+    later = datetime(2026, 10, 10, 4, 0, 0)
+    assert seconds_until_next(("daily", 3, 30), later) == (23 * 60 + 30) * 60
+
+
+def test_seconds_until_next_interval():
+    assert seconds_until_next(("interval", 3600), datetime(2026, 1, 1)) == 3600

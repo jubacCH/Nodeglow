@@ -25,14 +25,19 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+from datetime import datetime, timedelta
+
 from orchestrator import (
     CmdResult,
     Ctx,
     DumpResult,
     idle_state,
     list_backups,
+    parse_schedule,
     read_version,
+    run_scheduled_backup,
     run_update,
+    seconds_until_next,
 )
 
 REPO_PATH = os.environ.get("REPO_PATH", "/opt/repo")
@@ -49,9 +54,19 @@ DUMP_CHUNK = 1 << 20
 # anything — this is intentional (fail-closed).
 AUTH_TOKEN = os.environ.get("UPDATE_SIDECAR_TOKEN", "").strip()
 
+# Scheduled Postgres dumps: "HH:MM" daily (container clock, UTC), "every 6h",
+# or "off". Unset means daily at 03:30. Retention is BACKUP_RETENTION, counted
+# separately from the pre-update dumps.
+BACKUP_SCHEDULE = os.environ.get("BACKUP_SCHEDULE", "")
+
 _run_lock = threading.Lock()
 _run_thread = None
 _run_state = None  # last known state dict, mirrored from the state file
+
+# Scheduled-backup bookkeeping, guarded by _run_lock for the "running" flag so
+# an update and a scheduled dump never run at the same time.
+_backup_status = {"schedule": None, "enabled": False, "next_at": None,
+                  "running": False, "last": None, "error": None}
 
 
 def _log(msg: str) -> None:
@@ -203,6 +218,8 @@ def start_run(runner=run_update):
     with _run_lock:
         if _run_thread is not None and _run_thread.is_alive():
             return 409, {"ok": False, "error": "An update run is already active"}
+        if _backup_status["running"]:
+            return 409, {"ok": False, "error": "A scheduled backup is running; retry in a few minutes"}
 
         run_id = time.strftime("%Y-%m-%dT%H-%M-%S")
         ctx = build_ctx(run_id)
@@ -220,6 +237,66 @@ def start_run(runner=run_update):
         _run_thread.start()
         _log(f"update run {run_id} started")
         return 202, {"ok": True, "run_id": run_id}
+
+
+def scheduled_backup_once(backup=run_scheduled_backup) -> dict | None:
+    """Take one scheduled dump unless an update run is active.
+
+    An update takes its own pre-update dump, so skipping a slot while one runs
+    loses nothing. Returns the status record, or None when skipped.
+    """
+    with _run_lock:
+        if _run_thread is not None and _run_thread.is_alive():
+            _log("scheduled backup skipped: an update run is active")
+            return None
+        _backup_status["running"] = True
+    try:
+        ctx = build_ctx(f"backup-{time.strftime('%Y-%m-%dT%H-%M-%S')}")
+        result = backup(ctx)
+    except Exception as exc:  # noqa: BLE001 — the loop must survive anything
+        result = {"ok": False, "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                  "name": None, "size": 0, "error": str(exc)[-500:]}
+        _log(f"scheduled backup crashed: {exc}")
+    finally:
+        _backup_status["running"] = False
+    _backup_status["last"] = result
+    return result
+
+
+def _backup_loop(schedule, stop: threading.Event) -> None:
+    while not stop.is_set():
+        wait = seconds_until_next(schedule, datetime.now())
+        _backup_status["next_at"] = (datetime.now() + timedelta(seconds=wait)).strftime(
+            "%Y-%m-%dT%H:%M:%S")
+        if stop.wait(wait):
+            return
+        scheduled_backup_once()
+
+
+def start_backup_scheduler(spec: str = BACKUP_SCHEDULE, stop: threading.Event | None = None):
+    """Start the scheduled-backup thread. Returns it, or None when disabled."""
+    _backup_status["schedule"] = spec or None
+    try:
+        schedule = parse_schedule(spec)
+    except ValueError as exc:
+        _backup_status.update(enabled=False, error=str(exc))
+        _log(f"WARNING: scheduled backups DISABLED — {exc}")
+        return None
+    if schedule is None:
+        _backup_status.update(enabled=False, error=None)
+        _log("scheduled backups disabled (BACKUP_SCHEDULE=off)")
+        return None
+    _backup_status.update(enabled=True, error=None)
+    thread = threading.Thread(target=_backup_loop, args=(schedule, stop or threading.Event()),
+                              name="backup-scheduler", daemon=True)
+    thread.start()
+    _log(f"scheduled backups enabled ({spec or 'default 03:30'}), "
+         f"keeping {BACKUP_RETENTION}")
+    return thread
+
+
+def backup_schedule_status() -> dict:
+    return dict(_backup_status)
 
 
 class UpdateHandler(BaseHTTPRequestHandler):
@@ -255,7 +332,8 @@ class UpdateHandler(BaseHTTPRequestHandler):
         elif self.path == "/status":
             self._json(200, current_status())
         elif self.path == "/backups":
-            self._json(200, {"backups": list_backups(BACKUP_DIR)})
+            self._json(200, {"backups": list_backups(BACKUP_DIR),
+                             "schedule": backup_schedule_status()})
         else:
             self._json(404, {"error": "Not found"})
 
@@ -330,6 +408,7 @@ if __name__ == "__main__":
     if not AUTH_TOKEN:
         print("[update-sidecar] WARNING: UPDATE_SIDECAR_TOKEN is empty — "
               "all mutating endpoints will return 401 until it is set.")
+    start_backup_scheduler()
     server = HTTPServer(("0.0.0.0", port), UpdateHandler)
     print(f"[update-sidecar] listening on :{port}")
     server.serve_forever()

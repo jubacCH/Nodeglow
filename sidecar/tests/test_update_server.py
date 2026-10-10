@@ -171,3 +171,76 @@ def test_build_ctx_reads_settings_from_environment(monkeypatch, tmp_path):
     assert ctx.db_user == "nodeglow"
     assert ctx.backup_retention == 7
     assert ctx.run_id == "run-1"
+
+
+# ── Scheduled backups ────────────────────────────────────────────────────────
+
+def _must_not_run(ctx):
+    raise AssertionError("scheduled backup must not run")
+
+
+def test_scheduled_backup_runs_and_records_status(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "build_ctx", lambda run_id: run_id)
+    seen = []
+
+    def fake_backup(ctx):
+        seen.append(ctx)
+        assert server.backup_schedule_status()["running"] is True
+        return {"ok": True, "name": "scheduled-x.dump.gz"}
+
+    result = server.scheduled_backup_once(backup=fake_backup)
+
+    assert result["ok"] is True
+    assert seen and seen[0].startswith("backup-")
+    status = server.backup_schedule_status()
+    assert status["running"] is False
+    assert status["last"]["name"] == "scheduled-x.dump.gz"
+
+
+def test_scheduled_backup_skips_while_an_update_runs(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    release = threading.Event()
+    server.start_run(runner=lambda ctx, steps=None: release.wait(timeout=5) and None)
+    try:
+        assert server.scheduled_backup_once(backup=_must_not_run) is None
+    finally:
+        release.set()
+
+
+def test_update_is_refused_while_a_scheduled_backup_runs(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    server._backup_status["running"] = True
+    code, payload = server.start_run(runner=lambda ctx, steps=None: None)
+    assert code == 409
+    assert "backup" in payload["error"].lower()
+
+
+def test_scheduler_disabled_and_invalid_specs(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    assert server.start_backup_scheduler("off") is None
+    assert server.backup_schedule_status()["enabled"] is False
+
+    assert server.start_backup_scheduler("nightly") is None
+    status = server.backup_schedule_status()
+    assert status["enabled"] is False
+    assert "invalid" in status["error"]
+
+
+def test_scheduler_thread_starts_and_stops(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    stop = threading.Event()
+    thread = server.start_backup_scheduler("every 6h", stop=stop)
+    try:
+        assert thread is not None and thread.is_alive()
+        for _ in range(100):
+            if server.backup_schedule_status()["next_at"]:
+                break
+            time.sleep(0.01)
+        status = server.backup_schedule_status()
+        assert status["enabled"] is True
+        assert status["next_at"]
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+    assert not thread.is_alive()

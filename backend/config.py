@@ -128,6 +128,20 @@ def warn_about_secret_key(logger: logging.Logger = log) -> None:
         logger.log(level, line)
 
 
+def secret_key_fingerprint(key: str | None = None) -> str:
+    """Short, non-reversible identifier of the encryption key.
+
+    Lets an operator check that an escrowed key is the one an installation or
+    a backup was made with, without ever printing the key. It reveals nothing
+    the encrypted data does not already allow an attacker to verify.
+    """
+    import hashlib
+
+    material = (key if key is not None else SECRET_KEY).encode()
+    return hashlib.sha256(b"nodeglow-secret-key-fingerprint:" + material).hexdigest()[:16]
+
+
 SECRET_KEY = get_secret_key()
 warn_about_secret_key()
+log.info("Encryption key fingerprint: %s (source: %s)", secret_key_fingerprint(), SECRET_KEY_SOURCE)
 
