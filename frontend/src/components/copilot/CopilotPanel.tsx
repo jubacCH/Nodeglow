@@ -8,6 +8,8 @@ import { useGlowStore } from '@/stores/glow';
 import { useAuthStore } from '@/stores/auth';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { getCsrfToken } from '@/lib/api';
+import { cn } from '@/lib/utils';
+import { IconButton, buttonClasses } from '@/components/ui/Button';
 import { AI_STATUS_KEY, aiUnavailableMessage, useAiStatus } from '@/hooks/queries/useAiStatus';
 import { hasFeature, useFeatures } from '@/hooks/queries/useFeatures';
 
@@ -20,10 +22,10 @@ interface Message {
 function renderMarkdown(text: string): string {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/^### (.+)$/gm, '<strong class="glow-heading text-xs uppercase tracking-wide">$1</strong>')
-    .replace(/^## (.+)$/gm, '<strong class="glow-heading text-sm">$1</strong>')
+    .replace(/^### (.+)$/gm, '<strong class="glow-heading text-meta uppercase tracking-wide">$1</strong>')
+    .replace(/^## (.+)$/gm, '<strong class="glow-heading text-ui">$1</strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong class="glow-bold">$1</strong>')
-    .replace(/`([^`]+)`/g, '<code class="glow-code px-1 py-0.5 rounded text-xs">$1</code>')
+    .replace(/`([^`]+)`/g, '<code class="glow-code px-1 py-0.5 rounded text-meta">$1</code>')
     .replace(/^- (.+)$/gm, '<span class="flex gap-1.5"><span class="glow-bullet">•</span><span>$1</span></span>')
     .replace(/^(\d+)\. (.+)$/gm, '<span class="flex gap-1.5"><span class="glow-bullet">$1.</span><span>$2</span></span>');
 }
@@ -181,50 +183,30 @@ export function GlowPanel() {
   if (!isOpen || !installed) return null;
 
   return (
-    <div
-      className="fixed bottom-4 right-4 z-50 flex flex-col w-[420px] h-[500px] rounded-xl border backdrop-blur-xl shadow-2xl"
-      style={{
-        background: 'var(--ng-surface)',
-        borderColor: 'var(--ng-glass-border)',
-      }}
-    >
+    <div className="fixed bottom-4 right-4 z-50 flex h-[500px] w-[420px] max-w-[calc(100vw-32px)] flex-col rounded-ng-lg border border-border-2 bg-surface shadow-overlay">
       {/* Header */}
-      <div
-        className="flex items-center justify-between px-4 py-3 border-b"
-        style={{ borderColor: 'var(--ng-glass-border)' }}
-      >
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-violet-400" />
-          <span className="text-sm font-semibold bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">
-            Glow
-          </span>
+          <Sparkles size={16} className="text-accent" aria-hidden="true" />
+          <span className="text-body font-semibold text-fg">Glow</span>
         </div>
-        <button
-          onClick={close}
-          aria-label="Close Glow"
-          className="p-1 rounded-md transition-colors"
-          style={{ color: 'var(--ng-text-muted)' }}
-        >
-          <X size={16} />
-        </button>
+        <IconButton aria-label="Close Glow" size="sm" onClick={close}>
+          <X size={16} aria-hidden="true" />
+        </IconButton>
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
         {aiUnavailable && messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center px-4" data-testid="glow-ai-disabled">
-            <ShieldOff size={32} className="mb-3" style={{ color: 'var(--ng-text-muted)' }} />
-            <p className="text-sm font-medium mb-2" style={{ color: 'var(--ng-text-primary)' }}>
-              Glow is not available
-            </p>
-            <p className="text-xs mb-4" style={{ color: 'var(--ng-text-muted)' }}>
-              {aiUnavailableMessage(aiStatus, isAdmin)}
-            </p>
+          <div className="flex h-full flex-col items-center justify-center px-4 text-center" data-testid="glow-ai-disabled">
+            <ShieldOff size={32} className="mb-3 text-fg-3" aria-hidden="true" />
+            <p className="mb-2 text-ui font-medium text-fg">Glow is not available</p>
+            <p className="mb-4 text-meta text-fg-3">{aiUnavailableMessage(aiStatus, isAdmin)}</p>
             {isAdmin && (
               <Link
                 href="/settings?tab=ai"
                 onClick={close}
-                className="px-3 py-1.5 text-xs rounded-full border text-sky-400 border-sky-500/30 hover:bg-sky-500/5 transition-colors"
+                className={buttonClasses({ variant: 'secondary', size: 'sm' })}
               >
                 Open AI settings
               </Link>
@@ -232,21 +214,16 @@ export function GlowPanel() {
           </div>
         )}
         {!aiUnavailable && messages.length === 0 && !error && (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <Sparkles size={32} className="text-violet-400/40 mb-3" />
-            <p className="text-sm mb-4" style={{ color: 'var(--ng-text-muted)' }}>
-              Ask about your infrastructure
-            </p>
-            <div className="flex flex-wrap gap-2 justify-center">
+          <div className="flex h-full flex-col items-center justify-center text-center">
+            <Sparkles size={32} className="mb-3 text-accent/40" aria-hidden="true" />
+            <p className="mb-4 text-ui text-fg-3">Ask about your infrastructure</p>
+            <div className="flex flex-wrap justify-center gap-2">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
+                  type="button"
                   onClick={() => sendMessage(s)}
-                  className="px-3 py-1.5 text-xs rounded-full border hover:text-sky-400 hover:border-sky-500/30 hover:bg-sky-500/5 transition-colors"
-                  style={{
-                    borderColor: 'var(--ng-glass-border)',
-                    color: 'var(--ng-text-secondary)',
-                  }}
+                  className="rounded-pill border border-border-2 px-3 py-1.5 text-meta text-fg-2 transition-colors hover:border-accent/40 hover:bg-accent-soft hover:text-accent"
                 >
                   {s}
                 </button>
@@ -256,25 +233,12 @@ export function GlowPanel() {
         )}
 
         {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+          <div key={i} className={cn('flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
             <div
-              className="max-w-[85%] px-3 py-2 rounded-lg text-sm border"
-              style={
-                msg.role === 'user'
-                  ? {
-                      background: 'var(--ng-accent-bg, rgba(56, 189, 248, 0.12))',
-                      borderColor: 'var(--ng-accent-border, rgba(56, 189, 248, 0.2))',
-                      color: 'var(--ng-text-primary)',
-                    }
-                  : {
-                      background: 'var(--ng-glass-bg)',
-                      borderColor: 'var(--ng-glass-border)',
-                      color: 'var(--ng-text-primary)',
-                    }
-              }
+              className={cn(
+                'max-w-[85%] rounded-ctl border px-3 py-2 text-ui text-fg',
+                msg.role === 'user' ? 'border-accent/40 bg-accent-soft' : 'border-border bg-surface-2',
+              )}
             >
               {msg.role === 'assistant' ? (
                 <div className="whitespace-pre-wrap break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(msg.content)) }} />
@@ -282,10 +246,10 @@ export function GlowPanel() {
                 <div className="whitespace-pre-wrap break-words">{msg.content}</div>
               )}
               {msg.role === 'assistant' && isStreaming && i === messages.length - 1 && (
-                <span className="inline-flex gap-0.5 ml-1">
-                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: 'var(--ng-text-muted)', animationDelay: '0ms' }} />
-                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: 'var(--ng-text-muted)', animationDelay: '150ms' }} />
-                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: 'var(--ng-text-muted)', animationDelay: '300ms' }} />
+                <span className="ml-1 inline-flex gap-0.5" aria-hidden="true">
+                  <span className="h-1 w-1 animate-bounce rounded-full bg-fg-3 [animation-delay:0ms]" />
+                  <span className="h-1 w-1 animate-bounce rounded-full bg-fg-3 [animation-delay:150ms]" />
+                  <span className="h-1 w-1 animate-bounce rounded-full bg-fg-3 [animation-delay:300ms]" />
                 </span>
               )}
             </div>
@@ -293,15 +257,15 @@ export function GlowPanel() {
         ))}
 
         {error && (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-            <AlertCircle size={14} className="text-red-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-red-300">{error}</p>
+          <div role="alert" className="flex items-start gap-2 rounded-ctl border border-down/30 bg-down-soft p-3">
+            <AlertCircle size={14} className="mt-0.5 shrink-0 text-down" aria-hidden="true" />
+            <p className="text-meta text-down">{error}</p>
           </div>
         )}
       </div>
 
       {/* Input */}
-      <div className="px-4 py-3 border-t" style={{ borderColor: 'var(--ng-glass-border)' }}>
+      <div className="border-t border-border px-4 py-3">
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}
@@ -309,23 +273,19 @@ export function GlowPanel() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={aiUnavailable ? 'AI features are off' : 'Ask about your infrastructure...'}
+            aria-label="Message to Glow"
             rows={1}
-            className="flex-1 resize-none rounded-lg px-3 py-2 text-sm border focus:outline-none focus:ring-1 focus:ring-sky-500/50 transition-colors"
-            style={{
-              background: 'var(--ng-glass-bg)',
-              borderColor: 'var(--ng-glass-border)',
-              color: 'var(--ng-text-primary)',
-            }}
+            className="ng-input min-h-[36px] flex-1 resize-none"
             disabled={isStreaming || aiUnavailable}
           />
-          <button
+          <IconButton
+            variant="primary"
             onClick={() => sendMessage(input)}
             disabled={!input.trim() || isStreaming || aiUnavailable}
             aria-label="Send message"
-            className="p-2 rounded-lg bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            <Send size={16} />
-          </button>
+            <Send size={16} aria-hidden="true" />
+          </IconButton>
         </div>
       </div>
     </div>
