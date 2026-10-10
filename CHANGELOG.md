@@ -9,6 +9,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+### Fixed
+- Updater image: cosign 2.6.5, Docker CLI 29.8.1 and Compose 5.5.1 replace
+  binaries built with an outdated Go toolchain (Go stdlib crypto/tls
+  CVE-2025-68121, grpc-go CVE-2026-33186) that failed the release Trivy gate.
+
 ## [2.0.0-rc.1] - 2026-10-10
 
 ### Added
