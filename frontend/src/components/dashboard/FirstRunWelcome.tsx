@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { Server, Plug, Cpu, Sparkles, Copy, Check } from 'lucide-react';
 import { useState } from 'react';
-import { GlassCard } from '@/components/ui/GlassCard';
+import { Card } from '@/components/ui/Card';
 
 interface FirstRunWelcomeProps {
   /** Server URL for agent install commands. Defaults to current origin. */
@@ -24,26 +24,24 @@ export function FirstRunWelcome({ serverUrl }: FirstRunWelcomeProps) {
   return (
     <div className="max-w-4xl mx-auto">
       {/* Hero */}
-      <GlassCard className="p-8 mb-6 text-center">
-        <div className="inline-flex p-3 rounded-full bg-sky-500/10 mb-4">
-          <Sparkles size={28} className="text-sky-400" />
+      <Card className="mb-6 p-8 text-center">
+        <div className="mb-4 inline-flex rounded-full bg-accent-soft p-3">
+          <Sparkles size={28} className="text-accent" aria-hidden="true" />
         </div>
-        <h2 className="text-2xl font-bold text-slate-100 mb-2">
+        <h2 className="mb-2 font-display text-h3 font-semibold tracking-[-0.03em] text-fg">
           Welcome to Nodeglow
         </h2>
-        <p className="text-sm text-slate-400 max-w-xl mx-auto">
+        <p className="mx-auto max-w-xl text-ui text-fg-2">
           Your dashboard is empty because there&apos;s nothing to monitor yet.
           Pick one of the three options below to get data flowing — you can
           mix and match later.
         </p>
-      </GlassCard>
+      </Card>
 
       {/* Three paths */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <PathCard
           icon={Server}
-          iconColor="text-sky-400"
-          tint="bg-sky-500/10"
           title="1. Add a Host"
           description="Monitor an IP, hostname, or URL via ICMP / TCP / HTTP. The simplest way to start."
           ctaHref="/hosts"
@@ -51,8 +49,6 @@ export function FirstRunWelcome({ serverUrl }: FirstRunWelcomeProps) {
         />
         <PathCard
           icon={Plug}
-          iconColor="text-violet-400"
-          tint="bg-violet-500/10"
           title="2. Connect an Integration"
           description="Plug in Proxmox, UniFi, TrueNAS, Pi-hole, Home Assistant — Nodeglow knows 15 stacks."
           ctaHref="/integration/store"
@@ -60,8 +56,6 @@ export function FirstRunWelcome({ serverUrl }: FirstRunWelcomeProps) {
         />
         <PathCard
           icon={Cpu}
-          iconColor="text-emerald-400"
-          tint="bg-emerald-500/10"
           title="3. Install an Agent"
           description="Lightweight agent reports CPU, memory, disks, network, and processes from Linux or Windows hosts."
           ctaHref="/agents"
@@ -70,11 +64,11 @@ export function FirstRunWelcome({ serverUrl }: FirstRunWelcomeProps) {
       </div>
 
       {/* Inline install commands */}
-      <GlassCard className="p-6">
-        <h3 className="text-sm font-semibold text-slate-200 mb-1">
+      <Card className="p-6">
+        <h3 className="mb-1 text-body font-medium text-fg">
           One-liner agent install
         </h3>
-        <p className="text-xs text-slate-500 mb-4">
+        <p className="mb-4 text-meta text-fg-3">
           Run these on the host you want to monitor. They auto-enrol against
           this Nodeglow instance.
         </p>
@@ -82,42 +76,38 @@ export function FirstRunWelcome({ serverUrl }: FirstRunWelcomeProps) {
           <CommandLine label="Linux / macOS" command={linuxCmd} />
           <CommandLine label="Windows (PowerShell)" command={windowsCmd} />
         </div>
-      </GlassCard>
+      </Card>
     </div>
   );
 }
 
 function PathCard({
   icon: Icon,
-  iconColor,
-  tint,
   title,
   description,
   ctaHref,
   ctaLabel,
 }: {
   icon: typeof Server;
-  iconColor: string;
-  tint: string;
   title: string;
   description: string;
   ctaHref: string;
   ctaLabel: string;
 }) {
   return (
-    <GlassCard className="p-5 flex flex-col">
-      <div className={`p-2 rounded-lg ${tint} self-start mb-3`}>
-        <Icon size={18} className={iconColor} />
+    <Card className="flex flex-col p-5">
+      <div className="mb-3 self-start rounded-ctl bg-surface-2 p-2 text-accent">
+        <Icon size={18} aria-hidden="true" />
       </div>
-      <h3 className="text-sm font-semibold text-slate-200 mb-1">{title}</h3>
-      <p className="text-xs text-slate-500 flex-1 mb-4">{description}</p>
+      <h3 className="mb-1 text-ui font-medium text-fg">{title}</h3>
+      <p className="mb-4 flex-1 text-meta text-fg-2">{description}</p>
       <Link
         href={ctaHref}
-        className="text-xs font-medium text-sky-400 hover:text-sky-300 inline-flex items-center gap-1.5"
+        className="inline-flex items-center gap-1.5 text-ui font-medium text-accent hover:text-accent-hover"
       >
         {ctaLabel} →
       </Link>
-    </GlassCard>
+    </Card>
   );
 }
 
@@ -134,24 +124,20 @@ function CommandLine({ label, command }: { label: string; command: string }) {
   };
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1">
+      <div className="mb-1 text-meta text-fg-2">
         {label}
       </div>
       <div
-        className="flex items-center gap-2 px-3 py-2 rounded-md font-mono text-xs"
-        style={{
-          background: 'var(--ng-surface-container-lowest)',
-          border: '1px solid var(--ng-card-border)',
-        }}
+        className="flex items-center gap-2 rounded-ctl border border-border bg-bg px-3 py-2 font-mono text-meta"
       >
-        <code className="flex-1 text-slate-300 truncate select-all">{command}</code>
+        <code className="flex-1 select-all truncate text-fg-2">{command}</code>
         <button
           type="button"
           onClick={onCopy}
-          className="p-1 rounded hover:bg-slate-500/10 text-slate-400 hover:text-slate-200 transition-colors"
+          className="rounded-ng-sm p-1 text-fg-2 transition-colors hover:bg-surface-2 hover:text-fg"
           aria-label={copied ? 'Copied' : 'Copy to clipboard'}
         >
-          {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+          {copied ? <Check size={14} className="text-ok" aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
         </button>
       </div>
     </div>
