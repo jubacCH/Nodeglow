@@ -1,13 +1,17 @@
 'use client';
 
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useNavCounts, useSystemSummary } from '@/hooks/queries/useDashboard';
+import { useNavCounts, useSummary } from '@/hooks/queries/useDashboard';
 import { useIsAdmin } from '@/stores/auth';
 import { findActive, visibleSections, type NavBadge } from '@/lib/navigation';
 
-/** Badge counts for the navigation (null = unknown, not 0). */
+/**
+ * Badge counts for the navigation (null = unknown, not 0). Incidents come
+ * from /api/v2/summary — the same definition the dashboard uses ("open" =
+ * open or acknowledged).
+ */
 export function useNavBadges(): Record<NavBadge, number | null> {
-  const { data: summary } = useSystemSummary();
+  const { data: summary } = useSummary();
   const { data: navCounts } = useNavCounts();
   return {
     incidents: summary?.incidents?.open ?? null,

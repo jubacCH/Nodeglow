@@ -12,35 +12,12 @@
  */
 import type { QueryClient } from '@tanstack/react-query';
 import type { Agent, HostDetail, HostStatus, WsAgentMetric, WsPingUpdate } from '@/types';
-import type { DashboardData } from '@/hooks/queries/useDashboard';
 import type { HostListItem } from '@/hooks/queries/useHosts';
+import { DASHBOARD_V2_KEY, SUMMARY_V2_KEY, reachabilityFlipped } from './dashboard';
 
 /** Backend timestamps come from datetime.utcnow().isoformat() — no zone. */
 export function toUtcIso(ts: string): string {
   return /[zZ]|[+-]\d\d:?\d\d$/.test(ts) ? ts : `${ts}Z`;
-}
-
-export function patchDashboard(
-  data: DashboardData | undefined,
-  updates: ReadonlyMap<number, WsPingUpdate>,
-): DashboardData | undefined {
-  if (!data?.host_stats || updates.size === 0) return data;
-  let changed = false;
-  const host_stats = data.host_stats.map((hs) => {
-    const u = updates.get(hs.host.id);
-    if (!u || (hs.online === u.online && hs.latency === u.latency_ms)) return hs;
-    changed = true;
-    return { ...hs, online: u.online, latency: u.latency_ms };
-  });
-  if (!changed) return data;
-  // Same rule as the backend: maintenance hosts do not count.
-  const active = host_stats.filter((s) => !s.host.maintenance);
-  return {
-    ...data,
-    host_stats,
-    online_count: active.filter((s) => s.online === true).length,
-    offline_count: active.filter((s) => s.online === false).length,
-  };
 }
 
 export function patchHostStatusList(
@@ -133,6 +110,20 @@ function patchQuery<T>(qc: QueryClient, key: readonly unknown[], patch: (d: T | 
   qc.setQueryData<T>(key, next, { updatedAt: state.dataUpdatedAt });
 }
 
+// The unified host state (unknown, maintenance, upstream …) is computed by
+// the backend, so the v2 dashboard and badges are not patched locally: a
+// reachability flip triggers a refetch instead, at most every few seconds.
+const lastOnline = new Map<number, boolean>();
+let lastRefresh = 0;
+export const FLIP_REFRESH_MIN_MS = 5_000;
+
+function refreshOnFlip(qc: QueryClient, pings: ReadonlyMap<number, WsPingUpdate>, now = Date.now()) {
+  if (!reachabilityFlipped(lastOnline, pings) || now - lastRefresh < FLIP_REFRESH_MIN_MS) return;
+  lastRefresh = now;
+  void qc.invalidateQueries({ queryKey: DASHBOARD_V2_KEY });
+  void qc.invalidateQueries({ queryKey: SUMMARY_V2_KEY });
+}
+
 /** Apply one batch of buffered events to every cache entry they affect. */
 export function applyLiveUpdates(
   qc: QueryClient,
@@ -140,7 +131,7 @@ export function applyLiveUpdates(
   agents: ReadonlyMap<number, WsAgentMetric>,
 ): void {
   if (pings.size > 0) {
-    patchQuery<DashboardData>(qc, ['dashboard'], (d) => patchDashboard(d, pings));
+    refreshOnFlip(qc, pings);
     patchQuery<HostStatus[]>(qc, ['hosts'], (d) => patchHostStatusList(d, pings));
     patchQuery<HostListItem[]>(qc, ['hosts-v1'], (d) => patchHostListV1(d, pings));
     pings.forEach((u, id) => {
