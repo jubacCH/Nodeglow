@@ -1377,36 +1377,63 @@ async def get_integration(
 # ── Incidents ────────────────────────────────────────────────────────────────
 
 
+def _parse_iso_utc(raw: str | None, name: str) -> datetime | None:
+    """ISO-8601 → naive UTC (the schema's convention); 400 on garbage."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"{name} must be an ISO-8601 date/time") from None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
 @router.get("/incidents", summary="List incidents")
 async def list_incidents(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
-    status: str = Query(None, description="Filter: open, acknowledged, resolved"),
-    severity: str = Query(None, description="Filter: critical, warning, info"),
+    status: str = Query(None, description="Filter, comma-separated: open, acknowledged, resolved "
+                                           "(e.g. status=open,acknowledged)"),
+    severity: str = Query(None, description="Filter, comma-separated: critical, warning, info"),
     search: str = Query(None, description="Search in title"),
     host_name: str = Query(None, description="Filter by host name in event summaries"),
+    host_id: int = Query(None, description="Only incidents whose recorded hosts include this id"),
+    rule: str = Query(None, description="Filter by rule name"),
+    created_from: str = Query(None, alias="from", description="created_at >= (ISO-8601)"),
+    created_to: str = Query(None, alias="to", description="created_at < (ISO-8601)"),
+    sort: str = Query("updated", pattern="^(updated|created|severity)$"),
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=100_000),
+    envelope: bool = Query(False, description="Return {items, total, limit, offset} instead of a bare list"),
 ):
-    if host_name:
-        # Join with events and find incidents that mention this host
-        q = (
-            select(Incident)
-            .join(IncidentEvent, IncidentEvent.incident_id == Incident.id)
-            .where(IncidentEvent.summary.ilike(f"%{host_name}%"))
-            .group_by(Incident.id)
-            .order_by(Incident.updated_at.desc())
-            .limit(limit)
+    from services import incident_view as iv
+
+    statuses = None if (status or "").strip() == "all" else _csv_filter(status, iv.STATUSES, "status")
+    severities = _csv_filter(severity, iv.SEVERITIES, "severity")
+    conds = iv.build_conditions(
+        statuses=statuses, severities=severities, rule=rule, search=search,
+        host_name=host_name, host_id=host_id,
+        created_from=_parse_iso_utc(created_from, "from"),
+        created_to=_parse_iso_utc(created_to, "to"),
+    )
+    total = (await db.execute(select(func.count(Incident.id)).where(*conds))).scalar() or 0
+
+    q = select(Incident).where(*conds)
+    if sort == "created":
+        q = q.order_by(Incident.created_at.desc(), Incident.id.desc())
+    elif sort == "severity":
+        from sqlalchemy import case
+        q = q.order_by(
+            case(iv.SEVERITY_RANK, value=Incident.severity, else_=9),
+            Incident.created_at.desc(), Incident.id.desc(),
         )
     else:
-        q = select(Incident).order_by(Incident.updated_at.desc()).limit(limit)
-    if status:
-        q = q.where(Incident.status == status)
-    if severity:
-        q = q.where(Incident.severity == severity)
-    if search:
-        q = q.where(Incident.title.ilike(f"%{search}%"))
-    result = await db.execute(q)
+        q = q.order_by(Incident.updated_at.desc(), Incident.id.desc())
+    result = await db.execute(q.offset(offset).limit(limit))
     incidents = result.scalars().all()
+    summaries = await iv.host_summaries(db, incidents)
 
     # Fetch latest non-system event summary per incident (explains the WHY).
     # Greatest-per-group via max(id) subquery — long-lived incidents accumulate
@@ -1430,21 +1457,29 @@ async def list_incidents(
         )
         summary_map = {incident_id: summary for incident_id, summary in events_q}
 
-    return [
+    items = [
         {
             "id": i.id,
             "rule": i.rule,
             "title": i.title,
             "severity": i.severity,
             "status": i.status,
+            "acknowledged": i.status == "acknowledged",
             "summary": summary_map.get(i.id),
             "created_at": i.created_at.isoformat(),
             "updated_at": i.updated_at.isoformat(),
             "resolved_at": i.resolved_at.isoformat() if i.resolved_at else None,
             "acknowledged_by": i.acknowledged_by,
+            **iv.host_fields(i, summaries),
         }
         for i in incidents
     ]
+    headers = {"X-Total-Count": str(total)}
+    if envelope:
+        return JSONResponse({"items": items, "total": total, "limit": limit, "offset": offset,
+                             "has_more": offset + len(items) < total}, headers=headers)
+    # Bare list for existing clients; the total travels in the header.
+    return JSONResponse(items, headers=headers)
 
 
 SEVERITY_NAMES = {0: "Emergency", 1: "Alert", 2: "Critical", 3: "Error"}
@@ -1660,7 +1695,12 @@ async def get_incident(
     except Exception:
         pass
 
+    from services import incident_view as iv
+    host_summary = await iv.host_summaries(db, [incident], limit_per_item=None)
+
     return {
+        **iv.host_fields(incident, host_summary),
+        "acknowledged": incident.status == "acknowledged",
         "id": incident.id,
         "rule": incident.rule,
         "title": incident.title,
