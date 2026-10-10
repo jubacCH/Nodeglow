@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
  */
 export function TableContainer({ children, className, maxHeight }: { children: ReactNode; className?: string; maxHeight?: number | string }) {
   return (
-    <div className={cn('w-full overflow-auto', className)} style={maxHeight ? { maxHeight } : undefined}>
+    <div className={cn('relative w-full overflow-auto', className)} style={maxHeight ? { maxHeight } : undefined}>
       {children}
     </div>
   );
