@@ -18,7 +18,9 @@ import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Net
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { ApiError, get, patch, post } from '@/lib/api';
+import { ApiError, apiErrorMessage, get, patch, post } from '@/lib/api';
+import { HttpOptionsFields } from '@/components/hosts/HttpOptionsFields';
+import { DEFAULT_HTTP_FORM, hasHttpCheck, httpFormFromOptions, httpOptionsPayload, validateHttpForm } from '@/lib/httpOptions';
 import { useToastStore } from '@/stores/toast';
 import { Modal } from '@/components/ui/Modal';
 import type { EChartsOption } from 'echarts';
@@ -1384,6 +1386,7 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
   const qc = useQueryClient();
   const types = (host.check_type || 'icmp').split(',').map((t: string) => t.trim()).filter(Boolean);
   const detail: Record<string, boolean> = host.check_detail || {};
+  const reasons: Record<string, string> = host.check_errors || {};
   const [customPort, setCustomPort] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -1459,7 +1462,7 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
                 <span className={`w-2 h-2 rounded-full ${dotClass(s)}`} />
                 <span className={`text-sm ${labelClass(s)}`}>{label}</span>
                 {s === 'ok' && <span className="text-[10px] text-emerald-500">ok</span>}
-                {s === 'fail' && <span className="text-[10px] text-red-400">failed</span>}
+                {s === 'fail' && <span className="text-[10px] text-red-400">{reasons[key] ? `failed: ${reasons[key]}` : 'failed'}</span>}
               </div>
               <button
                 type="button"
@@ -1485,7 +1488,7 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
                 <span className={`w-2 h-2 rounded-full ${dotClass(s)}`} />
                 <span className={`text-sm ${labelClass(s)}`}>TCP :{port}</span>
                 {s === 'ok' && <span className="text-[10px] text-emerald-500">ok</span>}
-                {s === 'fail' && <span className="text-[10px] text-red-400">failed</span>}
+                {s === 'fail' && <span className="text-[10px] text-red-400">{reasons[key] ? `failed: ${reasons[key]}` : 'failed'}</span>}
               </div>
               <button
                 onClick={() => removeTcpPort(port)}
@@ -1527,8 +1530,10 @@ function MaintenanceCard({ host, hostId }: { host: any; hostId: number | string 
   const [customDate, setCustomDate] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const isInMaintenance = host.maintenance || false;
+  // The toggle changes the manual flag only; a window ends on its own schedule.
+  const isInMaintenance = host.maintenance_manual ?? host.maintenance ?? false;
   const maintenanceUntil = host.maintenance_until ? new Date(host.maintenance_until) : null;
+  const activeWindow = host.maintenance_window as { id: number; name: string; ends_at: string | null } | null | undefined;
 
   async function handleToggle() {
     setSaving(true);
@@ -1561,6 +1566,18 @@ function MaintenanceCard({ host, hostId }: { host: any; hostId: number | string 
         <Clock size={14} className="text-amber-400" />
         Maintenance Window
       </h3>
+
+      {activeWindow && (
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-md border border-amber-500/20 bg-amber-500/5">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+          <Link prefetch={false} href="/alerts?tab=maintenance" className="text-sm text-amber-300 hover:underline">
+            {activeWindow.name}
+          </Link>
+          {activeWindow.ends_at && (
+            <span className="text-xs text-slate-400 ml-auto">until {new Date(activeWindow.ends_at).toLocaleString()}</span>
+          )}
+        </div>
+      )}
 
       {isInMaintenance ? (
         <div className="space-y-3">
@@ -1638,7 +1655,10 @@ function EditHostModal({ open, onClose, host, onSaved }: {
     enabled: true,
     probe_id: '' as string,
   });
+  const [httpForm, setHttpForm] = useState(DEFAULT_HTTP_FORM);
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const isHttp = hasHttpCheck(host?.check_type);
 
   // Sync form when modal opens
   useEffect(() => {
@@ -1650,10 +1670,15 @@ function EditHostModal({ open, onClose, host, onSaved }: {
         enabled: host.enabled !== false,
         probe_id: host.probe_id != null ? String(host.probe_id) : '',
       });
+      setHttpForm(httpFormFromOptions(host.http_options));
+      setError(null);
     }
   }, [open, host]);
 
   async function handleSave() {
+    const httpError = isHttp ? validateHttpForm(httpForm) : null;
+    if (httpError) { setError(httpError); return; }
+    setError(null);
     setSaving(true);
     try {
       await patch(`/api/v1/hosts/${host.id}`, {
@@ -1662,9 +1687,12 @@ function EditHostModal({ open, onClose, host, onSaved }: {
         latency_threshold_ms: form.latency_threshold_ms ? Number(form.latency_threshold_ms) : null,
         enabled: form.enabled,
         probe_id: form.probe_id ? Number(form.probe_id) : null,
+        ...(isHttp ? { http_options: httpOptionsPayload(httpForm) } : {}),
       });
       onSaved();
       onClose();
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Could not save the host'));
     } finally {
       setSaving(false);
     }
@@ -1710,6 +1738,18 @@ function EditHostModal({ open, onClose, host, onSaved }: {
             assigned — pick one for hosts on a network the core cannot reach.
           </p>
         </div>
+        {isHttp && (
+          <details className="rounded-md border border-white/[0.06] p-3">
+            <summary className="cursor-pointer text-sm text-slate-300">HTTP check options</summary>
+            <div className="mt-3">
+              <HttpOptionsFields value={httpForm} onChange={setHttpForm} />
+            </div>
+            {form.probe_id && (
+              <p className="mt-2 text-xs text-slate-500">Probes run the plain HTTP check; these options apply when the core checks the host.</p>
+            )}
+          </details>
+        )}
+        {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
           <Button size="sm" onClick={handleSave} disabled={saving || !form.name || !form.hostname}>
