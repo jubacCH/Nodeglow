@@ -885,48 +885,146 @@ async def detect_baseline_anomalies(db: AsyncSession) -> list[dict]:
 
 # ── Precursor Detection (periodic) ───────────────────────────────────────────
 
+PRECURSOR_WINDOW = timedelta(minutes=5)
+PRECURSOR_MSGS_PER_EVENT = 50
+_PRECURSOR_WINDOWS_PER_QUERY = 100
+
+
+def _naive_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _merge_precursor_windows(
+    events: list[tuple[int, datetime]],
+) -> dict[int, list[tuple[datetime, datetime]]]:
+    """{host_id: [(start, end), ...]} — the events' look-back windows, merged.
+
+    A host that is down for an hour yields one failed check (one event) per
+    minute; their 5-minute windows overlap and collapse into one range.
+    """
+    by_host: dict[int, list[datetime]] = defaultdict(list)
+    for hid, ts in events:
+        by_host[int(hid or 0)].append(_naive_utc(ts))
+    merged: dict[int, list[tuple[datetime, datetime]]] = {}
+    for hid, stamps in by_host.items():
+        stamps.sort()
+        ranges: list[tuple[datetime, datetime]] = []
+        for ts in stamps:
+            start = ts - PRECURSOR_WINDOW
+            if ranges and start <= ranges[-1][1]:
+                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], ts))
+            else:
+                ranges.append((start, ts))
+        merged[hid] = ranges
+    return merged
+
+
+async def _fetch_precursor_messages(
+    events: list[tuple[int, datetime]],
+) -> dict[int, list[tuple[datetime, str]]]:
+    """Candidate messages for all events, in a few queries instead of one each.
+
+    Returns {host_id: [(timestamp, message), ...] sorted by time}; host_id 0
+    holds fleet-wide candidates (any host). Merged windows are sent in chunks
+    as OR-ed ranges. ``LIMIT n BY ... minute`` keeps at most n messages per
+    host per minute, so every 5-minute event window still has at least as
+    many candidates as the old per-event ``LIMIT 50`` — while a long outage
+    cannot pull its whole syslog history.
+    """
+    windows = _merge_precursor_windows(events)
+    out: dict[int, list[tuple[datetime, str]]] = defaultdict(list)
+
+    host_windows = [(hid, s, e) for hid, rs in windows.items() if hid != 0 for s, e in rs]
+    fleet_windows = [(0, s, e) for s, e in windows.get(0, [])]
+
+    for fleet, todo in ((False, host_windows), (True, fleet_windows)):
+        for chunk in _chunks(todo, _PRECURSOR_WINDOWS_PER_QUERY):
+            params: dict = {}
+            # A module constant, inlined: LIMIT BY wants a literal.
+            per_minute = int(PRECURSOR_MSGS_PER_EVENT)
+            ranges = []
+            for i, (hid, start, end) in enumerate(chunk):
+                params[f"s{i}"] = start
+                params[f"e{i}"] = end
+                cond = f"(timestamp >= {{s{i}:DateTime64(3)}} AND timestamp <= {{e{i}:DateTime64(3)}})"
+                if not fleet:
+                    # Fleet-wide events (host_id 0: integration failures,
+                    # incidents) look across all syslog; only host events
+                    # filter by host.
+                    params[f"h{i}"] = hid
+                    cond = f"(host_id = {{h{i}:Int32}} AND {cond})"
+                ranges.append(cond)
+            limit_by = "toStartOfMinute(timestamp)" if fleet else "host_id, toStartOfMinute(timestamp)"
+            rows = await ch_query(
+                f"""SELECT host_id, message, timestamp FROM syslog_messages
+                    WHERE severity <= 4
+                      AND ({' OR '.join(ranges)})
+                    LIMIT {per_minute} BY {limit_by}""",
+                params,
+            )
+            for r in rows:
+                ts = r.get("timestamp")
+                if not isinstance(ts, datetime):
+                    continue
+                key = 0 if fleet else int(r.get("host_id") or 0)
+                out[key].append((_naive_utc(ts), r.get("message") or ""))
+
+    for msgs in out.values():
+        msgs.sort(key=lambda m: m[0])
+    return out
+
+
 async def _learn_precursors_for_event(
     db: AsyncSession, event_type: str,
     events: list[tuple[int, datetime]], now: datetime,
 ):
     """Learn which templates appeared before a specific event type.
-    Measures actual lead times instead of using hardcoded values."""
+    Measures actual lead times instead of using hardcoded values.
+
+    host_id 0 means "not tied to a single host": integration failures and
+    incidents are fleet-wide, so their precursors are looked for across all
+    syslog rather than under a host that cannot exist.
+    """
+    from bisect import bisect_left, bisect_right
+
     template_before: dict[int, int] = defaultdict(int)
     template_lead_times: dict[int, list[float]] = defaultdict(list)
     total_events = 0
 
-    for host_id, event_ts in events:
-        window_start = event_ts - timedelta(minutes=5)
-        # host_id 0 means "not tied to a single host": integration failures and
-        # incidents are fleet-wide, so their precursors have to be looked for
-        # across all syslog rather than under a host that cannot exist. Passing
-        # it as a filter matched nothing, so those two event types never learned
-        # anything at all.
-        msg_rows = await ch_query(
-            """SELECT message, timestamp FROM syslog_messages
-               WHERE ({hid:Int32} = 0 OR host_id = {hid:Int32})
-               AND timestamp >= {ts_start:DateTime64(3)}
-               AND timestamp <= {ts_end:DateTime64(3)}
-               AND severity <= 4
-               LIMIT 50""",
-            {"hid": host_id, "ts_start": window_start, "ts_end": event_ts},
-        )
+    candidates = await _fetch_precursor_messages(events)
+    stamps = {hid: [m[0] for m in msgs] for hid, msgs in candidates.items()}
+    hash_of: dict[str, str] = {}  # message -> template hash, computed once
 
-        if msg_rows:
-            total_events += 1
-            seen_templates = set()
-            for row in msg_rows:
-                _, h = extract_template(row["message"])
-                tpl_id = _template_cache.get(h)
-                if tpl_id and tpl_id not in seen_templates:
-                    seen_templates.add(tpl_id)
-                    template_before[tpl_id] += 1
-                    # Measure actual lead time
-                    msg_ts = row["timestamp"]
-                    if isinstance(msg_ts, datetime):
-                        delta = (event_ts - msg_ts).total_seconds()
-                        if 0 < delta <= 300:
-                            template_lead_times[tpl_id].append(delta)
+    for host_id, event_ts in events:
+        hid = int(host_id or 0)
+        event_ts = _naive_utc(event_ts)
+        msgs = candidates.get(hid)
+        if not msgs:
+            continue
+        times = stamps[hid]
+        lo = bisect_left(times, event_ts - PRECURSOR_WINDOW)
+        hi = bisect_right(times, event_ts)
+        window = msgs[lo:hi][:PRECURSOR_MSGS_PER_EVENT]
+        if not window:
+            continue
+
+        total_events += 1
+        seen_templates = set()
+        for msg_ts, message in window:
+            h = hash_of.get(message)
+            if h is None:
+                _, h = extract_template(message)
+                hash_of[message] = h
+            tpl_id = _template_cache.get(h)
+            if tpl_id and tpl_id not in seen_templates:
+                seen_templates.add(tpl_id)
+                template_before[tpl_id] += 1
+                # Measure actual lead time
+                delta = (event_ts - msg_ts).total_seconds()
+                if 0 < delta <= PRECURSOR_WINDOW.total_seconds():
+                    template_lead_times[tpl_id].append(delta)
 
     if not total_events:
         return
@@ -940,8 +1038,17 @@ async def _learn_precursors_for_event(
             select(LogTemplate.id, LogTemplate.template).where(LogTemplate.id.in_(tpl_ids))
         )).all()
         tpl_text_by_id = {r[0]: r[1] for r in tpl_rows}
+        existing_by_tpl = {
+            pp.template_id: pp for pp in (await db.execute(
+                select(PrecursorPattern).where(
+                    PrecursorPattern.template_id.in_(tpl_ids),
+                    PrecursorPattern.precedes_event == event_type,
+                )
+            )).scalars().all()
+        }
     else:
         tpl_text_by_id = {}
+        existing_by_tpl = {}
 
     for tpl_id, before_count in template_before.items():
         tpl_text = tpl_text_by_id.get(tpl_id, "")
@@ -963,12 +1070,7 @@ async def _learn_precursors_for_event(
             min_lead = 0
             max_lead = 300
 
-        existing = (await db.execute(
-            select(PrecursorPattern).where(
-                PrecursorPattern.template_id == tpl_id,
-                PrecursorPattern.precedes_event == event_type,
-            )
-        )).scalar_one_or_none()
+        existing = existing_by_tpl.get(tpl_id)
 
         if existing:
             existing.confidence = confidence
