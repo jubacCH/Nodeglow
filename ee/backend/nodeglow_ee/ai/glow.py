@@ -12,6 +12,7 @@ from routers.api_v1 import require_api_key
 from services import ai_client
 from services.ai_config import AIError, load_ai_config
 
+from nodeglow_ee import license_runtime
 from nodeglow_ee.ai import context as ai_context
 from nodeglow_ee.ai.common import ai_unavailable
 
@@ -34,6 +35,8 @@ async def glow_chat(
     _key: ApiKey = Depends(require_api_key),
 ):
     """Stream an AI copilot response as SSE events."""
+    if refused := await license_runtime.blocked("ai_assistant"):
+        return refused
     body = await request.json()
     user_message = (body.get("message") or "").strip()
     history = body.get("history") or []
