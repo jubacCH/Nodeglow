@@ -454,7 +454,7 @@ function MobileGrid({ hosts }: { hosts: HostStat[] }) {
         return (
           <Link
             key={h.host.id}
-            href={`/hosts/${h.host.id}`}
+            prefetch={false} href={`/hosts/${h.host.id}`}
             className="flex flex-col items-center gap-1 p-2 rounded-md hover:bg-white/5 transition-colors"
           >
             <StatusDot status={status} pulse={status === 'offline'} />
@@ -503,7 +503,7 @@ function FleetOverview({ hosts }: { hosts: HostStat[] }) {
             {problems.map((h) => (
               <li key={h.host.id}>
                 <Link
-                  href={`/hosts/${h.host.id}`}
+                  prefetch={false} href={`/hosts/${h.host.id}`}
                   className="flex items-center gap-2 px-2 py-1 rounded text-xs text-slate-300 hover:bg-white/5"
                 >
                   <span className={`w-2 h-2 rounded-full shrink-0 ${GRID_COLOR[hostColor(h)] ?? 'bg-slate-500'}`} />
@@ -523,7 +523,7 @@ function FleetOverview({ hosts }: { hosts: HostStat[] }) {
           {hosts.map((h) => (
             <Link
               key={h.host.id}
-              href={`/hosts/${h.host.id}`}
+              prefetch={false} href={`/hosts/${h.host.id}`}
               title={h.host.name || h.host.hostname}
               aria-label={h.host.name || h.host.hostname}
               className={`w-2.5 h-2.5 rounded-sm hover:ring-1 hover:ring-white/60 ${GRID_COLOR[hostColor(h)] ?? 'bg-slate-500'}`}

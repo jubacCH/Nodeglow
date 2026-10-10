@@ -1837,15 +1837,19 @@ export default function SettingsPage() {
             </h3>
             <div className="space-y-4">
               {/* Enable toggle */}
-              <label className="flex items-center gap-3 cursor-pointer">
-                <div
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={ldapEnabled}
+                  aria-labelledby="ldap-enabled-label"
                   className={`w-10 h-5 rounded-full transition-colors relative ${ldapEnabled ? 'bg-violet-500' : 'bg-slate-700'}`}
                   onClick={() => setLdapEnabled(!ldapEnabled)}
                 >
-                  <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${ldapEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                </div>
-                <span className="text-sm text-slate-200">Enable LDAP Authentication</span>
-              </label>
+                  <span className={`absolute top-0.5 left-0 w-4 h-4 rounded-full bg-white transition-transform ${ldapEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button>
+                <span id="ldap-enabled-label" className="text-sm text-slate-200 cursor-pointer" onClick={() => setLdapEnabled(!ldapEnabled)}>Enable LDAP Authentication</span>
+              </div>
 
               {ldapEnabled && (
                 <>

@@ -1366,7 +1366,7 @@ function PortsTab({ ports, clients }: { ports: PortInfo[]; clients: ConnectedCli
                       </td>
                     </tr>
                   );
-                  return hid ? <Link key={c.mac} href={`/hosts/${hid}`}>{row}</Link> : row;
+                  return hid ? <Link key={c.mac} prefetch={false} href={`/hosts/${hid}`}>{row}</Link> : row;
                 })}
               </tbody>
             </table>

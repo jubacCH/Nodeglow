@@ -473,7 +473,7 @@ function HostsPageInner() {
                         one line, status pill condensed, all metadata aligned
                         in tabular form. ~28px row height vs old ~64px. */}
                     <td className="px-4 py-2">
-                      <Link href={`/hosts/${host.id}`} className="flex items-center gap-2 min-w-0">
+                      <Link prefetch={false} href={`/hosts/${host.id}`} className="flex items-center gap-2 min-w-0">
                         <span className="text-sm font-medium text-slate-200 truncate">{host.name}</span>
                         <span className="text-[11px] text-slate-500 font-mono truncate tabular-nums">{ipText}</span>
                         <span className="opacity-0 group-hover:opacity-100 transition-opacity">

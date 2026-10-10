@@ -310,7 +310,7 @@ function AlertsPageInner() {
                   <div className="flex items-center gap-3">
                     <Wrench className="h-4 w-4 text-amber-400 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <Link href={`/hosts/${h.id}`} className="text-sm font-medium text-slate-200 hover:text-sky-400 transition-colors">
+                      <Link prefetch={false} href={`/hosts/${h.id}`} className="text-sm font-medium text-slate-200 hover:text-sky-400 transition-colors">
                         {h.name}
                       </Link>
                       <p className="text-xs text-slate-500 font-mono">{h.hostname}</p>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useId, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 
@@ -12,6 +12,7 @@ interface ModalProps {
 }
 
 export function Modal({ open, onClose, title, children }: ModalProps) {
+  const titleId = useId();
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -39,6 +40,9 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
             exit={{ opacity: 0 }}
           >
             <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
               className="relative w-full max-w-lg rounded-xl border shadow-2xl"
               style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border-elevated)' }}
               initial={{ y: 20, scale: 0.97 }}
@@ -48,7 +52,7 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
-                <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
+                <h3 id={titleId} className="text-lg font-semibold text-slate-100">{title}</h3>
                 <button
                   onClick={onClose}
                   aria-label="Close dialog"
