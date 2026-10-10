@@ -328,7 +328,14 @@ async def agent_report(request: Request):
         agent.hostname = body.get("hostname", agent.hostname)
         agent.platform = body.get("platform", agent.platform)
         agent.arch = body.get("arch", agent.arch)
-        agent.agent_version = body.get("agent_version", agent.agent_version)
+        new_version = body.get("agent_version", agent.agent_version)
+        if agent.agent_version and new_version and new_version != agent.agent_version:
+            # The only record of an update: agents keep no version history,
+            # and the change feed ("agent updated") is derived from this row.
+            from services.audit import log_action
+            await log_action(db, None, "agent.version_change", "agent", agent.id, agent.name,
+                             details={"from": agent.agent_version, "to": new_version})
+        agent.agent_version = new_version
 
         # Extract primary disk (highest usage or root)
         disks = body.get("disks", [])

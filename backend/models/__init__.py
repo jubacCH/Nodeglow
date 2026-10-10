@@ -40,6 +40,7 @@ from models.audit import AuditLog
 from models.ai_usage import AiUsageLog
 from models.backup import BackupJob, BackupHistory
 from models.maintenance import MaintenanceWindow
+from models.user_preference import UserPreference
 
 
 async def init_db():
@@ -75,5 +76,6 @@ __all__ = [
     "AiUsageLog",
     "BackupJob", "BackupHistory",
     "MaintenanceWindow",
+    "UserPreference",
     "init_db",
 ]
