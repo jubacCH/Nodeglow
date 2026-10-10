@@ -7,6 +7,87 @@ For installation see the Quick start in the [README](../README.md).
 
 ---
 
+## Before you go live
+
+### System requirements and sizing
+
+Nodeglow runs as **one backend process** (a single uvicorn worker running the
+API, the scheduler, the syslog receiver and all collectors) next to
+PostgreSQL, ClickHouse, the Next.js frontend and the updater. It is built and
+run at homelab / small-network scale; the numbers below come from the code and
+from that experience, not from a load test.
+
+| | Minimum | Comfortable |
+|---|---|---|
+| CPU | 2 vCPU | 4 vCPU |
+| RAM | 4 GB | 8 GB |
+| Disk | 20 GB SSD | 50 GB+ SSD, depending on syslog volume |
+| OS | Linux with Docker Engine 20.10+ and Compose v2 | |
+
+- The Postgres defaults in `docker-compose.yml` (`shared_buffers` 512 MB,
+  `effective_cache_size` 1.5 GB) assume a 4–8 GB host. Lower them via
+  `POSTGRES_SHARED_BUFFERS` / `POSTGRES_EFFECTIVE_CACHE_SIZE` on smaller hosts.
+- ClickHouse alone wants about 1 GB of RAM and is what grows with syslog
+  volume. Its tables are TTL-reaped; plan disk for your retention × message
+  rate.
+- An update needs **2 GB free** (preflight check) for the image build.
+- **Practical ceiling: roughly 1000 monitored hosts** at the default 60 s
+  interval. Checks run 50 at a time, and an unreachable host holds its slot
+  for the full timeout (2 s ping, 3 s TCP, 5 s HTTP), so many hosts down at
+  once stretches a round towards the interval. Scheduled jobs are
+  `max_instances=1`: a round that overruns is skipped, not stacked, and the
+  self-check raises an incident when a job stops completing.
+- Scaling out is not supported out of the box. `REDIS_URL` makes the rate
+  limiter and job leadership multi-process safe, but the syslog listener and
+  the compose file assume a single backend.
+
+### Ports and firewall
+
+| Port | Proto | Direction | Purpose | Expose to |
+|---|---|---|---|---|
+| 8000 | tcp | inbound | Web UI and API (frontend, proxies to the backend) | Users and agents; put TLS in front |
+| 514 | udp | inbound | Syslog (mapped to container 1514) | Devices that send logs |
+| 1514 | tcp | inbound | Syslog over TCP | Devices that send logs |
+| 8000 (backend), 5432, 8123, 9100 | tcp | internal only | Backend, Postgres, ClickHouse, updater | Docker network only — never publish |
+| varies | icmp/tcp/udp | outbound | Checks, integrations (HTTPS APIs), SNMP 161/udp | Monitored networks |
+| 443 | tcp | outbound | Notifications (Telegram, Discord, webhooks), GeoIP updates, GitHub for updates | Internet |
+| 25/465/587 | tcp | outbound | E-mail notifications, if configured | Your SMTP server |
+
+**Agents** connect *to* the server on the UI port (8000, or 443 behind a
+reverse proxy) and need no inbound port on the agent host. Use the address
+agents can reach in the install command — the server's own idea of its address
+is wrong behind NAT or a proxy.
+
+`UI_BIND` and `SYSLOG_BIND` in `.env` restrict which host address the ports
+bind to — `UI_BIND=127.0.0.1` when a reverse proxy on the same host is the only
+way in.
+
+### Hardening checklist
+
+- [ ] `POSTGRES_PASSWORD` and `UPDATE_SIDECAR_TOKEN` are random
+      (`openssl rand -hex 32`), not the `.env.example` values.
+- [ ] `SECRET_KEY` is set in `.env` and escrowed separately
+      ([The encryption key](#the-encryption-key)); the backend logs no
+      SECRET_KEY warning on start.
+- [ ] TLS terminates at a reverse proxy (Caddy, nginx, Traefik, NPM) in front of
+      port 8000; plain 8000 is not reachable from untrusted networks
+      (`UI_BIND=127.0.0.1` or a firewall rule).
+- [ ] Syslog ports are reachable only from the networks that send logs
+      (`SYSLOG_BIND` or a firewall rule); consider the syslog host allowlist in
+      Settings.
+- [ ] Backups are copied off the host
+      ([Get the backups off the host](#get-the-backups-off-the-host)), and a
+      restore has been tried once.
+- [ ] The updater port (9100) is not published, and nothing but the backend
+      can reach it.
+- [ ] Agents are enrolled with per-install tokens;
+      `NODEGLOW_ALLOW_SHARED_ENROLLMENT` is unset.
+- [ ] Optional: `NODEGLOW_NO_NEW_PRIVILEGES=true`, after confirming ICMP checks
+      still work (see the comment in `docker-compose.yml`).
+- [ ] `DEBUG` is unset (it exposes the OpenAPI docs).
+
+---
+
 ## Updating
 
 ### From the UI
@@ -49,38 +130,111 @@ images; old ones can be reclaimed with `docker image prune`.
 ```bash
 cd /path/to/nodeglow
 git pull --ff-only
-docker compose build nodeglow frontend
+APP_VERSION=$(head -n1 VERSION) docker compose build nodeglow frontend
 docker compose run --rm --no-deps nodeglow python migrate.py   # optional: verify first
 docker compose up -d --no-deps nodeglow frontend
 ```
+
+`APP_VERSION` carries the release number from `VERSION` into the image (the
+backend build context does not contain that file). Without it the build still
+works, but the UI and API report the version as `0.0.0+unknown`. The UI update
+does this automatically.
 
 Migrations also run automatically on every container start, so the explicit
 `migrate.py` call is only there if you want to see the result before restarting.
 `SKIP_MIGRATIONS=1` in the environment bypasses it — for emergencies only, since
 running new code against an old schema is what it exists to prevent.
 
+### Upgrade policy
+
+- **`main` is the release channel.** The updater only ever fast-forwards to
+  `origin/main`; there are no release branches or tags to pick from yet.
+  `VERSION` is bumped by hand and is informational.
+- **Updates are forward-only.** Migrations have no tested downgrade path. The
+  way back from a bad update is restoring the `pre-update-*` dump together with
+  the previous commit (`git checkout <old sha>` + rebuild), not a downgrade
+  migration.
+- **Update regularly rather than in big jumps.** Every migration runs on every
+  deploy path, so skipping releases works, but a small step is easier to
+  diagnose if something fails.
+- **Before updating:** check that the last scheduled backup is recent
+  (`docker compose logs updater | grep "scheduled backup"`), and read the
+  commit list in *Software Updates* for anything marked as needing an `.env`
+  change.
+- **Agents** update themselves from the server after the server is updated
+  (SHA-256 checked; additionally ed25519-verified when update signing is
+  configured on the server and the agent has the public key).
+
 ---
 
 ## Backups
 
+A complete recovery needs **three** things. The automatic backups cover only
+the first:
+
+| What | Where it lives | Backed up automatically? |
+|---|---|---|
+| PostgreSQL database | `pgdata` volume | Yes — daily, and before every update |
+| The encryption key (`SECRET_KEY`) | `.env`, or `./data/.secret_key` | **No — by design, see below** |
+| `.env` (passwords, tokens) | installation directory | No |
+
+Without the encryption key a restored database is still usable, but every
+stored credential (integration passwords, API tokens, SNMP communities, SMTP
+password) is unreadable and has to be re-entered.
+
 ### What is backed up automatically
 
-Every update takes a full `pg_dump` **before** migrating. The five most recent
-are kept in the `backups` Docker volume.
+The updater sidecar writes gzipped `pg_dump` files into the `backups` Docker
+volume:
+
+| File | When | Kept |
+|---|---|---|
+| `scheduled-<timestamp>.dump.gz` | Daily at 02:30 UTC (`BACKUP_SCHEDULE`) | `BACKUP_RETENTION` (5) |
+| `pre-update-<timestamp>.dump.gz` | Before every update, prior to migrating | `BACKUP_RETENTION` (5) |
+
+The two kinds are pruned separately, so daily dumps never push the last
+pre-update dump out. A scheduled dump is skipped while an update runs (the
+update takes its own), and an update requested during a dump is refused with
+409 until the dump is done.
 
 ```bash
 docker compose exec updater ls -lh /backups/
+docker compose logs updater | grep "scheduled backup"   # ok / FAILED per run
 ```
+
+`GET /api/update/backups` (admin session) lists the dumps and, under
+`schedule`, the last scheduled result and the next slot.
+
+`BACKUP_SCHEDULE` accepts `HH:MM` (daily, container clock = UTC),
+`every 6h` / `every 90m` (minimum 15 minutes), or `off`. An invalid value
+disables scheduled backups and says so in `docker compose logs updater`.
 
 PostgreSQL holds configuration, hosts, rules, incidents and learned patterns —
 everything that cannot be recomputed. ClickHouse holds the time series (ping
 results, syslog, metrics) and is **not** included: it is reaped by TTL anyway
-and would dominate the dump size.
+and would dominate the dump size. Losing it loses history, not configuration.
+
+### Get the backups off the host
+
+The `backups` volume lives on the same disk as the database. It protects
+against a bad migration or an operator mistake, **not** against losing the
+host. Copy the dumps somewhere else on a schedule — a NAS, object storage,
+another machine:
+
+```bash
+# on the Docker host, e.g. from cron after 02:30 UTC
+docker run --rm -v <project>_backups:/backups:ro -v /mnt/nas/nodeglow:/out alpine \
+  sh -c 'cp -n /backups/*.dump.gz /out/'
+```
+
+(`<project>` is the compose project name — `docker volume ls | grep backups`.)
+Off-host copying is not built in; it is the most important thing to add
+yourself.
 
 ### Taking one manually
 
 ```bash
-docker compose exec db pg_dump -U nodeglow -Fc nodeglow | gzip > backup.dump.gz
+docker compose exec -T db pg_dump -U nodeglow -Fc nodeglow | gzip > backup.dump.gz
 ```
 
 ### Restoring
@@ -96,7 +250,83 @@ docker compose start nodeglow frontend
 ```
 
 The container applies any outstanding migrations on start, so restoring an
-older dump onto newer code is safe.
+older dump onto newer code is safe. Check the backend log afterwards: the line
+`Encryption key fingerprint: …` must match the fingerprint you escrowed with
+the key (next section), otherwise the restored credentials will not decrypt.
+
+---
+
+## The encryption key
+
+`SECRET_KEY` encrypts every stored credential (Fernet) and peppers API-key
+hashes. It is the one piece of state that no backup in this stack contains —
+deliberately: a backup that holds both the ciphertext and the key protects
+nothing once it leaks.
+
+### Where it is
+
+- **`SECRET_KEY` in `.env`** (recommended). The backend then logs nothing
+  about it.
+- **Not set:** the backend uses `./data/.secret_key` in the installation
+  directory, creating one on first start. It logs a warning banner on every
+  start, and an ERROR banner when it had to *generate* a new key — that is the
+  moment to stop if you expected an existing key, because credentials in a
+  restored database are now unreadable.
+
+Move a file-based key into `.env` (the value must be identical):
+
+```bash
+cat ./data/.secret_key            # copy this value
+# add SECRET_KEY=<value> to .env, then:
+docker compose up -d nodeglow     # the warning banner must be gone
+rm ./data/.secret_key
+```
+
+### Escrow it
+
+Store the key **separately** from the database backups: a password manager or
+secrets vault, or a sealed printout. Store its fingerprint next to it, so you
+can later prove that a key belongs to an installation or a backup without
+showing the key:
+
+```bash
+docker compose logs nodeglow | grep "Encryption key fingerprint"
+# or
+docker compose exec nodeglow python -c "from config import secret_key_fingerprint as f; print(f())"
+```
+
+To compute the fingerprint of an escrowed key on any machine with Python
+(the key is read from the terminal, not from the command line):
+
+```bash
+python3 -c "import getpass,hashlib; k=getpass.getpass('key: ').encode(); \
+  print(hashlib.sha256(b'nodeglow-secret-key-fingerprint:'+k).hexdigest()[:16])"
+```
+
+The JSON export (`GET /api/v1/backup`) records the fingerprint of the key it
+was made with; a JSON restore under a different key logs an error and returns
+a `warning` field.
+
+### Changing it
+
+There is no re-encryption tooling. Setting a different `SECRET_KEY` makes all
+existing credentials unreadable; they then have to be entered again. Treat the
+key as permanent for the life of the installation.
+
+### Recovering after losing the host
+
+1. Install Nodeglow on the new host (README, Quick start), but before the
+   first `docker compose up` put the **original** `SECRET_KEY` and
+   `POSTGRES_PASSWORD` into `.env`. Generate a new `UPDATE_SIDECAR_TOKEN`.
+2. `docker compose up -d db` and wait until it is healthy.
+3. Restore the newest off-host dump as in [Restoring](#restoring) (the
+   `pg_restore` part; `nodeglow` and `frontend` are not running yet).
+4. `docker compose up -d`.
+5. Compare `Encryption key fingerprint` in the backend log with the escrowed
+   one, then spot-check an integration that uses a stored password.
+
+Syslog and metric history (ClickHouse) start empty; configuration, hosts,
+rules and incidents are back.
 
 ---
 
@@ -176,6 +406,19 @@ docker compose logs nodeglow --tail 200
 Prefer `--tail` over `--since` on a long-running container: `--since` still
 scans the entire log and can take minutes.
 
+`LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`) and
+`LOG_FORMAT` (`text` or `json`) in `.env` control the backend log; restart the
+`nodeglow` container after changing them. `json` writes one object per line
+(`ts`, `level`, `logger`, `msg`, `request_id`, extras, `exc`) for Loki, Elastic
+and similar. `DEBUG` also shows why integrations skipped optional data and
+re-enables the per-run chatter of APScheduler and httpx.
+
+Every HTTP request carries an ID: the `X-Request-ID` from your reverse proxy if
+it sends one, otherwise a generated one. It is returned in the `X-Request-ID`
+response header and appears in every log line written while handling that
+request, so an error a user reports can be found with
+`docker compose logs nodeglow | grep <id>`.
+
 ---
 
 ## Configuration reference
@@ -193,8 +436,16 @@ Useful optional settings:
 |---|---|---|
 | `POSTGRES_SHARED_BUFFERS` | `512MB` | Raise on hosts with plenty of RAM |
 | `POSTGRES_WORK_MEM` | `8MB` | Per-operation sort/hash memory |
-| `BACKUP_RETENTION` | `5` | Pre-update dumps to keep |
-| `DB_CONTAINER` | auto | Only needed if the database container cannot be resolved automatically |
+| `SECRET_KEY` | unset | Encryption key. Strongly recommended — see [The encryption key](#the-encryption-key) |
+| `BACKUP_SCHEDULE` | `02:30` | Scheduled dumps: `HH:MM` (UTC), `every 6h`, or `off` |
+| `BACKUP_RETENTION` | `5` | Dumps to keep, per kind (scheduled / pre-update) |
+| `DB_CONTAINER` | auto | Only needed if the database container cannot be resolved from the compose project (e.g. `vigil-db-1`) |
+| `UI_BIND` | `0.0.0.0` | Host address for the UI port 8000 |
+| `SYSLOG_BIND` | `0.0.0.0` | Host address for the syslog ports 514/udp, 1514/tcp |
+| `NODEGLOW_NO_NEW_PRIVILEGES` | `false` | `true` enables no-new-privileges for the backend; verify ICMP checks afterwards |
+| `LOG_LEVEL` | `INFO` | Backend log level |
+| `LOG_FORMAT` | `text` | `json` for one JSON object per line |
+| `APP_VERSION` | from `VERSION` | Build arg; set automatically by the UI update |
 | `SKIP_MIGRATIONS` | unset | `1` skips the schema check on start — emergencies only |
 
 Retention is configured in the UI under Settings, not through the environment:
@@ -211,4 +462,5 @@ as root on the host. It is exposed only on the internal Docker network — never
 publish its port, and treat `UPDATE_SIDECAR_TOKEN` like a root password.
 
 **Run behind TLS.** The application sets HSTS, CSP and frame-denial headers, but
-it does not terminate TLS itself; put a reverse proxy in front of it.
+it does not terminate TLS itself; put a reverse proxy in front of it. The full
+list is the [hardening checklist](#hardening-checklist).
