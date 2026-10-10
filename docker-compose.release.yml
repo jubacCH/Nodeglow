@@ -87,6 +87,9 @@ services:
       NODEGLOW_ALLOW_SHARED_ENROLLMENT: ${NODEGLOW_ALLOW_SHARED_ENROLLMENT:-}
       # "1" turns the enterprise features off even in the nodeglow-backend image.
       NODEGLOW_DISABLE_EE: ${NODEGLOW_DISABLE_EE:-}
+      # Enterprise license key or a path to a file holding it; optional, can
+      # also be installed under Settings → License. See docs/INSTALL.md.
+      NODEGLOW_LICENSE: ${NODEGLOW_LICENSE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}
     depends_on:

@@ -104,11 +104,54 @@ async def test_features_endpoint_matches_the_registry():
 
     async with make_client() as (client, _sf):
         resp = await client.get("/api/v2/features")
+        expected = await extensions.registry.resolve_feature_payload()
     assert resp.status_code == 200
     data = resp.json()
-    assert data == extensions.registry.feature_payload()
+    assert data == expected
+    assert data["installed"] == extensions.registry.feature_payload()["features"]
     assert data["edition"] in (EDITION_COMMUNITY, EDITION_ENTERPRISE)
     assert set(DEFAULT_FEATURES) <= set(data["features"])
+    if data["edition"] == EDITION_COMMUNITY:
+        assert data["license"] is None and not any(data["features"].values())
+
+
+async def test_without_a_license_provider_installed_means_usable():
+    reg = Registry()
+    reg.enable_feature("ai_assistant")
+    payload = await reg.resolve_feature_payload()
+    assert payload["features"]["ai_assistant"] is True and payload["license"] is None
+
+
+async def test_license_provider_gates_the_reported_flags():
+    reg = Registry()
+    reg.enable_feature("ai_assistant")
+    reg.enable_feature("ai_postmortem")
+
+    async def provider():
+        return {"license": {"status": "valid"}, "active": {"ai_assistant": True, "ha_scheduler": True}}
+
+    reg.set_license_provider(provider)
+    payload = await reg.resolve_feature_payload()
+    assert payload["license"] == {"status": "valid"}
+    assert payload["features"]["ai_assistant"] is True
+    assert payload["features"]["ai_postmortem"] is False  # installed, not licensed
+    assert payload["features"]["ha_scheduler"] is False  # licensed, not installed
+    assert payload["installed"]["ai_postmortem"] is True
+    with pytest.raises(RuntimeError):
+        reg.set_license_provider(provider)
+
+
+async def test_a_failing_license_provider_turns_flags_off(caplog):
+    reg = Registry()
+    reg.enable_feature("ai_assistant")
+
+    async def provider():
+        raise RuntimeError("boom")
+
+    reg.set_license_provider(provider)
+    payload = await reg.resolve_feature_payload()
+    assert payload["features"]["ai_assistant"] is False
+    assert payload["license"]["status"] == "error"
 
 
 async def test_features_endpoint_needs_a_login():
