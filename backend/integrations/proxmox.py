@@ -6,7 +6,7 @@ import logging
 import re
 from datetime import datetime
 
-import httpx
+from utils.net_safety import safe_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,14 @@ class ProxmoxAPI:
 
     async def get(self, path: str) -> list | dict:
         url = f"{self.base}/api2/json{path}"
-        async with httpx.AsyncClient(verify=self._verify_ssl, timeout=10.0) as client:
+        async with safe_async_client(verify=self._verify_ssl, timeout=10.0) as client:
             resp = await client.get(url, headers=self._headers)
             resp.raise_for_status()
             return resp.json().get("data", [])
 
     async def post(self, path: str, data: dict | None = None) -> dict:
         url = f"{self.base}/api2/json{path}"
-        async with httpx.AsyncClient(verify=self._verify_ssl, timeout=30.0) as client:
+        async with safe_async_client(verify=self._verify_ssl, timeout=30.0) as client:
             resp = await client.post(url, headers=self._headers, data=data or {})
             resp.raise_for_status()
             return resp.json().get("data", {})

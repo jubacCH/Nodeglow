@@ -1,7 +1,7 @@
 """UniFi NAS (UNAS Pro) integration – storage, RAID, disk SMART, system stats."""
 from __future__ import annotations
 
-import httpx
+from utils.net_safety import safe_async_client
 
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
@@ -27,7 +27,7 @@ class UnasAPI:
         self.verify_ssl = verify_ssl
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0, follow_redirects=True) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=20.0, follow_redirects=True) as client:
             resp = await client.post(
                 f"{self.base}/api/auth/login",
                 json={"username": self.username, "password": self.password})
@@ -40,7 +40,7 @@ class UnasAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=10.0, follow_redirects=True) as client:
                 resp = await client.post(
                     f"{self.base}/api/auth/login",
                     json={"username": self.username, "password": self.password})

@@ -1,7 +1,7 @@
 """Home Assistant integration – entity states and config."""
 from __future__ import annotations
 
-import httpx
+from utils.net_safety import safe_async_client
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
@@ -24,7 +24,7 @@ class HassAPI:
         return {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=15) as client:
             config_resp = await client.get(f"{self.base}/api/config", headers=self._headers())
             config_resp.raise_for_status()
             states_resp = await client.get(f"{self.base}/api/states", headers=self._headers())
@@ -33,7 +33,7 @@ class HassAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=8) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=8) as client:
                 resp = await client.get(f"{self.base}/api/", headers=self._headers())
                 return resp.status_code == 200
         except Exception:

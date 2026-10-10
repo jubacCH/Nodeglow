@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
@@ -147,7 +149,7 @@ class RedfishAPI:
     async def fetch_all(self) -> dict:
         # Client-level timeout so the chained fallback path walks (multiple
         # sequential requests) cannot stack into an unbounded total wait.
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=20.0) as client:
             try:
                 root = await self._get(client, "/redfish/v1/")
                 system_link = (root.get("Systems", {}) or {}).get("@odata.id")
@@ -205,7 +207,7 @@ class RedfishAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl, timeout=20.0) as client:
+            async with safe_async_client(verify=self.verify_ssl, timeout=20.0) as client:
                 await self._get(client, "/redfish/v1/")
             return True
         except Exception:

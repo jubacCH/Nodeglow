@@ -18,9 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select as sa_select
 
-import ipaddress
-from urllib.parse import urlparse
-
 from integrations import get_registry, get_integration
 from integrations._base import BaseIntegration
 from models.api_key import ApiKey
@@ -55,128 +52,24 @@ async def _audit(db, request, action: str, target_id, target_name, details: dict
 # one of these redirects where the stored credentials are sent.
 ENDPOINT_FIELD_KEYS = ("host", "url", "base_url", "server", "address", "endpoint")
 
-_METADATA_IPS = frozenset({
-    ipaddress.ip_address("169.254.169.254"),  # AWS / GCP / OpenStack metadata
-    ipaddress.ip_address("168.63.129.16"),    # Azure wireserver
-    ipaddress.ip_address("100.100.100.200"),  # Alibaba Cloud metadata
-    ipaddress.ip_address("fd00:ec2::254"),    # AWS IMDS over IPv6
-})
-_METADATA_HOSTS = frozenset({
-    "metadata.google.internal", "metadata", "instance-data",
-    "metadata.internal", "kubernetes.default.svc", "kubernetes.default",
-})
-# Our own compose services (docker-compose.yml service + container names).
-# Their addresses are RFC1918 like any LAN host, so only the name gives them
-# away — an integration pointed at "db" would hand Postgres the credentials
-# of whoever configured it, or let a crafted response probe internal APIs.
-_INTERNAL_HOSTS = frozenset({
-    "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback",
-    "db", "postgres", "clickhouse", "nodeglow-ch", "updater", "nodeglow-updater",
-    "nodeglow", "frontend", "nodeglow-frontend",
-})
-_ZERO_NET = ipaddress.ip_network("0.0.0.0/8")  # "this host" on Linux
+# SSRF guards live in utils.net_safety (shared with notifications/webhooks);
+# re-exported under the old names for existing callers (routers/ping.py, tests).
+from utils.net_safety import (  # noqa: E402
+    INTERNAL_HOSTS as _INTERNAL_HOSTS,
+    METADATA_HOSTS as _METADATA_HOSTS,
+    METADATA_IPS as _METADATA_IPS,
+    blocked_ip_reason as _blocked_ip_reason,
+    extract_host as _extract_host,
+    resolve_all as _resolve_all,
+    validate_host as _validate_host,
+    validate_host_async,
+)
 
-
-def _extract_host(value: str) -> str:
-    """Hostname (or IP literal) from a URL, host:port, [v6]:port or bare host."""
-    raw = value.strip()
-    if not raw:
-        return ""
-    try:  # bare IPv6 literal ("fe80::1") — urlparse would read it as host:port
-        return str(ipaddress.ip_address(raw.split("%", 1)[0]))
-    except ValueError:
-        pass
-    if "://" not in raw:
-        raw = "//" + raw
-    try:
-        host = urlparse(raw).hostname or ""
-    except ValueError:  # malformed [v6 literal
-        host = ""
-    return host.strip().rstrip(".").lower()
-
-
-def _blocked_ip_reason(addr) -> str | None:
-    """Why an address must not be an integration/monitoring target.
-
-    RFC1918 / ULA private ranges are deliberately allowed: Nodeglow monitors
-    LANs, so the devices it talks to live there.
-    """
-    if getattr(addr, "ipv4_mapped", None) is not None:
-        addr = addr.ipv4_mapped
-    if addr in _METADATA_IPS:
-        return "Cloud metadata endpoints are not allowed"
-    if addr.is_loopback:
-        return "Loopback addresses are not allowed"
-    if addr.is_unspecified or (addr.version == 4 and addr in _ZERO_NET):
-        return "Unspecified addresses (0.0.0.0) are not allowed"
-    if addr.is_link_local:
-        return "Link-local addresses are not allowed (cloud metadata risk)"
-    if addr.is_multicast:
-        return "Multicast addresses are not allowed"
-    return None
-
-
-def _resolve_all(host: str) -> list:
-    import socket
-    try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, UnicodeError, OSError):
-        return []
-    out = []
-    for info in infos:
-        try:
-            out.append(ipaddress.ip_address(info[4][0].split("%", 1)[0]))
-        except ValueError:
-            continue
-    return out
-
-
-def _validate_host(value: str, resolve: bool = True) -> str | None:
-    """Validate a host/URL config value against SSRF.
-
-    Returns an error message if blocked, None if OK.
-    Allows RFC1918 private ranges (homelab use case) but blocks loopback,
-    link-local, 0.0.0.0, cloud metadata and our own compose services — both
-    as literals and by resolving the name (``localtest.me``, ``2130706433``
-    and friends resolve to 127.0.0.1).
-
-    A name that does not resolve is allowed: the device may simply be offline
-    or only resolvable later, and an unresolvable target reaches nothing.
-    (A name that is rebound after validation is not caught here.)
-
-    Synchronous and may block on DNS — call it via ``asyncio.to_thread`` (or
-    :func:`validate_host_async`) from request handlers.
-    """
-    if not value:
-        return None
-
-    host = _extract_host(str(value))
-    if not host:
-        return None
-
-    if host in _INTERNAL_HOSTS:
-        return "Internal service names are not allowed"
-    if host in _METADATA_HOSTS:
-        return "Cloud metadata endpoints are not allowed"
-
-    try:
-        literal = ipaddress.ip_address(host)
-    except ValueError:
-        literal = None
-    if literal is not None:
-        return _blocked_ip_reason(literal)
-
-    if resolve:
-        for addr in _resolve_all(host):
-            reason = _blocked_ip_reason(addr)
-            if reason:
-                return f"{reason} ({host} resolves to {addr})"
-    return None
-
-
-async def validate_host_async(value: str) -> str | None:
-    import asyncio
-    return await asyncio.to_thread(_validate_host, value)
+__all__ = [
+    "ENDPOINT_FIELD_KEYS", "_INTERNAL_HOSTS", "_METADATA_HOSTS", "_METADATA_IPS",
+    "_blocked_ip_reason", "_extract_host", "_resolve_all", "_validate_host",
+    "validate_host_async",
+]
 
 
 def _validate_config_hosts(config_dict: dict, fields) -> str | None:

@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from utils.net_safety import safe_async_client
+
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 log = logging.getLogger(__name__)
@@ -92,7 +94,7 @@ class CloudflareAPI:
             return []
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with safe_async_client(timeout=30.0) as client:
             # Verify token
             try:
                 active = await self.verify_token(client)
@@ -200,7 +202,7 @@ class CloudflareAPI:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with safe_async_client(timeout=10.0) as client:
                 return await self.verify_token(client)
         except Exception:
             return False

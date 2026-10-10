@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-import httpx
+from utils.net_safety import safe_async_client
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
 
@@ -37,7 +37,7 @@ class UnifiAPI:
         return f"{self.base}/api/s/{self.site}"
 
     async def fetch_all(self) -> dict:
-        async with httpx.AsyncClient(verify=self.verify_ssl, timeout=15.0, follow_redirects=True) as client:
+        async with safe_async_client(verify=self.verify_ssl, timeout=15.0, follow_redirects=True) as client:
             resp = await client.post(
                 self._login_url,
                 json={"username": self.username, "password": self.password},
