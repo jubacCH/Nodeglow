@@ -9,6 +9,7 @@ import { useAuthStore } from '@/stores/auth';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { getCsrfToken } from '@/lib/api';
 import { AI_STATUS_KEY, aiUnavailableMessage, useAiStatus } from '@/hooks/queries/useAiStatus';
+import { hasFeature, useFeatures } from '@/hooks/queries/useFeatures';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -44,7 +45,10 @@ export function GlowPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const qc = useQueryClient();
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
-  const { data: aiStatus } = useAiStatus(isOpen);
+  const { data: features } = useFeatures(isOpen);
+  // Glow is an enterprise feature (/api/v1/glow/chat only exists there).
+  const installed = hasFeature(features, 'ai_assistant');
+  const { data: aiStatus } = useAiStatus(isOpen && installed);
   // Unknown status (still loading / old backend) does not block the chat;
   // the server refuses anyway when AI is off.
   const aiUnavailable = aiStatus ? !aiStatus.available : false;
@@ -174,7 +178,7 @@ export function GlowPanel() {
     }
   }
 
-  if (!isOpen) return null;
+  if (!isOpen || !installed) return null;
 
   return (
     <div
