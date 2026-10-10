@@ -266,4 +266,18 @@ nodeglow/
 
 ## License
 
-Not decided yet — the repository does not ship a LICENSE file.
+Nodeglow is **Open Core**:
+
+- **Core** — everything outside `ee/` — is free software under the
+  [GNU AGPL-3.0-only](LICENSE). Self-host it, modify it, share it; if you run a
+  modified version for others over a network, offer them its source (AGPL §13).
+- **Enterprise features** in [`ee/`](ee/README.md) (multi-tenancy/MSP portal,
+  SSO/SAML/SCIM, SLA reports, HA, AI premium, audit export) are source-available
+  under the [Nodeglow Enterprise License](ee/LICENSE) (draft): free for
+  development and testing, production use needs a subscription.
+- **Contributions** require signing the [CLA](CLA.md) — see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Details, commercial licensing and the status of earlier versions:
+[LICENSING.md](LICENSING.md). Third-party licenses:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
