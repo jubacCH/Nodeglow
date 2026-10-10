@@ -28,9 +28,18 @@ class FakeUser:
     role = "admin"
 
 
-@pytest.fixture
-async def client():
-    """Provide an httpx AsyncClient wired to the FastAPI app with auth bypassed."""
+_AUTH_DISABLED = object()
+
+
+@asynccontextmanager
+async def make_client(fake_user=_AUTH_DISABLED):
+    """Build an httpx AsyncClient wired to the FastAPI app.
+
+    By default the session lookup is patched to always return ``FakeUser`` —
+    auth is bypassed. Pass ``fake_user=None`` to keep the real cookie lookup
+    (auth enabled), or any user-like object to be "logged in" as it.
+    Yields ``(client, session_factory)``.
+    """
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:", echo=False,
         poolclass=StaticPool,
@@ -89,6 +98,16 @@ async def client():
     def _fake_template_response(name, context=None, **kwargs):
         return HTMLResponse(content=f"<html><body>template:{name}</body></html>")
 
+    if fake_user is _AUTH_DISABLED:
+        _user_patch = patch("database.get_current_user", new_callable=AsyncMock,
+                            return_value=FakeUser())
+    elif fake_user is None:
+        from contextlib import nullcontext
+        _user_patch = nullcontext()
+    else:
+        _user_patch = patch("database.get_current_user", new_callable=AsyncMock,
+                            return_value=fake_user)
+
     # Patch templates FIRST — before any router imports bind the real Jinja2Templates object
     with patch("templating.templates") as mock_templates, \
          patch("main.start_scheduler", new_callable=AsyncMock), \
@@ -101,7 +120,7 @@ async def client():
          patch("main.AsyncSessionLocal", side_effect=fake_session), \
          patch("models.base.AsyncSessionLocal", side_effect=fake_session), \
          patch("routers.agents.AsyncSessionLocal", side_effect=fake_session), \
-         patch("database.get_current_user", new_callable=AsyncMock, return_value=FakeUser()), \
+         _user_patch, \
          patch("services.clickhouse_client.query", side_effect=_ch_query_mock), \
          patch("services.clickhouse_client.query_scalar", side_effect=_ch_scalar_mock), \
          patch("services.clickhouse_client.get_client", new_callable=AsyncMock), \
@@ -123,6 +142,25 @@ async def client():
             _csrf = f"{_raw}.{_sig}"
             ac.cookies.set("ng_csrf", _csrf)
             ac.headers["x-csrf-token"] = _csrf
-            yield ac
+            yield ac, session_factory
 
     await engine.dispose()
+
+
+@pytest.fixture
+async def client():
+    """Provide an httpx AsyncClient wired to the FastAPI app with auth bypassed."""
+    async with make_client() as (ac, _sf):
+        yield ac
+
+
+@pytest.fixture
+async def auth_client():
+    """AsyncClient with REAL authentication: no session, no API key.
+
+    Yields ``(client, session_factory)`` so a test can seed users/keys.
+    The CSRF cookie+header are valid, so a 403 here is never a CSRF artefact
+    hiding a missing auth check.
+    """
+    async with make_client(fake_user=None) as pair:
+        yield pair
