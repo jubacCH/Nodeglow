@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Pagination } from '@/components/ui/Pagination';
+import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
 import { useHosts } from '@/hooks/queries/useHosts';
 import { useConfirm } from '@/hooks/useConfirm';
 import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
@@ -66,17 +67,21 @@ function SortHeader({ label, sortKey, currentKey, dir, onSort }: {
   const active = currentKey === sortKey;
   return (
     <th
-      className={`text-left px-4 py-2 text-[10px] font-semibold uppercase tracking-widest cursor-pointer hover:text-slate-300 transition-colors select-none ${active ? 'accent-text' : 'text-slate-500'}`}
-      onClick={() => onSort(sortKey)}
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={`text-left px-4 py-2 text-[10px] font-semibold uppercase tracking-widest transition-colors select-none ${active ? 'accent-text' : 'text-slate-500'}`}
     >
-      <span className="inline-flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="inline-flex items-center gap-1 uppercase tracking-widest hover:text-slate-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-500/60 rounded-sm"
+      >
         {label}
         {active ? (
-          dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+          dir === 'asc' ? <ArrowUp size={11} aria-hidden="true" /> : <ArrowDown size={11} aria-hidden="true" />
         ) : (
-          <ArrowUpDown size={11} className="opacity-30" />
+          <ArrowUpDown size={11} className="opacity-30" aria-hidden="true" />
         )}
-      </span>
+      </button>
     </th>
   );
 }
@@ -115,7 +120,7 @@ function HostsPageInner() {
   const qc = useQueryClient();
   const qParam = searchParams.get('q') ?? '';
   const [search, setSearch] = useState(qParam);
-  const { data: hosts, isLoading } = useHosts();
+  const { data: hosts, isLoading, isError, error, refetch } = useHosts();
   const redirected = useRef(false);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -372,8 +377,8 @@ function HostsPageInner() {
         <GlassCard className="p-6 mb-6 border border-sky-500/20">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-base font-semibold text-slate-200">Add New Host</h3>
-            <button onClick={() => setShowAdd(false)} className="text-slate-400 hover:text-slate-200">
-              <X size={16} />
+            <button onClick={() => setShowAdd(false)} aria-label="Close" className="text-slate-400 hover:text-slate-200">
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -409,6 +414,7 @@ function HostsPageInner() {
         </GlassCard>
       )}
 
+      {isError && hosts && <StaleDataBanner error={error} onRetry={refetch} />}
       <GlassCard>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -453,7 +459,12 @@ function HostsPageInner() {
                   >
                     {selectMode && (
                       <td className="px-4 py-2">
-                        <button onClick={(e) => { e.stopPropagation(); toggleSelect(host.id); }} className="text-slate-500 hover:text-slate-300">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleSelect(host.id); }}
+                          aria-label={`Select ${host.name}`}
+                          aria-pressed={selected.has(host.id)}
+                          className="text-slate-500 hover:text-slate-300"
+                        >
                           {selected.has(host.id) ? <CheckSquare size={16} className="text-sky-400" /> : <Square size={16} />}
                         </button>
                       </td>
@@ -507,7 +518,14 @@ function HostsPageInner() {
                   </tr>
                 );
               })}
-              {!isLoading && filteredHosts.length === 0 && (
+              {!isLoading && isError && !hosts && (
+                <tr>
+                  <td colSpan={selectMode ? 7 : 6}>
+                    <QueryErrorState error={error} onRetry={refetch} title="Could not load hosts" />
+                  </td>
+                </tr>
+              )}
+              {!isLoading && !(isError && !hosts) && filteredHosts.length === 0 && (
                 <tr>
                   <td colSpan={selectMode ? 7 : 6} className="px-4 py-12 text-center">
                     <Server size={48} className="mx-auto mb-4 text-slate-600" />

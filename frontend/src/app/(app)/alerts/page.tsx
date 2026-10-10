@@ -10,6 +10,7 @@ import { useIncidents } from '@/hooks/queries/useAlerts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, post } from '@/lib/api';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryErrorState, QueryState, StaleDataBanner } from '@/components/ui/QueryState';
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -41,13 +42,18 @@ function AlertsPageInner() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const qc = useQueryClient();
   const { confirm, ConfirmDialogElement } = useConfirm();
-  const { data: incidents, isLoading } = useIncidents();
+  const {
+    data: incidents, isLoading, isError, error, refetch,
+  } = useIncidents();
+  // A failed request must not read as "All clear".
+  const loadFailed = isError && !incidents;
 
-  const { data: maintHosts, isLoading: maintLoading } = useQuery({
+  const maintQuery = useQuery({
     queryKey: ['maintenance-hosts'],
     queryFn: () => get<MaintenanceHost[]>('/api/v1/hosts?status=maintenance'),
     enabled: activeTab === 'maintenance',
   });
+  const maintHosts = maintQuery.data;
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'alerts', label: 'Alerts' },
@@ -102,8 +108,17 @@ function AlertsPageInner() {
         ))}
       </div>
 
+      {isError && incidents && activeTab !== 'maintenance' && (
+        <StaleDataBanner error={error} onRetry={refetch} />
+      )}
+
       {activeTab === 'alerts' && (
         <div className="space-y-3">
+          {loadFailed && (
+            <GlassCard>
+              <QueryErrorState error={error} onRetry={refetch} title="Could not load alerts" />
+            </GlassCard>
+          )}
           {isLoading &&
             Array.from({ length: 4 }).map((_, i) => (
               <GlassCard key={i} className="p-4">
@@ -134,7 +149,7 @@ function AlertsPageInner() {
               </GlassCard>
             </Link>
           ))}
-          {!isLoading && openIncidents.length === 0 && (
+          {!isLoading && !loadFailed && openIncidents.length === 0 && (
             <GlassCard>
               <EmptyState
                 icon={ShieldCheck}
@@ -207,6 +222,11 @@ function AlertsPageInner() {
 
             {/* Results */}
             <div className="space-y-3">
+              {loadFailed && (
+                <GlassCard>
+                  <QueryErrorState error={error} onRetry={refetch} title="Could not load incidents" />
+                </GlassCard>
+              )}
               {isLoading &&
                 Array.from({ length: 4 }).map((_, i) => (
                   <GlassCard key={i} className="p-4">
@@ -238,7 +258,7 @@ function AlertsPageInner() {
                   </GlassCard>
                 </Link>
               ))}
-              {!isLoading && filtered.length === 0 && (
+              {!isLoading && !loadFailed && filtered.length === 0 && (
                 <GlassCard>
                   <EmptyState
                     icon={Bell}
@@ -261,42 +281,19 @@ function AlertsPageInner() {
       })()}
 
       {activeTab === 'maintenance' && (
-        <div className="space-y-3">
-          {maintLoading &&
-            Array.from({ length: 3 }).map((_, i) => (
-              <GlassCard key={i} className="p-4">
-                <Skeleton className="h-5 w-full" />
-              </GlassCard>
-            ))}
-          {maintHosts?.map((h) => (
-            <GlassCard key={h.id} className="p-4">
-              <div className="flex items-center gap-3">
-                <Wrench className="h-4 w-4 text-amber-400 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <Link href={`/hosts/${h.id}`} className="text-sm font-medium text-slate-200 hover:text-sky-400 transition-colors">
-                    {h.name}
-                  </Link>
-                  <p className="text-xs text-slate-500 font-mono">{h.hostname}</p>
-                </div>
-                {h.maintenance_until && (
-                  <span className="flex items-center gap-1 text-xs text-slate-400">
-                    <Clock className="h-3 w-3" />
-                    Until {new Date(h.maintenance_until).toLocaleString()}
-                  </span>
-                )}
-                <Badge>{h.source}</Badge>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => removeMaintenance(h.id)}
-                  className="text-xs text-amber-400 hover:text-amber-300"
-                >
-                  Remove
-                </Button>
-              </div>
-            </GlassCard>
-          ))}
-          {!maintLoading && (!maintHosts || maintHosts.length === 0) && (
+        <QueryState
+          query={maintQuery}
+          errorTitle="Could not load maintenance hosts"
+          loading={
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <GlassCard key={i} className="p-4">
+                  <Skeleton className="h-5 w-full" />
+                </GlassCard>
+              ))}
+            </div>
+          }
+          empty={
             <GlassCard>
               <EmptyState
                 icon={Wrench}
@@ -304,8 +301,41 @@ function AlertsPageInner() {
                 description="Hosts in maintenance mode will appear here."
               />
             </GlassCard>
+          }
+        >
+          {(maintHosts) => (
+            <div className="space-y-3">
+              {maintHosts.map((h) => (
+                <GlassCard key={h.id} className="p-4">
+                  <div className="flex items-center gap-3">
+                    <Wrench className="h-4 w-4 text-amber-400 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <Link href={`/hosts/${h.id}`} className="text-sm font-medium text-slate-200 hover:text-sky-400 transition-colors">
+                        {h.name}
+                      </Link>
+                      <p className="text-xs text-slate-500 font-mono">{h.hostname}</p>
+                    </div>
+                    {h.maintenance_until && (
+                      <span className="flex items-center gap-1 text-xs text-slate-400">
+                        <Clock className="h-3 w-3" />
+                        Until {new Date(h.maintenance_until).toLocaleString()}
+                      </span>
+                    )}
+                    <Badge>{h.source}</Badge>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeMaintenance(h.id)}
+                      className="text-xs text-amber-400 hover:text-amber-300"
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </GlassCard>
+              ))}
+            </div>
           )}
-        </div>
+        </QueryState>
       )}
       {ConfirmDialogElement}
     </div>

@@ -2,7 +2,7 @@
 
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import type { EChartsOption } from 'echarts';
 
 interface AdguardEntry {

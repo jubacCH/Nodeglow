@@ -7,7 +7,11 @@ import { cn } from '@/lib/utils';
 import { useThemeStore } from '@/stores/theme';
 import { useAuthStore } from '@/stores/auth';
 import { useGlowStore } from '@/stores/glow';
-import { useDashboard, useNavCounts } from '@/hooks/queries/useDashboard';
+import {
+  useNavCounts, useSystemSummary, useHostSearch, useCachedOfflineCount,
+} from '@/hooks/queries/useDashboard';
+import { useIntegrations } from '@/hooks/queries/useIntegrations';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
   Bot, Scan, Radio, ShieldCheck, KeyRound, ChevronDown,
@@ -87,25 +91,33 @@ const allSearchItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { sidebarCollapsed, colorMode, toggleColorMode } = useThemeStore();
+  const sidebarCollapsed = useThemeStore((s) => s.sidebarCollapsed);
+  const colorMode = useThemeStore((s) => s.colorMode);
+  const toggleColorMode = useThemeStore((s) => s.toggleColorMode);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
-  const { isOpen: glowOpen, toggle: toggleGlow } = useGlowStore();
+  const glowOpen = useGlowStore((s) => s.isOpen);
+  const toggleGlow = useGlowStore((s) => s.toggle);
   const [intOpen, setIntOpen] = useState(() => pathname.startsWith('/integration'));
   const [search, setSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const { data: dashData } = useDashboard();
+  // Lightweight sources only — the full /api/dashboard payload stays on the
+  // dashboard page instead of being polled from every page via the sidebar.
   const { data: navCounts } = useNavCounts();
+  const { data: summary } = useSystemSummary();
+  const { data: integrations } = useIntegrations(undefined, { refetchInterval: 60_000 });
+  const offlineCount = useCachedOfflineCount();
+  const debouncedSearch = useDebouncedValue(search, 200);
+  const { data: hostHits } = useHostSearch(debouncedSearch, searchFocused);
 
   // Badge counts for nav items
   const navBadges: Record<string, { count: number; color: string }> = {};
-  if (dashData) {
-    const offlineCount = dashData.offline_count ?? 0;
-    if (offlineCount > 0) navBadges['/hosts'] = { count: offlineCount, color: 'bg-red-500/20 text-red-400' };
-    const activeInc = dashData.active_incidents ?? 0;
-    if (activeInc > 0) navBadges['/alerts'] = { count: activeInc, color: 'bg-red-500/20 text-red-400' };
+  if (offlineCount && offlineCount > 0) {
+    navBadges['/hosts'] = { count: offlineCount, color: 'bg-red-500/20 text-red-400' };
   }
+  const openIncidents = summary?.incidents?.open ?? 0;
+  if (openIncidents > 0) navBadges['/alerts'] = { count: openIncidents, color: 'bg-red-500/20 text-red-400' };
   if (navCounts) {
     const taskCount = navCounts.tasks ?? 0;
     if (taskCount > 0) navBadges['/tasks'] = { count: taskCount, color: 'bg-amber-500/20 text-amber-400' };
@@ -152,11 +164,13 @@ export function Sidebar() {
   // if any is unknown → unknown, else ok. Drives the small dot next to each
   // integration entry in the sidebar.
   const integrationHealthByType: Record<string, 'ok' | 'error' | 'unknown'> = {};
-  if (dashData?.integration_health) {
-    for (const ih of dashData.integration_health) {
+  if (integrations) {
+    for (const ih of integrations) {
+      if (!ih.enabled) continue;
       const prev = integrationHealthByType[ih.type];
       const next: 'ok' | 'error' | 'unknown' =
-        ih.ok === true ? 'ok' : ih.ok === false ? 'error' : 'unknown';
+        ih.status === 'ok' || ih.status === 'standby' ? 'ok'
+          : ih.status === 'error' ? 'error' : 'unknown';
       if (prev === 'error' || next === 'error') {
         integrationHealthByType[ih.type] = 'error';
       } else if (prev === 'unknown' || next === 'unknown') {
@@ -167,24 +181,20 @@ export function Sidebar() {
     }
   }
 
-  // Build dynamic search items from dashboard data (hosts + integration instances)
+  // Dynamic search items: hosts come from the server-side search endpoint,
+  // integration instances from the (already loaded) integrations list.
   const dynamicSearchItems = (() => {
     const items: { label: string; href: string; category?: string }[] = [];
-    if (dashData) {
-      for (const hs of dashData.host_stats ?? []) {
-        items.push({
-          label: hs.host.name || hs.host.hostname,
-          href: `/hosts/${hs.host.id}`,
-          category: 'Host',
-        });
-      }
-      for (const ih of dashData.integration_health ?? []) {
-        items.push({
-          label: `${ih.name} (${ih.label})`,
-          href: ih.single_instance ? `/integration/${ih.type}` : `/integration/${ih.type}/${ih.config_id}`,
-          category: 'Integration',
-        });
-      }
+    for (const h of hostHits ?? []) {
+      items.push({ label: h.name || h.hostname, href: `/hosts/${h.id}`, category: 'Host' });
+    }
+    for (const ih of integrations ?? []) {
+      const typeLabel = integrationTypes.find((t) => t.slug === ih.type)?.label ?? ih.type;
+      items.push({
+        label: `${ih.name} (${typeLabel})`,
+        href: `/integration/${ih.type}/${ih.id}`,
+        category: 'Integration',
+      });
     }
     return items;
   })();
@@ -195,8 +205,9 @@ export function Sidebar() {
     const pageResults = allSearchItems
       .filter((item) => item.label.toLowerCase().includes(q))
       .map((item) => ({ ...item, category: 'Page' }));
+    // Host hits are already filtered server-side (name or hostname).
     const dynResults = dynamicSearchItems
-      .filter((item) => item.label.toLowerCase().includes(q));
+      .filter((item) => item.category === 'Host' || item.label.toLowerCase().includes(q));
     return [...pageResults, ...dynResults].slice(0, 12);
   })();
 
@@ -229,6 +240,7 @@ export function Sidebar() {
             <input
               ref={searchRef}
               type="text"
+              aria-label="Search hosts and integrations"
               placeholder="Search hosts, integrations…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -250,7 +262,9 @@ export function Sidebar() {
             {/* Cmd+K discoverability pill — clicking this opens the global
                 command palette via a synthetic keydown so users learn the
                 shortcut by mousing over it once. */}
-            <kbd
+            <button
+              type="button"
+              aria-label="Open command palette"
               onClick={() => {
                 document.dispatchEvent(
                   new KeyboardEvent('keydown', {
@@ -264,8 +278,8 @@ export function Sidebar() {
               className="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-mono text-slate-500 bg-white/[0.04] border border-white/[0.08] rounded cursor-pointer hover:text-slate-300 hover:border-white/[0.18] transition-colors select-none"
               title="Open command palette"
             >
-              ⌘K
-            </kbd>
+              <kbd className="font-mono">⌘K</kbd>
+            </button>
           </div>
           {searchFocused && searchResults.length > 0 && (
             <div className="absolute left-3 right-3 mt-1 z-50 rounded-md border shadow-xl overflow-hidden max-h-80 overflow-y-auto" style={{ background: 'var(--ng-surface)', borderColor: 'var(--ng-glass-border-elevated)' }}>
@@ -300,6 +314,9 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              aria-current={isActive ? 'page' : undefined}
+              aria-label={sidebarCollapsed ? item.label : undefined}
+              title={sidebarCollapsed ? item.label : undefined}
               className={cn(
                 'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                 isActive
@@ -320,7 +337,7 @@ export function Sidebar() {
                   )}
                 />
               )}
-              <item.icon size={18} className={item.iconColor || 'text-slate-400'} />
+              <item.icon size={18} className={item.iconColor || 'text-slate-400'} aria-hidden="true" />
               {!sidebarCollapsed && (
                 <>
                   <span className="flex-1">{item.label}</span>
@@ -342,6 +359,8 @@ export function Sidebar() {
         <div className="pt-2">
           <button
             onClick={() => setIntOpen(!intOpen)}
+            aria-expanded={intOpen}
+            aria-label="Integrations"
             className="flex items-center gap-3 w-full px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-400"
           >
             {!sidebarCollapsed && <span className="flex-1 text-left">Integrations</span>}
@@ -424,6 +443,9 @@ export function Sidebar() {
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={isActive ? 'page' : undefined}
+                aria-label={sidebarCollapsed ? item.label : undefined}
+                title={sidebarCollapsed ? item.label : undefined}
                 className={cn(
                   'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors',
                   isActive
@@ -445,6 +467,7 @@ export function Sidebar() {
         <div className="px-3 py-1">
           <button
             onClick={toggleGlow}
+            aria-pressed={glowOpen}
             className={cn(
               'flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors',
               glowOpen
@@ -471,6 +494,7 @@ export function Sidebar() {
             </div>
             <button
               onClick={toggleColorMode}
+              aria-label={colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
               className="p-1.5 rounded-md transition-colors"
               style={{ color: 'var(--ng-text-muted)' }}
               title={colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -479,6 +503,7 @@ export function Sidebar() {
             </button>
             <button
               onClick={logout}
+              aria-label="Log out"
               className="p-1.5 rounded-md transition-colors"
               style={{ color: 'var(--ng-text-muted)' }}
               title="Logout"

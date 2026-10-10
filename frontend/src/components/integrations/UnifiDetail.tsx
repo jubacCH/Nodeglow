@@ -2,7 +2,7 @@
 
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import { Download, Upload, Gauge } from 'lucide-react';
 import Link from 'next/link';
 

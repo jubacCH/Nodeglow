@@ -3,7 +3,9 @@
 import { Command } from 'cmdk';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useDashboard, useNavCounts } from '@/hooks/queries/useDashboard';
+import { useHostSearch } from '@/hooks/queries/useDashboard';
+import { useIntegrations } from '@/hooks/queries/useIntegrations';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText, Bot, Scan,
   Radio, ShieldCheck, KeyRound, ClipboardList, Network, ArrowUpDown,
@@ -50,15 +52,18 @@ const NAV_ENTRIES: NavEntry[] = [
  *
  * Searches across:
  * - Navigation entries (always)
- * - Hosts (dynamically pulled from /api/dashboard)
- * - Integration instances (dynamically pulled from /api/dashboard)
+ * - Hosts (server-side search, /hosts/api/search, once 2+ chars are typed)
+ * - Integration instances (/api/v1/integrations)
+ *
+ * Both are fetched only while the palette is open.
  * - Quick actions (refresh, theme toggle later, etc.)
  */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const router = useRouter();
   const [search, setSearch] = useState('');
-  const { data: dashData } = useDashboard();
-  useNavCounts(); // keeps badge counts warm so navigation stays fresh
+  const debouncedSearch = useDebouncedValue(search, 200);
+  const { data: hosts, isFetching: hostsLoading } = useHostSearch(debouncedSearch, open);
+  const { data: integrations } = useIntegrations(undefined, { enabled: open });
 
   // Reset search when the palette is closed
   useEffect(() => {
@@ -92,6 +97,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           <kbd className="cmdk-kbd">ESC</kbd>
         </div>
         <Command.List className="cmdk-list">
+          {hostsLoading && <Command.Loading>Searching hosts…</Command.Loading>}
           <Command.Empty className="cmdk-empty">
             No results. Try a different search term.
           </Command.Empty>
@@ -124,16 +130,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ))}
           </Command.Group>
 
-          {(dashData?.host_stats?.length ?? 0) > 0 && (
+          {debouncedSearch.trim().length >= 2 && (hosts?.length ?? 0) > 0 && (
             <Command.Group heading="Hosts" className="cmdk-group">
-              {dashData!.host_stats!.slice(0, 50).map((hs) => {
-                const id = hs.host.id;
-                const name = hs.host.name || hs.host.hostname;
-                const online = hs.online;
+              {hosts!.map((h) => {
+                const id = h.id;
+                const name = h.name || h.hostname;
+                const online = h.online;
                 return (
                   <Command.Item
                     key={id}
-                    value={`host ${name} ${hs.host.hostname}`}
+                    value={`host ${name} ${h.hostname} ${id}`}
                     onSelect={() => go(`/hosts/${id}`)}
                     className="cmdk-item"
                   >
@@ -148,29 +154,27 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       }
                     />
                     <span>{name}</span>
-                    <span className="cmdk-meta">{hs.host.hostname}</span>
+                    <span className="cmdk-meta">{h.hostname}</span>
                   </Command.Item>
                 );
               })}
             </Command.Group>
           )}
 
-          {(dashData?.integration_health?.length ?? 0) > 0 && (
+          {(integrations?.length ?? 0) > 0 && (
             <Command.Group heading="Integrations" className="cmdk-group">
-              {dashData!.integration_health!.map((ih, i) => {
-                const href = ih.single_instance
-                  ? `/integration/${ih.type}`
-                  : `/integration/${ih.type}/${ih.config_id}`;
+              {integrations!.map((ih) => {
+                const href = `/integration/${ih.type}/${ih.id}`;
                 return (
                   <Command.Item
-                    key={`${ih.type}-${ih.config_id ?? i}`}
-                    value={`integration ${ih.name} ${ih.label} ${ih.type}`}
+                    key={`${ih.type}-${ih.id}`}
+                    value={`integration ${ih.name} ${ih.type} ${ih.id}`}
                     onSelect={() => go(href)}
                     className="cmdk-item"
                   >
                     <Plug size={14} className="text-violet-400" />
                     <span>{ih.name}</span>
-                    <span className="cmdk-meta">{ih.label}</span>
+                    <span className="cmdk-meta">{ih.type}</span>
                   </Command.Item>
                 );
               })}

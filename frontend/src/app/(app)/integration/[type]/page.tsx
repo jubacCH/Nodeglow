@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useIntegrations } from '@/hooks/queries/useIntegrations';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, post, del } from '@/lib/api';
+import { get, post, del, apiErrorBody, apiErrorMessage } from '@/lib/api';
 import { Plus, Trash2, X, Pencil, AlertCircle, Clock } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import Link from 'next/link';
@@ -17,6 +17,7 @@ import { useState } from 'react';
 import { useToastStore } from '@/stores/toast';
 import { api } from '@/lib/api';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useIsAdmin } from '@/stores/auth';
 
 interface ConfigField {
   key: string;
@@ -37,6 +38,16 @@ interface FieldsResponse {
 
 const selectClass = 'w-full px-3 py-2 text-sm bg-[var(--ng-surface)] border border-white/[0.08] rounded-lg text-slate-200 focus:outline-none focus:border-sky-500/50 [&>option]:text-[var(--ng-text-primary)]';
 const inputClass = 'w-full px-3 py-2 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50';
+const inputErrorClass = 'w-full px-3 py-2 text-sm bg-white/[0.06] border border-red-500/60 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-red-400';
+
+/** Fields that point the integration at a server. */
+function isEndpointField(f: ConfigField): boolean {
+  return f.field_type === 'url' || /^(host|hostname|url|base_url|api_url|endpoint|server|address)$/.test(f.key);
+}
+
+function isSecretField(f: ConfigField): boolean {
+  return f.field_type === 'password';
+}
 
 export default function IntegrationListPage() {
   const params = useParams();
@@ -49,6 +60,10 @@ export default function IntegrationListPage() {
   const [saving, setSaving] = useState(false);
   const toast = useToastStore((s) => s.show);
   const { confirm, ConfirmDialogElement } = useConfirm();
+  // Creating, editing and deleting integrations is admin-only on the backend.
+  const isAdmin = useIsAdmin();
+  const [formError, setFormError] = useState('');
+  const [missingFields, setMissingFields] = useState<string[]>([]);
 
   const { data: fieldsData } = useQuery({
     queryKey: ['integration-fields', type],
@@ -56,7 +71,31 @@ export default function IntegrationListPage() {
     enabled: showAdd || editId !== null,
   });
 
+  function clearFormErrors() {
+    setFormError('');
+    setMissingFields([]);
+  }
+
+  /** Show the backend's reason; for secrets_required, flag the fields. */
+  function showSaveError(e: unknown, fallback: string) {
+    const body = apiErrorBody(e);
+    setFormError(apiErrorMessage(e, fallback));
+    setMissingFields(body?.code === 'secrets_required' && Array.isArray(body.missing_fields) ? body.missing_fields : []);
+  }
+
+  // Edit form: endpoint fields start empty, so any value typed there is a
+  // change of address — and the backend then wants the secrets re-entered
+  // rather than sending stored credentials to a new server.
+  const endpointChanged =
+    editId !== null &&
+    (fieldsData?.fields ?? []).some((f) => isEndpointField(f) && String(formData[f.key] ?? '').trim() !== '');
+
+  function secretRequired(f: ConfigField): boolean {
+    return isSecretField(f) && (missingFields.includes(f.key) || (endpointChanged && !String(formData[f.key] ?? '')));
+  }
+
   function resetForm() {
+    clearFormErrors();
     const defaults: Record<string, string | boolean> = {};
     if (fieldsData?.fields) {
       for (const f of fieldsData.fields) {
@@ -68,6 +107,7 @@ export default function IntegrationListPage() {
 
   async function handleAdd() {
     setSaving(true);
+    clearFormErrors();
     try {
       await post(`/api/integration/${type}/create`, {
         name: formData.name || '',
@@ -76,6 +116,8 @@ export default function IntegrationListPage() {
       qc.invalidateQueries({ queryKey: ['integrations', type] });
       setShowAdd(false);
       setFormData({});
+    } catch (e) {
+      showSaveError(e, 'Failed to create integration');
     } finally {
       setSaving(false);
     }
@@ -84,6 +126,7 @@ export default function IntegrationListPage() {
   function openEdit(id: number, name: string, clusterGroup: string | null, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    clearFormErrors();
     setEditId(id);
     // Pre-fill name + cluster_group; secret config fields stay empty (password-safe)
     setFormData({ name, cluster_group: clusterGroup ?? '' });
@@ -92,6 +135,7 @@ export default function IntegrationListPage() {
   async function handleSaveEdit() {
     if (editId === null) return;
     setSaving(true);
+    clearFormErrors();
     try {
       await api(`/api/integration/${type}/${editId}`, {
         method: 'PATCH',
@@ -101,8 +145,8 @@ export default function IntegrationListPage() {
       setEditId(null);
       setFormData({});
       toast('Integration updated', 'success');
-    } catch {
-      toast('Failed to update integration', 'error');
+    } catch (e) {
+      showSaveError(e, 'Failed to update integration');
     } finally {
       setSaving(false);
     }
@@ -113,8 +157,12 @@ export default function IntegrationListPage() {
     e.stopPropagation();
     const ok = await confirm({ title: 'Delete integration', description: 'Delete this integration instance? This cannot be undone.', confirmLabel: 'Delete', variant: 'danger' });
     if (!ok) return;
-    await del(`/api/integration/${type}/${id}`);
-    qc.invalidateQueries({ queryKey: ['integrations', type] });
+    try {
+      await del(`/api/integration/${type}/${id}`);
+      qc.invalidateQueries({ queryKey: ['integrations', type] });
+    } catch (err) {
+      toast(apiErrorMessage(err, 'Failed to delete integration'), 'error');
+    }
   }
 
   return (
@@ -123,10 +171,12 @@ export default function IntegrationListPage() {
         title={fieldsData?.display_name ?? (type.charAt(0).toUpperCase() + type.slice(1))}
         description={fieldsData?.description ?? `Integration instances for ${type}`}
         actions={
-          <Button size="sm" onClick={() => { setShowAdd(true); resetForm(); }}>
-            <Plus size={16} />
-            Add Instance
-          </Button>
+          isAdmin ? (
+            <Button size="sm" onClick={() => { setShowAdd(true); resetForm(); }}>
+              <Plus size={16} />
+              Add Instance
+            </Button>
+          ) : undefined
         }
       />
 
@@ -137,11 +187,14 @@ export default function IntegrationListPage() {
             <h3 className="text-sm font-medium text-slate-200">
               New {fieldsData?.display_name ?? type} Instance
             </h3>
-            <button onClick={() => setShowAdd(false)} className="text-slate-400 hover:text-slate-200">
-              <X size={16} />
+            <button onClick={() => setShowAdd(false)} aria-label="Close" className="text-slate-400 hover:text-slate-200">
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
 
+          {formError && (
+            <p role="alert" className="mb-4 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">{formError}</p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Name field */}
             <div>
@@ -176,7 +229,7 @@ export default function IntegrationListPage() {
               <div key={field.key}>
                 <label className="block text-xs text-slate-400 mb-1">
                   {field.label}
-                  {field.required && <span className="text-red-400 ml-0.5">*</span>}
+                  {(field.required || secretRequired(field)) && <span className="text-red-400 ml-0.5">*</span>}
                 </label>
                 {field.field_type === 'checkbox' ? (
                   <label className="flex items-center gap-2 mt-1">
@@ -205,7 +258,8 @@ export default function IntegrationListPage() {
                     placeholder={field.placeholder}
                     value={(formData[field.key] as string) ?? ''}
                     onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
-                    className={inputClass}
+                    aria-invalid={missingFields.includes(field.key) || undefined}
+                    className={missingFields.includes(field.key) ? inputErrorClass : inputClass}
                   />
                 )}
               </div>
@@ -228,11 +282,19 @@ export default function IntegrationListPage() {
             <h3 className="text-sm font-medium text-slate-200">
               Edit {fieldsData?.display_name ?? type} Instance
             </h3>
-            <button onClick={() => { setEditId(null); setFormData({}); }} className="text-slate-400 hover:text-slate-200">
-              <X size={16} />
+            <button onClick={() => { setEditId(null); setFormData({}); }} aria-label="Close" className="text-slate-400 hover:text-slate-200">
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
 
+          {formError && (
+            <p role="alert" className="mb-4 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">{formError}</p>
+          )}
+          {endpointChanged && (fieldsData?.fields ?? []).some(isSecretField) && (
+            <p className="mb-4 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+              You are changing the address — re-enter the secret fields too. Stored credentials are not sent to a new server.
+            </p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-slate-400 mb-1">Name</label>
@@ -262,7 +324,7 @@ export default function IntegrationListPage() {
               <div key={field.key}>
                 <label className="block text-xs text-slate-400 mb-1">
                   {field.label}
-                  {field.required && <span className="text-red-400 ml-0.5">*</span>}
+                  {(field.required || secretRequired(field)) && <span className="text-red-400 ml-0.5">*</span>}
                 </label>
                 {field.field_type === 'checkbox' ? (
                   <label className="flex items-center gap-2 mt-1">
@@ -286,13 +348,24 @@ export default function IntegrationListPage() {
                     ))}
                   </select>
                 ) : (
-                  <input
-                    type={field.field_type === 'password' ? 'password' : field.field_type === 'url' ? 'url' : 'text'}
-                    placeholder={field.field_type === 'password' ? '(leave empty to keep current)' : field.placeholder}
-                    value={(formData[field.key] as string) ?? ''}
-                    onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
-                    className={inputClass}
-                  />
+                  <>
+                    <input
+                      type={field.field_type === 'password' ? 'password' : field.field_type === 'url' ? 'url' : 'text'}
+                      placeholder={
+                        secretRequired(field)
+                          ? 'required — address changed'
+                          : field.field_type === 'password' ? '(leave empty to keep current)' : field.placeholder
+                      }
+                      value={(formData[field.key] as string) ?? ''}
+                      onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                      required={secretRequired(field)}
+                      aria-invalid={secretRequired(field) || undefined}
+                      className={secretRequired(field) ? inputErrorClass : inputClass}
+                    />
+                    {secretRequired(field) && (
+                      <p className="mt-1 text-[11px] text-red-400">Required because the address changed.</p>
+                    )}
+                  </>
                 )}
               </div>
             ))}
@@ -330,6 +403,7 @@ export default function IntegrationListPage() {
                 <div className="flex items-center gap-3 mb-2">
                   <StatusDot status={statusKey} pulse={int.status === 'error' && int.enabled} />
                   <p className="text-sm font-medium text-slate-200 flex-1 truncate">{int.name}</p>
+                  {isAdmin && (<>
                   <button
                     onClick={(e) => openEdit(int.id, int.name, int.cluster_group, e)}
                     className="text-slate-500 hover:text-sky-400 transition-colors"
@@ -344,6 +418,7 @@ export default function IntegrationListPage() {
                   >
                     <Trash2 size={14} />
                   </button>
+                  </>)}
                 </div>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <Badge>{int.type}</Badge>
@@ -397,9 +472,11 @@ export default function IntegrationListPage() {
                   : `Add an instance to start monitoring.`
               }
               action={
-                <Button size="sm" onClick={() => { setShowAdd(true); resetForm(); }}>
-                  <Plus size={14} /> Add Instance
-                </Button>
+                isAdmin ? (
+                  <Button size="sm" onClick={() => { setShowAdd(true); resetForm(); }}>
+                    <Plus size={14} /> Add Instance
+                  </Button>
+                ) : undefined
               }
             />
           </GlassCard>

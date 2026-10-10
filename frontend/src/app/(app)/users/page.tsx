@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Modal } from '@/components/ui/Modal';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, post, patch, del } from '@/lib/api';
-import { useIsAdmin } from '@/stores/auth';
+import { get, post, patch, del, apiErrorBody, apiErrorMessage } from '@/lib/api';
+import { useIsAdmin, useUser } from '@/stores/auth';
 import { Plus, Trash2, Key, ShieldOff } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useEffect, useState } from 'react';
@@ -33,6 +33,12 @@ export default function UsersPage() {
   const [resetPwUser, setResetPwUser] = useState<UserInfo | null>(null);
   const [newUser, setNewUser] = useState({ username: '', password: '', role: 'readonly' });
   const [newPw, setNewPw] = useState('');
+  const [currentPw, setCurrentPw] = useState('');
+  const [pwError, setPwError] = useState('');
+  const me = useUser();
+  // Changing your own password needs the current one; an admin resetting
+  // someone else's does not.
+  const resetIsSelf = !!resetPwUser && !!me && resetPwUser.id === me.id;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const toast = useToastStore((s) => s.show);
@@ -87,16 +93,35 @@ export default function UsersPage() {
     }
   }
 
+  function openResetPassword(u: UserInfo | null) {
+    setResetPwUser(u);
+    setNewPw('');
+    setCurrentPw('');
+    setPwError('');
+  }
+
   async function handleResetPassword() {
     if (!resetPwUser || !newPw) return;
+    if (resetIsSelf && !currentPw) {
+      setPwError('Enter your current password.');
+      return;
+    }
     setSaving(true);
+    setPwError('');
     try {
-      await patch(`/api/users/${resetPwUser.id}`, { password: newPw });
-      setResetPwUser(null);
-      setNewPw('');
-      toast('Password reset', 'success');
-    } catch {
-      toast('Failed to reset password', 'error');
+      await patch(
+        `/api/users/${resetPwUser.id}`,
+        resetIsSelf ? { password: newPw, current_password: currentPw } : { password: newPw },
+      );
+      openResetPassword(null);
+      toast(resetIsSelf ? 'Password changed' : 'Password reset', 'success');
+    } catch (e) {
+      const body = apiErrorBody(e);
+      setPwError(
+        body?.code === 'current_password_required'
+          ? (body.error || 'Your current password is missing or wrong.')
+          : apiErrorMessage(e, 'Failed to reset password'),
+      );
     } finally {
       setSaving(false);
     }
@@ -181,9 +206,10 @@ export default function UsersPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button
-                          onClick={() => { setResetPwUser(u); setNewPw(''); }}
+                          onClick={() => openResetPassword(u)}
                           className="p-1.5 rounded-md text-slate-400 hover:text-sky-400 hover:bg-white/[0.06] transition-colors"
-                          title="Reset password"
+                          title={me?.id === u.id ? 'Change my password' : 'Reset password'}
+                          aria-label={me?.id === u.id ? 'Change my password' : `Reset password for ${u.username}`}
                         >
                           <Key size={14} />
                         </button>
@@ -253,24 +279,47 @@ export default function UsersPage() {
       </Modal>
 
       {/* Reset Password Modal */}
-      <Modal open={!!resetPwUser} onClose={() => setResetPwUser(null)} title={`Reset Password — ${resetPwUser?.username}`}>
+      <Modal
+        open={!!resetPwUser}
+        onClose={() => openResetPassword(null)}
+        title={resetIsSelf ? 'Change my password' : `Reset Password — ${resetPwUser?.username}`}
+      >
         <div className="space-y-4">
+          {pwError && (
+            <p role="alert" className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">{pwError}</p>
+          )}
+          {resetIsSelf && (
+            <div>
+              <label htmlFor="current-password" className="block text-xs text-slate-400 mb-1">Current Password</label>
+              <input
+                id="current-password"
+                type="password"
+                value={currentPw}
+                onChange={(e) => setCurrentPw(e.target.value)}
+                autoComplete="current-password"
+                className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                autoFocus
+              />
+            </div>
+          )}
           <div>
-            <label className="block text-xs text-slate-400 mb-1">New Password</label>
+            <label htmlFor="new-password" className="block text-xs text-slate-400 mb-1">New Password</label>
             <input
+              id="new-password"
               type="password"
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
+              autoComplete="new-password"
               className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/[0.08] text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-              autoFocus
+              autoFocus={!resetIsSelf}
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setResetPwUser(null)}>
+            <Button variant="ghost" size="sm" onClick={() => openResetPassword(null)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={handleResetPassword} disabled={saving || !newPw}>
-              {saving ? 'Saving...' : 'Reset Password'}
+            <Button size="sm" onClick={handleResetPassword} disabled={saving || !newPw || (resetIsSelf && !currentPw)}>
+              {saving ? 'Saving...' : resetIsSelf ? 'Change Password' : 'Reset Password'}
             </Button>
           </div>
         </div>

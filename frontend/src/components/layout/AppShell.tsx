@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Sidebar } from './Sidebar';
 import { GlowPanel } from '@/components/copilot/CopilotPanel';
 import { ToastContainer } from '@/components/ui/Toast';
@@ -11,6 +12,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useWsStore } from '@/stores/websocket';
 import { useThemeStore } from '@/stores/theme';
 import { cn } from '@/lib/utils';
+import { loginHref } from '@/lib/redirect';
 import { Menu, X } from 'lucide-react';
 
 interface AppShellProps {
@@ -23,22 +25,30 @@ export function AppShell({ children }: AppShellProps) {
   const isLoading = useAuthStore((s) => s.isLoading);
   const connect = useWsStore((s) => s.connect);
   const disconnect = useWsStore((s) => s.disconnect);
-  const { sidebarPosition, accentColor, colorMode, density, fontSize } = useThemeStore();
+  const queryClient = useQueryClient();
+  // Individual selectors: re-render only when one of these values changes,
+  // not on every theme-store update.
+  const sidebarPosition = useThemeStore((s) => s.sidebarPosition);
+  const accentColor = useThemeStore((s) => s.accentColor);
+  const colorMode = useThemeStore((s) => s.colorMode);
+  const density = useThemeStore((s) => s.density);
+  const fontSize = useThemeStore((s) => s.fontSize);
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
 
   useEffect(() => {
     fetchUser();
-    connect();
+    // Live events are folded into the query cache (see lib/liveUpdates).
+    connect(queryClient);
     // Tear down the socket + reconnect loop on unmount/logout to avoid leaks.
     return () => disconnect();
-  }, [fetchUser, connect, disconnect]);
+  }, [fetchUser, connect, disconnect, queryClient]);
 
   // Redirect to /login once auth state resolves and there is no user.
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace('/login');
+      router.replace(loginHref(window.location.pathname + window.location.search));
     }
   }, [isLoading, user, router]);
 
@@ -108,6 +118,8 @@ export function AppShell({ children }: AppShellProps) {
         <div className="lg:hidden flex items-center gap-3 px-4 h-14 sticky top-0 z-40" style={{ background: 'var(--ng-bg)', borderBottom: '1px solid var(--ng-glass-border)' }}>
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
+            aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={mobileOpen}
             className="p-1.5 rounded-md transition-colors"
             style={{ color: 'var(--ng-text-muted)' }}
           >
@@ -120,6 +132,8 @@ export function AppShell({ children }: AppShellProps) {
           </span>
         </div>
         <div
+          // The one page transition: remount + CSS fade on navigation
+          // (globals.css, disabled under prefers-reduced-motion).
           key={pathname}
           className={cn(
             // flex-1 makes the content wrapper fill the main height even

@@ -30,7 +30,8 @@ const SUGGESTIONS = [
 ];
 
 export function GlowPanel() {
-  const { isOpen, close } = useGlowStore();
+  const isOpen = useGlowStore((s) => s.isOpen);
+  const close = useGlowStore((s) => s.close);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -175,6 +176,7 @@ export function GlowPanel() {
         </div>
         <button
           onClick={close}
+          aria-label="Close Glow"
           className="p-1 rounded-md transition-colors"
           style={{ color: 'var(--ng-text-muted)' }}
         >
@@ -274,6 +276,7 @@ export function GlowPanel() {
           <button
             onClick={() => sendMessage(input)}
             disabled={!input.trim() || isStreaming}
+            aria-label="Send message"
             className="p-2 rounded-lg bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Send size={16} />

@@ -1,7 +1,7 @@
 'use client';
 
 import { GlassCard } from '@/components/ui/GlassCard';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import type { EChartsOption } from 'echarts';
 import Link from 'next/link';
 
