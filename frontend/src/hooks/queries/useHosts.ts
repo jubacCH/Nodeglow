@@ -1,12 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
 import type { HostStatus, HostDetail, PingResult } from '@/types';
+import { whileLive } from '@/stores/websocket';
 
 export function useHosts() {
   return useQuery({
     queryKey: ['hosts'],
     queryFn: () => get<HostStatus[]>('/hosts/api/status'),
-    refetchInterval: 30_000,
+    // Online/latency arrive live over the WebSocket; poll slower while it is up.
+    refetchInterval: whileLive(30_000, 120_000),
   });
 }
 
@@ -33,7 +35,7 @@ export function useHostsV1() {
   return useQuery({
     queryKey: ['hosts-v1'],
     queryFn: () => get<HostListItem[]>('/api/v1/hosts'),
-    refetchInterval: 30_000,
+    refetchInterval: whileLive(30_000, 120_000),
   });
 }
 

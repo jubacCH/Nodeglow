@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Sidebar } from './Sidebar';
 import { GlowPanel } from '@/components/copilot/CopilotPanel';
 import { ToastContainer } from '@/components/ui/Toast';
@@ -23,6 +24,7 @@ export function AppShell({ children }: AppShellProps) {
   const isLoading = useAuthStore((s) => s.isLoading);
   const connect = useWsStore((s) => s.connect);
   const disconnect = useWsStore((s) => s.disconnect);
+  const queryClient = useQueryClient();
   const { sidebarPosition, accentColor, colorMode, density, fontSize } = useThemeStore();
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
@@ -30,10 +32,11 @@ export function AppShell({ children }: AppShellProps) {
 
   useEffect(() => {
     fetchUser();
-    connect();
+    // Live events are folded into the query cache (see lib/liveUpdates).
+    connect(queryClient);
     // Tear down the socket + reconnect loop on unmount/logout to avoid leaks.
     return () => disconnect();
-  }, [fetchUser, connect, disconnect]);
+  }, [fetchUser, connect, disconnect, queryClient]);
 
   // Redirect to /login once auth state resolves and there is no user.
   useEffect(() => {

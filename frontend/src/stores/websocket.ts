@@ -1,11 +1,12 @@
 import { create } from 'zustand';
+import type { QueryClient } from '@tanstack/react-query';
 import type { WsMessage, WsPingUpdate, WsAgentMetric } from '@/types';
+import { applyLiveUpdates, liveRefetchInterval } from '@/lib/liveUpdates';
 
 interface WsState {
   isConnected: boolean;
-  lastPingUpdates: Map<number, WsPingUpdate>;
-  lastAgentMetrics: Map<number, WsAgentMetric>;
-  connect: () => void;
+  /** Open the socket. Live events are folded into `queryClient`'s cache. */
+  connect: (queryClient: QueryClient) => void;
   disconnect: () => void;
 }
 
@@ -16,12 +17,36 @@ let backoff = 1000;
 // does not schedule a reconnect (e.g. on unmount/logout).
 let intentionalDisconnect = false;
 
+// Events are buffered (latest per host/agent wins) and flushed once per
+// animation frame, so a burst of N pings costs one cache pass instead of N.
+let client: QueryClient | null = null;
+let pendingPings = new Map<number, WsPingUpdate>();
+let pendingAgents = new Map<number, WsAgentMetric>();
+let flushScheduled = false;
+
+function flush() {
+  flushScheduled = false;
+  const pings = pendingPings;
+  const agents = pendingAgents;
+  pendingPings = new Map();
+  pendingAgents = new Map();
+  if (client) applyLiveUpdates(client, pings, agents);
+}
+
+function scheduleFlush() {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  // rAF is paused in background tabs; the buffer is keyed by id so it stays
+  // bounded and is applied as soon as the tab is visible again.
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+  else setTimeout(flush, 16);
+}
+
 export const useWsStore = create<WsState>((set, getState) => ({
   isConnected: false,
-  lastPingUpdates: new Map(),
-  lastAgentMetrics: new Map(),
 
-  connect: () => {
+  connect: (queryClient) => {
+    client = queryClient;
     if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
 
     // A fresh connect cancels any pending intentional-disconnect state.
@@ -34,31 +59,32 @@ export const useWsStore = create<WsState>((set, getState) => ({
     }
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${proto}//${location.host}/ws/live`);
+    const sock = new WebSocket(`${proto}//${location.host}/ws/live`);
+    ws = sock;
 
-    ws.onopen = () => {
+    sock.onopen = () => {
       set({ isConnected: true });
       backoff = 1000;
     };
 
-    ws.onmessage = (e) => {
+    sock.onmessage = (e) => {
       try {
         const msg: WsMessage = JSON.parse(e.data);
         if (msg.type === 'ping_update') {
-          const map = new Map(getState().lastPingUpdates);
-          map.set(msg.host_id, msg);
-          set({ lastPingUpdates: map });
+          pendingPings.set(msg.host_id, msg);
+          scheduleFlush();
         } else if (msg.type === 'agent_metric') {
-          const map = new Map(getState().lastAgentMetrics);
-          map.set(msg.agent_id, msg);
-          set({ lastAgentMetrics: map });
+          pendingAgents.set(msg.agent_id, msg);
+          scheduleFlush();
         }
       } catch {
         // ignore malformed messages
       }
     };
 
-    ws.onclose = () => {
+    sock.onclose = () => {
+      // A socket replaced by a newer connect() must not clobber its state.
+      if (ws !== sock && ws !== null) return;
       set({ isConnected: false });
       ws = null;
       // Do not reconnect if the socket was closed by an intentional disconnect.
@@ -66,11 +92,11 @@ export const useWsStore = create<WsState>((set, getState) => ({
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         backoff = Math.min(backoff * 2, 30000);
-        getState().connect();
+        if (client) getState().connect(client);
       }, backoff);
     };
 
-    ws.onerror = () => ws?.close();
+    sock.onerror = () => sock.close();
   },
 
   disconnect: () => {
@@ -83,6 +109,16 @@ export const useWsStore = create<WsState>((set, getState) => ({
     }
     ws?.close();
     ws = null;
+    pendingPings.clear();
+    pendingAgents.clear();
     set({ isConnected: false });
   },
 }));
+
+/**
+ * refetchInterval for queries the WebSocket keeps live: `fast` while the
+ * socket is down, `slow` while it is connected.
+ */
+export function whileLive(fast: number, slow: number) {
+  return liveRefetchInterval(() => useWsStore.getState().isConnected, fast, slow);
+}
