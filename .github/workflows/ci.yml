@@ -54,6 +54,14 @@ jobs:
       - name: Ruff (sidecar)
         run: ruff check --config backend/ruff.toml --output-format github sidecar
 
+      # Catches interpolation/schema mistakes in docker-compose.yml before an
+      # operator's `compose up` does. Dummy values satisfy the :? guards.
+      - name: docker compose config
+        env:
+          POSTGRES_PASSWORD: ci
+          UPDATE_SIDECAR_TOKEN: ci
+        run: docker compose -f docker-compose.yml config --quiet
+
   sidecar:
     name: Sidecar (pytest)
     runs-on: ubuntu-latest
