@@ -259,7 +259,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
 
@@ -304,7 +304,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
 
@@ -390,7 +390,7 @@ jobs:
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
 
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
 
