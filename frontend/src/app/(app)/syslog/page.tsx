@@ -257,16 +257,16 @@ export default function SyslogPage() {
                             {msg.hostname || '—'}
                           </Link>
                         </Td>
-                        <Td className="w-full max-w-0">
+                        <Td className="w-full max-w-0 max-[759px]:min-w-[280px]">
                           <span className="flex min-w-0 items-center gap-2">
                             <span className="truncate font-mono text-meta text-fg" title={msg.message}>{msg.message}</span>
                             {fieldKeys.length > 0 && (
-                              <span className="shrink-0 rounded-chip bg-surface-2 px-1.5 text-micro text-fg-3">
+                              <span className="shrink-0 rounded-chip bg-surface-2 px-1.5 text-micro text-fg-3 max-[759px]:hidden">
                                 {fieldKeys.length} fields
                               </span>
                             )}
                             {msg.geo_country && (
-                              <span className="inline-flex shrink-0 items-center gap-1 rounded-chip bg-surface-2 px-1.5 text-micro text-fg-3">
+                              <span className="inline-flex shrink-0 items-center gap-1 rounded-chip bg-surface-2 px-1.5 text-micro text-fg-3 max-[759px]:hidden">
                                 <MapPin size={10} aria-hidden="true" />{msg.geo_country}
                               </span>
                             )}
