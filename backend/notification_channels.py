@@ -28,6 +28,8 @@ import notifications as _notifications
 logger = logging.getLogger(__name__)
 
 CHANNELS: tuple[str, ...] = ("teams", "slack", "ntfy")
+# Every channel the daily AI summary can go to; also its default selection.
+DAILY_SUMMARY_DEFAULT_CHANNELS = "telegram,discord,webhook,email,teams,slack,ntfy"
 
 HTTP_TIMEOUT = 10.0
 _MAX_RETRIES = 2          # extra attempts after a 429
@@ -331,6 +333,25 @@ def make_send(cfg: ExtraChannelConfig, channel: str, title: str, message: str,
         return send_ntfy(cfg.ntfy_server_url, cfg.ntfy_topic, cfg.ntfy_token,
                          title, message, severity, link)
     raise ChannelError(f"unknown channel {channel!r}")
+
+
+async def send_to_selected(cfg: ExtraChannelConfig, selected: set[str] | list[str],
+                           title: str, message: str, severity: str = "info",
+                           link_path: str | None = None,
+                           ) -> list[tuple[str, Exception | None]]:
+    """Deliver to each enabled, configured Teams/Slack/ntfy channel in
+    ``selected`` (used by the daily AI summary). Returns (channel, error)."""
+    link = build_link(cfg.public_url, link_path)
+    results: list[tuple[str, Exception | None]] = []
+    for name in CHANNELS:
+        if name not in selected or not getattr(cfg, f"{name}_enabled") or not cfg.configured(name):
+            continue
+        try:
+            await make_send(cfg, name, title, message, severity, link)
+            results.append((name, None))
+        except Exception as exc:
+            results.append((name, exc))
+    return results
 
 
 def build_sends(cfg: ExtraChannelConfig, title: str, message: str, severity: str, *,

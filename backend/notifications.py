@@ -239,11 +239,12 @@ async def notify(title: str, message: str, severity: str = "critical",
         if enabled != "1":
             return
 
-        tg_token    = await get_setting(db, "telegram_bot_token", "")
+        from services.channel_secrets import reveal  # stored via encrypt_value
+        tg_token    = reveal(await get_setting(db, "telegram_bot_token", ""))
         tg_chat     = await get_setting(db, "telegram_chat_id", "")
-        dc_webhook  = await get_setting(db, "discord_webhook_url", "")
-        wh_url      = await get_setting(db, "webhook_url", "")
-        wh_secret   = await get_setting(db, "webhook_secret", "")
+        dc_webhook  = reveal(await get_setting(db, "discord_webhook_url", ""))
+        wh_url      = reveal(await get_setting(db, "webhook_url", ""))
+        wh_secret   = reveal(await get_setting(db, "webhook_secret", ""))
         smtp_host   = await get_setting(db, "smtp_host", "")
         smtp_port   = await get_setting(db, "smtp_port", "587")
         smtp_user   = await get_setting(db, "smtp_user", "")

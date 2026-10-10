@@ -138,11 +138,19 @@ async def save_notifications(
         min_cyc = "2"
     await set_setting(db, "correlation_min_cycles", min_cyc)
 
-    await set_setting(db, "telegram_bot_token", telegram_bot_token.strip())
     await set_setting(db, "telegram_chat_id", telegram_chat_id.strip())
-    await set_setting(db, "discord_webhook_url", discord_webhook_url.strip())
-    await set_setting(db, "webhook_url", webhook_url.strip())
-    await set_setting(db, "webhook_secret", webhook_secret.strip())
+    # Legacy channel secrets: encrypted at rest, blank keeps, <key>_clear removes.
+    form = await request.form()
+    for key, val in (
+        ("telegram_bot_token", telegram_bot_token),
+        ("discord_webhook_url", discord_webhook_url),
+        ("webhook_url", webhook_url),
+        ("webhook_secret", webhook_secret),
+    ):
+        if form.get(f"{key}_clear") == "1":
+            await set_setting(db, key, "")
+        elif val.strip():
+            await set_setting(db, key, encrypt_value(val.strip()))
     await set_setting(db, "smtp_host", smtp_host.strip())
     await set_setting(db, "smtp_port", smtp_port.strip() or "587")
     await set_setting(db, "smtp_user", smtp_user.strip())
@@ -230,17 +238,18 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
         _build_html_email, _log_notification,
     )
     from database import decrypt_value, get_setting
+    from services.channel_secrets import reveal
     try:
         if channel == "telegram":
-            token = await get_setting(db, "telegram_bot_token", "")
+            token = reveal(await get_setting(db, "telegram_bot_token", ""))
             chat  = await get_setting(db, "telegram_chat_id", "")
             await _send_telegram(token, chat, "<b>Nodeglow Test</b>\nNotifications are working ✓")
         elif channel == "discord":
-            url = await get_setting(db, "discord_webhook_url", "")
+            url = reveal(await get_setting(db, "discord_webhook_url", ""))
             await _send_discord(url, "Nodeglow Test", "Notifications are working ✓", 0x3498db)
         elif channel == "webhook":
-            url    = await get_setting(db, "webhook_url", "")
-            secret = await get_setting(db, "webhook_secret", "")
+            url    = reveal(await get_setting(db, "webhook_url", ""))
+            secret = reveal(await get_setting(db, "webhook_secret", ""))
             await _send_webhook(url, secret, "Nodeglow Test", "Notifications are working", "info")
         elif channel == "email":
             host  = await get_setting(db, "smtp_host", "")

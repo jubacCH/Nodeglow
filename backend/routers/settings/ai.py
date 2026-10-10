@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import encrypt_value, get_db, get_setting, set_setting
+from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
 from ratelimit import rate_limit
 from services.ai_config import (
     AI_DISABLED_MESSAGE,
@@ -73,7 +74,7 @@ async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
     data["daily_ai_summary_enabled"] = (await get_setting(db, "daily_ai_summary_enabled", "0")) == "1"
     data["daily_ai_summary_hour"] = await get_setting(db, "daily_ai_summary_hour", "") or "8"
     data["daily_ai_summary_channels"] = (
-        await get_setting(db, "daily_ai_summary_channels", "") or "telegram,discord,webhook,email"
+        await get_setting(db, "daily_ai_summary_channels", "") or DAILY_SUMMARY_DEFAULT_CHANNELS
     )
     return JSONResponse(data)
 
@@ -270,16 +271,17 @@ async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get
         log.warning("Failed to log AI usage: %s", exc)
 
     title = "Daily AI Summary (Test)"
-    channels_csv = await get_setting(db, "daily_ai_summary_channels", "telegram,discord,webhook,email")
+    channels_csv = await get_setting(db, "daily_ai_summary_channels", "") or DAILY_SUMMARY_DEFAULT_CHANNELS
     selected = {c.strip() for c in channels_csv.split(",") if c.strip()}
     sent = False
     errors = []
 
-    tg_token = await get_setting(db, "telegram_bot_token", "")
+    from services.channel_secrets import reveal
+    tg_token = reveal(await get_setting(db, "telegram_bot_token", ""))
     tg_chat = await get_setting(db, "telegram_chat_id", "")
-    dc_webhook = await get_setting(db, "discord_webhook_url", "")
-    wh_url = await get_setting(db, "webhook_url", "")
-    wh_secret = await get_setting(db, "webhook_secret", "")
+    dc_webhook = reveal(await get_setting(db, "discord_webhook_url", ""))
+    wh_url = reveal(await get_setting(db, "webhook_url", ""))
+    wh_secret = reveal(await get_setting(db, "webhook_secret", ""))
     smtp_host = await get_setting(db, "smtp_host", "")
     smtp_user = await get_setting(db, "smtp_user", "")
     smtp_pw_enc = await get_setting(db, "smtp_password", "")
@@ -327,6 +329,14 @@ async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get
             sent = True
         except Exception as exc:
             errors.append(f"Email: {exc}")
+
+    from notification_channels import load_config as load_channel_config, send_to_selected
+    channel_cfg = await load_channel_config(db, get_setting, decrypt_value)
+    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary):
+        if exc is None:
+            sent = True
+        else:
+            errors.append(f"{ch}: {exc}")
 
     if sent:
         msg = "Test summary sent"

@@ -54,6 +54,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         import logging as _logging
         _logging.getLogger("nodeglow.ai").exception("AI opt-in upgrade check failed")
+    # Telegram/Discord/webhook secrets used to be stored in plaintext.
+    try:
+        from services.channel_secrets import encrypt_plaintext_channel_secrets
+        await encrypt_plaintext_channel_secrets()
+    except Exception:
+        import logging as _logging
+        _logging.getLogger("nodeglow").exception("Encrypting notification channel secrets failed")
     await start_scheduler()
     os.environ["NODEGLOW_START_TIME"] = str(time.time())
     from services.syslog import start_syslog_server, stop_syslog_server

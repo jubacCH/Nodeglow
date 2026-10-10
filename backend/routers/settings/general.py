@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import encrypt_value, get_db, get_setting, set_setting
 from models.integration import IntegrationConfig
+from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
 from ratelimit import rate_limit
 from services.audit import log_action
+from services.channel_secrets import LEGACY_SECRET_KEYS
 
 from ._helpers import require_admin
 
@@ -26,8 +28,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "site_name", "timezone", "ping_interval", "latency_threshold_ms",
         "agent_server_url",
         "proxmox_interval", "notify_enabled", "notify_grace_minutes",
-        "telegram_bot_token", "telegram_chat_id",
-        "discord_webhook_url", "webhook_url", "webhook_secret",
+        "telegram_chat_id",
         "smtp_host", "smtp_port", "smtp_user", "smtp_from", "smtp_to",
         "notify_telegram_min_severity", "notify_discord_min_severity",
         "notify_webhook_min_severity", "notify_email_min_severity",
@@ -62,7 +63,7 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "predictor_min_occurrences": "20",
         "digest_day": "0", "digest_hour": "9",
         "daily_ai_summary_hour": "8",
-        "daily_ai_summary_channels": "telegram,discord,webhook,email",
+        "daily_ai_summary_channels": DAILY_SUMMARY_DEFAULT_CHANNELS,
         "ntfy_server_url": "https://ntfy.sh",
         "teams_enabled": "0", "slack_enabled": "0", "ntfy_enabled": "0",
     }
@@ -73,6 +74,9 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         from services.predictor_config import DEFAULT_BLACKLIST_PATTERNS
         result["predictor_template_blacklist"] = json.dumps(DEFAULT_BLACKLIST_PATTERNS)
     result["smtp_has_pw"] = bool(await get_setting(db, "smtp_password", ""))
+    # Legacy channel secrets never leave the server either: flags only.
+    for key in LEGACY_SECRET_KEYS:
+        result[f"{key}_has_value"] = bool(await get_setting(db, key, ""))
     # Teams/Slack webhook URLs and the ntfy token are secrets: flags only.
     result["teams_has_url"] = bool(await get_setting(db, "teams_webhook_url", ""))
     result["slack_has_url"] = bool(await get_setting(db, "slack_webhook_url", ""))
