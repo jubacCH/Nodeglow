@@ -520,3 +520,12 @@ app.include_router(digest_router.router)
 app.include_router(bandwidth_router.router)
 app.include_router(backups_router.router)
 app.include_router(maintenance_router.router)
+
+# ── Plugins (enterprise features under ee/, when present) ─────────────────────
+# The loader is the only core module that knows ee/ exists; without it (or with
+# NODEGLOW_DISABLE_EE=1) nothing is registered and this is the community
+# edition. Plugin routers are mounted after the core ones.
+import ee_loader  # noqa: E402
+
+ee_loader.load_plugins()
+ee_loader.mount_routers(app)

@@ -201,24 +201,6 @@ def _factory(db):
     return factory
 
 
-async def test_auto_postmortem_is_skipped_when_ai_is_off(db):
-    from datetime import datetime
-
-    from models.incident import Incident
-    from services import postmortem
-
-    inc = Incident(rule="host_down", title="nas01 down", severity="critical", status="resolved",
-                   created_at=datetime.utcnow(), resolved_at=datetime.utcnow())
-    db.add(inc)
-    await db.commit()
-    with patch.object(postmortem, "AsyncSessionLocal", _factory(db)), \
-         patch.object(postmortem, "generate_completion") as gen:
-        await postmortem.generate_postmortem(inc.id)
-    gen.assert_not_called()
-    await db.refresh(inc)
-    assert inc.postmortem is None and inc.postmortem_generated_at is None
-
-
 async def test_upgrade_with_existing_key_enables_once_and_audits(db):
     from database import Setting, encrypt_value
     db.add(Setting(key="claude_api_key", value=encrypt_value("sk-ant-prod")))

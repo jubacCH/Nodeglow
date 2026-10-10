@@ -1,12 +1,10 @@
-"""AI entry points honour the opt-in; the settings tab records who enabled it."""
-from datetime import datetime
+"""AI settings honour the opt-in and record who enabled it (core plumbing)."""
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
 
 from database import Setting, encrypt_value
 from models.audit import AuditLog
-from models.incident import Incident
 from tests.test_routers.conftest import make_client
 
 JSON = {"accept": "application/json"}
@@ -27,46 +25,6 @@ async def _get(sf, key):
     async with sf() as db:
         row = await db.get(Setting, key)
         return row.value if row else None
-
-
-async def test_glow_chat_refuses_when_ai_is_off():
-    async with make_client() as (client, sf):
-        await _set(sf, claude_api_key=encrypt_value("sk-ant-x"))  # key alone is not consent
-        with patch("services.ai_client._anthropic_stream") as sent:
-            resp = await client.post("/api/v1/glow/chat", json={"message": "hi"})
-        assert resp.status_code == 409
-        assert resp.json()["code"] == "ai_disabled"
-        assert "Settings > AI" in resp.json()["error"]
-        sent.assert_not_called()
-
-
-async def test_glow_chat_reports_missing_provider_config():
-    async with make_client() as (client, sf):
-        await _set(sf, ai_enabled="1", ai_provider="openai_compatible")
-        resp = await client.post("/api/v1/glow/chat", json={"message": "hi"})
-        assert resp.status_code == 409
-        assert resp.json()["code"] == "ai_not_configured"
-
-
-async def test_postmortem_regenerate_refuses_when_ai_is_off():
-    async with make_client() as (client, sf):
-        async with sf() as db:
-            inc = Incident(rule="host_down", title="x", severity="critical", status="resolved",
-                           created_at=datetime.utcnow(), resolved_at=datetime.utcnow())
-            db.add(inc)
-            await db.commit()
-            inc_id = inc.id
-        with patch("services.postmortem.generate_postmortem", new_callable=AsyncMock) as gen:
-            resp = await client.post(f"/api/v1/incidents/{inc_id}/postmortem")
-        assert resp.status_code == 409 and resp.json()["code"] == "ai_disabled"
-        gen.assert_not_called()
-
-
-async def test_daily_summary_test_refuses_when_ai_is_off():
-    async with make_client() as (client, sf):
-        await _set(sf, claude_api_key=encrypt_value("sk-ant-x"))
-        resp = await client.post("/settings/ai/test-summary")
-        assert resp.status_code == 409 and resp.json()["code"] == "ai_disabled"
 
 
 async def test_status_endpoint():

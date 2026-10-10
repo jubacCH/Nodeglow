@@ -13,7 +13,6 @@ Rules:
 8. severity_trend    – Error template with rising frequency trend
 9. content_anomaly   – New templates on stable host / severity upgrade
 """
-import asyncio
 import hashlib
 import json
 import logging
@@ -1083,12 +1082,9 @@ async def run_correlation():
         # keep the streak counters and let the next complete cycle prune.
         _current_cycle_hits.clear()
 
-    # Spawn post-mortem tasks only after the transaction has committed, so the
-    # background task (fresh session) reads incidents that are durably persisted.
+    # Run incident-resolved hooks (e.g. the enterprise AI postmortem) only after
+    # the transaction has committed, so the background task (fresh session)
+    # reads incidents that are durably persisted.
     if postmortem_ids:
-        try:
-            from services.postmortem import generate_postmortem
-            for _incident_id in postmortem_ids:
-                asyncio.create_task(generate_postmortem(_incident_id))
-        except Exception:
-            log.warning("Failed to spawn post-mortem tasks", exc_info=True)
+        from extensions import fire_incident_resolved
+        fire_incident_resolved(postmortem_ids)

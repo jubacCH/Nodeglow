@@ -1,5 +1,5 @@
 """Telegram / Discord / webhook secrets: encrypted, never sent to the UI,
-blank keeps, *_clear removes; the daily summary reaches Teams/Slack/ntfy."""
+blank keeps, *_clear removes; the daily summary defaults include Teams/Slack/ntfy."""
 from unittest.mock import AsyncMock, patch
 
 import notification_channels as nc
@@ -99,35 +99,6 @@ async def test_daily_summary_defaults_include_new_channels():
             "telegram", "discord", "webhook", "email", "teams", "slack", "ntfy",
         ]
         assert "teams" in (await client.get("/settings/json")).json()["daily_ai_summary_channels"]
-
-
-async def test_test_summary_reaches_selected_new_channels():
-    async with make_client() as (client, sf):
-        await _set(
-            sf, ai_enabled="1", claude_api_key=encrypt_value("sk-ant-x"),
-            daily_ai_summary_channels="telegram,slack,ntfy",
-            telegram_bot_token=encrypt_value("1:A"), telegram_chat_id="-100",
-            teams_enabled="1", teams_webhook_url=encrypt_value("https://x.logic.azure.com/w"),
-            slack_enabled="1", slack_webhook_url=encrypt_value("https://hooks.slack.com/services/x"),
-            ntfy_enabled="1", ntfy_topic="alerts",
-        )
-        usage = {"input_tokens": 1, "output_tokens": 1, "model": "m"}
-        with patch("services.digest.build_daily_summary_data", new=AsyncMock(return_value={})), \
-             patch("services.digest.format_daily_summary_prompt", return_value="p"), \
-             patch("services.ai_client.generate_completion",
-                   new=AsyncMock(return_value=("All quiet.", usage))), \
-             patch("notifications._send_telegram", new_callable=AsyncMock) as tg, \
-             patch.object(nc, "send_teams", new_callable=AsyncMock) as teams, \
-             patch.object(nc, "send_slack", new_callable=AsyncMock) as slack, \
-             patch.object(nc, "send_ntfy", side_effect=nc.ChannelError("ntfy: HTTP 500")):
-            r = await client.post("/settings/ai/test-summary")
-        assert r.status_code == 200, r.text
-        assert tg.await_args.args[0] == "1:A"
-        slack.assert_awaited_once()
-        assert slack.await_args.args[0] == "https://hooks.slack.com/services/x"
-        assert slack.await_args.args[2] == "All quiet."
-        teams.assert_not_called()  # not selected
-        assert "ntfy: HTTP 500" in r.json()["message"]
 
 
 async def test_send_to_selected_skips_disabled_and_collects_errors():
