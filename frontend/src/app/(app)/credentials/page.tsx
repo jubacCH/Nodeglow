@@ -118,7 +118,11 @@ export default function CredentialsPage() {
 
   const query = useQuery<Credential[]>({
     queryKey: ['credentials'],
-    queryFn: () => get('/api/credentials/list'),
+    // The endpoint wraps the list: {credentials: [...]}
+    queryFn: async () => {
+      const res = await get<{ credentials: Credential[] } | Credential[]>('/api/credentials/list');
+      return Array.isArray(res) ? res : res.credentials ?? [];
+    },
   });
 
   /* ----- Mutations ----- */
