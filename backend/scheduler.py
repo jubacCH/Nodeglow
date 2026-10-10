@@ -949,6 +949,7 @@ async def check_disk_space():
                 severity=severity,
                 status="open",
                 host_ids_hash=sha256(b"self-disk").hexdigest()[:16],
+                host_ids="[]",  # about Nodeglow's own disk, no monitored host
             )
             db.add(inc)
             await db.flush()

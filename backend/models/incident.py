@@ -16,6 +16,10 @@ class Incident(Base):
     severity = Column(String(16), nullable=False, default="warning")  # critical | warning | info
     status = Column(String(16), nullable=False, default="open")       # open | acknowledged | resolved
     host_ids_hash = Column(String(64), nullable=True)    # for dedup: hash of sorted affected host IDs
+    # The affected ping host ids themselves, as a sorted JSON list ("[3,7]").
+    # NULL = not recorded (incidents from before revision 037, or rules that
+    # are not about hosts) — "unknown", never "no hosts". "[]" = recorded, none.
+    host_ids = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
