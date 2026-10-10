@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+
+logger = logging.getLogger(__name__)
 
 _STATUS_LABELS = {
     "OL": "On Line", "OB": "On Battery", "LB": "Low Battery",
@@ -115,7 +118,7 @@ class NutClient:
             try:
                 await writer.wait_closed()
             except Exception:
-                pass
+                logger.debug("NUT connection did not close cleanly", exc_info=True)
 
         return parse_nut_vars(lines)
 

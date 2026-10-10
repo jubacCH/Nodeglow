@@ -296,8 +296,9 @@ async def import_unifi_devices(ctrl_name: str, data: dict, db) -> dict:
             rev = _socket.gethostbyaddr(ip)[0]
             if rev and "." in rev and not rev.startswith(ip):
                 fqdn = rev
-        except Exception:
-            pass
+        except (OSError, UnicodeError, ValueError):
+            # No PTR record (socket.herror) or a malformed name — keep the short name.
+            logger.debug("reverse DNS failed for %s", ip, exc_info=True)
 
         existing = by_ip.get(ip) or by_mac.get(mac)
         if existing:
