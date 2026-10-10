@@ -192,7 +192,9 @@ async def syslog_stream(
                     yield ": keepalive\n\n"
                     continue
 
-                if sev_filter is not None and msg.get("severity") != sev_filter:
+                # Same semantics as the list endpoint: "severity N or worse"
+                msg_sev = msg.get("severity")
+                if sev_filter is not None and (msg_sev is None or msg_sev > sev_filter):
                     continue
                 if host and host.lower() not in (msg.get("source_ip", "").lower() + msg.get("hostname", "").lower()):
                     continue

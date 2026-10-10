@@ -55,7 +55,7 @@ export function SyslogLiveTail({ enabled, severity, host, app }: SyslogLiveTailP
             {messages.length} message{messages.length !== 1 ? 's' : ''}
           </span>
           {sevLabel && (
-            <span className="text-meta text-fg-3">Only {sevLabel.toLowerCase()} messages</span>
+            <span className="text-meta text-fg-3">{sevLabel} or worse</span>
           )}
         </div>
         <Button variant="ghost" size="sm" onClick={clear} disabled={messages.length === 0}>
