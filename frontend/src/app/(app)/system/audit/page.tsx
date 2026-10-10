@@ -10,10 +10,10 @@ import { useAudit } from '@/hooks/queries/useAudit';
 import {
   Shield, ChevronLeft, ChevronRight, Filter,
   LogIn, LogOut, Settings, Server, AlertTriangle,
-  Download, Upload, Wrench,
+  Download, Upload, Wrench, type LucideIcon,
 } from 'lucide-react';
 
-const ACTION_ICONS: Record<string, React.ElementType> = {
+const ACTION_ICONS: Record<string, LucideIcon> = {
   'auth.login': LogIn,
   'auth.logout': LogOut,
   'settings.update': Settings,

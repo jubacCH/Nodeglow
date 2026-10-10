@@ -14,7 +14,7 @@ import { useHost, useHostHistory, useHosts } from '@/hooks/queries/useHosts';
 import { useAgents } from '@/hooks/queries/useAgents';
 import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
 import { EChart } from '@/components/charts/LazyEChart';
-import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText, AlertTriangle, Scan, Check, X, Lock, Shield } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText, AlertTriangle, Scan, Check, X, Lock, Shield, type LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
@@ -171,7 +171,7 @@ function formatBytes(bytes: number | null | undefined): string {
 }
 
 function MetricCard({ icon: Icon, label, value, pct, sub, color }: {
-  icon: React.ElementType;
+  icon: LucideIcon;
   label: string;
   value: string;
   pct?: number | null;
