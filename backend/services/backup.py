@@ -51,6 +51,10 @@ async def export_backup(db: AsyncSession) -> dict:
             "version": "1.0",
             "timestamp": datetime.utcnow().isoformat(),
             "format": "nodeglow-backup",
+            # Never the key itself: credentials in this file are encrypted
+            # with SECRET_KEY, which must be escrowed separately. The
+            # fingerprint only tells a restore which key it needs.
+            "secret_key_fingerprint": _key_fingerprint(),
         },
         "tables": {},
     }
@@ -105,6 +109,17 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
 
     tables_data = data.get("tables", {})
     imported = {}
+
+    key_warning = None
+    backup_fp = meta.get("secret_key_fingerprint")
+    current_fp = _key_fingerprint()
+    if backup_fp and current_fp and backup_fp != current_fp:
+        key_warning = (
+            f"Backup was made with encryption key {backup_fp}, this installation "
+            f"runs with {current_fp}: restored credentials will not decrypt until "
+            "the original SECRET_KEY is configured."
+        )
+        logger.error(key_warning)
 
     # Disable FK checks during import
     await db.execute(text("SET session_replication_role = 'replica'"))
@@ -176,7 +191,19 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
     finally:
         await db.execute(text("SET session_replication_role = 'origin'"))
 
-    return {"imported": imported, "total_rows": sum(imported.values())}
+    result = {"imported": imported, "total_rows": sum(imported.values())}
+    if key_warning:
+        result["warning"] = key_warning
+    return result
+
+
+def _key_fingerprint() -> str | None:
+    try:
+        from config import secret_key_fingerprint
+        return secret_key_fingerprint()
+    except Exception:  # never let bookkeeping break a backup or restore
+        logger.debug("could not compute the key fingerprint", exc_info=True)
+        return None
 
 
 def _serialize(value):

@@ -51,3 +51,19 @@ def test_source_is_tracked(monkeypatch, tmp_path):
     assert config.get_secret_key() == "abc"
     assert config.SECRET_KEY_SOURCE == "env"
     assert config.SECRET_KEY_FROM_ENV is True
+
+
+def test_fingerprint_is_stable_short_and_not_the_key():
+    fp = config.secret_key_fingerprint("a" * 64)
+    assert fp == config.secret_key_fingerprint("a" * 64)
+    assert fp != config.secret_key_fingerprint("b" * 64)
+    assert len(fp) == 16
+    assert "a" * 16 not in fp
+
+
+async def test_json_backup_records_fingerprint_not_key(db):
+    from services.backup import export_backup
+
+    data = await export_backup(db)
+    assert data["_meta"]["secret_key_fingerprint"] == config.secret_key_fingerprint()
+    assert config.SECRET_KEY not in str(data)
