@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # release.yml runs the whole suite against the tagged commit before it
+  # builds anything.
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -72,6 +75,30 @@ jobs:
           POSTGRES_PASSWORD: ci
           UPDATE_SIDECAR_TOKEN: ci
         run: docker compose -f docker-compose.yml config --quiet
+
+      # The release compose file (image mode) must render as well, for both
+      # editions, and both files must define the same services.
+      - name: docker compose config (release)
+        env:
+          POSTGRES_PASSWORD: ci
+          UPDATE_SIDECAR_TOKEN: ci
+          NODEGLOW_VERSION: 0.0.0-ci
+        run: |
+          set -eu
+          docker compose -f docker-compose.release.yml config --quiet
+          NODEGLOW_BACKEND_IMAGE=nodeglow-backend-community \
+            docker compose -f docker-compose.release.yml config --quiet
+          src=$(docker compose -f docker-compose.yml config --services | sort)
+          rel=$(docker compose -f docker-compose.release.yml config --services | sort)
+          if [ "$src" != "$rel" ]; then
+            echo "::error::docker-compose.yml and docker-compose.release.yml define different services"
+            printf 'source:\n%s\nrelease:\n%s\n' "$src" "$rel"
+            exit 1
+          fi
+
+      # install.sh runs on customer hosts with whatever /bin/sh they have.
+      - name: shellcheck (scripts)
+        run: shellcheck -s sh scripts/*.sh
 
   sidecar:
     name: Sidecar (pytest)
@@ -190,7 +217,11 @@ jobs:
           grep -q APP_STARTED with.log
 
           PATH=/tmp/stub:$PATH SKIP_MIGRATIONS=1 sh entrypoint.sh echo APP_STARTED > without.log
-          ! grep -q MIGRATE_RAN without.log
+          # Not `! grep`: a negated command never trips `set -e`.
+          if grep -q MIGRATE_RAN without.log; then
+            echo "entrypoint migrated despite SKIP_MIGRATIONS=1" >&2
+            exit 1
+          fi
           grep -q APP_STARTED without.log
 
           printf '#!/bin/sh\nexit 1\n' > /tmp/stub/python
