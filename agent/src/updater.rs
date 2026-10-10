@@ -173,3 +173,47 @@ async fn apply_update(exe_path: &std::path::Path, data: &[u8]) -> anyhow::Result
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Produced by the server's signer (Python `cryptography`, as in
+    // backend/services/agent_signing.py) with the private key bytes 0..32, so
+    // this pins cross-implementation compatibility, not just round-tripping.
+    const PUBLIC_KEY: &str = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8";
+    const SIGNATURE: &str = "c4c745a721d01c44f45488a8816085565c94dfa0cd90cd5722ab8f8e0b807fd9e873017cd3d9a50eccc4f61a9d96799e66aebbf9fddc1387dd68d55e679a9507";
+    const MESSAGE: &[u8] = b"nodeglow-agent test binary v1";
+
+    #[test]
+    fn accepts_a_signature_from_the_server_signer() {
+        assert!(verify_signature(PUBLIC_KEY, SIGNATURE, MESSAGE).is_ok());
+    }
+
+    #[test]
+    fn rejects_tampered_data() {
+        assert!(verify_signature(PUBLIC_KEY, SIGNATURE, b"nodeglow-agent test binary v2").is_err());
+    }
+
+    #[test]
+    fn rejects_a_flipped_signature_byte() {
+        let mut sig = SIGNATURE.to_string();
+        sig.replace_range(0..2, "c5");
+        assert!(verify_signature(PUBLIC_KEY, &sig, MESSAGE).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_inputs() {
+        assert!(verify_signature("zz", SIGNATURE, MESSAGE).is_err());
+        assert!(verify_signature(&PUBLIC_KEY[..62], SIGNATURE, MESSAGE).is_err());
+        assert!(verify_signature(PUBLIC_KEY, &SIGNATURE[..126], MESSAGE).is_err());
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_digest() {
+        assert_eq!(
+            hex::encode(Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

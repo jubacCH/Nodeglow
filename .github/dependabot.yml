@@ -12,6 +12,13 @@ updates:
     groups:
       python-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # FastAPI 0.137+ nests included routers in app.routes, which blinds the
+      # route-auth coverage test; 0.142+ also needs OpenTelemetry >=1.44.
+      # Lift both together once that test walks the new router structure.
+      - dependency-name: fastapi
+        versions: [">=0.137"]
+      - dependency-name: "opentelemetry-*"
 
   - package-ecosystem: npm
     directory: /frontend
@@ -21,6 +28,15 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Planned migrations, not weekly bumps: Tailwind 4 rewrites the config,
+      # and eslint-config-next has to match the Next.js major.
+      - dependency-name: tailwindcss
+        update-types: ["version-update:semver-major"]
+      - dependency-name: next
+        update-types: ["version-update:semver-major"]
+      - dependency-name: eslint-config-next
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: cargo
     directory: /agent
@@ -30,6 +46,11 @@ updates:
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # sysinfo 0.33+ changed its API; the Windows build breaks until the
+      # collectors are ported.
+      - dependency-name: sysinfo
+        versions: [">=0.33"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -49,3 +70,7 @@ updates:
     groups:
       docker-base-images:
         patterns: ["*"]
+    ignore:
+      # Stay on Node LTS; odd majors (23, 25, ...) are short-lived.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
