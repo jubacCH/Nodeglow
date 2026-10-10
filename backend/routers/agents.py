@@ -19,6 +19,7 @@ from ratelimit import rate_limit
 from models.agent import Agent
 from models.agent_install_token import AgentInstallToken
 from services import agent_signing
+from services.agent_services import watched_list
 from services.websocket import broadcast_agent_metric
 
 
@@ -356,6 +357,11 @@ async def agent_report(request: Request):
 
         await db.commit()
 
+    # Watched services. Only agents that know the feature send the key; for
+    # older agents nothing is evaluated and nothing is raised.
+    if isinstance(body.get("service_states"), list):
+        await _evaluate_service_states(agent.id, body["service_states"])
+
     # Time-series snapshot lives in ClickHouse only (post-cutover).
     try:
         from services.clickhouse_client import insert_agent_metrics
@@ -405,6 +411,8 @@ async def agent_report(request: Request):
         "log_channels": agent.log_channels or "System,Application",
         "log_file_paths": agent.log_file_paths or "",
         "agent_log_level": agent.agent_log_level or "errors",
+        # Older agents ignore the extra key.
+        "watched_services": watched_list(agent),
     }}
     if command:
         resp["command"] = command
@@ -416,6 +424,29 @@ async def agent_report(request: Request):
     if agent.is_probe:
         resp["checks"] = await _probe_assignments(agent.id)
     return resp
+
+
+async def _evaluate_service_states(agent_id: int, reported: list) -> None:
+    """Fold a heartbeat's service states into the agent and raise / resolve
+    incidents, in a transaction of its own.
+
+    Runs after the heartbeat itself has committed: a failure here must never
+    cost the report (the agent would resend it, and the metrics with it).
+    Notifications go out only once the incident change is durable.
+    """
+    from services.agent_services import apply_service_report, send_notifications
+
+    try:
+        async with AsyncSessionLocal() as db:
+            agent = await db.get(Agent, agent_id)
+            if agent is None:
+                return
+            notifications = await apply_service_report(db, agent, reported)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Service evaluation failed for agent %d: %s", agent_id, exc)
+        return
+    send_notifications(notifications)
 
 
 async def _record_probe_results(probe_id: int, results: list) -> None:
