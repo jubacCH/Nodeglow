@@ -694,12 +694,31 @@ async def get_offline_hosts_since(
 
 
 async def get_latest_agent_metrics(agent_ids: list[int] | None = None) -> dict[int, dict]:
-    """Return {agent_id: latest_snapshot_dict}."""
-    where = ""
+    """Return {agent_id: latest_snapshot_dict}.
+
+    The newest timestamp per agent is resolved first, in a subquery that only
+    reads (agent_id, timestamp). The outer query then reads the remaining
+    columns, data_json above all, for just those rows: the MinMax and primary
+    key indexes cut it to a handful of granules. A plain argMax over the table
+    read every data_json ever stored; on production that was ~60 ms against
+    ~15 ms, and the dashboard asks twice per request.
+
+    The outer argMax/GROUP BY stays so that two rows sharing an agent's newest
+    timestamp still collapse into one.
+    """
+    agent_filter = ""
     params: dict = {}
     if agent_ids:
-        where = "WHERE agent_id IN ({aids:Array(UInt32)})"
+        agent_filter = "agent_id IN ({aids:Array(UInt32)})"
         params["aids"] = list(agent_ids)
+    inner_where = f"WHERE {agent_filter}" if agent_filter else ""
+    outer_where = (
+        "WHERE (agent_id, timestamp) IN ("
+        f"SELECT agent_id, max(timestamp) FROM agent_metrics {inner_where} GROUP BY agent_id"
+        ")"
+    )
+    if agent_filter:
+        outer_where += f" AND {agent_filter}"
     # _ts alias avoids the same ClickHouse parser quirk documented in
     # get_latest_ping_per_host above.
     sql = f"""
@@ -720,7 +739,7 @@ async def get_latest_agent_metrics(agent_ids: list[int] | None = None) -> dict[i
             argMax(tx_bytes,     timestamp) AS tx_bytes,
             argMax(data_json,    timestamp) AS data_json
         FROM agent_metrics
-        {where}
+        {outer_where}
         GROUP BY agent_id
     """
     rows = await query(sql, params)

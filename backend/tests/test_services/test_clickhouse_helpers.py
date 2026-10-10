@@ -294,6 +294,28 @@ async def test_get_latest_agent_metrics(fake_query):
     assert "argmax" in sql
     assert "group by agent_id" in sql
     assert fake_query.last_params == {"aids": [7]}
+    assert len(fake_query.calls) == 1
+
+
+async def test_get_latest_agent_metrics_reads_payload_of_newest_rows_only(fake_query):
+    """argMax(data_json) over the whole table read every payload ever stored.
+
+    The newest timestamp per agent is resolved first (agent_id/timestamp only),
+    so the payload columns are read for those rows alone.
+    """
+    await ch.get_latest_agent_metrics([7, 8])
+    sql = " ".join(fake_query.last_sql.lower().split())
+    assert "(agent_id, timestamp) in (select agent_id, max(timestamp) from agent_metrics" in sql
+    # The agent filter applies inside the subquery and outside it.
+    assert sql.count("agent_id in ({aids:array(uint32)})") == 2
+
+
+async def test_get_latest_agent_metrics_without_ids_has_no_agent_filter(fake_query):
+    await ch.get_latest_agent_metrics(None)
+    sql = fake_query.last_sql.lower()
+    assert "{aids" not in sql
+    assert "max(timestamp) from agent_metrics" in " ".join(sql.split())
+    assert fake_query.last_params == {}
 
 
 async def test_get_agent_history_with_hours(fake_query):
