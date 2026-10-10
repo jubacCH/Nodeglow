@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import {
   applyLiveUpdates,
+  hasStateFlip,
   patchDashboard,
   patchHostListV1,
   patchHostStatusList,
@@ -82,5 +83,23 @@ describe('applyLiveUpdates', () => {
     expect(qc.getQueryState(['dashboard'])!.dataUpdatedAt).toBe(1000);
     // Absent entries are not created
     expect(qc.getQueryData(['hosts'])).toBeUndefined();
+  });
+});
+
+describe('hasStateFlip', () => {
+  const list = [
+    { id: 1, state: 'up' },
+    { id: 2, state: 'unknown' },
+    { id: 3, state: 'maintenance' },
+  ] as unknown as HostListItem[];
+
+  it('flags results that contradict the unified state', () => {
+    expect(hasStateFlip(list, new Map([[1, ping(1, false)]]))).toBe(true);
+    expect(hasStateFlip(list, new Map([[2, ping(2, true)]]))).toBe(true);
+  });
+
+  it('ignores agreeing results and maintenance hosts', () => {
+    expect(hasStateFlip(list, new Map([[1, ping(1, true)]]))).toBe(false);
+    expect(hasStateFlip(list, new Map([[3, ping(3, false)]]))).toBe(false);
   });
 });
