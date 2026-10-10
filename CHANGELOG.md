@@ -9,6 +9,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+## [2.0.0-rc.5] - 2026-10-10
+
 ### Fixed
 - Release workflow: pin cosign-installer v4.1.2 (the action has no `v4` tag).
 
@@ -134,7 +136,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   sidecar finds the database without a hard-coded container name.
 - Password hashing survives bcrypt 5's 72-byte limit.
 
-[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.4...HEAD
+[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.5...HEAD
+[2.0.0-rc.5]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.4...v2.0.0-rc.5
 [2.0.0-rc.4]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.3...v2.0.0-rc.4
 [2.0.0-rc.3]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.2...v2.0.0-rc.3
 [2.0.0-rc.2]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.1...v2.0.0-rc.2
