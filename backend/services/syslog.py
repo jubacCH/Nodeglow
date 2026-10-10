@@ -4,6 +4,7 @@ write-buffered DB inserts, and auto-host assignment.
 """
 import asyncio
 import logging
+import os
 import re
 import socket
 from datetime import datetime
@@ -18,11 +19,26 @@ log = logging.getLogger("nodeglow.syslog")
 
 # ── Per-IP rate limiter for syslog ingestion ────────────────────────────────
 
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float = 0.05) -> float:
+    try:
+        return max(minimum, float(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 _MAX_MSG_SIZE = 64 * 1024       # 64 KB max syslog message
-_MAX_TCP_CONNECTIONS = 100      # max concurrent TCP connections
-_SYSLOG_RATE_WINDOW = 10        # seconds
-_SYSLOG_RATE_MAX = 500          # max messages per IP per window
-_GLOBAL_RATE_MAX = 10_000       # max total messages per window across all IPs
+_MAX_TCP_CONNECTIONS = _env_int("NODEGLOW_SYSLOG_MAX_TCP_CONNECTIONS", 100)
+# Rate limits, configurable for fleets that legitimately send more.
+_SYSLOG_RATE_WINDOW = _env_int("NODEGLOW_SYSLOG_RATE_WINDOW", 10)          # seconds
+_SYSLOG_RATE_MAX = _env_int("NODEGLOW_SYSLOG_RATE_MAX", 500)               # per IP per window
+_GLOBAL_RATE_MAX = _env_int("NODEGLOW_SYSLOG_GLOBAL_RATE_MAX", 10_000)     # all IPs per window
 _ip_msg_counts: dict[str, list] = {}  # ip -> [count, window_start]
 _rate_dropped: dict[str, int] = {}    # ip -> dropped count (for periodic logging)
 _global_msg_count: list = [0, 0.0]    # [count, window_start]
@@ -54,6 +70,7 @@ def _syslog_rate_ok(source_ip: str) -> bool:
     entry[0] += 1
     if entry[0] > _SYSLOG_RATE_MAX:
         _rate_dropped[source_ip] = _rate_dropped.get(source_ip, 0) + 1
+        _count_drop("rate_limit_ip")
         return False
     return True
 
@@ -67,7 +84,19 @@ def _global_rate_ok() -> bool:
         _global_msg_count[1] = now
         return True
     _global_msg_count[0] += 1
-    return _global_msg_count[0] <= _GLOBAL_RATE_MAX
+    if _global_msg_count[0] <= _GLOBAL_RATE_MAX:
+        return True
+    _count_drop("rate_limit_global")
+    return False
+
+
+def _count_drop(reason: str, n: int = 1) -> None:
+    """nodeglow_syslog_messages_dropped_total{reason}; never raises."""
+    try:
+        from services.metrics import SYSLOG_MESSAGES_DROPPED
+        SYSLOG_MESSAGES_DROPPED.labels(reason=reason).inc(n)
+    except Exception:
+        pass
 
 
 # ── RFC 3164 (BSD syslog) parser ────────────────────────────────────────────
@@ -265,6 +294,36 @@ def _is_allowed_source(source_ip: str) -> bool:
     return source_ip in _allowlist_ips
 
 
+_DNS_CONCURRENCY = _env_int("NODEGLOW_SYSLOG_DNS_CONCURRENCY", 16)
+_DNS_TIMEOUT = _env_float("NODEGLOW_SYSLOG_DNS_TIMEOUT", 3.0)
+
+
+async def _resolve_many(names: list[str], resolver) -> dict[str, Optional[str]]:
+    """Run a blocking resolver for many names concurrently.
+
+    ``resolver(name)`` runs in the default executor; at most _DNS_CONCURRENCY
+    run at once and each is abandoned after _DNS_TIMEOUT. Returns
+    {name: result or None}. ``resolver`` may return a str or a tuple whose
+    first element is the name (gethostbyaddr).
+    """
+    loop = asyncio.get_running_loop()
+    sem = asyncio.Semaphore(_DNS_CONCURRENCY)
+
+    async def one(name: str):
+        async with sem:
+            try:
+                res = await asyncio.wait_for(
+                    loop.run_in_executor(None, resolver, name), timeout=_DNS_TIMEOUT,
+                )
+            except Exception:
+                return name, None
+            if isinstance(res, tuple):
+                res = res[0] if res else None
+            return name, res
+
+    return dict(await asyncio.gather(*(one(n) for n in names)))
+
+
 async def _refresh_host_cache():
     global _host_cache, _host_cache_ts, _allowlist_only, _allowlist_ips
     import time
@@ -278,7 +337,7 @@ async def _refresh_host_cache():
             _allowlist_only = (await get_setting(db, "syslog_allowlist_only", "0")) == "1"
         cache: dict[str, int] = {}
         allowed_ips: set[str] = set()
-        loop = asyncio.get_running_loop()
+        raws: list[tuple[str, int]] = []
         for h in hosts:
             cache[h.hostname.lower()] = h.id
             if h.name:
@@ -291,14 +350,7 @@ async def _refresh_host_cache():
                     raw = raw[len(prefix):]
             raw = raw.split("/")[0].split(":")[0]
             cache[raw.lower()] = h.id
-
-            # Forward DNS: resolve hostname to IP (catches FQDNs → IPs)
-            try:
-                resolved_ip = await loop.run_in_executor(None, socket.gethostbyname, raw)
-                cache[resolved_ip] = h.id
-                allowed_ips.add(resolved_ip)
-            except Exception:
-                pass
+            raws.append((raw, h.id))
 
             # If raw is already an IP, add it directly
             try:
@@ -306,6 +358,19 @@ async def _refresh_host_cache():
                 allowed_ips.add(raw)
             except OSError:
                 pass
+
+        # Forward DNS: resolve hostname to IP (catches FQDNs → IPs). These ran
+        # one after another, so a few unresolvable names (each waiting for the
+        # resolver timeout) stalled the refresh for minutes. Now concurrent,
+        # bounded, and each lookup capped.
+        resolved = await _resolve_many(
+            sorted({raw for raw, _ in raws}), socket.gethostbyname,
+        )
+        for raw, host_id in raws:
+            ip = resolved.get(raw)
+            if ip:
+                cache[ip] = host_id
+                allowed_ips.add(ip)
 
         _host_cache = cache
         _allowlist_ips = allowed_ips
@@ -366,16 +431,10 @@ async def _rdns_resolve_loop():
         for entry in snapshot:
             if not entry.get("host_id") and entry.get("source_ip"):
                 ips_to_resolve.add(entry["source_ip"])
-        # Also resolve IPs we haven't seen before
-        loop = asyncio.get_running_loop()
-        for ip in ips_to_resolve:
-            if ip in _rdns_cache:
-                continue
-            try:
-                result = await loop.run_in_executor(None, socket.gethostbyaddr, ip)
-                _rdns_cache[ip] = result[0]
-            except Exception:
-                _rdns_cache[ip] = None
+        # Also resolve IPs we haven't seen before (concurrently, bounded)
+        todo = sorted(ip for ip in ips_to_resolve if ip not in _rdns_cache)
+        if todo:
+            _rdns_cache.update(await _resolve_many(todo, socket.gethostbyaddr))
 
 
 # ── Live tail broadcast ────────────────────────────────────────────────────
@@ -397,16 +456,40 @@ def unsubscribe(q: asyncio.Queue):
 
 
 # ── Write buffer ────────────────────────────────────────────────────────────
+#
+# Messages are appended to _buffer and written to ClickHouse in batches by a
+# single flusher task: whenever _BUFFER_SIZE messages are waiting, or every
+# _FLUSH_INTERVAL seconds, whichever comes first. The lock only guards the
+# list swap — the insert itself runs outside it. It used to be awaited while
+# holding the lock, so every receiver stalled for the duration of each
+# ClickHouse round trip, in batches of only 100.
 
 _buffer: list[dict] = []
 _buffer_lock = asyncio.Lock()
-_BUFFER_SIZE = 100
-_BUFFER_MAX = 50_000  # hard cap — drop oldest if exceeded
-_FLUSH_INTERVAL = 2.0  # seconds
+_insert_lock = asyncio.Lock()  # one insert at a time, in order
+_BUFFER_SIZE = _env_int("NODEGLOW_SYSLOG_BATCH_SIZE", 1000)
+_BUFFER_MAX = _env_int("NODEGLOW_SYSLOG_BUFFER_MAX", 50_000)  # hard cap — drop oldest
+_FLUSH_INTERVAL = _env_float("NODEGLOW_SYSLOG_FLUSH_INTERVAL", 1.0)  # seconds
+_flush_event: Optional[asyncio.Event] = None  # set while the flusher task runs
+
+# UDP datagrams are parsed in the protocol callback and handed to a bounded
+# queue drained by a worker, instead of one unbounded task per datagram — a
+# burst could otherwise create hundreds of thousands of pending tasks.
+_UDP_QUEUE_MAX = _env_int("NODEGLOW_SYSLOG_UDP_QUEUE", 10_000)
+_udp_queue: Optional[asyncio.Queue] = None
+
+
+def _trim_buffer_locked() -> None:
+    """Drop the oldest messages beyond the hard cap. Caller holds the lock."""
+    global _buffer
+    if len(_buffer) > _BUFFER_MAX:
+        dropped = len(_buffer) - _BUFFER_MAX
+        _buffer = _buffer[dropped:]
+        _count_drop("buffer_overflow", dropped)
+        log.warning("Syslog buffer overflow: dropped %d oldest messages", dropped)
 
 
 async def _enqueue(parsed: dict):
-    global _buffer
     # Run through intelligence pipeline (template extraction + tagging)
     try:
         from services.log_intelligence import process_message
@@ -428,6 +511,9 @@ async def _enqueue(parsed: dict):
     except Exception:
         log.debug("GeoIP enrichment failed", exc_info=True)
 
+    # Ingest time is when we received it, not when the batch happens to flush.
+    parsed.setdefault("received_at", datetime.utcnow())
+
     # Broadcast to live tail subscribers
     for q in _subscribers[:]:
         try:
@@ -436,23 +522,35 @@ async def _enqueue(parsed: dict):
             pass
     async with _buffer_lock:
         _buffer.append(parsed)
-        # Drop oldest entries if buffer exceeds hard cap
-        if len(_buffer) > _BUFFER_MAX:
-            dropped = len(_buffer) - _BUFFER_MAX
-            _buffer = _buffer[dropped:]
-            log.warning("Syslog buffer overflow: dropped %d oldest messages", dropped)
-        if len(_buffer) >= _BUFFER_SIZE:
+        _trim_buffer_locked()
+        full = len(_buffer) >= _BUFFER_SIZE
+    if full:
+        if _flush_event is not None:
+            _flush_event.set()  # wake the flusher; never wait for ClickHouse here
+        else:
+            # No flusher running (server not started, e.g. agent log ingest
+            # in isolation): write inline, still outside the buffer lock.
             await _flush_buffer()
 
 
 async def _flush_buffer():
-    """Write buffered messages to ClickHouse. Called with lock held or from flush task."""
-    global _buffer
-    if not _buffer:
-        return
-    batch = _buffer[:]
-    _buffer = []
+    """Write buffered messages to ClickHouse.
 
+    Takes the whole buffer under the lock, then inserts without holding it, so
+    receivers keep appending while the insert is in flight. Inserts are
+    serialised by _insert_lock. Must NOT be called with _buffer_lock held.
+    """
+    global _buffer
+    async with _insert_lock:
+        async with _buffer_lock:
+            if not _buffer:
+                return
+            batch = _buffer
+            _buffer = []
+        await _write_batch(batch)
+
+
+def _clean_rows(batch: list[dict]) -> list[dict]:
     _transient = {"is_new_template", "severity_label"}
     cleaned = []
     for msg in batch:
@@ -467,7 +565,12 @@ async def _flush_buffer():
         if not isinstance(row.get("extracted_fields"), dict):
             row["extracted_fields"] = {}
         cleaned.append(row)
+    return cleaned
 
+
+async def _write_batch(batch: list[dict]) -> None:
+    global _buffer
+    cleaned = _clean_rows(batch)
     try:
         from services.clickhouse_client import insert_batch
         await insert_batch(cleaned)
@@ -476,21 +579,44 @@ async def _flush_buffer():
         # Re-prepend the failed batch so the next flush retries it instead of
         # losing it on a transient ClickHouse error. Respect the hard cap by
         # dropping the oldest messages if the combined buffer would overflow.
-        _buffer = batch + _buffer
-        if len(_buffer) > _BUFFER_MAX:
-            dropped = len(_buffer) - _BUFFER_MAX
-            _buffer = _buffer[dropped:]
-            log.warning(
-                "Syslog retry buffer overflow: dropped %d oldest messages", dropped
-            )
+        async with _buffer_lock:
+            _buffer = batch + _buffer
+            _trim_buffer_locked()
 
 
 async def _flush_loop():
-    """Periodically flush the write buffer."""
+    """Flush when a batch is full or every _FLUSH_INTERVAL, whichever first."""
+    event = _flush_event
     while True:
-        await asyncio.sleep(_FLUSH_INTERVAL)
-        async with _buffer_lock:
+        if event is not None:
+            try:
+                await asyncio.wait_for(event.wait(), timeout=_FLUSH_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
+            event.clear()
+        else:
+            await asyncio.sleep(_FLUSH_INTERVAL)
+        try:
             await _flush_buffer()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.error("Syslog flush loop error", exc_info=True)
+
+
+async def _udp_worker():
+    """Drain the UDP queue into the enrichment + buffer pipeline."""
+    queue = _udp_queue
+    while True:
+        parsed = await queue.get()
+        try:
+            await _enqueue(parsed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.debug("Syslog UDP enqueue failed", exc_info=True)
+        finally:
+            queue.task_done()
 
 
 # ── Protocol handlers ───────────────────────────────────────────────────────
@@ -514,7 +640,16 @@ class SyslogUDPProtocol(asyncio.DatagramProtocol):
         if not parsed:
             return
         parsed["host_id"] = _resolve_host_id(source_ip, parsed.get("hostname"))
-        asyncio.ensure_future(_enqueue(parsed))
+        parsed["received_at"] = datetime.utcnow()
+        queue = _udp_queue
+        if queue is None:
+            # Not started through start_syslog_server (tests, tooling).
+            asyncio.ensure_future(_enqueue(parsed))
+            return
+        try:
+            queue.put_nowait(parsed)
+        except asyncio.QueueFull:
+            _count_drop("queue_full")
 
 
 class SyslogTCPHandler:
@@ -574,6 +709,7 @@ _tcp_server = None
 _flush_task = None
 _cache_task = None
 _rdns_task = None
+_udp_task = None
 
 
 async def _cache_refresh_loop():
@@ -585,7 +721,10 @@ async def _cache_refresh_loop():
 
 async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
     """Start UDP + TCP syslog listeners."""
-    global _udp_transport, _tcp_server, _flush_task, _cache_task
+    # _rdns_task used to be assigned without being declared global, so
+    # stop_syslog_server never saw (or cancelled) the rDNS loop.
+    global _udp_transport, _tcp_server, _flush_task, _cache_task, _rdns_task
+    global _udp_task, _udp_queue, _flush_event
 
     loop = asyncio.get_running_loop()
 
@@ -609,6 +748,12 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
     except Exception as e:
         log.warning("Failed to load template cache: %s", e)
 
+    # Pipeline primitives first, so no datagram arrives before they exist.
+    _flush_event = asyncio.Event()
+    _udp_queue = asyncio.Queue(maxsize=_UDP_QUEUE_MAX)
+    _flush_task = asyncio.create_task(_flush_loop())
+    _udp_task = asyncio.create_task(_udp_worker())
+
     # UDP
     _udp_transport, _ = await loop.create_datagram_endpoint(
         SyslogUDPProtocol, local_addr=("0.0.0.0", udp_port)
@@ -626,7 +771,6 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
     log.info("Syslog TCP listening on port %d", tcp_port)
 
     # Background tasks
-    _flush_task = asyncio.create_task(_flush_loop())
     _cache_task = asyncio.create_task(_cache_refresh_loop())
     _rdns_task = asyncio.create_task(_rdns_resolve_loop())
 
@@ -634,21 +778,28 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
 async def stop_syslog_server():
     """Stop syslog listeners and flush remaining buffer."""
     global _udp_transport, _tcp_server, _flush_task, _cache_task, _rdns_task
+    global _udp_task, _udp_queue, _flush_event
 
-    if _flush_task:
-        _flush_task.cancel()
-    if _cache_task:
-        _cache_task.cancel()
-    if _rdns_task:
-        _rdns_task.cancel()
     if _udp_transport:
         _udp_transport.close()
     if _tcp_server:
         _tcp_server.close()
         await _tcp_server.wait_closed()
+    for task in (_flush_task, _cache_task, _rdns_task, _udp_task):
+        if task:
+            task.cancel()
+
+    # Messages still queued from UDP go into the buffer before the last flush.
+    queue, _udp_queue = _udp_queue, None
+    _flush_event = None
+    if queue is not None:
+        while not queue.empty():
+            try:
+                await _enqueue(queue.get_nowait())
+            except Exception:
+                log.debug("Dropping queued syslog message on shutdown", exc_info=True)
 
     # Final flush
-    async with _buffer_lock:
-        await _flush_buffer()
+    await _flush_buffer()
 
     log.info("Syslog server stopped")
