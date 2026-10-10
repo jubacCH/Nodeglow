@@ -2,6 +2,12 @@
 
 Status: design · 2026-08-28
 
+> **Status (2026-10-10): implemented** — core side (#45), frontend for probe
+> assignment and the `unknown` status (#46), later folded into the unified,
+> probe-aware host state (`backend/services/host_state.py`). This document is
+> the design record and is not kept up to date; see
+> [docs/API.md](../API.md#host-state) for the current behaviour.
+
 ## Why
 
 Every active check runs from the backend container: ICMP, TCP, HTTP/S and SSL

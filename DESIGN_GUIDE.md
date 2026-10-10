@@ -1,5 +1,11 @@
 # Nodeglow Design Guide — Command Center Theme
 
+> **Historical — superseded.** This was the design guide of the pre-2026
+> "Command Center" UI (sidebar, glow cards, Geist fonts, 3D globe). That UI
+> was replaced by the E3 redesign. Current rules:
+> [docs/design/04-design-system.md](docs/design/04-design-system.md); routes
+> and navigation: `frontend/src/lib/navigation.ts`. Kept for reference only.
+
 > Extracted from Stitch designs. Reference for all frontend UI work.
 
 ## Philosophy

@@ -5,7 +5,7 @@ from the GitHub Container Registry, no build on your host. It covers online and
 air-gapped installation, upgrades, backups and how to verify what you install.
 
 Running from a git checkout instead (development, or the project's own
-production) is described in the [README](../README.md#quick-start) and
+production) is described in the [README](../README.md#run-from-source) and
 [OPERATIONS.md](OPERATIONS.md#updating). Day-2 operation — sizing, ports,
 hardening, backups, the encryption key, diagnosis — is in
 [OPERATIONS.md](OPERATIONS.md) and applies to both.
@@ -40,11 +40,10 @@ Tags: `X.Y.Z` for every release, plus `X.Y` and `latest` for stable releases
 `X.Y.Z`; `latest` exists for trying things out.
 
 **Which backend?** `nodeglow-backend` is the default. It is one image for
-everybody: once license keys are enforced (in progress, see
-[ee/README.md](../ee/README.md)), the enterprise features in it stay inactive
-without a valid key and the image behaves like the community edition. Until
-then the features are present and the license terms in
-[LICENSING.md](../LICENSING.md) govern their production use. We ship it this
+everybody: the enterprise features in it stay inactive until a valid license
+key is installed (Settings → License or `NODEGLOW_LICENSE`, see
+[OPERATIONS.md → Enterprise license](OPERATIONS.md#enterprise-license)), and
+without one the image behaves like the community edition. We ship it this
 way because the `ee/` source is public (source-available) anyway,
 because customers can then start a trial or buy a license without changing
 images, and because one tested image is easier to support than two diverging
@@ -140,7 +139,7 @@ With cosign installed the script verifies the image signatures before saving
 them (`--require-signature` makes that mandatory).
 
 **1. Verify before transfer** (on the connected machine), see
-[Verifying signatures](#release-files-install-sh-archives-bundle):
+[Verifying signatures](#release-files-installsh-archives-bundle):
 
 ```sh
 cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
@@ -186,9 +185,9 @@ matching database dump).
 
 ### From the UI (online installs)
 
-**System → Status → Software Updates** lists newer releases (stable only,
-unless `NODEGLOW_UPDATE_CHANNEL=prerelease`). **Update Now** runs, observable
-step by step:
+**Administration → System status → Software updates** lists newer releases
+(stable only, unless `NODEGLOW_UPDATE_CHANNEL=prerelease`). **Update now**
+runs, observable step by step:
 
 | Step | What happens | If it fails |
 |---|---|---|
@@ -335,23 +334,21 @@ requires it — `curl | sh` is convenient, not auditable.
 
 ## Configuration (.env)
 
-`install.sh` generates these; everything else in
-[OPERATIONS.md → Configuration reference](OPERATIONS.md#configuration-reference)
-works as well.
+`install.sh` writes `<install dir>/.env` (mode 600) with:
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `NODEGLOW_VERSION` | the installed release | Image tag for all Nodeglow images. Changed by updates. |
-| `NODEGLOW_BACKEND_IMAGE` | `nodeglow-backend` | `nodeglow-backend-community` for the AGPL-only edition |
-| `NODEGLOW_REGISTRY` | `ghcr.io/jubacch` | Registry/namespace to pull from (mirror) |
-| `HOST_PROJECT_DIR` | the install dir | Host path of the installation; the updater needs it |
-| `POSTGRES_PASSWORD`, `UPDATE_SIDECAR_TOKEN`, `SECRET_KEY` | random | Secrets — back up `.env` |
-| `NODEGLOW_UPDATE_CHANNEL` | `stable` | `prerelease` to be offered release candidates |
-| `NODEGLOW_RELEASES_URL` | GitHub Releases API | `off` disables update checks (air-gapped) |
-| `NODEGLOW_VERIFY_SIGNATURES` | `1` | `0` lets the updater install unsigned images |
-| `NODEGLOW_DISABLE_EE` | — | `1` runs the community edition in the default image |
-| `UI_BIND`, `SYSLOG_BIND` | `0.0.0.0` | Host addresses for the UI and syslog ports |
-| `BACKUP_SCHEDULE`, `BACKUP_RETENTION` | `02:30`, `5` | Scheduled dumps |
+- `NODEGLOW_VERSION` (the installed release; updates change it),
+  `NODEGLOW_BACKEND_IMAGE` (edition), `NODEGLOW_REGISTRY`, `HOST_PROJECT_DIR`;
+- fresh random `POSTGRES_PASSWORD`, `UPDATE_SIDECAR_TOKEN` and `SECRET_KEY` —
+  **back up `.env`**;
+- `NODEGLOW_UPDATE_CHANNEL=stable`, `NODEGLOW_RELEASES_URL` (`off` for offline
+  installs) and `NODEGLOW_VERIFY_SIGNATURES=1`;
+- commented examples for `UI_BIND`, `SYSLOG_BIND`, `BACKUP_SCHEDULE` and
+  `BACKUP_RETENTION`.
+
+What each variable does, its default, and the advanced ones that need a
+`docker-compose.override.yml`: **[OPERATIONS.md → Configuration
+reference](OPERATIONS.md#configuration-reference)**. After editing `.env`, run
+`docker compose up -d` in the installation directory.
 
 ---
 

@@ -23,10 +23,9 @@ AGPL-3.0-only and with the commercial `ee/` license. Points to watch:
 | `sharp` / `libvips` (transitive, Next.js image optimisation) | Apache-2.0 / LGPL-3.0-or-later | Compatible. Shipped as separate, dynamically loaded prebuilt binaries. |
 | `dompurify` (transitive, via `isomorphic-dompurify`) | MPL-2.0 OR Apache-2.0 | Compatible; used under Apache-2.0. |
 | `caniuse-lite` (transitive, build-time data) | CC-BY-4.0 | Compatible; attribution via its package. |
-| `webgl-constants` (transitive, 3D view) | no license field in the package metadata | **To verify** with the upstream repository. |
 | `webpki-roots` (transitive, Rust agent) | CDLA-Permissive-2.0 | Compatible (permissive data license; keep its notice). |
 | `ring`, `untrusted` (transitive, Rust agent) | Apache-2.0 AND ISC / ISC | Compatible. |
-| Fonts Inter, JetBrains Mono (via `next/font/google`, self-hosted at build) | SIL Open Font License 1.1 | Compatible. |
+| Fonts Sora, Inter Tight, JetBrains Mono (`@fontsource-variable/*`, bundled into the frontend build) | SIL Open Font License 1.1 | Compatible. The fonts are redistributed unmodified as part of the web UI; the OFL travels with the packages. |
 | `anthropic` SDK | MIT | Compatible. Using the Anthropic API is subject to Anthropic's own terms, accepted by whoever supplies the API key. |
 
 The prebuilt agent binaries in `backend/static/` statically link all
@@ -43,7 +42,7 @@ CI.
 | fastapi | 0.136.3 | MIT |
 | starlette | 1.7.0 | BSD-3-Clause |
 | uvicorn[standard] | 0.54.0 | BSD-3-Clause |
-| sqlalchemy[asyncio] | 2.1.3 | MIT |
+| sqlalchemy[asyncio] | 2.1.4 | MIT |
 | jinja2 | 3.1.6 | BSD-3-Clause |
 | python-multipart | 0.0.32 | Apache-2.0 |
 | apscheduler | 3.11.3 | MIT |
@@ -55,7 +54,7 @@ CI.
 | speedtest-cli | 2.1.3 | Apache-2.0 |
 | alembic | 1.20.0 | MIT |
 | psutil | 7.2.2 | BSD-3-Clause |
-| clickhouse-connect | 0.8.9 | Apache-2.0 |
+| clickhouse-connect | 1.10.0 | Apache-2.0 |
 | maxminddb | 3.2.0 | Apache-2.0 |
 | anthropic | 1.13.0 | MIT |
 | ldap3 | 2.9.1 | LGPL-3.0 |
@@ -77,27 +76,28 @@ Versions as resolved in `frontend/package-lock.json`.
 
 | Package | Version | License |
 |---|---|---|
-| @react-three/drei | 10.7.9 | MIT |
-| @react-three/fiber | 9.8.1 | MIT |
+| @fontsource-variable/inter-tight | 5.3.0 | OFL-1.1 |
+| @fontsource-variable/jetbrains-mono | 5.3.0 | OFL-1.1 |
+| @fontsource-variable/sora | 5.3.0 | OFL-1.1 |
 | @tanstack/react-query | 5.104.1 | MIT |
 | clsx | 2.1.1 | MIT |
 | cmdk | 1.1.1 | MIT |
 | echarts | 6.1.0 | Apache-2.0 |
-| framer-motion | 12.43.0 | MIT |
+| framer-motion | 14.0.0 | MIT |
 | isomorphic-dompurify | 4.5.0 | MIT |
-| lucide-react | 0.577.0 | ISC |
+| lucide-react | 1.52.0 | ISC |
 | next | 15.5.27 | MIT |
 | react | 19.3.0 | MIT |
 | react-dom | 19.3.0 | MIT |
 | tailwind-merge | 3.7.0 | MIT |
-| three | 0.186.1 | MIT |
 | zustand | 5.0.15 | MIT |
 
-Across all non-dev packages in the lockfile: MIT 131, Apache-2.0 22,
+Across all non-dev packages in the lockfile: MIT 83, Apache-2.0 17,
 LGPL-3.0-or-later 10 and mixed Apache/LGPL 4 (all `sharp`/`libvips`
-platform binaries), ISC 7, BSD-3-Clause 4, 0BSD 3, MIT-0 2, BSD-2-Clause 2,
-and one each of CC-BY-4.0, MPL-2.0 OR Apache-2.0, BlueOak-1.0.0, CC0-1.0 and
-unspecified (see the summary above).
+platform binaries), ISC 4, OFL-1.1 3, BSD-3-Clause 3, 0BSD 3, MIT-0 2,
+BSD-2-Clause 2, and one each of CC-BY-4.0, MPL-2.0 OR Apache-2.0,
+BlueOak-1.0.0 and CC0-1.0. The 3D libraries (`three`, `@react-three/*`) and
+with them the unlicensed `webgl-constants` were removed with the redesign.
 
 ## Agent (`agent/Cargo.toml` dependencies)
 
@@ -121,11 +121,13 @@ Versions as resolved in `agent/Cargo.lock`.
 | sysinfo (Windows only) | 0.32.1 | MIT |
 | winresource (Windows build only) | 0.1.31 | MIT |
 
-## Container images used by `docker-compose.yml`
+## Container images used by the compose files
 
-Pulled by the operator from their publishers, not redistributed by Nodeglow:
-`postgres:16-alpine` (PostgreSQL License), `clickhouse/clickhouse-server`
-(Apache-2.0). The Nodeglow images build on `python:3.12-slim` and
+Pulled by the operator from their publishers by `docker-compose.yml` and
+`docker-compose.release.yml`: `postgres:16-alpine` (PostgreSQL License),
+`clickhouse/clickhouse-server:24.8-alpine` (Apache-2.0). The offline bundle
+(`scripts/make-offline-bundle.sh`) contains saved copies of both, so whoever
+hands out a bundle redistributes them under those licenses. The Nodeglow images build on `python:3.12-slim` and
 `node:22-alpine`, which contain Debian/Alpine packages under their own
 licenses (including GPL components); anyone redistributing built images must
 comply with those package licenses as well.
