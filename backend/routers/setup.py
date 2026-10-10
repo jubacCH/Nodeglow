@@ -19,7 +19,7 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 async def setup_page(request: Request, db: AsyncSession = Depends(get_db)):
     if await is_setup_complete(db):
         return RedirectResponse(url="/")
-    return templates.TemplateResponse("setup.html", {"request": request})
+    return templates.TemplateResponse(request, "setup.html")
 
 
 @router.post("/complete")
