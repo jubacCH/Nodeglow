@@ -1,0 +1,153 @@
+# Nodeglow — release deployment (pull published images, no build).
+#
+# This is the compose file for customer and on-prem installations. scripts/
+# install.sh puts it into the installation directory as docker-compose.yml,
+# next to .env and clickhouse/. See docs/INSTALL.md.
+#
+# docker-compose.yml in the repository root is the source/development variant
+# that builds the images from the checkout (and is what a git-based install
+# such as the project's own production uses). Keep the two in step: service
+# names, environment and volumes must match, only `build:` vs `image:` and the
+# updater's mode differ. CI renders both with `docker compose config`.
+#
+# Every Nodeglow image is pinned to NODEGLOW_VERSION from .env. The updater
+# (image mode) changes that value when it installs a new release.
+
+services:
+  db:
+    image: postgres:16-alpine
+    command: >
+      postgres
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1536MB}
+      -c work_mem=${POSTGRES_WORK_MEM:-8MB}
+      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.max=5000
+      -c pg_stat_statements.track=top
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nodeglow}
+      POSTGRES_USER: ${POSTGRES_USER:-nodeglow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nodeglow}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: nodeglow-ch
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/nodeglow.xml:ro
+      - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      CLICKHOUSE_DB: nodeglow
+      CLICKHOUSE_USER: nodeglow
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  nodeglow:
+    # NODEGLOW_BACKEND_IMAGE picks the edition:
+    #   nodeglow-backend            includes ee/ (enterprise features need a
+    #                               license; without one it runs as community)
+    #   nodeglow-backend-community  pure AGPL, built without ee/
+    image: ${NODEGLOW_REGISTRY:-ghcr.io/jubacch}/${NODEGLOW_BACKEND_IMAGE:-nodeglow-backend}:${NODEGLOW_VERSION:?Set NODEGLOW_VERSION in .env (e.g. 1.0.0)}
+    container_name: nodeglow
+    ports:
+      - "${SYSLOG_BIND:-0.0.0.0}:514:1514/udp"    # Syslog UDP (host 514 → container 1514)
+      - "${SYSLOG_BIND:-0.0.0.0}:1514:1514/tcp"   # Syslog TCP
+    expose:
+      - "8000"             # Internal only — frontend proxies all requests
+    volumes:
+      - ./data:/data
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nodeglow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-nodeglow}
+      CLICKHOUSE_URL: http://nodeglow:${CLICKHOUSE_PASSWORD:-${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}}@clickhouse:8123/nodeglow
+      DATA_DIR: /data
+      SKIP_MIGRATIONS: ${SKIP_MIGRATIONS:-}
+      SYSLOG_PORT: "1514"
+      UPDATE_SIDECAR_URL: http://updater:9100
+      UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with updater)}
+      # Encrypts stored credentials. install.sh generates it; back it up
+      # separately — no database dump contains it (docs/INSTALL.md).
+      SECRET_KEY: ${SECRET_KEY:-}
+      NODEGLOW_ALLOW_SHARED_ENROLLMENT: ${NODEGLOW_ALLOW_SHARED_ENROLLMENT:-}
+      # "1" turns the enterprise features off even in the nodeglow-backend image.
+      NODEGLOW_DISABLE_EE: ${NODEGLOW_DISABLE_EE:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+    depends_on:
+      db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    cap_add:
+      - NET_RAW   # Required for ICMP ping
+    # See docker-compose.yml for why no-new-privileges is off by default.
+    security_opt:
+      - "no-new-privileges:${NODEGLOW_NO_NEW_PRIVILEGES:-false}"
+    restart: unless-stopped
+
+  updater:
+    image: ${NODEGLOW_REGISTRY:-ghcr.io/jubacch}/nodeglow-updater:${NODEGLOW_VERSION:?Set NODEGLOW_VERSION in .env (e.g. 1.0.0)}
+    container_name: nodeglow-updater
+    volumes:
+      # The installation directory (compose file, .env, clickhouse/). In image
+      # mode the updater rewrites NODEGLOW_VERSION in .env and nothing else.
+      - .:/opt/repo
+      - /var/run/docker.sock:/var/run/docker.sock
+      - backups:/backups
+    environment:
+      UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with backend)}
+      # image: install published releases (this file). git: build from a
+      # checkout (docker-compose.yml). Do not change it here.
+      NODEGLOW_UPDATE_MODE: image
+      # stable (default) or prerelease.
+      NODEGLOW_UPDATE_CHANNEL: ${NODEGLOW_UPDATE_CHANNEL:-stable}
+      # Where to look for releases. "off" for air-gapped installations: they
+      # update with an offline bundle (install.sh --offline).
+      NODEGLOW_RELEASES_URL: ${NODEGLOW_RELEASES_URL:-}
+      # Verify cosign signatures before installing (fail closed). Set 0 only
+      # for images you mirrored and re-tagged yourself.
+      NODEGLOW_VERIFY_SIGNATURES: ${NODEGLOW_VERIFY_SIGNATURES:-1}
+      DB_CONTAINER: ${DB_CONTAINER:-}
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
+      POSTGRES_USER: ${POSTGRES_USER:-nodeglow}
+      POSTGRES_DB: ${POSTGRES_DB:-nodeglow}
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION: ${BACKUP_RETENTION:-5}
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-}
+    expose:
+      - "9100"
+    restart: unless-stopped
+
+  frontend:
+    image: ${NODEGLOW_REGISTRY:-ghcr.io/jubacch}/nodeglow-frontend:${NODEGLOW_VERSION:?Set NODEGLOW_VERSION in .env (e.g. 1.0.0)}
+    container_name: nodeglow-frontend
+    ports:
+      - "${UI_BIND:-0.0.0.0}:8000:3000"
+    environment:
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      - nodeglow
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  chdata:
+  backups:

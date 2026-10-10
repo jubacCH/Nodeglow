@@ -337,3 +337,47 @@ def test_scheduler_thread_starts_and_stops(monkeypatch, tmp_path):
         stop.set()
         thread.join(timeout=2)
     assert not thread.is_alive()
+
+
+# ── Update modes ─────────────────────────────────────────────────────────────
+
+def test_update_mode_defaults_to_git(monkeypatch, tmp_path):
+    monkeypatch.delenv("NODEGLOW_UPDATE_MODE", raising=False)
+    server = load_server(monkeypatch, tmp_path)
+    assert server.update_mode() == "git"
+    monkeypatch.setenv("NODEGLOW_UPDATE_MODE", "bogus")
+    assert server.update_mode() == "git"
+    monkeypatch.setenv("NODEGLOW_UPDATE_MODE", "IMAGE")
+    assert server.update_mode() == "image"
+
+
+def test_default_runner_picks_steps_by_mode(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    seen = {}
+
+    def fake_run_update(ctx, steps=None):
+        seen["steps"] = [name for name, _ in steps] if steps else None
+
+    monkeypatch.setattr(server, "run_update", fake_run_update)
+    monkeypatch.setenv("NODEGLOW_UPDATE_MODE", "git")
+    server.default_runner(None)
+    assert seen["steps"] is None  # orchestrator's DEFAULT_STEPS
+
+    monkeypatch.setenv("NODEGLOW_UPDATE_MODE", "image")
+    server.default_runner(None)
+    assert seen["steps"] == server.image_update.IMAGE_STEP_NAMES
+
+
+def test_version_and_check_in_image_mode(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.setenv("NODEGLOW_UPDATE_MODE", "image")
+    monkeypatch.setenv("NODEGLOW_RELEASES_URL", "off")
+    with open(tmp_path / "repo" / ".env", "w") as fh:
+        fh.write("NODEGLOW_VERSION=1.2.3\n")
+
+    handler = server.UpdateHandler.__new__(server.UpdateHandler)
+    assert handler._get_version() == {"commit": "1.2.3", "version": "1.2.3", "mode": "image"}
+    check = handler._check_updates()
+    assert check["mode"] == "image"
+    assert check["update_available"] is False
+    assert check["current_version"] == "1.2.3"

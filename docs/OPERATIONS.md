@@ -98,6 +98,20 @@ way in.
 
 ## Updating
 
+There are two kinds of installation, and the updater sidecar handles each in
+its own mode (`NODEGLOW_UPDATE_MODE`, set by the compose file):
+
+| Installation | Compose file | Updater mode | Updates to |
+|---|---|---|---|
+| **Release install** — customers, on-prem, air-gapped; made by `install.sh` | `docker-compose.release.yml` (copied as `docker-compose.yml`) | `image` | the newest signed **release** from GHCR |
+| **Git checkout** — development, the project's own production | `docker-compose.yml` | `git` (default) | `origin/main`, built on the host |
+
+Release installs are documented in **[INSTALL.md](INSTALL.md#upgrading)**:
+the UI update there verifies the cosign signatures (fail closed), dumps the
+database, pulls, installs the release's compose file, migrates and restarts;
+air-gapped installs upgrade with `install.sh --offline <bundle>`. The rest of
+this section describes the git mode.
+
 ### From the UI
 
 **System → Status → Software Updates → Update Now.**
@@ -196,13 +210,17 @@ running new code against an old schema is what it exists to prevent.
 
 ### Upgrade policy
 
-- **`main` is the release channel.** The updater only ever fast-forwards to
-  `origin/main`; there are no release branches or tags to pick from yet.
-  `VERSION` is bumped by hand and is informational.
+- **Two channels.** Git installs follow `main`: the updater only ever
+  fast-forwards to `origin/main`. Release installs follow tagged releases
+  (`vX.Y.Z`, cut with `scripts/release.sh`, built and signed by
+  `.github/workflows/release.yml`); `VERSION` and the tag must agree, and
+  [CHANGELOG.md](../CHANGELOG.md) is the release note. Pre-releases
+  (`X.Y.Z-rc.N`) are offered only with `NODEGLOW_UPDATE_CHANNEL=prerelease`.
 - **Updates are forward-only.** Migrations have no tested downgrade path. The
   way back from a bad update is restoring the `pre-update-*` dump together with
-  the previous commit (`git checkout <old sha>` + rebuild), not a downgrade
-  migration.
+  the previous commit (`git checkout <old sha>` + rebuild) — or, for a release
+  install, the previous `NODEGLOW_VERSION` (the updater keeps the old `.env`
+  and compose file as `*.bak-<run>`) — not a downgrade migration.
 - **Update regularly rather than in big jumps.** Every migration runs on every
   deploy path, so skipping releases works, but a small step is easier to
   diagnose if something fails.
@@ -607,6 +625,12 @@ Useful optional settings:
 | `LOG_FORMAT` | `text` | `json` for one JSON object per line |
 | `APP_VERSION` | from `VERSION` | Build arg; set automatically by the UI update |
 | `SKIP_MIGRATIONS` | unset | `1` skips the schema check on start — emergencies only |
+| `NODEGLOW_DISABLE_EE` | unset | `1` runs the community edition even with `ee/` built in |
+
+Release installs (`docker-compose.release.yml`) additionally use
+`NODEGLOW_VERSION` (required), `NODEGLOW_BACKEND_IMAGE`, `NODEGLOW_REGISTRY`,
+`NODEGLOW_UPDATE_CHANNEL`, `NODEGLOW_RELEASES_URL` and
+`NODEGLOW_VERIFY_SIGNATURES` — see [INSTALL.md](INSTALL.md#configuration-env).
 
 Retention is configured in the UI under Settings, not through the environment:
 integration snapshots (7 days), incident events (30 days) and log templates

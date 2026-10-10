@@ -64,6 +64,15 @@ license terms apply regardless. See [`ee/LICENSE`](ee/LICENSE).
 feature works, the enterprise endpoints do not exist, and the UI hides them
 (with a one-line note where a user would look for them).
 
+## Published images
+
+Releases publish two backend images (see [docs/INSTALL.md](docs/INSTALL.md#editions-and-images)):
+`nodeglow-backend` contains `ee/` and is therefore partly under the Nodeglow
+Enterprise License; `nodeglow-backend-community` is built without `ee/` and
+contains AGPL-3.0 code only. The frontend and updater images are AGPL-3.0
+in both cases. Each image states its license in the
+`org.opencontainers.image.licenses` label.
+
 ## Obtaining a commercial license
 
 A commercial license covers production use of `ee/`, and can also be
