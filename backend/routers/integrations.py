@@ -103,6 +103,29 @@ def _endpoint_changed(fields, old: dict, new: dict) -> list[str]:
         and _normalise_endpoint(old.get(f.key)) != _normalise_endpoint(new.get(f.key))
     ]
 
+
+# Checkbox keys that turn TLS certificate verification on (True = verify).
+TLS_VERIFY_FIELD_KEYS = ("verify_ssl",)
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "on", "yes")
+    return bool(value)
+
+
+def _tls_verification_disabled(fields, old: dict, new: dict) -> bool:
+    """True when an edit switches TLS certificate verification from on to off."""
+    for f in fields:
+        if f.key not in TLS_VERIFY_FIELD_KEYS:
+            continue
+        default = f.default if f.default is not None else True
+        was_on = _truthy(old.get(f.key, default))
+        if was_on and not _truthy(new.get(f.key, default)):
+            return True
+    return False
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -298,7 +321,11 @@ async def api_edit_instance(
 
     fields = integration_cls.config_fields
     changed_endpoints = _endpoint_changed(fields, existing_config, config_dict)
-    if changed_endpoints:
+    # Turning certificate verification off is as good as repointing the
+    # endpoint: anyone on the path can then impersonate the server and collect
+    # the stored credentials. Same rule — secrets must be supplied again.
+    tls_disabled = _tls_verification_disabled(fields, existing_config, config_dict)
+    if changed_endpoints or tls_disabled:
         missing = [
             f.key for f in fields
             if _is_secret_field(f)
@@ -307,10 +334,12 @@ async def api_edit_instance(
         ]
         if missing:
             labels = [f.label for f in fields if f.key in missing]
+            what = ("Changing the address of an integration" if changed_endpoints
+                    else "Disabling TLS certificate verification")
             return JSONResponse({
                 "error": (
-                    "Changing the address of an integration requires entering "
-                    "its credentials again: " + ", ".join(labels)
+                    f"{what} requires entering its credentials again: "
+                    + ", ".join(labels)
                 ),
                 "code": "secrets_required",
                 "missing_fields": missing,
@@ -335,6 +364,7 @@ async def api_edit_instance(
         "type": integration_type,
         **_endpoint_summary(fields, config_dict),
         "endpoint_changed": changed_endpoints or None,
+        "tls_verification_disabled": True if tls_disabled else None,
         "secrets_replaced": secrets_changed or None,
     })
     return JSONResponse({"ok": True, "id": config_id, "name": name})

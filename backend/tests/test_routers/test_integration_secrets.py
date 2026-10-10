@@ -89,6 +89,32 @@ async def test_edit_without_host_change_keeps_secret(admin):
     assert stored["token_secret"] == "s3cret-token"
 
 
+async def test_disabling_tls_verification_requires_secrets(admin):
+    client, sf = admin
+    cfg_id = await _seed_proxmox(sf)
+    resp = await client.patch(f"/api/integration/proxmox/{cfg_id}",
+                              json={"verify_ssl": False})
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["code"] == "secrets_required"
+    assert body["missing_fields"] == ["token_secret"]
+    assert "TLS" in body["error"]
+    assert (await _stored(sf, cfg_id))["verify_ssl"] is True
+
+    resp = await client.patch(f"/api/integration/proxmox/{cfg_id}",
+                              json={"verify_ssl": False, "token_secret": "again"})
+    assert resp.status_code == 200, resp.text
+    stored = await _stored(sf, cfg_id)
+    assert stored["verify_ssl"] is False
+    assert stored["token_secret"] == "again"
+
+    # Turning it back on (or leaving it off) needs no secrets.
+    resp = await client.patch(f"/api/integration/proxmox/{cfg_id}", json={"name": "x"})
+    assert resp.status_code == 200, resp.text
+    resp = await client.patch(f"/api/integration/proxmox/{cfg_id}", json={"verify_ssl": True})
+    assert resp.status_code == 200, resp.text
+
+
 async def test_integration_changes_are_audited(admin):
     from models.audit import AuditLog
     from sqlalchemy import select
