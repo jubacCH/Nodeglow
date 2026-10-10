@@ -1,21 +1,23 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Cable, Check, Inbox, Lock, RefreshCw, X } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SectionHeader } from '@/components/layout/SectionHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
+import { BigNumber } from '@/components/ui/BigNumber';
 import { Button } from '@/components/ui/Button';
+import { Card, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryState, formatAsOf } from '@/components/ui/QueryState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { useToastStore } from '@/stores/toast';
+import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '@/components/ui/Table';
 import { get, patch, post } from '@/lib/api';
-import { timeAgo } from '@/lib/utils';
-import {
-  Check, X, Lock, Shield, Cable, CheckCircle, ExternalLink, RefreshCw,
-} from 'lucide-react';
-import Link from 'next/link';
+import { STATE_TEXT } from '@/lib/status';
+import { cn, timeAgo } from '@/lib/utils';
+import { useToastStore } from '@/stores/toast';
 
 interface PortTask {
   id: number;
@@ -57,19 +59,54 @@ interface TasksData {
   };
 }
 
+type Item = { hostId: number; portId: number };
+
+function HostCell({ id, name, hostname }: { id: number; name: string; hostname: string }) {
+  return (
+    <Td className="py-1.5 pl-5">
+      <Link prefetch={false} href={`/hosts/${id}`} className="font-medium text-fg hover:text-accent">{name}</Link>
+      <span className="block font-mono text-meta text-fg-3">{hostname}</span>
+    </Td>
+  );
+}
+
+function StatusLabel({ status }: { status: string }) {
+  if (status === 'new') return <Badge tone="accent">New</Badge>;
+  if (status === 'monitored') {
+    return <span className="inline-flex items-center gap-1 text-meta text-fg-2"><Check size={12} aria-hidden="true" /> Monitored</span>;
+  }
+  if (status === 'dismissed') return <span className="text-meta text-fg-3">Dismissed</span>;
+  return <span className="text-meta text-fg-3">{status}</span>;
+}
+
+function RowActions({ busy, onMonitor, onDismiss, what }: { busy: boolean; onMonitor: () => void; onDismiss: () => void; what: string }) {
+  return (
+    <div className="flex items-center justify-end gap-1.5">
+      <Button size="sm" variant="secondary" disabled={busy} onClick={onMonitor} aria-label={`Monitor ${what}`}>
+        <Check size={13} aria-hidden="true" /> Monitor
+      </Button>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={onDismiss} aria-label={`Dismiss ${what}`}>
+        <X size={13} aria-hidden="true" /> Dismiss
+      </Button>
+    </div>
+  );
+}
+
 export default function TasksPage() {
-  useEffect(() => { document.title = 'Tasks | Nodeglow'; }, []);
+  useEffect(() => { document.title = 'Discovery | Nodeglow'; }, []);
 
   const qc = useQueryClient();
   const toast = useToastStore();
-  const { data, isLoading } = useQuery<TasksData>({
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const query = useQuery<TasksData>({
     queryKey: ['tasks'],
     queryFn: () => get('/api/tasks'),
     refetchInterval: 30_000,
   });
+  const data = query.data;
 
   const actionMut = useMutation({
-    mutationFn: ({ hostId, portId, action }: { hostId: number; portId: number; action: string }) =>
+    mutationFn: ({ hostId, portId, action }: Item & { action: string }) =>
       patch(`/hosts/api/${hostId}/discovered-ports/${portId}`, { action }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -89,390 +126,231 @@ export default function TasksPage() {
     onError: () => toast.show('Scan failed', 'error'),
   });
 
-  const bulkAction = async (items: { hostId: number; portId: number }[], action: string) => {
-    for (const item of items) {
-      await patch(`/hosts/api/${item.hostId}/discovered-ports/${item.portId}`, { action });
+  const bulkAction = async (items: Item[], action: string) => {
+    setBulkBusy(true);
+    let done = 0;
+    try {
+      for (const item of items) {
+        await patch(`/hosts/api/${item.hostId}/discovered-ports/${item.portId}`, { action });
+        done += 1;
+      }
+      toast.show(`${items.length} items updated`, 'success');
+    } catch {
+      toast.show(`Stopped after ${done} of ${items.length} items — the next one failed`, 'error');
+    } finally {
+      setBulkBusy(false);
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['nav-counts'] });
     }
-    qc.invalidateQueries({ queryKey: ['tasks'] });
-    qc.invalidateQueries({ queryKey: ['nav-counts'] });
-    toast.show(`${items.length} items updated`, 'success');
   };
 
-  const newPorts = (data?.port_tasks ?? []).filter(p => p.status === 'new');
-  const newSsl = (data?.ssl_tasks ?? []).filter(s => s.ssl_status === 'new');
-  const resolvedPorts = (data?.port_tasks ?? []).filter(p => p.status !== 'new');
-  const resolvedSsl = (data?.ssl_tasks ?? []).filter(s => s.ssl_status !== 'new');
-
+  const newPorts = (data?.port_tasks ?? []).filter((p) => p.status === 'new');
+  const newSsl = (data?.ssl_tasks ?? []).filter((s) => s.ssl_status === 'new');
+  const resolvedPorts = (data?.port_tasks ?? []).filter((p) => p.status !== 'new');
+  const resolvedSsl = (data?.ssl_tasks ?? []).filter((s) => s.ssl_status !== 'new');
   const totalPending = newPorts.length + newSsl.length;
+  const monitored = resolvedPorts.filter((p) => p.status === 'monitored').length + resolvedSsl.filter((s) => s.ssl_status === 'monitored').length;
+  const dismissed = resolvedPorts.filter((p) => p.status === 'dismissed').length + resolvedSsl.filter((s) => s.ssl_status === 'dismissed').length;
+  const busy = actionMut.isPending || bulkBusy;
 
   return (
     <div>
       <PageHeader
-        title="Tasks"
-        description="Items requiring admin attention"
+        title="Discovery"
+        description={
+          data
+            ? `${totalPending} new item${totalPending === 1 ? '' : 's'} to review · ports and certificates found by scans · updated ${formatAsOf(query.dataUpdatedAt)}`
+            : 'Ports and certificates found by scans, waiting for a decision'
+        }
         actions={
-          <div className="flex items-center gap-3">
-            {totalPending > 0 && (
-              <span className="text-xs text-amber-400 font-mono">{totalPending} pending</span>
-            )}
-            <Button
-              size="sm"
-              onClick={() => scanAllMut.mutate()}
-              disabled={scanAllMut.isPending}
-            >
-              <RefreshCw size={14} className={scanAllMut.isPending ? 'animate-spin' : ''} />
-              {scanAllMut.isPending ? 'Scanning...' : 'Scan All Hosts'}
-            </Button>
-          </div>
+          <Button onClick={() => scanAllMut.mutate()} loading={scanAllMut.isPending}>
+            {!scanAllMut.isPending && <RefreshCw size={14} aria-hidden="true" />}
+            {scanAllMut.isPending ? 'Scanning…' : 'Scan all hosts'}
+          </Button>
         }
       />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-        <SummaryCard
-          label="New Ports"
-          value={data?.summary.new_ports ?? 0}
-          color="text-sky-400"
-          loading={isLoading}
-        />
-        <SummaryCard
-          label="New SSL Certs"
-          value={data?.summary.new_ssl ?? 0}
-          color="text-emerald-400"
-          loading={isLoading}
-        />
-        <SummaryCard
-          label="Monitored"
-          value={resolvedPorts.filter(p => p.status === 'monitored').length + resolvedSsl.filter(s => s.ssl_status === 'monitored').length}
-          color="text-slate-400"
-          loading={isLoading}
-        />
-        <SummaryCard
-          label="Dismissed"
-          value={resolvedPorts.filter(p => p.status === 'dismissed').length + resolvedSsl.filter(s => s.ssl_status === 'dismissed').length}
-          color="text-slate-500"
-          loading={isLoading}
-        />
-      </div>
+      <QueryState
+        query={query}
+        errorTitle="Could not load discoveries"
+        loading={
+          <div className="space-y-4" aria-busy="true" aria-label="Loading">
+            <Skeleton className="h-[96px] w-full rounded-card" />
+            <Skeleton className="h-[240px] w-full rounded-card" />
+          </div>
+        }
+      >
+        {(d) => (
+          <div className="space-y-4">
+            <Card>
+              <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
+                <BigNumber size="sm" value={d.summary.new_ports} label="New ports" />
+                <BigNumber size="sm" value={d.summary.new_ssl} label="New certificates" />
+                <BigNumber size="sm" value={monitored} label="Monitored" />
+                <BigNumber size="sm" value={dismissed} label="Dismissed" />
+              </div>
+            </Card>
 
-      {/* All clear */}
-      {!isLoading && totalPending === 0 && (
-        <GlassCard>
-          <EmptyState
-            icon={CheckCircle}
-            title="All clear — no pending tasks"
-            description="Port scans run automatically every 6 hours."
-          />
-        </GlassCard>
-      )}
+            {totalPending === 0 && (
+              <Card>
+                <EmptyState
+                  variant="confirmed"
+                  icon={Inbox}
+                  title="Inbox empty — nothing to review"
+                  description="Port scans run automatically every 6 hours; new ports and certificates appear here."
+                  asOf={formatAsOf(query.dataUpdatedAt)}
+                />
+              </Card>
+            )}
 
-      {/* New Ports */}
-      {(isLoading || newPorts.length > 0) && (
-        <GlassCard className="mb-6">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-              <Cable size={16} className="text-sky-400" />
-              Discovered Ports
-              {newPorts.length > 0 && (
-                <Badge variant="severity" severity="info">{newPorts.length} new</Badge>
-              )}
-            </h3>
-            {newPorts.length > 1 && (
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => bulkAction(
-                    newPorts.map(p => ({ hostId: p.host_id, portId: p.id })),
-                    'monitor_port'
-                  )}
-                >
-                  <Check size={13} /> Accept All
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => bulkAction(
-                    newPorts.map(p => ({ hostId: p.host_id, portId: p.id })),
-                    'dismiss_port'
-                  )}
-                >
-                  <X size={13} /> Dismiss All
-                </Button>
+            {newPorts.length > 0 && (
+              <Card as="section" padding="none" aria-labelledby="h-ports">
+                <div className="px-5 pt-5">
+                  <CardHeader
+                    title={<span className="inline-flex items-center gap-2"><Cable size={15} aria-hidden="true" className="text-fg-3" /> Discovered ports <Badge tone="accent" className="num">{newPorts.length} new</Badge></span>}
+                    titleId="h-ports"
+                    actions={newPorts.length > 1 && (
+                      <>
+                        <Button size="sm" variant="secondary" disabled={busy} onClick={() => bulkAction(newPorts.map((p) => ({ hostId: p.host_id, portId: p.id })), 'monitor_port')}>
+                          <Check size={13} aria-hidden="true" /> Monitor all
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => bulkAction(newPorts.map((p) => ({ hostId: p.host_id, portId: p.id })), 'dismiss_port')}>
+                          <X size={13} aria-hidden="true" /> Dismiss all
+                        </Button>
+                      </>
+                    )}
+                  />
+                </div>
+                <TableContainer className="relative">
+                  <Table>
+                    <THead>
+                      <Tr>
+                        <Th className="pl-5">Host</Th>
+                        <Th numeric>Port</Th>
+                        <Th>Service</Th>
+                        <Th className="max-md:hidden">First seen</Th>
+                        <Th className="pr-5 text-right"><span className="sr-only">Actions</span></Th>
+                      </Tr>
+                    </THead>
+                    <TBody>
+                      {newPorts.map((p) => (
+                        <Tr key={`port-${p.id}`}>
+                          <HostCell id={p.host_id} name={p.host_name} hostname={p.host_hostname} />
+                          <Td numeric className="font-mono"><span className="text-fg">{p.port}</span><span className="text-meta text-fg-3">/{p.protocol}</span></Td>
+                          <Td>{p.service ? <Badge>{p.service}</Badge> : <span className="text-fg-3">—</span>}</Td>
+                          <Td muted className="text-meta max-md:hidden">{p.first_seen ? timeAgo(p.first_seen) : '—'}</Td>
+                          <Td className="pr-5">
+                            <RowActions
+                              busy={busy}
+                              what={`port ${p.port} on ${p.host_name}`}
+                              onMonitor={() => actionMut.mutate({ hostId: p.host_id, portId: p.id, action: 'monitor_port' })}
+                              onDismiss={() => actionMut.mutate({ hostId: p.host_id, portId: p.id, action: 'dismiss_port' })}
+                            />
+                          </Td>
+                        </Tr>
+                      ))}
+                    </TBody>
+                  </Table>
+                </TableContainer>
+              </Card>
+            )}
+
+            {newSsl.length > 0 && (
+              <Card as="section" padding="none" aria-labelledby="h-ssl">
+                <div className="px-5 pt-5">
+                  <CardHeader
+                    title={<span className="inline-flex items-center gap-2"><Lock size={15} aria-hidden="true" className="text-fg-3" /> Discovered certificates <Badge tone="accent" className="num">{newSsl.length} new</Badge></span>}
+                    titleId="h-ssl"
+                    actions={newSsl.length > 1 && (
+                      <>
+                        <Button size="sm" variant="secondary" disabled={busy} onClick={() => bulkAction(newSsl.map((s) => ({ hostId: s.host_id, portId: s.id })), 'monitor_ssl')}>
+                          <Check size={13} aria-hidden="true" /> Monitor all
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => bulkAction(newSsl.map((s) => ({ hostId: s.host_id, portId: s.id })), 'dismiss_ssl')}>
+                          <X size={13} aria-hidden="true" /> Dismiss all
+                        </Button>
+                      </>
+                    )}
+                  />
+                </div>
+                <TableContainer className="relative">
+                  <Table>
+                    <THead>
+                      <Tr>
+                        <Th className="pl-5">Host</Th>
+                        <Th numeric>Port</Th>
+                        <Th>Subject</Th>
+                        <Th className="max-lg:hidden">Issuer</Th>
+                        <Th numeric>Expires in</Th>
+                        <Th className="pr-5 text-right"><span className="sr-only">Actions</span></Th>
+                      </Tr>
+                    </THead>
+                    <TBody>
+                      {newSsl.map((s) => {
+                        const st = s.ssl_expiry_days == null ? null : s.ssl_expiry_days <= 14 ? 'down' : s.ssl_expiry_days <= 30 ? 'warning' : null;
+                        return (
+                          <Tr key={`ssl-${s.id}`}>
+                            <HostCell id={s.host_id} name={s.host_name} hostname={s.host_hostname} />
+                            <Td numeric className="font-mono">{s.port}</Td>
+                            <Td className="max-w-[220px] truncate font-mono text-meta" title={s.ssl_subject ?? undefined}>{s.ssl_subject || '—'}</Td>
+                            <Td muted className="max-w-[220px] truncate text-meta max-lg:hidden" title={s.ssl_issuer ?? undefined}>{s.ssl_issuer || '—'}</Td>
+                            <Td numeric className={cn('font-medium', st ? STATE_TEXT[st] : 'text-fg')}>
+                              {s.ssl_expiry_days != null ? `${s.ssl_expiry_days} d` : <span className="text-fg-3">—</span>}
+                            </Td>
+                            <Td className="pr-5">
+                              <RowActions
+                                busy={busy}
+                                what={`certificate on ${s.host_name}:${s.port}`}
+                                onMonitor={() => actionMut.mutate({ hostId: s.host_id, portId: s.id, action: 'monitor_ssl' })}
+                                onDismiss={() => actionMut.mutate({ hostId: s.host_id, portId: s.id, action: 'dismiss_ssl' })}
+                              />
+                            </Td>
+                          </Tr>
+                        );
+                      })}
+                    </TBody>
+                  </Table>
+                </TableContainer>
+              </Card>
+            )}
+
+            {(resolvedPorts.length > 0 || resolvedSsl.length > 0) && (
+              <div>
+                <SectionHeader title="History" subtitle={`${resolvedPorts.length + resolvedSsl.length} decided items`} />
+                <Card padding="none">
+                  <TableContainer className="relative">
+                    <Table density="compact">
+                      <THead>
+                        <Tr>
+                          <Th className="pl-5">Host</Th>
+                          <Th numeric>Port</Th>
+                          <Th>Type</Th>
+                          <Th>Decision</Th>
+                          <Th className="pr-5 max-sm:hidden">First seen</Th>
+                        </Tr>
+                      </THead>
+                      <TBody>
+                        {[
+                          ...resolvedPorts.map((p) => ({ key: `rp-${p.id}`, host_id: p.host_id, host_name: p.host_name, port: `${p.port}/${p.protocol}`, type: 'Port', status: p.status, first_seen: p.first_seen })),
+                          ...resolvedSsl.map((s) => ({ key: `rs-${s.id}`, host_id: s.host_id, host_name: s.host_name, port: `${s.port}/${s.protocol}`, type: 'Certificate', status: s.ssl_status, first_seen: s.first_seen })),
+                        ].map((r) => (
+                          <Tr key={r.key}>
+                            <Td className="pl-5"><Link prefetch={false} href={`/hosts/${r.host_id}`} className="text-fg-2 hover:text-accent">{r.host_name}</Link></Td>
+                            <Td numeric muted className="font-mono text-meta">{r.port}</Td>
+                            <Td muted className="text-meta">{r.type}</Td>
+                            <Td><StatusLabel status={r.status} /></Td>
+                            <Td muted className="pr-5 text-meta max-sm:hidden">{r.first_seen ? timeAgo(r.first_seen) : '—'}</Td>
+                          </Tr>
+                        ))}
+                      </TBody>
+                    </Table>
+                  </TableContainer>
+                </Card>
               </div>
             )}
           </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06]">
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Host</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Port</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Service</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">First Seen</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
-                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading && Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i} className="border-b border-white/[0.06]">
-                    {Array.from({ length: 6 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3"><Skeleton className="h-5 w-24" /></td>
-                    ))}
-                  </tr>
-                ))}
-                {newPorts.map((p) => (
-                  <tr key={`port-${p.id}`} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
-                    <td className="px-4 py-3">
-                      <Link prefetch={false} href={`/hosts/${p.host_id}`} className="flex items-center gap-1.5 text-slate-200 hover:text-sky-400 transition-colors">
-                        {p.host_name}
-                        <ExternalLink size={11} className="text-slate-500" />
-                      </Link>
-                      <p className="text-[10px] text-slate-500 font-mono">{p.host_hostname}</p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="font-mono font-bold text-slate-200">{p.port}</span>
-                      <span className="text-xs text-slate-500">/{p.protocol}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {p.service ? <Badge>{p.service}</Badge> : <span className="text-slate-500">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-400">
-                      {p.first_seen ? timeAgo(p.first_seen) : '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusLabel status={p.status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        {p.status === 'new' && (
-                          <>
-                            <button
-                              onClick={() => actionMut.mutate({ hostId: p.host_id, portId: p.id, action: 'monitor_port' })}
-                              disabled={actionMut.isPending}
-                              className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-                              title="Monitor this port"
-                            >
-                              <Check size={14} />
-                            </button>
-                            <button
-                              onClick={() => actionMut.mutate({ hostId: p.host_id, portId: p.id, action: 'dismiss_port' })}
-                              disabled={actionMut.isPending}
-                              className="p-1.5 rounded-md bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] transition-colors"
-                              title="Dismiss"
-                            >
-                              <X size={14} />
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
-      )}
-
-      {/* New SSL Certificates */}
-      {(isLoading || newSsl.length > 0) && (
-        <GlassCard className="mb-6">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-              <Lock size={16} className="text-emerald-400" />
-              Discovered SSL Certificates
-              {newSsl.length > 0 && (
-                <Badge variant="severity" severity="info">{newSsl.length} new</Badge>
-              )}
-            </h3>
-            {newSsl.length > 1 && (
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => bulkAction(
-                    newSsl.map(s => ({ hostId: s.host_id, portId: s.id })),
-                    'monitor_ssl'
-                  )}
-                >
-                  <Shield size={13} /> Accept All
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => bulkAction(
-                    newSsl.map(s => ({ hostId: s.host_id, portId: s.id })),
-                    'dismiss_ssl'
-                  )}
-                >
-                  <X size={13} /> Dismiss All
-                </Button>
-              </div>
-            )}
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06]">
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Host</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Port</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Subject</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Issuer</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Expiry</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
-                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading && Array.from({ length: 3 }).map((_, i) => (
-                  <tr key={i} className="border-b border-white/[0.06]">
-                    {Array.from({ length: 7 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3"><Skeleton className="h-5 w-24" /></td>
-                    ))}
-                  </tr>
-                ))}
-                {newSsl.map((s) => (
-                  <tr key={`ssl-${s.id}`} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
-                    <td className="px-4 py-3">
-                      <Link prefetch={false} href={`/hosts/${s.host_id}`} className="flex items-center gap-1.5 text-slate-200 hover:text-sky-400 transition-colors">
-                        {s.host_name}
-                        <ExternalLink size={11} className="text-slate-500" />
-                      </Link>
-                      <p className="text-[10px] text-slate-500 font-mono">{s.host_hostname}</p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="font-mono text-slate-300">{s.port}</span>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-300 max-w-[200px] truncate">
-                      {s.ssl_subject || '—'}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-400 max-w-[200px] truncate">
-                      {s.ssl_issuer || '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      {s.ssl_expiry_days != null ? (
-                        <Badge variant="severity" severity={
-                          s.ssl_expiry_days <= 14 ? 'critical' : s.ssl_expiry_days <= 30 ? 'warning' : 'info'
-                        }>
-                          {s.ssl_expiry_days}d
-                        </Badge>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusLabel status={s.ssl_status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        {s.ssl_status === 'new' && (
-                          <>
-                            <button
-                              onClick={() => actionMut.mutate({ hostId: s.host_id, portId: s.id, action: 'monitor_ssl' })}
-                              disabled={actionMut.isPending}
-                              className="p-1.5 rounded-md bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 transition-colors"
-                              title="Monitor SSL certificate"
-                            >
-                              <Shield size={14} />
-                            </button>
-                            <button
-                              onClick={() => actionMut.mutate({ hostId: s.host_id, portId: s.id, action: 'dismiss_ssl' })}
-                              disabled={actionMut.isPending}
-                              className="p-1.5 rounded-md bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] transition-colors"
-                              title="Dismiss"
-                            >
-                              <X size={14} />
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
-      )}
-
-      {/* Resolved items (collapsed) */}
-      {(resolvedPorts.length > 0 || resolvedSsl.length > 0) && (
-        <>
-          <SectionHeader
-            title="History"
-            subtitle={`${resolvedPorts.length + resolvedSsl.length} resolved items`}
-          />
-          <GlassCard>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06]">
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Host</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Port</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Type</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wider">First Seen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {resolvedPorts.map((p) => (
-                  <tr key={`rp-${p.id}`} className="border-b border-white/[0.06]">
-                    <td className="px-4 py-3">
-                      <Link prefetch={false} href={`/hosts/${p.host_id}`} className="text-xs text-slate-400 hover:text-sky-400 transition-colors">
-                        {p.host_name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{p.port}/{p.protocol}</td>
-                    <td className="px-4 py-3 text-xs text-slate-500">Port</td>
-                    <td className="px-4 py-3"><StatusLabel status={p.status} /></td>
-                    <td className="px-4 py-3 text-xs text-slate-500">{p.first_seen ? timeAgo(p.first_seen) : '—'}</td>
-                  </tr>
-                ))}
-                {resolvedSsl.map((s) => (
-                  <tr key={`rs-${s.id}`} className="border-b border-white/[0.06]">
-                    <td className="px-4 py-3">
-                      <Link prefetch={false} href={`/hosts/${s.host_id}`} className="text-xs text-slate-400 hover:text-sky-400 transition-colors">
-                        {s.host_name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{s.port}/{s.protocol}</td>
-                    <td className="px-4 py-3 text-xs text-slate-500">SSL Cert</td>
-                    <td className="px-4 py-3"><StatusLabel status={s.ssl_status} /></td>
-                    <td className="px-4 py-3 text-xs text-slate-500">{s.first_seen ? timeAgo(s.first_seen) : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          </GlassCard>
-        </>
-      )}
+        )}
+      </QueryState>
     </div>
   );
-}
-
-function SummaryCard({ label, value, color, loading }: {
-  label: string; value: number; color: string; loading: boolean;
-}) {
-  return (
-    <GlassCard className="p-4">
-      <p className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">{label}</p>
-      {loading ? (
-        <Skeleton className="h-8 w-12 mt-1" />
-      ) : (
-        <p className={`text-2xl font-bold ${color}`}>{value}</p>
-      )}
-    </GlassCard>
-  );
-}
-
-function StatusLabel({ status }: { status: string }) {
-  if (status === 'new') return <Badge variant="severity" severity="warning">new</Badge>;
-  if (status === 'monitored') return <span className="text-xs text-emerald-400 flex items-center gap-1"><Check size={12} /> monitored</span>;
-  if (status === 'dismissed') return <span className="text-xs text-slate-500">dismissed</span>;
-  return <span className="text-xs text-slate-500">{status}</span>;
 }
