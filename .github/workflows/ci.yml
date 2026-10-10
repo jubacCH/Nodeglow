@@ -127,16 +127,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       clickhouse:
-        image: clickhouse/clickhouse-server:24.8-alpine
+        image: clickhouse/clickhouse-server:24.8
         env:
           CLICKHOUSE_SKIP_USER_SETUP: "1"
         ports:
           - 8123:8123
-        options: >-
-          --health-cmd "wget -qO- http://localhost:8123/ping || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     defaults:
       run:
         working-directory: backend
@@ -151,6 +146,14 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+
+      - name: Wait for ClickHouse
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8123/ping && exit 0
+            sleep 2
+          done
+          echo "::error::ClickHouse did not come up"; exit 1
 
       - name: Run live ClickHouse tests
         env:
