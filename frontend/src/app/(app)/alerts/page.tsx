@@ -1,371 +1,174 @@
 'use client';
 
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Bell, ShieldCheck } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Badge } from '@/components/ui/Badge';
-import { StatusDot } from '@/components/ui/StatusDot';
 import { Button } from '@/components/ui/Button';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { useIncidents } from '@/hooks/queries/useAlerts';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, post } from '@/lib/api';
+import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { QueryErrorState, QueryState, StaleDataBanner } from '@/components/ui/QueryState';
-import { Suspense, useEffect, useState } from 'react';
-import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { Wrench, Clock, ShieldCheck, Bell, Search } from 'lucide-react';
-import { timeAgo } from '@/lib/utils';
-import { useConfirm } from '@/hooks/useConfirm';
+import { Pagination } from '@/components/ui/Pagination';
+import { QueryState, formatAsOf } from '@/components/ui/QueryState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { IncidentFilters } from '@/components/incidents/IncidentFilters';
+import { IncidentTable } from '@/components/incidents/IncidentTable';
+import { MaintenanceHostsCard } from '@/components/maintenance/MaintenanceHostsCard';
 import { MaintenanceWindowsPanel } from '@/components/maintenance/MaintenanceWindowsPanel';
-import type { MaintenanceWindowRef } from '@/types';
+import { useIncidentAction, useIncidentList } from '@/hooks/queries/useAlerts';
+import {
+  DEFAULT_STATUSES, KNOWN_RULES, PAGE_SIZE, filtersFromParams, filtersToParams, hasActiveFilters, incidentQueryString,
+  type IncidentFilters as Filters, type IncidentItem, type IncidentPage, type IncidentSort,
+} from '@/lib/incidents';
+import { useIsEditor } from '@/stores/auth';
 
-interface MaintenanceHost {
-  id: number;
-  name: string;
-  hostname: string;
-  source: string;
-  maintenance: boolean;
-  maintenance_manual?: boolean;
-  maintenance_window?: MaintenanceWindowRef | null;
-  maintenance_until?: string | null;
+/** Re-render once a minute so ages stay current between refetches. */
+function useNow(intervalMs = 60_000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(t);
+  }, [intervalMs]);
+  return now;
 }
 
-type Tab = 'alerts' | 'incidents' | 'maintenance';
-
-const VALID_TABS: Tab[] = ['alerts', 'incidents', 'maintenance'];
-
-function AlertsPageInner() {
-  const searchParams = useSearchParams();
-  const tabParam = searchParams.get('tab') as Tab | null;
-  const initialTab = tabParam && VALID_TABS.includes(tabParam) ? tabParam : 'alerts';
-  useEffect(() => { document.title = 'Alerts | Nodeglow'; }, []);
-  const [activeTab, setActiveTabState] = useState<Tab>(initialTab);
-  const router = useRouter();
-  // The tab lives in the URL so the shell sub-navigation (Incidents /
-  // Maintenance) and the page tabs stay in sync.
-  useEffect(() => {
-    if (tabParam && VALID_TABS.includes(tabParam)) setActiveTabState(tabParam);
-    else if (!tabParam) setActiveTabState('alerts');
-  }, [tabParam]);
-  const setActiveTab = (tab: Tab) => {
-    setActiveTabState(tab);
-    router.replace(tab === 'alerts' ? '/alerts' : `/alerts?tab=${tab}`, { scroll: false });
-  };
-  const [incidentSearch, setIncidentSearch] = useState('');
-  const [severityFilter, setSeverityFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const qc = useQueryClient();
-  const { confirm, ConfirmDialogElement } = useConfirm();
-  const {
-    data: incidents, isLoading, isError, error, refetch,
-  } = useIncidents();
-  // A failed request must not read as "All clear".
-  const loadFailed = isError && !incidents;
-
-  const maintQuery = useQuery({
-    queryKey: ['maintenance-hosts'],
-    queryFn: () => get<MaintenanceHost[]>('/api/v1/hosts?status=maintenance'),
-    enabled: activeTab === 'maintenance',
-  });
-  const maintHosts = maintQuery.data;
-
-  const tabs: { key: Tab; label: string }[] = [
-    { key: 'alerts', label: 'Alerts' },
-    { key: 'incidents', label: 'Incidents' },
-    { key: 'maintenance', label: 'Maintenance' },
-  ];
-
-  const openIncidents = incidents?.filter((i) => i.status === 'open') ?? [];
-
-  async function removeMaintenance(hostId: number) {
-    const ok = await confirm({
-      title: 'Remove maintenance',
-      description: 'Remove maintenance mode from this host?',
-      confirmLabel: 'Remove',
-    });
-    if (!ok) return;
-    await post(`/hosts/api/${hostId}/maintenance`);
-    qc.invalidateQueries({ queryKey: ['maintenance-hosts'] });
-  }
-
+function ListSkeleton() {
   return (
-    <div>
-      <PageHeader
-        title="Alerts"
-        description="Active alerts, incidents, and maintenance windows"
-      />
-
-      {/* Tab bar — larger tap targets on mobile (44pt minimum). */}
-      <div className="flex gap-1 border-b border-white/[0.06] mb-6 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-3 sm:py-2 text-sm font-medium transition-colors whitespace-nowrap min-h-[44px] sm:min-h-0 ${
-              activeTab === tab.key
-                ? 'accent-text border-b-2 border-current'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            {tab.label}
-            {tab.key === 'alerts' && openIncidents.length > 0 && (
-              <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs bg-red-500/20 text-red-400">
-                {openIncidents.length}
-              </span>
-            )}
-            {tab.key === 'maintenance' && maintHosts && maintHosts.length > 0 && (
-              <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs bg-amber-500/20 text-amber-400">
-                {maintHosts.length}
-              </span>
-            )}
-          </button>
+    <Card padding="none" aria-busy="true" aria-label="Loading incidents">
+      <div className="divide-y divide-border">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-4 px-4 py-3">
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="h-4 flex-1" />
+            <Skeleton className="h-4 w-24 max-[759px]:hidden" />
+            <Skeleton className="h-4 w-16" />
+          </div>
         ))}
       </div>
-
-      {isError && incidents && activeTab !== 'maintenance' && (
-        <StaleDataBanner error={error} onRetry={refetch} />
-      )}
-
-      {activeTab === 'alerts' && (
-        <div className="space-y-3">
-          {loadFailed && (
-            <GlassCard>
-              <QueryErrorState error={error} onRetry={refetch} title="Could not load alerts" />
-            </GlassCard>
-          )}
-          {isLoading &&
-            Array.from({ length: 4 }).map((_, i) => (
-              <GlassCard key={i} className="p-4">
-                <div className="flex items-center gap-3">
-                  <Skeleton className="h-5 w-5 rounded-full" />
-                  <Skeleton className="h-5 w-64" />
-                  <Skeleton className="h-5 w-16 ml-auto" />
-                </div>
-              </GlassCard>
-            ))}
-          {openIncidents.map((inc) => (
-            <Link key={inc.id} href={`/incidents/${inc.id}`}>
-              <GlassCard className="p-4 hover:bg-white/[0.04] transition-colors cursor-pointer">
-                <div className="flex items-center gap-3">
-                  <StatusDot
-                    status={inc.severity === 'critical' ? 'offline' : inc.severity === 'warning' ? 'maintenance' : 'unknown'}
-                    pulse={inc.severity === 'critical'}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-slate-200 truncate">{inc.title}</p>
-                    {inc.summary && (
-                      <p className="text-xs text-slate-400 truncate mt-0.5">{inc.summary}</p>
-                    )}
-                    <p className="text-xs text-slate-500 mt-0.5">{timeAgo(inc.created_at)}</p>
-                  </div>
-                  <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>
-                </div>
-              </GlassCard>
-            </Link>
-          ))}
-          {!isLoading && !loadFailed && openIncidents.length === 0 && (
-            <GlassCard>
-              <EmptyState
-                icon={ShieldCheck}
-                title="All clear"
-                description="No active alerts — everything is running smoothly."
-              />
-            </GlassCard>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'incidents' && (() => {
-        const filtered = (incidents ?? []).filter((inc) => {
-          if (severityFilter !== 'all' && inc.severity !== severityFilter) return false;
-          if (statusFilter !== 'all' && inc.status !== statusFilter) return false;
-          if (incidentSearch) {
-            const q = incidentSearch.toLowerCase();
-            if (!inc.title.toLowerCase().includes(q) && !inc.rule.toLowerCase().includes(q)) return false;
-          }
-          return true;
-        });
-        return (
-          <div className="space-y-4">
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="relative flex-1 min-w-[200px] max-w-sm">
-                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-                <input
-                  type="text"
-                  placeholder="Search incidents..."
-                  value={incidentSearch}
-                  onChange={(e) => setIncidentSearch(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
-                />
-              </div>
-              <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-                {['all', 'critical', 'warning', 'info'].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setSeverityFilter(s)}
-                    className={`px-3 py-2 sm:py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-                      severityFilter === s
-                        ? s === 'critical' ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-                          : s === 'warning' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                          : s === 'info' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
-                          : 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                        : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
-                    }`}
-                  >
-                    {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-                {['all', 'open', 'acknowledged', 'resolved'].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setStatusFilter(s)}
-                    className={`px-3 py-2 sm:py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-                      statusFilter === s
-                        ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                        : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
-                    }`}
-                  >
-                    {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Results */}
-            <div className="space-y-3">
-              {loadFailed && (
-                <GlassCard>
-                  <QueryErrorState error={error} onRetry={refetch} title="Could not load incidents" />
-                </GlassCard>
-              )}
-              {isLoading &&
-                Array.from({ length: 4 }).map((_, i) => (
-                  <GlassCard key={i} className="p-4">
-                    <Skeleton className="h-5 w-full" />
-                  </GlassCard>
-                ))}
-              {filtered.map((inc) => (
-                <Link key={inc.id} href={`/incidents/${inc.id}`}>
-                  <GlassCard className="p-4 hover:bg-white/[0.04] transition-colors cursor-pointer">
-                    <div className="flex items-center gap-3">
-                      <StatusDot
-                        status={
-                          inc.status === 'resolved' ? 'online' :
-                          inc.status === 'acknowledged' ? 'maintenance' : 'offline'
-                        }
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-slate-200 truncate">{inc.title}</p>
-                        {inc.summary && (
-                          <p className="text-xs text-slate-400 truncate mt-0.5">{inc.summary}</p>
-                        )}
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {inc.rule} &middot; {timeAgo(inc.created_at)}
-                        </p>
-                      </div>
-                      <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>
-                      <Badge>{inc.status}</Badge>
-                    </div>
-                  </GlassCard>
-                </Link>
-              ))}
-              {!isLoading && !loadFailed && filtered.length === 0 && (
-                <GlassCard>
-                  <EmptyState
-                    icon={Bell}
-                    title={
-                      incidentSearch || severityFilter !== 'all' || statusFilter !== 'all'
-                        ? 'No incidents match your filters'
-                        : 'No incidents yet'
-                    }
-                    description={
-                      incidentSearch || severityFilter !== 'all' || statusFilter !== 'all'
-                        ? 'Try adjusting your filters.'
-                        : 'Incidents from correlation rules will appear here.'
-                    }
-                  />
-                </GlassCard>
-              )}
-            </div>
-          </div>
-        );
-      })()}
-
-      {activeTab === 'maintenance' && <MaintenanceWindowsPanel />}
-
-      {activeTab === 'maintenance' && (
-        <QueryState
-          query={maintQuery}
-          errorTitle="Could not load maintenance hosts"
-          loading={
-            <div className="space-y-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <GlassCard key={i} className="p-4">
-                  <Skeleton className="h-5 w-full" />
-                </GlassCard>
-              ))}
-            </div>
-          }
-          empty={
-            <GlassCard>
-              <EmptyState
-                icon={Wrench}
-                title="No hosts in maintenance"
-                description="Hosts in maintenance — set by hand or by an active window — appear here."
-              />
-            </GlassCard>
-          }
-        >
-          {(maintHosts) => (
-            <div className="space-y-3">
-              {maintHosts.map((h) => (
-                <GlassCard key={h.id} className="p-4">
-                  <div className="flex items-center gap-3">
-                    <Wrench className="h-4 w-4 text-amber-400 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <Link prefetch={false} href={`/hosts/${h.id}`} className="text-sm font-medium text-slate-200 hover:text-sky-400 transition-colors">
-                        {h.name}
-                      </Link>
-                      <p className="text-xs text-slate-500 font-mono">{h.hostname}</p>
-                    </div>
-                    {h.maintenance_manual !== false && h.maintenance_until && (
-                      <span className="flex items-center gap-1 text-xs text-slate-400">
-                        <Clock className="h-3 w-3" />
-                        Until {new Date(h.maintenance_until).toLocaleString()}
-                      </span>
-                    )}
-                    {h.maintenance_window && (
-                      <span className="flex items-center gap-1 text-xs text-amber-300/80">
-                        <Clock className="h-3 w-3" />
-                        {h.maintenance_window.name}
-                        {h.maintenance_window.ends_at && <> · until {new Date(h.maintenance_window.ends_at).toLocaleString()}</>}
-                      </span>
-                    )}
-                    <Badge>{h.source}</Badge>
-                    {h.maintenance_manual !== false && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeMaintenance(h.id)}
-                        className="text-xs text-amber-400 hover:text-amber-300"
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-                </GlassCard>
-              ))}
-            </div>
-          )}
-        </QueryState>
-      )}
-      {ConfirmDialogElement}
-    </div>
+    </Card>
   );
+}
+
+function IncidentsView() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const filters = useMemo(() => filtersFromParams(new URLSearchParams(params.toString())), [params]);
+  const now = useNow();
+  // The `from` boundary moves with the minute clock, so a time-range filter
+  // follows "last 24 h" without changing the query key on every render.
+  const qs = useMemo(() => incidentQueryString(filters, now), [filters, now]);
+  const query = useIncidentList(qs);
+  const action = useIncidentAction();
+  const canEdit = useIsEditor();
+
+  const setFilters = useCallback((next: Filters) => {
+    const p = filtersToParams(next).toString();
+    router.replace(p ? `${pathname}?${p}` : pathname, { scroll: false });
+  }, [router, pathname]);
+
+  const reset = () => setFilters({ ...filters, statuses: [...DEFAULT_STATUSES], severities: [], rule: '', range: 'all', search: '', page: 0 });
+
+  const rules = useMemo(() => {
+    const seen = new Set(KNOWN_RULES);
+    query.data?.items.forEach((i) => seen.add(i.rule));
+    if (filters.rule) seen.add(filters.rule);
+    return Array.from(seen).sort();
+  }, [query.data, filters.rule]);
+
+  const total = query.data?.total;
+  const onlyOpen = filters.statuses.every((s) => s !== 'resolved');
+  const asOf = formatAsOf(query.dataUpdatedAt);
+  const filtered = hasActiveFilters(filters);
+
+  // Last page emptied (e.g. after resolving its only row): step back.
+  useEffect(() => {
+    const d = query.data;
+    if (d && d.items.length === 0 && d.total > 0 && filters.page > 0) {
+      setFilters({ ...filters, page: Math.max(0, Math.ceil(d.total / PAGE_SIZE) - 1) });
+    }
+  }, [query.data, filters, setFilters]);
+
+  return (
+    <>
+      <PageHeader
+        title="Incidents"
+        description={
+          total === undefined
+            ? 'Correlated incidents from rules and checks'
+            : `${total} ${onlyOpen ? 'open' : 'matching'} incident${total === 1 ? '' : 's'}${asOf ? ` · updated ${asOf}` : ''}`
+        }
+      />
+      <IncidentFilters value={filters} onChange={setFilters} rules={rules} onReset={reset} />
+      <QueryState<IncidentPage>
+        query={query}
+        errorTitle="Could not load incidents"
+        loading={<ListSkeleton />}
+        isEmpty={(d) => d.total === 0}
+        empty={
+          <Card>
+            {filtered ? (
+              <EmptyState
+                variant="no-results"
+                icon={Bell}
+                title="No incidents match these filters"
+                description="Widen the time range or include other statuses."
+                action={<Button variant="secondary" size="sm" onClick={reset}>Reset filters</Button>}
+              />
+            ) : (
+              <EmptyState
+                variant="confirmed"
+                icon={ShieldCheck}
+                title="No open incidents"
+                description="Nothing is open or waiting for acknowledgement."
+                asOf={asOf}
+              />
+            )}
+          </Card>
+        }
+      >
+        {(page) => (
+          <div aria-busy={query.isFetching && query.isPlaceholderData ? true : undefined} className={query.isPlaceholderData ? 'opacity-70 transition-opacity' : undefined}>
+            <IncidentTable
+              items={page.items}
+              sort={filters.sort}
+              onSort={(s: IncidentSort) => setFilters({ ...filters, sort: s, page: 0 })}
+              now={now}
+              actions={{
+                canEdit,
+                pendingId: action.isPending ? action.variables?.id ?? null : null,
+                onAcknowledge: (inc: IncidentItem) => action.mutate({ id: inc.id, action: 'acknowledge' }),
+                onResolve: (inc: IncidentItem) => action.mutate({ id: inc.id, action: 'resolve' }),
+              }}
+            />
+            <nav aria-label="Incident pages" className="mt-2 [&>div]:border-t-0 [&>div]:px-1">
+              <Pagination page={filters.page} pageSize={PAGE_SIZE} total={page.total} onPageChange={(p) => setFilters({ ...filters, page: p })} />
+            </nav>
+          </div>
+        )}
+      </QueryState>
+    </>
+  );
+}
+
+function MaintenanceView() {
+  return (
+    <>
+      <PageHeader title="Maintenance" description="Scheduled windows and hosts currently in maintenance. Hosts in maintenance are not alerted." />
+      <MaintenanceWindowsPanel />
+      <MaintenanceHostsCard />
+    </>
+  );
+}
+
+function AlertsPageInner() {
+  const tab = useSearchParams().get('tab');
+  const maintenance = tab === 'maintenance';
+  useEffect(() => {
+    document.title = `${maintenance ? 'Maintenance' : 'Incidents'} | Nodeglow`;
+  }, [maintenance]);
+  // Section navigation (Incidents / Maintenance / Alert rules) lives in the
+  // shell sub-nav; this page only renders the view the URL asks for.
+  return maintenance ? <MaintenanceView /> : <IncidentsView />;
 }
 
 export default function AlertsPage() {
