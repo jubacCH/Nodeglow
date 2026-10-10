@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import base64
+import logging
 
 import httpx
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
+
+logger = logging.getLogger(__name__)
 
 
 # ── OPNsense API Client ──────────────────────────────────────────────────────
@@ -43,11 +46,11 @@ class OPNsenseAPI:
             try:
                 status = await self._get(client, "/api/core/system/status")
             except Exception:
-                pass
+                logger.debug("OPNsense system status unavailable", exc_info=True)
             try:
                 interfaces = await self._get(client, "/api/diagnostics/interface/getInterfaceNames")
             except Exception:
-                pass
+                logger.debug("OPNsense interface names unavailable", exc_info=True)
         return {"fw_type": "opnsense", "firmware": firmware, "status": status, "interfaces": interfaces}
 
     async def health_check(self) -> bool:
@@ -90,7 +93,7 @@ class PfsenseAPI:
                 resp.raise_for_status()
                 interfaces = resp.json()
             except Exception:
-                pass
+                logger.debug("pfSense interfaces unavailable", exc_info=True)
         return {"fw_type": "pfsense", "sys_info": sys_info, "interfaces": interfaces}
 
     async def health_check(self) -> bool:
