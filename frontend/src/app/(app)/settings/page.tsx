@@ -12,6 +12,7 @@ import { ApiTab } from '@/components/settings/ApiTab';
 import { AppearanceTab } from '@/components/settings/AppearanceTab';
 import { AuthTab } from '@/components/settings/AuthTab';
 import { BackupTab } from '@/components/settings/BackupTab';
+import { LicenseTab } from '@/components/settings/LicenseTab';
 import { MonitoringTab, SystemTab } from '@/components/settings/GeneralTabs';
 import { NotificationsTab, type NotifLog } from '@/components/settings/NotificationsTab';
 import { useSaveStatus, useSectionForm } from '@/components/settings/formKit';
@@ -22,9 +23,9 @@ import {
 import { api, apiErrorBody, apiErrorMessage, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 
-type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'ai' | 'auth' | 'backup';
+type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'ai' | 'auth' | 'backup' | 'license';
 
-const TAB_IDS: Tab[] = ['system', 'monitoring', 'notifications', 'appearance', 'api', 'ai', 'auth', 'backup'];
+const TAB_IDS: Tab[] = ['system', 'monitoring', 'notifications', 'appearance', 'api', 'ai', 'auth', 'backup', 'license'];
 const TAB_LABELS: Record<Tab, string> = {
   system: 'System',
   monitoring: 'Monitoring',
@@ -34,6 +35,7 @@ const TAB_LABELS: Record<Tab, string> = {
   ai: 'AI',
   auth: 'Authentication',
   backup: 'Backup',
+  license: 'License',
 };
 
 /** `message` of a failed notification save/test response, if any. */
@@ -264,6 +266,7 @@ export default function SettingsPage() {
             <AuthTab settings={s} ldap={{ ...ldap, value: ldap.value }} onSaved={invalidateSettings} />
           ))}
           {id === 'backup' && <BackupTab />}
+          {id === 'license' && <LicenseTab />}
         </TabPanel>
       ))}
     </div>
