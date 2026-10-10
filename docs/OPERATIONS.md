@@ -462,6 +462,108 @@ request, so an error a user reports can be found with
 
 ---
 
+## AI features
+
+Glow (the chat), automatic incident postmortems and the daily AI summary send
+data to a language model. They are **off until an admin opts in** under
+Settings → AI. While they are off nothing is sent: Glow and the postmortem
+button answer `409 {"code": "ai_disabled"}`, automatic postmortems and the
+daily summary are skipped, and the UI says how to enable AI.
+
+The switch is per installation today. All AI settings are read through one
+function (`services/ai_config.load_ai_config`), so when tenants arrive the
+scope changes there and not in every feature.
+
+### Upgrading an installation that already used AI
+
+Before the opt-in existed, configuring a Claude API key was the opt-in. On the
+first start after the upgrade, an installation that **already has a Claude API
+key** gets `ai_enabled=1` once, so Glow, postmortems and the summary keep
+working. This is logged as a warning and written to the audit log as
+`settings.ai_enabled` by `system: upgrade (existing Claude API key)`. The marker
+`ai_optin_migrated` makes sure it never runs again: if you switch AI off
+afterwards, it stays off. A new installation has no key at that point and
+starts with AI off. Disable it under Settings → AI if you did not want it.
+
+Every later change of the switch is recorded with who and when
+(`ai_enabled_by`, `ai_enabled_at`, audit actions `settings.ai_enabled` /
+`settings.ai_disabled`); provider changes are audited as `settings.ai_update`
+with the names of the changed settings, never the values.
+
+### What is sent, and where
+
+| Feature | Sent to the model |
+|---|---|
+| Glow | Host counts and names of offline hosts, up to 10 active incidents (severity, title, rule), syslog counts of the last hour with up to 3 example error messages, unhealthy integrations — plus the question and the last 10 chat messages |
+| Postmortem | Incident title, rule, severity, times, event timeline, up to 5 syslog patterns (one example message each, up to 3 hostnames) |
+| Daily summary | 24 h of incidents, down hosts, syslog error patterns, unhealthy integrations, expiring certificates |
+
+The destination is the provider you choose:
+
+| Provider | Base URL | Notes |
+|---|---|---|
+| Anthropic | — (api.anthropic.com) | API key; model defaults to `claude-haiku-4-5-20251001` |
+| Azure OpenAI | `https://<resource>.openai.azure.com` | Set the **API version** (e.g. `2024-10-21`); the model field is the **deployment name**; API key required. Pick a resource in the region you need (e.g. Switzerland North) |
+| Ollama | `http://<host>:11434/v1` | No key needed; model e.g. `llama3.1:8b` |
+| vLLM / LM Studio / other OpenAI-compatible | `http://<host>:8000/v1`, `http://<host>:1234/v1` | Key optional |
+
+Keys are stored encrypted with the installation's `SECRET_KEY`, like every
+other credential, and are never returned by the API. **Test connection** sends a
+fixed "Reply with OK" prompt (no infrastructure data), so it works before AI is
+enabled.
+
+The base URL may point at `localhost` or a private (RFC1918/ULA) address —
+local models are a primary use case and only admins can set it. Cloud metadata
+endpoints, link-local, multicast, `0.0.0.0` and Nodeglow's own services (`db`,
+`clickhouse`, `updater`, …) are refused, and redirects are not followed.
+Note that `localhost` is the Nodeglow container itself; for a model on the
+Docker host use the host's LAN address.
+
+Only plain text completion is used (no tool/function calling), so every
+provider supports every feature. Token cost in the usage card is estimated for
+Anthropic only.
+
+### Redaction
+
+On by default. Before anything is sent, Nodeglow replaces with placeholders
+such as `<IP_1>`, `<USER_2>`, `<SECRET_1>`:
+
+- IPv4 and IPv6 addresses (not `0.0.0.0` / loopback), MAC addresses
+- e-mail addresses
+- usernames in common log formats: sshd (`Failed password for X`,
+  `Invalid user X`, `Accepted publickey for X`), PAM (`for user X`, `user=X`),
+  sudo, Windows Security events (`Account Name:`, `DOMAIN\user`, SIDs,
+  `Workstation Name:`), nginx/Apache access logs (remote user), home directories
+- secrets: `password=` / `token=` / `api_key:` and similar, `Bearer …`,
+  credentials in URLs, Anthropic/OpenAI/AWS/GitHub/Slack/JWT token formats
+- optionally hostnames and FQDNs, including the names of monitored hosts and
+  integrations (Settings → AI → "Also redact hostnames")
+
+The same value gets the same placeholder throughout one request (context, your
+question and the chat history), so the model can still correlate. A value found
+once is replaced wherever else it appears in that request. Built-in accounts
+such as `root` or `admin` are kept, because they are not personal data and
+matter for the analysis. With "Show real values in answers" on, placeholders in
+the answer are mapped back inside Nodeglow; the mapping itself is never sent.
+Secrets are never mapped back.
+
+**Redaction is best effort, not a guarantee.** It recognises the patterns above;
+a name in an incident title, free text in a log message, a username in a format
+it does not know or a short hostname that is not in the inventory passes
+through. If data must not leave your network at all, use a local model
+(Ollama, vLLM, LM Studio) or keep AI off.
+
+### Settings keys
+
+`ai_enabled`, `ai_enabled_by`, `ai_enabled_at`, `ai_provider`
+(`anthropic` | `openai_compatible`), `claude_api_key`, `ai_anthropic_model`,
+`ai_openai_base_url`, `ai_openai_api_key`, `ai_openai_model`,
+`ai_openai_api_version`, `ai_redact_enabled`, `ai_redact_hostnames`,
+`ai_restore_placeholders`, `ai_optin_migrated`. They live in the `settings`
+table and are changed through the UI (`POST /settings/ai/save`).
+
+---
+
 ## Configuration reference
 
 Required in `.env` — the stack refuses to start without them:
