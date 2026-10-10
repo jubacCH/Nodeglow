@@ -1,0 +1,626 @@
+<title>Nodeglow Calm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400..650&display=swap">
+<style>
+/* Concept D "Calm": Konzept A vereinfacht. Startseite = Lage, Jetzt zu tun, Neu seit 09:12. Alles andere in Drawer oder Unterseiten. */
+:root{
+  --paper:#F4F5F2; --surface:#ECEEEA; --raised:#FFFFFF; --hover:#E6E8E3;
+  --rule:#DADDD7;
+  --ink:#121518; --ink-2:#3C444A; --ink-3:#5E676D;
+  --accent:#2E36C4; --accent-ink:#FFFFFF;
+  --ok:#1C7142; --ok-bar:#9CC7AC;
+  --warn:#A64A00; --degr:#7F6200; --crit:#BC2216; --crit-soft:#F7DCD8;
+  --unk:#646C72; --unk-soft:#E2E4E1; --maint:#4F5C80;
+  --series:#2B3238; --grid:#E0E3DE;
+  --shadow:0 24px 64px rgba(18,21,24,.18),0 2px 8px rgba(18,21,24,.06);
+  --scrim:rgba(18,21,24,.22);
+  --f-ui:"Instrument Sans","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --f-data:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --t-body:15px; --t-small:13px; --t-h1:26px; --t-h2:19px;
+  --r:6px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F1214; --surface:#161A1D; --raised:#1C2125; --hover:#1E2327;
+    --rule:#262C31;
+    --ink:#E6E9EB; --ink-2:#B4BCC1; --ink-3:#8C969C;
+    --accent:#A4AAFF; --accent-ink:#0F1214;
+    --ok:#56C489; --ok-bar:#2F6B4A;
+    --warn:#F29A52; --degr:#D8B954; --crit:#FF7468; --crit-soft:#3A1714;
+    --unk:#8F989E; --unk-soft:#1F2427; --maint:#A0ACCB;
+    --series:#D3D9DD; --grid:#20262A;
+    --shadow:0 24px 64px rgba(0,0,0,.55),0 2px 8px rgba(0,0,0,.4);
+    --scrim:rgba(0,0,0,.5);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F1214; --surface:#161A1D; --raised:#1C2125; --hover:#1E2327;
+  --rule:#262C31;
+  --ink:#E6E9EB; --ink-2:#B4BCC1; --ink-3:#8C969C;
+  --accent:#A4AAFF; --accent-ink:#0F1214;
+  --ok:#56C489; --ok-bar:#2F6B4A;
+  --warn:#F29A52; --degr:#D8B954; --crit:#FF7468; --crit-soft:#3A1714;
+  --unk:#8F989E; --unk-soft:#1F2427; --maint:#A0ACCB;
+  --series:#D3D9DD; --grid:#20262A;
+  --shadow:0 24px 64px rgba(0,0,0,.55),0 2px 8px rgba(0,0,0,.4);
+  --scrim:rgba(0,0,0,.5);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{background:var(--paper);color:var(--ink);font-family:var(--f-ui);font-size:var(--t-body);line-height:1.5;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+h1,h2,h3,p,ul,ol{margin:0;padding:0}
+ul,ol{list-style:none}
+.mono{font-family:var(--f-data);font-size:.92em;letter-spacing:-.01em}
+.muted{color:var(--ink-3)}
+.small{font-size:var(--t-small)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.g{flex:none;display:inline-block;vertical-align:-1px}
+.g-ok{color:var(--ok)}.g-degr{color:var(--degr)}.g-warn{color:var(--warn)}.g-down,.g-crit{color:var(--crit)}.g-unk{color:var(--unk)}.g-maint{color:var(--maint)}.g-info{color:var(--ink-3)}
+
+/* ---------- top bar ---------- */
+.top{display:flex;align-items:center;gap:8px 24px;padding:14px max(16px,calc((100vw - 1180px)/2));flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-.01em;margin-right:8px}
+.nav{display:flex;gap:4px}
+.nav button{height:36px;padding:0 12px;border-radius:var(--r);color:var(--ink-2);display:inline-flex;align-items:center;gap:8px}
+.nav button:hover{background:var(--hover);color:var(--ink)}
+.nav button[aria-current="page"]{color:var(--ink);font-weight:600;background:var(--surface)}
+.count{font-family:var(--f-data);font-size:var(--t-small);color:var(--crit);font-weight:500}
+.spacer{flex:1}
+.tool{height:36px;padding:0 10px;border-radius:var(--r);color:var(--ink-3);display:inline-flex;align-items:center;gap:8px}
+.tool:hover{background:var(--hover);color:var(--ink)}
+.tool svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5}
+kbd{font-family:var(--f-data);font-size:11px;color:var(--ink-3);border:1px solid var(--rule);border-radius:3px;padding:0 4px;line-height:16px}
+.sim{display:inline-flex;align-items:center;height:26px;padding:0 10px;font-size:var(--t-small);color:var(--ink-2);border-radius:4px;background:repeating-linear-gradient(-45deg,transparent 0 5px,var(--surface) 5px 10px);box-shadow:inset 0 0 0 1px var(--rule);white-space:nowrap}
+.menu-btn{display:none}
+
+/* ---------- views ---------- */
+main{padding:56px 16px 96px}
+.view{max-width:760px;margin:0 auto}
+.view>section+section{margin-top:56px}
+h1.lead{font-size:var(--t-h1);line-height:1.25;font-weight:600;letter-spacing:-.015em;text-wrap:balance}
+h2.sec{font-size:var(--t-body);font-weight:600;margin-bottom:12px}
+
+/* host bar */
+.hbar{display:grid;grid-template-columns:repeat(48,minmax(0,1fr));gap:2px;height:8px;margin-top:24px}
+.hbar i{display:block;border-radius:1px}
+.s-ok{background:var(--ok-bar)}.s-degr{background:var(--degr)}.s-warn{background:var(--warn)}.s-down{background:var(--crit)}
+.s-unk{background:repeating-linear-gradient(-45deg,var(--unk) 0 1.5px,transparent 1.5px 3.5px);box-shadow:inset 0 0 0 1px var(--unk)}
+.s-maint{background:repeating-linear-gradient(45deg,var(--maint) 0 1.5px,transparent 1.5px 3.5px);box-shadow:inset 0 0 0 1px var(--maint)}
+.legend{display:flex;flex-wrap:wrap;gap:2px 18px;margin-top:10px;font-size:var(--t-small);color:var(--ink-3)}
+.legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+
+/* attention list */
+.todo li+li{margin-top:2px}
+.item{width:100%;display:grid;grid-template-columns:16px minmax(0,1fr) auto 16px;column-gap:14px;row-gap:2px;align-items:baseline;text-align:left;padding:14px 16px;border-radius:var(--r)}
+.item:hover{background:var(--surface)}
+.item .g{align-self:start;margin-top:6px;grid-row:1}
+.item .t{font-weight:500}
+.item .age{font-size:var(--t-small);color:var(--ink-3);white-space:nowrap}
+.item .chev{align-self:start;margin-top:4px;color:var(--ink-3);grid-row:1;grid-column:4}
+.item .next{grid-column:2/4;font-size:var(--t-small);color:var(--ink-3)}
+.item:hover .chev{color:var(--ink)}
+
+/* changes */
+.changes li{display:grid;grid-template-columns:48px 14px minmax(0,1fr);column-gap:12px;align-items:baseline;padding:7px 16px}
+.changes .time{font-family:var(--f-data);font-size:var(--t-small);color:var(--ink-3)}
+.changes .g{align-self:start;margin-top:6px}
+.nw{white-space:nowrap}
+.hgrp+.hgrp{margin-top:10px}
+.hgrp>p{font-size:var(--t-small);color:var(--ink-3);margin-bottom:2px}
+.linkbtn{color:var(--ink-2);font-size:var(--t-small);padding:6px 16px;margin-top:6px;border-radius:var(--r);text-decoration:underline;text-decoration-color:var(--rule);text-underline-offset:3px}
+.linkbtn:hover{color:var(--ink);text-decoration-color:currentColor}
+
+/* secondary pages */
+.subtle{color:var(--ink-3);margin-top:8px}
+.tabs{display:flex;gap:4px;margin-top:24px}
+.tabs button{height:34px;padding:0 12px;border-radius:var(--r);color:var(--ink-2)}
+.tabs button:hover{background:var(--hover)}
+.tabs button[aria-selected="true"]{background:var(--surface);color:var(--ink);font-weight:600}
+.site{margin-top:40px}
+.site h2{font-size:var(--t-body);font-weight:600}
+.grp{margin-top:14px;padding:12px 16px;border-radius:var(--r)}
+.grp>p{font-size:var(--t-small);color:var(--ink-3);margin-bottom:6px}
+.grp.stale{background:repeating-linear-gradient(-45deg,transparent 0 7px,var(--unk-soft) 7px 9px);box-shadow:inset 0 0 0 1px var(--rule)}
+.grp.stale>p{color:var(--ink-2)}
+.hosts{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:2px 16px}
+.hosts li{display:flex;align-items:baseline;gap:10px;padding:4px 0;min-width:0}
+.hosts li .g{align-self:center}
+.hosts li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hosts li.flag{grid-column:1/-1}
+.hosts li.flag em{font-style:normal;color:var(--ink-3);font-size:var(--t-small);white-space:normal}
+.hosts li.hl{background:var(--surface);border-radius:4px;box-shadow:0 0 0 6px var(--surface)}
+.risks{margin-top:24px}
+.risks li{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:4px 24px;align-items:center;padding:16px;border-radius:var(--r)}
+.risks li+li{margin-top:2px}
+.risks .t{font-weight:500}
+.risks .d{font-size:var(--t-small);color:var(--ink-3);grid-column:1}
+.risks svg{grid-row:1/3;grid-column:2;width:96px;height:28px}
+.plain li{display:grid;grid-template-columns:16px minmax(0,1fr) auto;column-gap:14px;align-items:baseline;padding:10px 16px}
+.plain li .g{align-self:center}
+.plain .age{font-size:var(--t-small);color:var(--ink-3)}
+.loglines{margin-top:24px;font-family:var(--f-data);font-size:var(--t-small);color:var(--ink-2)}
+.loglines li{padding:6px 0;display:grid;grid-template-columns:76px minmax(0,1fr);gap:12px;overflow-wrap:anywhere}
+.loglines li span:first-child{color:var(--ink-3)}
+
+/* ---------- drawer ---------- */
+.scrim{position:fixed;inset:0;background:var(--scrim);z-index:40}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(540px,100vw);z-index:41;background:var(--raised);box-shadow:var(--shadow);display:flex;flex-direction:column;animation:slide .2s ease-out}
+@keyframes slide{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
+.dhead{display:grid;grid-template-columns:16px minmax(0,1fr) 36px;column-gap:14px;padding:28px 28px 8px;align-items:start}
+.dhead .g{margin-top:7px}
+.dhead h2{font-size:var(--t-h2);line-height:1.3;font-weight:600;letter-spacing:-.01em}
+.dhead p{font-size:var(--t-small);color:var(--ink-3);margin-top:4px}
+.x{width:36px;height:36px;border-radius:var(--r);display:grid;place-items:center;color:var(--ink-3)}
+.x:hover{background:var(--hover);color:var(--ink)}
+.dbody{flex:1;overflow:auto;padding:16px 28px 40px 58px}
+.dbody>*+*{margin-top:28px}
+.dbody h3{font-size:var(--t-body);font-weight:600;margin-bottom:8px}
+.dbody p{color:var(--ink-2)}
+.ahosts{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0 16px}
+.ahosts li{display:flex;align-items:baseline;gap:10px;padding:3px 0}
+.ahosts li .g{align-self:center}
+.ahosts li em{font-style:normal;margin-left:auto;font-size:var(--t-small);color:var(--ink-3);white-space:nowrap}
+.btn{display:inline-flex;align-items:center;height:38px;padding:0 16px;border-radius:var(--r);font-weight:500;margin-top:14px}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.secondary{background:var(--surface);color:var(--ink)}
+.btn.secondary:hover{background:var(--hover)}
+.btn[disabled]{cursor:default;background:var(--surface);color:var(--ink-3);filter:none}
+.acc{border-top:1px solid var(--rule)}
+.acc>div{border-bottom:1px solid var(--rule)}
+.acc button.ah{width:100%;display:flex;justify-content:space-between;align-items:center;padding:14px 0;font-weight:600;text-align:left}
+.acc button.ah svg{transition:transform .15s;color:var(--ink-3)}
+.acc button.ah[aria-expanded="true"] svg{transform:rotate(180deg)}
+.acc .ap{padding:0 0 20px}
+.tl{width:100%;height:auto;display:block}
+.rels li{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;padding:10px 0}
+.rels li+li{border-top:1px solid var(--grid)}
+.rel{display:inline-flex;align-items:center;gap:8px;font-size:var(--t-small);font-weight:600;color:var(--ink)}
+.rel svg{width:22px;height:6px}
+.rel.na{color:var(--ink-3);font-weight:500}
+.rels .src{font-size:var(--t-small);color:var(--ink-3)}
+.dlogs{font-family:var(--f-data);font-size:var(--t-small);color:var(--ink-2)}
+.dlogs li{padding:4px 0;overflow-wrap:anywhere}
+.dlogs li span{color:var(--ink-3);margin-right:10px}
+
+/* ---------- search ---------- */
+.pal{position:fixed;z-index:51;top:12vh;left:50%;transform:translateX(-50%);width:min(560px,calc(100vw - 32px));background:var(--raised);border-radius:10px;box-shadow:var(--shadow);overflow:hidden}
+.pal input{width:100%;height:54px;border:0;border-bottom:1px solid var(--rule);background:transparent;padding:0 20px;font:inherit;font-size:var(--t-body);color:var(--ink);outline:none}
+.pal ul{max-height:50vh;overflow:auto;padding:6px}
+.pal li{display:flex;align-items:center;gap:12px;padding:9px 14px;border-radius:var(--r);cursor:pointer}
+.pal li small{margin-left:auto;color:var(--ink-3);font-size:var(--t-small)}
+.pal li[aria-selected="true"]{background:var(--surface)}
+.pal .empty{padding:14px;color:var(--ink-3)}
+.pscrim{z-index:50}
+
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:var(--r);font-size:var(--t-small);z-index:60;max-width:calc(100vw - 32px)}
+
+/* ---------- narrow ---------- */
+@media (max-width:900px){
+  .menu-btn{display:inline-flex}
+  .nav{display:none;position:absolute;left:16px;right:16px;top:60px;z-index:30;flex-direction:column;background:var(--raised);box-shadow:var(--shadow);border-radius:10px;padding:6px}
+  .nav.open{display:flex}
+  .nav button{justify-content:flex-start;height:44px}
+  .top{position:relative}
+  .hide-sm{display:none}
+}
+@media (max-width:560px){
+  .top{gap:8px 4px}
+  .sim{order:10;flex-basis:100%;justify-content:center}
+  main{padding-top:32px}
+  h1.lead{font-size:22px}
+  .item{padding:12px 8px;column-gap:12px}
+  .changes li{padding:7px 8px;grid-template-columns:44px 14px minmax(0,1fr)}
+  .linkbtn{padding-inline:8px}
+  .dhead{padding:20px 16px 8px;column-gap:12px}
+  .dbody{padding:12px 16px 32px}
+  .risks li{grid-template-columns:minmax(0,1fr) 72px;padding:14px 8px}
+  .risks svg{width:72px}
+  .plain li{padding:10px 8px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+</style>
+
+<header class="top">
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="11.5" fill="none" stroke="var(--ink-3)"/><circle cx="13" cy="13" r="3" fill="var(--ink)"/></svg>
+    Nodeglow
+  </div>
+  <button class="tool menu-btn" id="menuBtn" aria-expanded="false" aria-controls="nav" aria-label="Navigation öffnen"><svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg></button>
+  <nav class="nav" id="nav" aria-label="Hauptnavigation">
+    <button data-view="home" aria-current="page">Übersicht</button>
+    <button data-view="incidents">Incidents <span class="count" aria-label="2 offen">2</span></button>
+    <button data-view="infra">Infrastruktur</button>
+    <button data-view="logs">Logs</button>
+    <button data-view="settings">Einstellungen</button>
+  </nav>
+  <span class="spacer"></span>
+  <button class="tool" id="searchBtn" aria-haspopup="dialog" aria-label="Suchen (Ctrl K)" title="Suchen (Ctrl K)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg><span class="hide-sm">Suchen</span></button>
+  <button class="tool" id="themeBtn" aria-label="Farbschema wechseln"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5z" fill="currentColor"/></svg></button>
+  <span class="sim" title="Alle Werte sind simuliert (Szenario Muster Treuhand AG)">Simulierte Daten · Stand 14:32</span>
+</header>
+
+<main id="main">
+  <!-- Übersicht -->
+  <div class="view" id="v-home">
+    <section aria-labelledby="lead">
+      <h1 class="lead" id="lead"><span class="nw">1 kritisches Problem</span> · <span class="nw">9 Hosts ohne aktuelle Daten</span></h1>
+      <div class="hbar" id="hbar" role="img"></div>
+      <p class="legend" id="legend"></p>
+    </section>
+    <section aria-labelledby="todoH">
+      <h2 class="sec" id="todoH">Jetzt zu tun</h2>
+      <ul class="todo" id="todo"></ul>
+    </section>
+    <section aria-labelledby="newH">
+      <h2 class="sec" id="newH">Neu seit 09:12</h2>
+      <ul class="changes" id="changes"></ul>
+      <button class="linkbtn" id="moreBtn" aria-expanded="false" aria-controls="changes">Alle 9 anzeigen</button>
+    </section>
+  </div>
+
+  <!-- Incidents -->
+  <div class="view" id="v-incidents" hidden>
+    <h1 class="lead">Incidents</h1>
+    <section style="margin-top:32px" aria-labelledby="openH"><h2 class="sec" id="openH">Offen</h2><ul class="todo" id="incOpen"></ul></section>
+    <section style="margin-top:40px" aria-labelledby="doneH"><h2 class="sec" id="doneH">Heute behoben</h2>
+      <ul class="plain">
+        <li><svg class="g g-ok" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="3.3" fill="currentColor"/></svg><span>intranet antwortete mit HTTP 503 <span class="muted small">#1069</span></span><span class="age">13:36–13:48</span></li>
+        <li><svg class="g g-ok" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="3.3" fill="currentColor"/></svg><span>Latenzspitze an AP-ZH-OG3 <span class="muted small">#1068</span></span><span class="age">11:02–11:09</span></li>
+      </ul>
+    </section>
+  </div>
+
+  <!-- Infrastruktur -->
+  <div class="view" id="v-infra" hidden>
+    <h1 class="lead">Infrastruktur</h1>
+    <div class="tabs" role="tablist" aria-label="Ansicht">
+      <button role="tab" id="tab-hosts" aria-selected="true" aria-controls="p-hosts">Hosts</button>
+      <button role="tab" id="tab-trends" aria-selected="false" aria-controls="p-trends" tabindex="-1">Trends</button>
+    </div>
+    <div role="tabpanel" id="p-hosts" aria-labelledby="tab-hosts"></div>
+    <div role="tabpanel" id="p-trends" aria-labelledby="tab-trends" hidden>
+      <ul class="risks" id="risks"></ul>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div class="view" id="v-logs" hidden>
+    <h1 class="lead">Logs</h1>
+    <p class="subtle">Letzte 24 Std.: 11’622 Meldungen, davon 214 Fehler oder schlimmer. Suche und Filter sind in diesem Prototyp nicht nachgebaut.</p>
+    <ul class="loglines" id="logList"></ul>
+  </div>
+
+  <!-- Einstellungen -->
+  <div class="view" id="v-settings" hidden>
+    <h1 class="lead">Einstellungen</h1>
+    <p class="subtle">Regeln, Checks, Integrationen, Agents und Benutzer gehören hierher. In diesem Prototyp nicht ausgearbeitet.</p>
+  </div>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle" hidden></aside>
+
+<div class="scrim pscrim" id="pscrim" hidden></div>
+<div class="pal" id="pal" role="dialog" aria-modal="true" aria-label="Suchen" hidden>
+  <input id="palIn" type="text" placeholder="Hosts, Incidents, Seiten suchen · Esc schliesst" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list">
+  <ul id="palList" role="listbox" aria-label="Treffer"></ul>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+(function(){
+"use strict";
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ---------- state shapes ---------- */
+function g(s,sz){sz=sz||12;const a='class="g g-'+s+'" width="'+sz+'" height="'+sz+'" viewBox="0 0 12 12" aria-hidden="true"';
+  switch(s){
+    case"ok":return'<svg '+a+'><circle cx="6" cy="6" r="3.3" fill="currentColor"/></svg>';
+    case"degr":return'<svg '+a+'><circle cx="6" cy="6" r="4.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 1.6a4.4 4.4 0 0 0 0 8.8z" fill="currentColor"/></svg>';
+    case"warn":return'<svg '+a+'><path d="M6 1.2L11.2 10.6H.8z" fill="currentColor"/></svg>';
+    case"down":case"crit":return'<svg '+a+'><rect x="1.5" y="1.5" width="9" height="9" fill="currentColor"/></svg>';
+    case"unk":return'<svg '+a+'><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 1.4"/><path d="M1.5 6.5L6.5 1.5M1.5 10.5L10.5 1.5M5.5 10.5L10.5 5.5" stroke="currentColor" stroke-width="1"/></svg>';
+    case"maint":return'<svg '+a+'><path d="M6 1l5 5-5 5-5-5z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 4l2 2-2 2-2-2z" fill="currentColor"/></svg>';
+    default:return'<svg '+a+'><circle cx="6" cy="6" r="3.6" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+  }}
+const STATE={down:"ausgefallen",degr:"verlangsamt",warn:"Warnung",unk:"ohne aktuelle Daten",maint:"Wartung",ok:"in Ordnung"};
+const ORDER=["down","degr","warn","unk","maint","ok"];
+
+/* ---------- data (simuliert, siehe SCENARIO.md) ---------- */
+const GROUPS=[
+  {site:"Zürich HQ",parent:"SW-ZH-CORE-01",note:"Kern-Switch, direkt überwacht",hosts:[
+    ["SW-ZH-CORE-01","ok"],["SW-ZH-CORE-02","ok","erreichbar, Quelle der Link-Meldungen (#1071)"],["pve-zh-01","ok"],["pve-zh-02","ok"],["SRV-DC-01","ok"],
+    ["SRV-FILE-01","ok","Volume D: 91 %, voll in ca. 5 Tagen"],["SRV-BACKUP-01","warn","VeeamBackupSvc gestoppt (#1072)"],["NAS-ZH-01","maint","Wartung bis 15:00"],["fw-zh-01","ok"],
+    ["SW-ZH-ACC-01","ok"],["SW-ZH-ACC-02","ok"],["AP-ZH-OG1","ok"],["AP-ZH-OG2","ok"],["IOT-ZH-01","ok"]]},
+  {site:"Zürich HQ",parent:"pve-zh-01 / pve-zh-02",note:"Linux-VMs",hosts:[
+    ["web-01","warn","Port 443 antwortet nicht"],["db-01","ok"],["mon-01","ok"],["git-01","ok"],["dms-01","ok"],["mail-01","ok"],["proxy-01","ok"],["ci-01","ok"],["vpn-01","ok"]]},
+  {site:"Zürich HQ",parent:"SW-ZH-CORE-02",note:"hinter dem flatternden Uplink (#1071)",hosts:[
+    ["SRV-APP-01","down","ausgefallen seit 14:07"],["PRN-ZH-02","down","ausgefallen seit 14:07"],["SRV-RDS-01","degr"],["SW-ZH-ACC-03","degr"],["AP-ZH-OG3","degr"],["AP-ZH-OG4","degr"],["PRN-ZH-01","degr"]]},
+  {site:"Bern",parent:"UniFi / pfSense",note:"über Integration, nicht über die Probe",hosts:[
+    ["SW-BE-01","ok"],["fw-be-01","ok"],["AP-BE-01","ok"],["AP-BE-02","ok"],["AP-BE-03","ok"],["AP-BE-04","ok"],["NAS-BE-01","ok"]]},
+  {site:"Bern",parent:"probe-bern-01",stale:true,note:"Keine aktuellen Daten seit 14:21. Der Zustand dieser 9 Hosts ist unbekannt.",hosts:[
+    ["BE-PC-01","unk"],["BE-PC-02","unk"],["BE-PC-03","unk"],["BE-PC-04","unk"],["BE-PC-05","unk"],["BE-PRN-01","unk"],["BE-NVR-01","unk"],["BE-TEL-01","unk"],["BE-UPS-01","unk"]]},
+  {site:"Cloud / Internet",parent:"HTTP- und SSL-Checks",note:"extern",hosts:[
+    ["portal.mustertreuhand.ch","ok","Zertifikat läuft in 9 Tagen ab"],["intranet","ok"]]}
+];
+const HOSTS=[];GROUPS.forEach(gr=>gr.hosts.forEach(h=>HOSTS.push({name:h[0],state:h[1],note:h[2]||"",group:gr})));
+const AFF=["SRV-APP-01","PRN-ZH-02","SRV-RDS-01","SW-ZH-ACC-03","AP-ZH-OG3","AP-ZH-OG4","PRN-ZH-01"];
+const BERN=HOSTS.filter(h=>h.group.stale).map(h=>h.name);
+
+const REL={confirmed:["Bestätigt",""],rule:["Regelbasiert","7 3 2 3"],suspected:["Vermutet","1.5 3"],na:["Noch nicht verfügbar",""]};
+const W0=13*60+30, W1=14*60+36, NOW=14*60+32;
+
+const ITEMS=[
+  {id:"1071",s:"crit",incident:true,status:"open",
+   title:"Uplink an SW-ZH-CORE-02 flattert, 7 Hosts betroffen",age:"25 Min.",
+   next:"SFP und Kabel an Te1/0/48 prüfen oder den Port abschalten.",
+   meta:"Incident #1071 · kritisch · offen seit 14:07",
+   what:"Der Uplink Te1/0/48 an SW-ZH-CORE-02 geht seit 14:05 wiederholt auf und ab, 38 Link-Meldungen in 10 Minuten. Die 7 Hosts dahinter sind seither verlangsamt oder nicht mehr erreichbar.",
+   hosts:AFF.map(n=>[n,HOSTS.find(h=>h.name===n).state]),
+   nextLong:"SFP und Kabel an Te1/0/48 auf SW-ZH-CORE-02 prüfen. Wenn das nicht sofort geht: Port abschalten, damit der Verkehr über SW-ZH-CORE-01 läuft.",
+   lanes:[
+     {label:"Syslog SW-ZH-CORE-02, Meldungen pro Minute",type:"bars",start:W0,step:5,vals:[9,11,10,12,10,9,10,28,41,44,46,46,45]},
+     {label:"Latenz der 7 Hosts",type:"line",pts:(()=>{const p=[];for(let t=W0;t<=NOW;t+=2){let v=0.3;if(t>=14*60+5){v=3+Math.abs(Math.sin(t*1.7))*30+((t*7)%11)}p.push([t,v])}return p})()},
+     {label:"Erreichbarkeit",type:"state",segs:[[W0,14*60+7,"ok"],[14*60+7,NOW,"crit","2 Hosts ausgefallen"]]}],
+   rels:[
+     ["confirmed","Alle 7 Hosts hängen in der Topologie an SW-ZH-CORE-02. Ihre einzelnen Alarme sind in diesem Incident zusammengefasst.","Topologie parent_id (Proxmox / UniFi)"],
+     ["rule","Syslog-Burst am Parent innerhalb des Incident-Fensters.","Regeln multi_host_down und host_down_syslog"],
+     ["suspected","fw-zh-01 protokolliert 420 % mehr Filterlog-Einträge als üblich für Freitag 14 Uhr. Gemeinsam ist nur der Zeitraum.","Baseline-Abweichung"],
+     ["na","Ursachen-Ranking über mehrere Metriken.","geplant"]],
+   logs:[["14:31:58","SW-ZH-CORE-02 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to up"],["14:31:41","SW-ZH-CORE-02 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to down"],["14:31:40","SW-ZH-CORE-02 %LINEPROTO-5-UPDOWN: Line protocol on Interface Te1/0/48, changed state to down"],["14:31:12","SW-ZH-CORE-02 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to up"]]},
+  {id:"1072",s:"warn",incident:true,status:"open",
+   title:"VeeamBackupSvc auf SRV-BACKUP-01 gestoppt",age:"6 Min.",
+   next:"Dienst starten und im Windows-Ereignisprotokoll den Grund suchen.",
+   meta:"Incident #1072 · Warnung · offen seit 14:26",
+   what:"Der Windows-Dienst VeeamBackupSvc auf SRV-BACKUP-01 läuft nicht mehr. Der Agent hat das in drei Meldungen nacheinander festgestellt.",
+   hosts:[["SRV-BACKUP-01","warn"]],
+   nextLong:"VeeamBackupSvc auf SRV-BACKUP-01 starten und im Windows-Ereignisprotokoll nach dem Grund für den Stopp suchen.",
+   lanes:[
+     {label:"VeeamBackupSvc",type:"state",segs:[[W0,14*60+22,"ok"],[14*60+22,NOW,"warn","gestoppt"]]},
+     {label:"Agent-Meldungen",type:"ticks",ticks:(()=>{const t=[];for(let m=W0;m<=NOW;m+=2)t.push(m);return t})()}],
+   rels:[
+     ["na","Grund des Stopps: Das Windows-Ereignisprotokoll wird noch nicht ausgewertet.","geplant"]],
+   relNote:"Keine strukturellen oder regelbasierten Zusammenhänge gefunden.",
+   logs:[]},
+  {id:"bern",s:"unk",incident:false,
+   title:"Probe Bern meldet sich nicht, 9 Hosts ohne Daten",age:"11 Min.",
+   next:"Probe-Host und WAN-Link Bern prüfen.",
+   meta:"Datenlücke · kein Incident, keine Regel deckt Probes ab",
+   what:"probe-bern-01 hat sich zuletzt um 14:21 gemeldet, die Schwelle liegt bei 3 Minuten. Die 9 Hosts dahinter haben deshalb keinen aktuellen Zustand und gelten als unbekannt, nicht als in Ordnung.",
+   hosts:BERN.map(n=>[n,"unk"]),
+   nextLong:"Probe-Host und WAN-Link nach Bern prüfen. Bis dahin die 9 Hosts als ungeprüft behandeln.",
+   lanes:[
+     {label:"Heartbeat probe-bern-01",type:"ticks",ticks:(()=>{const t=[];for(let m=W0;m<=14*60+21;m+=1)t.push(m);return t})(),gapFrom:14*60+21},
+     {label:"9 Hosts in Bern",type:"state",segs:[[W0,14*60+21,"ok"],[14*60+21,NOW,"unk","keine Daten"]]}],
+   rels:[
+     ["confirmed","Alle 9 Hosts werden über probe-bern-01 überwacht.","gleiche Probe"],
+     ["na","Erkennung, ob die Probe oder der WAN-Link ausgefallen ist.","geplant"]],
+   logs:[]},
+  {id:"web01",s:"warn",incident:false,
+   title:"web-01: Port 443 antwortet nicht",age:"seit gestern",
+   next:"TLS-Listener (nginx) auf web-01 prüfen.",
+   meta:"Check fehlgeschlagen · kein Incident",
+   what:"Der TCP-Check auf Port 443 von web-01 schlägt fehl. Dafür wurde kein Incident eröffnet, der Host ist als Warnung markiert.",
+   hosts:[["web-01","warn"]],
+   nextLong:"Den TLS-Listener (nginx) auf web-01 prüfen und danach den Check manuell auslösen.",
+   lanes:[{label:"Check Port 443",type:"state",segs:[[W0,NOW,"warn","fehlgeschlagen"]]}],
+   rels:[["na","Ursachen-Ranking über mehrere Metriken.","geplant"]],
+   relNote:"Keine Zusammenhänge gefunden.",
+   logs:[]}
+];
+
+const CHANGES=[
+  ["14:26","warn","#1072 eröffnet: VeeamBackupSvc gestoppt"],
+  ["14:21","unk","probe-bern-01 meldet sich nicht mehr"],
+  ["14:07","crit","#1071 eröffnet: Uplink an SW-ZH-CORE-02"],
+  ["14:00","maint","Wartung an NAS-ZH-01 läuft bis 15:00",1],
+  ["13:48","ok","intranet nach 12 Min. wieder erreichbar (#1069)",1],
+  ["13:36","warn","#1069 eröffnet: intranet antwortet mit HTTP 503"],
+  ["11:09","ok","#1068 behoben: Latenzspitze an AP-ZH-OG3"],
+  ["heute","info","SRV-RDS-01: Agent auf 0.4.2 aktualisiert"],
+  ["heute","info","2 neue Hosts gefunden, warten auf Prüfung",1]
+];
+
+/* ---------- Übersicht ---------- */
+function renderHome(){
+  const sorted=[...HOSTS].sort((a,b)=>ORDER.indexOf(a.state)-ORDER.indexOf(b.state));
+  $("#hbar").innerHTML=sorted.map(h=>'<i class="s-'+h.state+'" title="'+esc(h.name+": "+STATE[h.state])+'"></i>').join("");
+  const c={};ORDER.forEach(s=>c[s]=HOSTS.filter(h=>h.state===s).length);
+  $("#hbar").setAttribute("aria-label","48 Hosts: "+ORDER.map(s=>c[s]+" "+STATE[s]).join(", "));
+  const short={down:"ausgefallen",degr:"verlangsamt",warn:"Warnung",unk:"ohne Daten",maint:"Wartung",ok:"in Ordnung"};
+  $("#legend").innerHTML=ORDER.map(s=>'<span>'+g(s,11)+c[s]+" "+short[s]+'</span>').join("");
+  $("#todo").innerHTML=ITEMS.map(itemRow).join("");
+  $("#incOpen").innerHTML=ITEMS.filter(i=>i.incident).map(itemRow).join("");
+  renderChanges();
+}
+function itemRow(i){
+  const age=i.status==="ack"?"quittiert · "+i.age:i.age;
+  return'<li><button class="item" data-open="'+i.id+'" aria-label="'+esc(i.title+", "+age+". Details öffnen")+'">'+g(i.s,12)+
+    '<span class="t">'+esc(i.title)+'</span><span class="age">'+esc(age)+'</span>'+
+    '<svg class="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'+
+    '<span class="next">'+esc(i.next)+'</span></button></li>';
+}
+let allChanges=false;
+function renderChanges(){
+  const list=allChanges?CHANGES:CHANGES.filter(c=>c[3]);
+  $("#changes").innerHTML=list.map(c=>'<li><span class="time">'+c[0]+'</span>'+g(c[1],11)+'<span>'+esc(c[2])+'</span></li>').join("");
+  $("#moreBtn").textContent=allChanges?"Weniger anzeigen":"Alle 9 anzeigen";
+  $("#moreBtn").setAttribute("aria-expanded",String(allChanges));
+}
+$("#moreBtn").addEventListener("click",()=>{allChanges=!allChanges;renderChanges()});
+document.addEventListener("click",e=>{const b=e.target.closest("[data-open]");if(b)openDrawer(b.dataset.open,b)});
+
+/* ---------- Infrastruktur ---------- */
+function renderInfra(){
+  const sites=[...new Set(GROUPS.map(x=>x.site))];
+  $("#p-hosts").innerHTML=sites.map(site=>'<div class="site"><h2>'+esc(site)+'</h2>'+
+    GROUPS.filter(x=>x.site===site).map(gr=>{const okN=gr.hosts.filter(h=>h[1]==="ok").length;const isFlag=h=>!!(h[2]&&(h[1]!=="ok"||/Zertifikat|Volume/.test(h[2])));
+      return'<div class="grp'+(gr.stale?" stale":"")+'"><p><span class="mono">'+esc(gr.parent)+'</span> · '+esc(gr.note)+(okN?' · '+okN+' in Ordnung':'')+'</p><ul class="hosts">'+
+      [...gr.hosts].sort((a,b)=>(isFlag(b)-isFlag(a))||ORDER.indexOf(a[1])-ORDER.indexOf(b[1])).map(h=>{const flag=isFlag(h);
+        return'<li id="h-'+esc(h[0])+'"'+(flag?' class="flag"':'')+'>'+g(h[1],11)+'<span class="mono">'+esc(h[0])+'</span><span class="sr"> '+STATE[h[1]]+'</span>'+(flag?'<em>'+esc(h[2])+'</em>':'')+'</li>'}).join("")+
+    '</ul></div>'}).join("")+'</div>').join("");
+  const spark=(vals,lo,hi)=>{const w=96,h=28,n=vals.length;const x=i=>2+i*(w-4)/(n-1),y=v=>h-3-(v-lo)/(hi-lo)*(h-6);
+    return'<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" aria-hidden="true"><polyline points="'+vals.map((v,i)=>x(i).toFixed(1)+","+y(v).toFixed(1)).join(" ")+'" fill="none" stroke="var(--series)" stroke-width="1.5" vector-effect="non-scaling-stroke"/><circle cx="'+x(n-1)+'" cy="'+y(vals[n-1])+'" r="2.2" fill="var(--series)"/></svg>'};
+  $("#risks").innerHTML=[
+    ["SRV-FILE-01: Volume D: in ca. 5 Tagen voll","Heute 91 %, lineare Hochrechnung bis Mittwoch 15.10.",spark([78,79,81,82,83,85,86,88,89,91],75,100)],
+    ["portal.mustertreuhand.ch: Zertifikat läuft am 19.10. ab","Noch 9 Tage, gemessen vom SSL-Check.",spark([30,27,24,21,18,15,12,9],0,30)],
+    ["Verfügbarkeit 30 Tage: 99,94 %, Ziel 99,90 %","Bis zum Ziel bleiben noch rund 17 Minuten Ausfall.",spark([2,5,5,9,11,12,12,15,19,22,24,26],0,43)]
+  ].map(r=>'<li><span class="t">'+esc(r[0])+'</span><span class="d">'+esc(r[1])+'</span>'+r[2]+'</li>').join("");
+}
+function selectTab(which){
+  ["hosts","trends"].forEach(t=>{const on=t===which;const b=$("#tab-"+t);b.setAttribute("aria-selected",String(on));b.tabIndex=on?0:-1;$("#p-"+t).hidden=!on});
+}
+$$('[role="tab"]').forEach(b=>{
+  b.addEventListener("click",()=>selectTab(b.id.slice(4)));
+  b.addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key==="ArrowLeft"){const n=b.id==="tab-hosts"?"trends":"hosts";selectTab(n);$("#tab-"+n).focus();e.preventDefault()}});
+});
+
+/* ---------- Logs ---------- */
+$("#logList").innerHTML=[
+  ["14:31:58","SW-ZH-CORE-02 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to up"],
+  ["14:31:41","SW-ZH-CORE-02 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to down"],
+  ["14:31:40","SW-ZH-CORE-02 %LINEPROTO-5-UPDOWN: Line protocol on Interface Te1/0/48, changed state to down"],
+  ["14:31:12","SW-ZH-CORE-02 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to up"],
+  ["14:30:55","SW-ZH-CORE-02 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to down"],
+  ["14:26:04","SRV-BACKUP-01 agent: service VeeamBackupSvc state=stopped (3/3)"],
+  ["13:48:10","intranet http: 200 OK after 12 min of 503"]
+].map(l=>'<li><span>'+l[0]+'</span><span>'+esc(l[1])+'</span></li>').join("");
+
+/* ---------- navigation ---------- */
+const VIEWS={home:"Übersicht",incidents:"Incidents",infra:"Infrastruktur",logs:"Logs",settings:"Einstellungen"};
+function go(v,focusMain){
+  Object.keys(VIEWS).forEach(k=>$("#v-"+k).hidden=k!==v);
+  $$(".nav button").forEach(b=>{if(b.dataset.view===v)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});
+  $("#nav").classList.remove("open");$("#menuBtn").setAttribute("aria-expanded","false");
+  window.scrollTo(0,0);
+  if(focusMain){const h=$("#v-"+v+" h1");if(h){h.tabIndex=-1;h.focus({preventScroll:true})}}
+}
+$$(".nav button").forEach(b=>b.addEventListener("click",()=>go(b.dataset.view,true)));
+$("#menuBtn").addEventListener("click",()=>{const o=$("#nav").classList.toggle("open");$("#menuBtn").setAttribute("aria-expanded",String(o));if(o)$("#nav button").focus()});
+
+/* ---------- theme ---------- */
+const root=document.documentElement;
+try{const t=localStorage.getItem("ng-calm-theme");if(t==="light"||t==="dark")root.dataset.theme=t}catch(e){}
+$("#themeBtn").addEventListener("click",()=>{
+  const cur=root.dataset.theme||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+  const next=cur==="dark"?"light":"dark";root.dataset.theme=next;
+  try{localStorage.setItem("ng-calm-theme",next)}catch(e){}
+});
+
+/* ---------- toast ---------- */
+let tt;function toast(m){const t=$("#toast");t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,3200)}
+
+/* ---------- timeline (max 3 Spuren) ---------- */
+function timeline(i){
+  const W=460,L=0,R=W-4,laneH=50,top=4,H=top+i.lanes.length*laneH+24;
+  const x=t=>L+(t-W0)/(W1-W0)*(R-L);
+  const o=['<defs><pattern id="hU" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="1.6" height="5" fill="var(--unk)"/></pattern></defs>'];
+  i.lanes.forEach((ln,k)=>{
+    const y0=top+k*laneH, y=y0+18, h=20;
+    o.push('<text x="0" y="'+(y0+11)+'" font-size="12" fill="var(--ink-3)" font-family="inherit">'+esc(ln.label)+'</text>');
+    o.push('<line x1="0" x2="'+R+'" y1="'+(y+h)+'" y2="'+(y+h)+'" stroke="var(--grid)"/>');
+    if(ln.type==="bars"){const mx=Math.max(...ln.vals);ln.vals.forEach((v,j)=>{const t=ln.start+j*ln.step;const bh=Math.max(1.5,v/mx*h);o.push('<rect x="'+(x(t)+1).toFixed(1)+'" y="'+(y+h-bh).toFixed(1)+'" width="'+(x(t+ln.step)-x(t)-2).toFixed(1)+'" height="'+bh.toFixed(1)+'" fill="var(--series)" opacity="'+(v>20?.85:.35)+'"/>')})}
+    if(ln.type==="line"){const sc=v=>y+h-Math.sqrt(v)/Math.sqrt(45)*h;o.push('<polyline fill="none" stroke="var(--series)" stroke-width="1.4" points="'+ln.pts.map(p=>x(p[0]).toFixed(1)+","+sc(p[1]).toFixed(1)).join(" ")+'"/>')}
+    if(ln.type==="state"){ln.segs.forEach(sg=>{const c={ok:"var(--ok-bar)",warn:"var(--warn)",crit:"var(--crit)",unk:"url(#hU)"}[sg[2]];const x1=x(sg[0]),x2=x(sg[1]);
+      o.push('<rect x="'+x1.toFixed(1)+'" y="'+(y+6)+'" width="'+(x2-x1).toFixed(1)+'" height="8" fill="'+c+'"'+(sg[2]==="unk"?' stroke="var(--unk)" stroke-dasharray="3 2"':'')+'/>');
+      if(sg[3])o.push('<text x="'+(x2-4).toFixed(1)+'" y="'+(y0+11)+'" font-size="12" text-anchor="end" fill="var(--ink-2)" font-family="inherit">'+esc(sg[3])+'</text>')})}
+    if(ln.type==="ticks"){ln.ticks.forEach(t=>o.push('<line x1="'+x(t).toFixed(1)+'" x2="'+x(t).toFixed(1)+'" y1="'+(y+4)+'" y2="'+(y+16)+'" stroke="var(--series)" stroke-width="1.2" opacity=".7"/>'));
+      if(ln.gapFrom){const x1=x(ln.gapFrom)+2;o.push('<rect x="'+x1.toFixed(1)+'" y="'+(y+4)+'" width="'+(x(NOW)-x1).toFixed(1)+'" height="12" fill="url(#hU)" stroke="var(--unk)" stroke-dasharray="3 2"/>');o.push('<text x="'+x(NOW).toFixed(1)+'" y="'+(y0+11)+'" font-size="12" text-anchor="end" fill="var(--ink-2)" font-family="inherit">keine Daten seit 14:21</text>')}}
+  });
+  const ay=top+i.lanes.length*laneH+16;
+  [W0,13*60+45,14*60,14*60+15,14*60+30].forEach(t=>{const lab=Math.floor(t/60)+":"+String(t%60).padStart(2,"0");o.push('<text x="'+x(t).toFixed(1)+'" y="'+ay+'" font-size="11" fill="var(--ink-3)" font-family="var(--f-data)"'+(t===W0?'':' text-anchor="middle"')+'>'+lab+'</text>')});
+  o.push('<line x1="'+x(NOW)+'" x2="'+x(NOW)+'" y1="'+top+'" y2="'+(ay-12)+'" stroke="var(--ink)" stroke-width="1" stroke-dasharray="2 2"/>');
+  const desc=i.lanes.map(l=>l.label).join("; ");
+  return'<svg class="tl" viewBox="0 -2 '+W+' '+(H+2)+'" role="img" aria-label="Zeitachse 13:30 bis jetzt (14:32): '+esc(desc)+'">'+o.join("")+'</svg>';
+}
+function relTag(r){const m=REL[r];return'<span class="rel'+(r==="na"?" na":"")+'"><svg viewBox="0 0 22 6" aria-hidden="true"><line x1="0" y1="3" x2="22" y2="3" stroke="currentColor" stroke-width="'+(r==="na"?1:2)+'"'+(m[1]?' stroke-dasharray="'+m[1]+'"':"")+'/></svg>'+m[0]+'</span>'}
+
+/* ---------- drawer ---------- */
+let lastFocus=null,curId=null;
+const chevD='<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6L8 10.5 12.5 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+function openDrawer(id,from,keepOpen){
+  const i=ITEMS.find(x=>x.id===id);if(!i)return;
+  if(from)lastFocus=from;curId=id;
+  const d=$("#drawer");
+  let act;
+  if(i.incident)act=i.status==="ack"?'<button class="btn" disabled>Quittiert</button>':'<button class="btn primary" id="ackBtn">Quittieren</button>';
+  else act='<button class="btn secondary" data-goinfra="'+esc(i.hosts[0][0])+'">In Infrastruktur zeigen</button>';
+  const sec=(k,title,body)=>'<div><button class="ah" id="ah-'+k+'" aria-expanded="'+(keepOpen===k)+'" aria-controls="ap-'+k+'">'+title+chevD+'</button><div class="ap" id="ap-'+k+'" role="region" aria-labelledby="ah-'+k+'"'+(keepOpen===k?'':' hidden')+'>'+body+'</div></div>';
+  const rels=(i.relNote?'<p class="small muted" style="margin-bottom:6px">'+esc(i.relNote)+'</p>':'')+'<ul class="rels">'+i.rels.map(r=>'<li>'+relTag(r[0])+'<span>'+esc(r[1])+'</span><span class="src">'+esc(r[2])+'</span></li>').join("")+'</ul>';
+  const logs=i.logs.length?'<ul class="dlogs">'+i.logs.map(l=>'<li><span>'+l[0]+'</span>'+esc(l[1])+'</li>').join("")+'</ul><button class="linkbtn" style="padding-left:0" data-golog>Alle Logs öffnen</button>':'<p class="small muted">Für diese Hosts liegen im Zeitraum keine Logs vor.</p>';
+  d.innerHTML='<div class="dhead">'+g(i.s,14)+'<div><h2 id="dTitle">'+esc(i.title)+'</h2><p>'+esc(i.meta)+'</p></div><button class="x" id="dClose" aria-label="Schliessen"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5"/></svg></button></div>'+
+   '<div class="dbody">'+
+     '<section><h3>Was passiert ist</h3><p>'+esc(i.what)+'</p></section>'+
+     '<section><h3>Betroffene Hosts</h3>'+ORDER.filter(s=>i.hosts.some(h=>h[1]===s)).map(s=>{const hs=i.hosts.filter(h=>h[1]===s);
+       return'<div class="hgrp"><p>'+hs.length+' '+STATE[s]+'</p><ul class="ahosts">'+hs.map(h=>'<li>'+g(s,11)+'<span class="mono nw">'+esc(h[0])+'</span></li>').join("")+'</ul></div>'}).join("")+'</section>'+
+     '<section><h3>Nächster Schritt</h3><p>'+esc(i.nextLong)+'</p>'+act+'</section>'+
+     '<div class="acc">'+sec("tl","Zeitachse",timeline(i))+sec("rel","Zusammenhänge",rels)+sec("log","Logs",logs)+'</div>'+
+   '</div>';
+  const wasHidden=d.hidden;d.hidden=false;$("#scrim").hidden=false;document.body.style.overflow="hidden";
+  $("#dClose").addEventListener("click",closeDrawer);
+  $$("#drawer .ah").forEach(b=>b.addEventListener("click",()=>{
+    const open=b.getAttribute("aria-expanded")!=="true";
+    $$("#drawer .ah").forEach(o=>{o.setAttribute("aria-expanded","false");$("#"+o.getAttribute("aria-controls")).hidden=true});
+    if(open){b.setAttribute("aria-expanded","true");$("#"+b.getAttribute("aria-controls")).hidden=false}
+  }));
+  const ack=$("#ackBtn");if(ack)ack.addEventListener("click",()=>{i.status="ack";renderHome();openDrawer(id,null,null);$("#dClose").focus();toast("#"+id+" quittiert. Simuliert, es wurde nichts gesendet.")});
+  const gi=d.querySelector("[data-goinfra]");if(gi)gi.addEventListener("click",()=>{const n=gi.dataset.goinfra;closeDrawer(true);go("infra");selectTab("hosts");const el=document.getElementById("h-"+n);if(el){$$(".hosts li.hl").forEach(x=>x.classList.remove("hl"));el.classList.add("hl");el.scrollIntoView({block:"center"})}$("#v-infra h1").tabIndex=-1;$("#v-infra h1").focus({preventScroll:true})});
+  const gl=d.querySelector("[data-golog]");if(gl)gl.addEventListener("click",()=>{closeDrawer(true);go("logs",true)});
+  if(wasHidden)$("#dClose").focus();
+}
+function closeDrawer(noRestore){$("#drawer").hidden=true;$("#scrim").hidden=true;document.body.style.overflow="";curId=null;if(noRestore!==true&&lastFocus&&document.contains(lastFocus))lastFocus.focus();else if(noRestore!==true){const b=document.querySelector('[data-open]');if(b)b.focus()}}
+$("#scrim").addEventListener("click",closeDrawer);
+
+function trap(c,e){const f=[...c.querySelectorAll('button:not([disabled]),input,[tabindex]:not([tabindex="-1"])')].filter(el=>el.offsetParent!==null);if(!f.length)return;const a=f[0],z=f[f.length-1];
+  if(e.shiftKey&&document.activeElement===a){z.focus();e.preventDefault()}else if(!e.shiftKey&&document.activeElement===z){a.focus();e.preventDefault()}else if(!c.contains(document.activeElement)){a.focus();e.preventDefault()}}
+
+/* ---------- search ---------- */
+const ENTRIES=[].concat(
+  Object.keys(VIEWS).map(k=>({label:VIEWS[k],hint:"Seite",shape:"info",run:()=>go(k,true)})),
+  [{label:"Trends",hint:"Infrastruktur",shape:"info",run:()=>{go("infra",true);selectTab("trends")}}],
+  ITEMS.map(i=>({label:i.title,hint:i.incident?"#"+i.id:"Hinweis",shape:i.s,run:()=>openDrawer(i.id,$("#searchBtn"))})),
+  HOSTS.map(h=>({label:h.name,hint:"Host · "+STATE[h.state],shape:h.state,run:()=>{go("infra");selectTab("hosts");const el=document.getElementById("h-"+h.name);$$(".hosts li.hl").forEach(x=>x.classList.remove("hl"));if(el){el.classList.add("hl");el.scrollIntoView({block:"center"})}$("#v-infra h1").tabIndex=-1;$("#v-infra h1").focus({preventScroll:true})}}))
+);
+let palItems=[],palIx=0,palReturn=null;
+function renderPal(){
+  const q=$("#palIn").value.trim().toLowerCase();
+  palItems=(q?ENTRIES.filter(e=>(e.label+" "+e.hint).toLowerCase().includes(q)):ENTRIES.slice(0,9)).slice(0,10);
+  palIx=Math.min(palIx,Math.max(0,palItems.length-1));
+  $("#palList").innerHTML=palItems.length?palItems.map((e,k)=>'<li role="option" id="po'+k+'" data-k="'+k+'" aria-selected="'+(k===palIx)+'">'+g(e.shape,11)+'<span>'+esc(e.label)+'</span><small>'+esc(e.hint)+'</small></li>').join(""):'<li class="empty" role="option" aria-disabled="true">Keine Treffer</li>';
+  $("#palIn").setAttribute("aria-activedescendant",palItems.length?"po"+palIx:"");
+}
+function openPal(){palReturn=document.activeElement;$("#pal").hidden=false;$("#pscrim").hidden=false;$("#palIn").value="";palIx=0;renderPal();$("#palIn").focus()}
+function closePal(restore){$("#pal").hidden=true;$("#pscrim").hidden=true;if(restore&&palReturn&&document.contains(palReturn))palReturn.focus()}
+function runPal(k){const e=palItems[k];if(!e)return;closePal(false);if(!$("#drawer").hidden)closeDrawer(true);e.run()}
+$("#searchBtn").addEventListener("click",openPal);
+$("#pscrim").addEventListener("click",()=>closePal(true));
+$("#palIn").addEventListener("input",()=>{palIx=0;renderPal()});
+$("#palIn").addEventListener("keydown",e=>{
+  if(e.key==="ArrowDown"){palIx=Math.min(palItems.length-1,palIx+1);renderPal();e.preventDefault()}
+  else if(e.key==="ArrowUp"){palIx=Math.max(0,palIx-1);renderPal();e.preventDefault()}
+  else if(e.key==="Enter"){runPal(palIx);e.preventDefault()}
+  const el=$("#po"+palIx);if(el)el.scrollIntoView({block:"nearest"});
+});
+$("#palList").addEventListener("click",e=>{const li=e.target.closest("[data-k]");if(li)runPal(+li.dataset.k)});
+
+document.addEventListener("keydown",e=>{
+  const palOpen=!$("#pal").hidden,drOpen=!$("#drawer").hidden;
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();palOpen?closePal(true):openPal();return}
+  if(e.key==="Escape"){if(palOpen){closePal(true);e.preventDefault()}else if(drOpen){closeDrawer();e.preventDefault()}else if($("#nav").classList.contains("open")){$("#nav").classList.remove("open");$("#menuBtn").setAttribute("aria-expanded","false");$("#menuBtn").focus()}}
+  if(e.key==="Tab"){if(palOpen){e.preventDefault()}else if(drOpen)trap($("#drawer"),e)}
+});
+
+renderHome();renderInfra();
+})();
+</script>
