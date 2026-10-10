@@ -1,9 +1,13 @@
 """Gitea integration – repository and user stats."""
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
+
+logger = logging.getLogger(__name__)
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -42,7 +46,7 @@ class GiteaAPI:
                 if users_resp.status_code == 200:
                     users = users_resp.json()
             except Exception:
-                pass
+                logger.debug("Gitea user list unavailable", exc_info=True)
             try:
                 orgs_resp = await client.get(
                     f"{self.base}/api/v1/admin/orgs",
@@ -50,7 +54,7 @@ class GiteaAPI:
                 if orgs_resp.status_code == 200:
                     orgs = orgs_resp.json()
             except Exception:
-                pass
+                logger.debug("Gitea org list unavailable", exc_info=True)
 
         return {
             "version_info": version_resp.json(),

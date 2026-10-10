@@ -135,7 +135,7 @@ class ProxmoxAPI:
                     if m:
                         return vmid, m.group(1).upper()
             except Exception:
-                pass
+                logger.debug("MAC lookup failed for %s %s/%s", gtype, node, vmid, exc_info=True)
             return vmid, None
 
         results = await asyncio.gather(*[_one(g) for g in guests])

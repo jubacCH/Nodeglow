@@ -69,6 +69,12 @@ ARG GIT_COMMIT=dev
 ARG BUILD_DATE=unknown
 RUN echo "{\"commit\":\"${GIT_COMMIT}\",\"date\":\"${BUILD_DATE}\"}" > /app/.build-version
 
+# Application version. The source of truth is VERSION at the repo root, which
+# is outside this build context; compose passes it in as APP_VERSION (the update
+# sidecar fills it from VERSION). config.get_version() reads /app/VERSION.
+ARG APP_VERSION=
+RUN if [ -n "$APP_VERSION" ]; then printf '%s\n' "$APP_VERSION" > /app/VERSION; fi
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

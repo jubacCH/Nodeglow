@@ -18,7 +18,6 @@ from orchestrator import (  # noqa: E402
     DEFAULT_STEPS,
     STEP_NAMES,
     StepError,
-    UpdateState,
     idle_state,
     list_backups,
     prune_backups,
@@ -29,7 +28,12 @@ from orchestrator import (  # noqa: E402
     step_preflight,
     step_pull,
     step_restart,
+    read_version,
+    parse_schedule,
+    run_scheduled_backup,
+    seconds_until_next,
 )
+from datetime import datetime  # noqa: E402
 
 
 def make_ctx(tmp_path, **overrides):
@@ -148,15 +152,29 @@ def test_default_steps_match_documented_order():
 
 # ── Preflight ────────────────────────────────────────────────────────────────
 
-def _git_responder(overrides=None):
+def _compose_config(source="/opt/vigil/data", kind="bind"):
+    return json.dumps({"services": {"nodeglow": {"volumes": [
+        {"type": kind, "source": source, "target": "/data"}]}}})
+
+
+def _mounts(source="/opt/vigil/data", kind="bind"):
+    return json.dumps([{"Type": kind, "Source": source, "Destination": "/data"}])
+
+
+def _git_responder(overrides=None, config=None, mounts=None):
     answers = {
         ("git", "status", "--porcelain"): CmdResult(0, "", ""),
         ("git", "symbolic-ref", "-q", "HEAD"): CmdResult(0, "refs/heads/main", ""),
         ("docker", "inspect", "-f", "{{.State.Running}}", "vigil-db-1"): CmdResult(0, "true", ""),
+        ("docker", "inspect", "-f", "{{json .Mounts}}", "nodeglow"):
+            mounts or CmdResult(0, _mounts(), ""),
     }
     answers.update(overrides or {})
+    config = config or CmdResult(0, _compose_config(), "")
 
     def run_cmd(argv, timeout=60, cwd=None):
+        if argv[:2] == ["docker", "compose"] and argv[-3:] == ["config", "--format", "json"]:
+            return config
         key = tuple(argv)
         if key not in answers:
             raise AssertionError(f"unexpected command: {argv}")
@@ -222,6 +240,64 @@ def test_preflight_rejects_foreign_head(tmp_path):
         ("git", "symbolic-ref", "-q", "HEAD"): CmdResult(1, "", ""),
     }))
     with pytest.raises(StepError, match="refs/heads/main"):
+        step_preflight(ctx)
+
+
+def test_preflight_reports_the_data_mount(tmp_path):
+    detail = step_preflight(make_ctx(tmp_path, run_cmd=_git_responder()))
+    assert "/data from /opt/vigil/data" in detail
+
+
+def test_preflight_refuses_when_data_would_move(tmp_path):
+    """The production bug: a sidecar `up` bound /data to /opt/repo/data."""
+    run_cmd = _git_responder(config=CmdResult(0, _compose_config("/opt/repo/data"), ""))
+    with pytest.raises(StepError, match="/opt/repo/data.*/opt/vigil/data"):
+        step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+
+
+def test_preflight_ignores_trailing_slashes(tmp_path):
+    run_cmd = _git_responder(config=CmdResult(0, _compose_config("/opt/vigil/data/"), ""))
+    step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+
+
+def test_preflight_fails_when_compose_config_fails(tmp_path):
+    run_cmd = _git_responder(config=CmdResult(1, "", "required variable POSTGRES_PASSWORD"))
+    with pytest.raises(StepError, match="compose config failed"):
+        step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+
+
+def test_preflight_skips_comparison_for_named_volumes(tmp_path):
+    run_cmd = _git_responder(
+        config=CmdResult(0, _compose_config("data", kind="volume"), ""),
+        mounts=CmdResult(0, _mounts("/var/lib/docker/volumes/x/_data", kind="volume"), ""))
+    detail = step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+    assert "not compared" in detail
+
+
+def test_compose_uses_host_project_directory_for_build_run_and_up(tmp_path):
+    """Build, the migration `run --rm` and `up` all resolve paths on the host."""
+    seen = []
+
+    def run_cmd(argv, timeout=60, cwd=None):
+        seen.append(argv)
+        return CmdResult(0, "", "")
+
+    ctx = make_ctx(tmp_path, run_cmd=run_cmd, project_dir="/opt/vigil",
+                   compose_file="/opt/vigil/docker-compose.yml")
+    step_build(ctx)
+    step_migrate(ctx)
+    step_restart(ctx)
+
+    assert len(seen) == 3
+    for argv in seen:
+        assert argv[:8] == ["docker", "compose", "-p", "vigil",
+                            "--project-directory", "/opt/vigil",
+                            "-f", "/opt/vigil/docker-compose.yml"]
+
+
+def test_preflight_names_db_container_when_unresolved(tmp_path):
+    ctx = make_ctx(tmp_path, run_cmd=_git_responder(), db_container="")
+    with pytest.raises(StepError, match="DB_CONTAINER"):
         step_preflight(ctx)
 
 
@@ -384,6 +460,33 @@ def test_build_only_builds_app_services(tmp_path):
     assert "nodeglow" in detail
 
 
+def test_build_passes_version_from_repo_file(tmp_path):
+    seen = {}
+
+    def run_cmd(argv, timeout=60, cwd=None):
+        seen["argv"] = argv
+        return CmdResult(0, "", "")
+
+    ctx = make_ctx(tmp_path, run_cmd=run_cmd)
+    with open(os.path.join(ctx.repo_path, "VERSION"), "w") as fh:
+        fh.write("1.2.3\n# 2026-04-03T06:28:41Z\n")
+
+    detail = step_build(ctx)
+
+    assert seen["argv"] == ["docker", "compose", "-p", "vigil", "-f", ctx.compose_file,
+                            "build", "--build-arg", "APP_VERSION=1.2.3",
+                            "nodeglow", "frontend"]
+    assert "1.2.3" in detail
+
+
+def test_read_version_skips_comments_and_rejects_garbage(tmp_path):
+    (tmp_path / "VERSION").write_text("# header\n\n2.0.0-rc1\n")
+    assert read_version(str(tmp_path)) == "2.0.0-rc1"
+    (tmp_path / "VERSION").write_text("1.0 ; rm -rf /\n")
+    assert read_version(str(tmp_path)) == ""
+    assert read_version(str(tmp_path / "missing")) == ""
+
+
 def test_build_failure_is_reported(tmp_path):
     ctx = make_ctx(tmp_path, run_cmd=lambda argv, timeout=60, cwd=None: CmdResult(
         1, "", "ERROR: failed to solve"))
@@ -470,3 +573,82 @@ def test_migrate_does_not_restart_dependencies(tmp_path):
 
     step_migrate(make_ctx(tmp_path, run_cmd=run_cmd))
     assert "--no-deps" in seen["argv"]
+
+
+# ── Scheduled backups ────────────────────────────────────────────────────────
+
+def test_scheduled_backup_writes_its_own_kind(tmp_path):
+    ctx = make_ctx(tmp_path, run_dump=_fake_dump(1024))
+    result = run_scheduled_backup(ctx)
+    assert result["ok"] is True
+    assert result["name"] == "scheduled-2026-06-10T14-02-11.dump.gz"
+    entries = list_backups(ctx.backup_dir)
+    assert [e["kind"] for e in entries] == ["scheduled"]
+
+
+def test_scheduled_backup_failure_is_reported_not_raised(tmp_path):
+    def run_dump(argv, dest, timeout=1800):
+        return DumpResult(1, 0, "connection refused")
+
+    ctx = make_ctx(tmp_path, run_dump=run_dump)
+    result = run_scheduled_backup(ctx)
+    assert result["ok"] is False
+    assert "connection refused" in result["error"]
+    assert os.listdir(ctx.backup_dir) == []
+
+
+def test_scheduled_backup_without_db_container_fails_cleanly(tmp_path):
+    result = run_scheduled_backup(make_ctx(tmp_path, db_container=""))
+    assert result["ok"] is False
+    assert "DB_CONTAINER" in result["error"]
+
+
+def test_retention_is_counted_per_kind(tmp_path):
+    """Daily dumps must never push the last pre-update dump out."""
+    ctx = make_ctx(tmp_path, run_dump=_fake_dump(10), backup_retention=2)
+    pre = os.path.join(ctx.backup_dir, "pre-update-old.dump.gz")
+    with open(pre, "wb") as fh:
+        fh.write(b"x")
+    os.utime(pre, (1, 1))
+    for i, name in enumerate(["a", "b", "c"]):
+        path = os.path.join(ctx.backup_dir, f"scheduled-{name}.dump.gz")
+        with open(path, "wb") as fh:
+            fh.write(b"x")
+        os.utime(path, (1000 + i, 1000 + i))
+
+    run_scheduled_backup(ctx)
+
+    names = sorted(os.listdir(ctx.backup_dir))
+    assert "pre-update-old.dump.gz" in names
+    assert sorted(n for n in names if n.startswith("scheduled-")) == [
+        "scheduled-2026-06-10T14-02-11.dump.gz", "scheduled-c.dump.gz"]
+
+
+@pytest.mark.parametrize("spec,expected", [
+    (None, ("daily", 2, 30)),
+    ("", ("daily", 2, 30)),
+    ("02:15", ("daily", 2, 15)),
+    ("every 6h", ("interval", 21600)),
+    ("Every 90m", ("interval", 5400)),
+    ("off", None),
+    ("0", None),
+])
+def test_parse_schedule(spec, expected):
+    assert parse_schedule(spec) == expected
+
+
+@pytest.mark.parametrize("spec", ["25:00", "every 5m", "nightly", "3:3"])
+def test_parse_schedule_rejects_garbage(spec):
+    with pytest.raises(ValueError):
+        parse_schedule(spec)
+
+
+def test_seconds_until_next_daily():
+    now = datetime(2026, 10, 10, 2, 0, 0)
+    assert seconds_until_next(("daily", 3, 30), now) == 90 * 60
+    later = datetime(2026, 10, 10, 4, 0, 0)
+    assert seconds_until_next(("daily", 3, 30), later) == (23 * 60 + 30) * 60
+
+
+def test_seconds_until_next_interval():
+    assert seconds_until_next(("interval", 3600), datetime(2026, 1, 1)) == 3600

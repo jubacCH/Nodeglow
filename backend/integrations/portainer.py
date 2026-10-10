@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
+
+logger = logging.getLogger(__name__)
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -30,6 +33,7 @@ class PortainerAPI:
             resp.raise_for_status()
             return resp.json()
         except Exception:
+            logger.debug("Portainer containers unavailable for endpoint %s", endpoint_id, exc_info=True)
             return []
 
     async def fetch_all(self) -> dict:

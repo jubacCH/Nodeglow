@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import namedtuple
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Callable
 
 CmdResult = namedtuple("CmdResult", "returncode stdout stderr")
@@ -39,7 +41,10 @@ MIN_FREE_BYTES = 2 * 1024**3
 DOCKER_SOCKET = "/var/run/docker.sock"
 
 BACKUP_PREFIX = "pre-update-"
+SCHEDULED_PREFIX = "scheduled-"
 BACKUP_SUFFIX = ".dump.gz"
+BACKUP_KINDS = {"pre-update": BACKUP_PREFIX, "scheduled": SCHEDULED_PREFIX}
+DEFAULT_BACKUP_SCHEDULE = "02:30"
 
 BUILD_SERVICES = ["nodeglow", "frontend"]
 BUILD_TIMEOUT = 1800
@@ -119,6 +124,11 @@ class Ctx:
     db_name: str
     state_path: str
     run_id: str
+    # Host-side directory the stack was started from (e.g. /opt/vigil). When
+    # set, compose runs with --project-directory so relative bind sources
+    # (./data, ./clickhouse/*.xml) and .env resolve to HOST paths. Empty keeps
+    # the legacy behaviour (paths relative to compose_file).
+    project_dir: str = ""
 
 
 def idle_state() -> dict:
@@ -194,12 +204,86 @@ def _compose(ctx: Ctx, *args, timeout: int) -> CmdResult:
     considers the running containers to belong to a different project and tries
     to create its own — which fails on the fixed container_name, and would have
     built images under the wrong prefix.
+
+    The project directory has to be passed for the same reason. Compose resolves
+    relative bind sources client-side, against the directory of the compose
+    file, and hands the daemon absolute paths — which the daemon interprets on
+    the HOST. With the file at /opt/repo/docker-compose.yml, ``./data`` became
+    the host path /opt/repo/data: an empty directory instead of the real data.
+    ``--project-directory <host dir>`` (made readable inside the sidecar by a
+    symlink, see update-server.py) gives compose the host's view instead.
     """
+    head = ["docker", "compose", "-p", ctx.compose_project]
+    if ctx.project_dir:
+        head += ["--project-directory", ctx.project_dir]
     return ctx.run_cmd(
-        ["docker", "compose", "-p", ctx.compose_project, "-f", ctx.compose_file, *args],
+        [*head, "-f", ctx.compose_file, *args],
         timeout=timeout,
         cwd=ctx.repo_path,
     )
+
+
+APP_CONTAINER = "nodeglow"
+DATA_TARGET = "/data"
+
+
+def _compose_bind_source(config: dict, service: str, target: str) -> tuple[str, str] | None:
+    """Return ``(type, source)`` of the volume a service mounts at ``target``."""
+    for vol in (config.get("services", {}).get(service, {}) or {}).get("volumes", []) or []:
+        if isinstance(vol, dict) and vol.get("target") == target:
+            return vol.get("type", ""), vol.get("source", "")
+    return None
+
+
+def _running_mount_source(mounts: list, target: str) -> tuple[str, str] | None:
+    for m in mounts or []:
+        if m.get("Destination") == target:
+            return m.get("Type", ""), m.get("Source", "")
+    return None
+
+
+def check_data_mount(ctx: Ctx) -> str:
+    """Refuse to continue if compose would mount a different /data than now.
+
+    Compares the bind source compose resolves for the app's /data with the one
+    the running container actually uses. A mismatch means the recreated
+    container would start on another directory — empty, with a freshly
+    generated encryption key when SECRET_KEY is not set. Failing here, before
+    anything is mutated, is the only safe answer.
+    """
+    cfg = _compose(ctx, "config", "--format", "json", timeout=60)
+    if cfg.returncode != 0:
+        raise StepError(f"docker compose config failed: {cfg.stderr[-MAX_ERROR_CHARS:]}")
+    try:
+        wanted = _compose_bind_source(json.loads(cfg.stdout), APP_CONTAINER, DATA_TARGET)
+    except ValueError as exc:
+        raise StepError(f"docker compose config returned no JSON: {exc}") from exc
+
+    insp = ctx.run_cmd(
+        ["docker", "inspect", "-f", "{{json .Mounts}}", APP_CONTAINER], timeout=15
+    )
+    if insp.returncode != 0:
+        raise StepError(f"Cannot inspect the running {APP_CONTAINER} container: "
+                        f"{insp.stderr[-MAX_ERROR_CHARS:]}")
+    try:
+        current = _running_mount_source(json.loads(insp.stdout or "[]"), DATA_TARGET)
+    except ValueError as exc:
+        raise StepError(f"Unreadable mounts of {APP_CONTAINER}: {exc}") from exc
+
+    if wanted is None or current is None:
+        return "no /data mount to compare"
+    if wanted[0] != "bind" or current[0] != "bind":
+        return f"/data is a {wanted[0] or current[0]} mount, not compared"
+    want_src = wanted[1].rstrip("/")
+    cur_src = current[1].rstrip("/")
+    if want_src != cur_src:
+        raise StepError(
+            f"Refusing to update: compose would mount {want_src} as /data, but the "
+            f"running container uses {cur_src}. The update would start on the wrong "
+            "data directory. Set HOST_PROJECT_DIR to the directory the stack was "
+            "started from (see docs/OPERATIONS.md, 'Updater: host paths')."
+        )
+    return f"/data from {cur_src}"
 
 
 def step_preflight(ctx: Ctx) -> str:
@@ -235,41 +319,63 @@ def step_preflight(ctx: Ctx) -> str:
             f"HEAD is not on {EXPECTED_REF} (got {head.stdout.strip() or 'detached'})"
         )
 
+    if not ctx.db_container:
+        raise StepError(
+            f"Database container not found for compose project {ctx.compose_project!r}; "
+            "set DB_CONTAINER in .env"
+        )
     inspect = ctx.run_cmd(
         ["docker", "inspect", "-f", "{{.State.Running}}", ctx.db_container], timeout=15
     )
     if inspect.returncode != 0 or inspect.stdout.strip() != "true":
         raise StepError(f"Database container {ctx.db_container} is not running")
 
+    data = check_data_mount(ctx)
+
     return (
         f"{free / 1024**3:.1f} GB free, {ctx.db_container} running, "
-        f"HEAD on {EXPECTED_REF.rsplit('/', 1)[-1]}"
+        f"HEAD on {EXPECTED_REF.rsplit('/', 1)[-1]}, {data}"
     )
 
 
-def list_backups(backup_dir: str) -> list[dict]:
-    """List existing dumps, newest first."""
+def _backup_kind(name: str) -> str | None:
+    if not name.endswith(BACKUP_SUFFIX):
+        return None
+    for kind, prefix in BACKUP_KINDS.items():
+        if name.startswith(prefix):
+            return kind
+    return None
+
+
+def list_backups(backup_dir: str, prefix: str | None = None) -> list[dict]:
+    """List existing dumps (all kinds, or one ``prefix``), newest first."""
     try:
         names = os.listdir(backup_dir)
     except OSError:
         return []
     entries = []
     for name in names:
-        if not (name.startswith(BACKUP_PREFIX) and name.endswith(BACKUP_SUFFIX)):
+        kind = _backup_kind(name)
+        if kind is None or (prefix is not None and not name.startswith(prefix)):
             continue
         path = os.path.join(backup_dir, name)
         try:
             stat = os.stat(path)
         except OSError:
             continue
-        entries.append({"name": name, "size": stat.st_size, "mtime": stat.st_mtime})
+        entries.append({"name": name, "size": stat.st_size, "mtime": stat.st_mtime,
+                        "kind": kind})
     entries.sort(key=lambda e: e["mtime"], reverse=True)
     return entries
 
 
-def prune_backups(ctx: Ctx) -> int:
-    """Delete all but the ``backup_retention`` newest dumps. Returns the count kept."""
-    entries = list_backups(ctx.backup_dir)
+def prune_backups(ctx: Ctx, prefix: str = BACKUP_PREFIX) -> int:
+    """Keep the ``backup_retention`` newest dumps of one kind. Returns the count kept.
+
+    Kinds are pruned separately, so a week of scheduled dumps can never push
+    the pre-update dump of the last release out of the directory.
+    """
+    entries = list_backups(ctx.backup_dir, prefix=prefix)
     for entry in entries[ctx.backup_retention:]:
         try:
             os.remove(os.path.join(ctx.backup_dir, entry["name"]))
@@ -279,15 +385,23 @@ def prune_backups(ctx: Ctx) -> int:
     return min(len(entries), ctx.backup_retention)
 
 
-def step_backup(ctx: Ctx) -> str:
-    """Dump Postgres before any migration touches it."""
+def dump_database(ctx: Ctx, prefix: str) -> tuple[str, int, int]:
+    """pg_dump the database into ``<prefix><timestamp>.dump.gz`` and prune.
+
+    Returns ``(name, size_bytes, kept)``. Raises :class:`StepError` on failure
+    and removes the partial file. Only the database is dumped: SECRET_KEY,
+    which decrypts the stored credentials, is deliberately never written next
+    to it (see docs/OPERATIONS.md, "The encryption key").
+    """
+    if not ctx.db_container:
+        raise StepError("Database container not resolved; set DB_CONTAINER in .env")
     try:
         os.makedirs(ctx.backup_dir, exist_ok=True)
     except OSError as exc:
         raise StepError(f"Backup directory unavailable: {exc}") from exc
 
     stamp = ctx.now().replace(":", "-")
-    name = f"{BACKUP_PREFIX}{stamp}{BACKUP_SUFFIX}"
+    name = f"{prefix}{stamp}{BACKUP_SUFFIX}"
     dest = os.path.join(ctx.backup_dir, name)
 
     result = ctx.run_dump(
@@ -302,8 +416,67 @@ def step_backup(ctx: Ctx) -> str:
             pass
         raise StepError(f"pg_dump failed: {result.stderr[-MAX_ERROR_CHARS:]}")
 
-    kept = prune_backups(ctx)
-    return f"{name} ({result.size / 1024**2:.1f} MB), pruned {kept} kept"
+    kept = prune_backups(ctx, prefix=prefix)
+    return name, result.size, kept
+
+
+def step_backup(ctx: Ctx) -> str:
+    """Dump Postgres before any migration touches it."""
+    name, size, kept = dump_database(ctx, BACKUP_PREFIX)
+    return f"{name} ({size / 1024**2:.1f} MB), pruned {kept} kept"
+
+
+def run_scheduled_backup(ctx: Ctx) -> dict:
+    """Take one scheduled dump; never raises. Returns a status record."""
+    started = ctx.now()
+    try:
+        name, size, kept = dump_database(ctx, SCHEDULED_PREFIX)
+    except Exception as exc:  # noqa: BLE001 — reported, retried next slot
+        error = str(exc)[-MAX_ERROR_CHARS:]
+        ctx.log(f"scheduled backup FAILED: {error}")
+        return {"ok": False, "at": started, "name": None, "size": 0, "error": error}
+    ctx.log(f"scheduled backup ok: {name} ({size / 1024**2:.1f} MB), {kept} kept")
+    return {"ok": True, "at": started, "name": name, "size": size, "error": None}
+
+
+# ── Backup schedule ──────────────────────────────────────────────────────────
+
+
+def parse_schedule(spec: str | None):
+    """Parse ``BACKUP_SCHEDULE``.
+
+    * ``"HH:MM"`` — daily at that time (container clock, UTC by default)
+    * ``"every 6h"`` / ``"every 90m"`` — fixed interval, at least 15 minutes
+    * ``"off"`` (or ``none`` / ``0``) — disabled
+    * unset or empty — the default, daily at 02:30
+
+    Returns ``None`` (disabled), ``("daily", hour, minute)`` or
+    ``("interval", seconds)``. Raises ``ValueError`` on anything else.
+    """
+    value = (spec or "").strip().lower() or DEFAULT_BACKUP_SCHEDULE
+    if value in ("off", "none", "disabled", "false", "0"):
+        return None
+    m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", value)
+    if m:
+        return ("daily", int(m.group(1)), int(m.group(2)))
+    m = re.fullmatch(r"every\s+(\d+)\s*([hm])", value)
+    if m:
+        seconds = int(m.group(1)) * (3600 if m.group(2) == "h" else 60)
+        if seconds < 15 * 60:
+            raise ValueError(f"backup interval too short: {spec!r} (minimum 15m)")
+        return ("interval", seconds)
+    raise ValueError(f"invalid BACKUP_SCHEDULE {spec!r}; use HH:MM, 'every 6h' or 'off'")
+
+
+def seconds_until_next(schedule, now: datetime) -> float:
+    """Seconds from ``now`` to the next slot of a parsed schedule."""
+    if schedule[0] == "interval":
+        return float(schedule[1])
+    _, hour, minute = schedule
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
 
 
 def step_pull(ctx: Ctx) -> str:
@@ -335,12 +508,41 @@ def step_pull(ctx: Ctx) -> str:
     return f"{old_sha} → {new_sha} ({n} commits)"
 
 
+_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
+
+
+def read_version(repo_path: str) -> str:
+    """Return the release version from ``VERSION`` in the repo, or ``""``.
+
+    The file may carry trailing comment lines (``# <timestamp>``); the first
+    non-comment line is the version. Anything that does not look like a
+    version string is ignored rather than passed on to the build.
+    """
+    try:
+        with open(os.path.join(repo_path, "VERSION"), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line if _VERSION_RE.match(line) else ""
+    return ""
+
+
 def step_build(ctx: Ctx) -> str:
-    """Build the new images without touching the running containers."""
-    result = _compose(ctx, "build", *BUILD_SERVICES, timeout=BUILD_TIMEOUT)
+    """Build the new images without touching the running containers.
+
+    The backend build context is ./backend, which does not contain the
+    repo-root VERSION file, so the version travels as a build arg.
+    """
+    version = read_version(ctx.repo_path)
+    extra = ["--build-arg", f"APP_VERSION={version}"] if version else []
+    result = _compose(ctx, "build", *extra, *BUILD_SERVICES, timeout=BUILD_TIMEOUT)
     if result.returncode != 0:
         raise StepError(f"docker compose build failed: {result.stderr[-MAX_ERROR_CHARS:]}")
-    return f"built {', '.join(BUILD_SERVICES)}"
+    suffix = f" (version {version})" if version else ""
+    return f"built {', '.join(BUILD_SERVICES)}{suffix}"
 
 
 def step_migrate(ctx: Ctx) -> str:

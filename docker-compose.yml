@@ -56,10 +56,16 @@ services:
         # for anything you distribute: Ookla's licence restricts redistribution
         # and commercial use. Set BUNDLE_OOKLA=1 in .env for your own install.
         BUNDLE_OOKLA: ${BUNDLE_OOKLA:-0}
+        # Version shown in the UI/API. Source of truth is ./VERSION; the update
+        # sidecar passes it automatically. For a manual build:
+        #   APP_VERSION=$(head -n1 VERSION) docker compose build nodeglow
+        APP_VERSION: ${APP_VERSION:-}
     container_name: nodeglow
     ports:
-      - "514:1514/udp"    # Syslog UDP (host 514 → container 1514)
-      - "1514:1514/tcp"   # Syslog TCP
+      # SYSLOG_BIND restricts the host address the syslog listeners bind to,
+      # e.g. the management-VLAN IP. Default: all interfaces (as before).
+      - "${SYSLOG_BIND:-0.0.0.0}:514:1514/udp"    # Syslog UDP (host 514 → container 1514)
+      - "${SYSLOG_BIND:-0.0.0.0}:1514:1514/tcp"   # Syslog TCP
     expose:
       - "8000"             # Internal only — frontend proxies all requests
     volumes:
@@ -81,6 +87,9 @@ services:
       # flow is still accepted alongside per-install tokens. Leave unset on
       # new deployments.
       NODEGLOW_ALLOW_SHARED_ENROLLMENT: ${NODEGLOW_ALLOW_SHARED_ENROLLMENT:-}
+      # Logging: LOG_LEVEL=DEBUG|INFO|WARNING|ERROR, LOG_FORMAT=text|json.
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
     depends_on:
       db:
         condition: service_healthy
@@ -88,6 +97,17 @@ services:
         condition: service_healthy
     cap_add:
       - NET_RAW   # Required for ICMP ping
+    # no-new-privileges is OFF here by default, unlike the frontend: ping runs
+    # as the unprivileged nodeglow user and gets CAP_NET_RAW from a FILE
+    # capability (setcap in the Dockerfile), which no-new-privileges disables.
+    # iputils then falls back to unprivileged ICMP sockets, which only works if
+    # net.ipv4.ping_group_range covers the container (Docker >= 20.10 sets it).
+    # Set NODEGLOW_NO_NEW_PRIVILEGES=true after checking ICMP checks still work.
+    security_opt:
+      - "no-new-privileges:${NODEGLOW_NO_NEW_PRIVILEGES:-false}"
+    # Optional resource ceiling (example values; size to your host):
+    # mem_limit: 2g
+    # cpus: 2.0
     restart: unless-stopped
 
   updater:
@@ -99,14 +119,25 @@ services:
       - backups:/backups
     environment:
       UPDATE_SIDECAR_TOKEN: ${UPDATE_SIDECAR_TOKEN:?Set UPDATE_SIDECAR_TOKEN in .env (shared with backend)}
-      # Postgres container to dump before migrating. Leave unset to let the
-      # sidecar resolve it via `docker compose ps -q db`; the legacy production
-      # stack in /opt/vigil uses `vigil-db-1`.
+      # Postgres container to dump. Leave unset: the sidecar finds the `db`
+      # service of the running compose project via its labels (this also works
+      # for the legacy stack started as project "vigil"). Set it only if that
+      # fails, e.g. DB_CONTAINER=vigil-db-1.
       DB_CONTAINER: ${DB_CONTAINER:-}
+      # Host directory this stack runs from (e.g. /opt/vigil). Leave unset: it
+      # is read from the running container's compose labels. Needed so that
+      # ./data etc. resolve to the right HOST path when the updater recreates
+      # containers; the update refuses to run if /data would move.
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
       POSTGRES_USER: ${POSTGRES_USER:-nodeglow}
       POSTGRES_DB: ${POSTGRES_DB:-nodeglow}
       BACKUP_DIR: /backups
+      # Dumps kept per kind (pre-update and scheduled are counted separately).
       BACKUP_RETENTION: ${BACKUP_RETENTION:-5}
+      # Scheduled Postgres dumps: "HH:MM" daily (UTC), "every 6h", or "off".
+      # Empty = daily at 02:30 UTC. The dumps hold the database only, never
+      # SECRET_KEY: escrow that separately (docs/OPERATIONS.md).
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-}
     expose:
       - "9100"
     restart: unless-stopped
@@ -115,11 +146,16 @@ services:
     build: ./frontend
     container_name: nodeglow-frontend
     ports:
-      - "8000:3000"
+      # UI_BIND=127.0.0.1 when a reverse proxy on the same host terminates TLS,
+      # so the plain-HTTP port is not reachable from the network.
+      - "${UI_BIND:-0.0.0.0}:8000:3000"
     environment:
       HOSTNAME: "0.0.0.0"
     depends_on:
       - nodeglow
+    security_opt:
+      - no-new-privileges:true
+    # mem_limit: 512m
     restart: unless-stopped
 
 volumes:

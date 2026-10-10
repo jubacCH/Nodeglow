@@ -153,6 +153,7 @@ class RedfishAPI:
                 system_link = (root.get("Systems", {}) or {}).get("@odata.id")
                 chassis_link = (root.get("Chassis", {}) or {}).get("@odata.id")
             except Exception:
+                logger.debug("Redfish service root unavailable, probing known paths", exc_info=True)
                 system_link = None
                 chassis_link = None
 
@@ -166,7 +167,7 @@ class RedfishAPI:
                         system_path = members[0].get("@odata.id")
                         system = await self._get(client, system_path)
                 except Exception:
-                    pass
+                    logger.debug("Redfish systems collection %s unreadable", system_link, exc_info=True)
 
             if not system:
                 _, system = await self._try_paths(client, _SYSTEM_PATHS)
@@ -179,12 +180,13 @@ class RedfishAPI:
                     if members:
                         chassis_path = members[0].get("@odata.id")
                 except Exception:
-                    pass
+                    logger.debug("Redfish chassis collection %s unreadable", chassis_link, exc_info=True)
 
             if not chassis_path:
                 try:
                     chassis_path, _ = await self._try_paths(client, _CHASSIS_PATHS)
                 except Exception:
+                    logger.debug("no Redfish chassis path found", exc_info=True)
                     chassis_path = None
 
             thermal: dict | None = None
@@ -193,11 +195,11 @@ class RedfishAPI:
                 try:
                     thermal = await self._get(client, f"{chassis_path}/Thermal")
                 except Exception:
-                    pass
+                    logger.debug("Redfish thermal data unavailable at %s", chassis_path, exc_info=True)
                 try:
                     power = await self._get(client, f"{chassis_path}/Power")
                 except Exception:
-                    pass
+                    logger.debug("Redfish power data unavailable at %s", chassis_path, exc_info=True)
 
         return parse_redfish_data(system, thermal, power)
 

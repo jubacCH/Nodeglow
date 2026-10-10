@@ -32,6 +32,36 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff==0.17.0
+
+      # The rule set in backend/ruff.toml is a ratchet: bug-class checks only,
+      # green on the current code. Widen it one rule family at a time.
+      - name: Ruff (backend)
+        working-directory: backend
+        run: ruff check --output-format github .
+
+      - name: Ruff (sidecar)
+        run: ruff check --config backend/ruff.toml --output-format github sidecar
+
+      # Catches interpolation/schema mistakes in docker-compose.yml before an
+      # operator's `compose up` does. Dummy values satisfy the :? guards.
+      - name: docker compose config
+        env:
+          POSTGRES_PASSWORD: ci
+          UPDATE_SIDECAR_TOKEN: ci
+        run: docker compose -f docker-compose.yml config --quiet
+
   sidecar:
     name: Sidecar (pytest)
     runs-on: ubuntu-latest
@@ -159,7 +189,7 @@ jobs:
           fi
 
   frontend:
-    name: Frontend (typecheck + build)
+    name: Frontend (typecheck + lint + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -179,8 +209,17 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # TODO: make this blocking once the ESLint config has landed and the
+      # existing findings are cleaned up.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
       - name: Unit tests
         run: npm run test
 
       - name: Build
         run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+

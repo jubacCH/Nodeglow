@@ -25,13 +25,19 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+from datetime import datetime, timedelta
+
 from orchestrator import (
     CmdResult,
     Ctx,
     DumpResult,
     idle_state,
     list_backups,
+    parse_schedule,
+    read_version,
+    run_scheduled_backup,
     run_update,
+    seconds_until_next,
 )
 
 REPO_PATH = os.environ.get("REPO_PATH", "/opt/repo")
@@ -48,9 +54,19 @@ DUMP_CHUNK = 1 << 20
 # anything — this is intentional (fail-closed).
 AUTH_TOKEN = os.environ.get("UPDATE_SIDECAR_TOKEN", "").strip()
 
+# Scheduled Postgres dumps: "HH:MM" daily (container clock, UTC), "every 6h",
+# or "off". Unset means daily at 02:30. Retention is BACKUP_RETENTION, counted
+# separately from the pre-update dumps.
+BACKUP_SCHEDULE = os.environ.get("BACKUP_SCHEDULE", "")
+
 _run_lock = threading.Lock()
 _run_thread = None
 _run_state = None  # last known state dict, mirrored from the state file
+
+# Scheduled-backup bookkeeping, guarded by _run_lock for the "running" flag so
+# an update and a scheduled dump never run at the same time.
+_backup_status = {"schedule": None, "enabled": False, "next_at": None,
+                  "running": False, "last": None, "error": None}
 
 
 def _log(msg: str) -> None:
@@ -115,26 +131,116 @@ def _resolve_compose_project() -> str:
     return os.path.basename(REPO_PATH.rstrip("/")) or "nodeglow"
 
 
-def _resolve_db_container() -> str:
-    """Prefer an explicit DB_CONTAINER, else ask compose, else the prod default."""
+def _first_line(result: CmdResult) -> str:
+    lines = [ln.strip() for ln in (result.stdout or "").splitlines() if ln.strip()]
+    return lines[0] if result.returncode == 0 and lines else ""
+
+
+def _resolve_db_container(project: str) -> str:
+    """Find the Postgres container of the running stack.
+
+    Order: an explicit ``DB_CONTAINER``; the container labelled as service
+    ``db`` of the running compose project; ``docker compose ps -q db`` for that
+    project. Returns ``""`` when nothing is found, and the preflight then fails
+    with a message naming DB_CONTAINER.
+
+    There is deliberately no hardcoded fallback any more. The old default
+    ``vigil-db-1`` only matched the legacy production stack, and that stack
+    resolves correctly through its compose labels (project ``vigil``) anyway;
+    anyone who still wants it can set ``DB_CONTAINER=vigil-db-1``.
+    """
     explicit = os.environ.get("DB_CONTAINER", "").strip()
     if explicit:
         return explicit
+    attempts = (
+        ["docker", "ps", "-q",
+         "--filter", f"label=com.docker.compose.project={project}",
+         "--filter", "label=com.docker.compose.service=db"],
+        ["docker", "compose", "-p", project, "-f", COMPOSE_FILE, "ps", "-q", "db"],
+    )
+    for argv in attempts:
+        try:
+            found = _first_line(_run_cmd(argv, timeout=15, cwd=REPO_PATH))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"could not resolve db container via {' '.join(argv[:2])}: {exc}")
+            continue
+        if found:
+            return found
+    _log(f"no db container found for compose project {project!r}; set DB_CONTAINER")
+    return ""
+
+
+WORKING_DIR_LABEL = "com.docker.compose.project.working_dir"
+
+
+def _resolve_host_project_dir() -> str:
+    """The HOST directory the stack was started from, e.g. /opt/vigil.
+
+    Order: HOST_PROJECT_DIR (explicit); the ``project.working_dir`` label of the
+    running app container; ``""`` (legacy behaviour, with a loud warning). A
+    label equal to the in-container mount path means the container itself was
+    created by an earlier sidecar run with the old, broken paths — that value is
+    not trusted, because it is exactly the bug this exists to fix.
+    """
+    explicit = os.environ.get("HOST_PROJECT_DIR", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    label = ""
     try:
         result = _run_cmd(
-            ["docker", "compose", "-f", COMPOSE_FILE, "ps", "-q", "db"],
-            timeout=15, cwd=REPO_PATH,
+            ["docker", "inspect", "nodeglow", "--format",
+             "{{index .Config.Labels \"" + WORKING_DIR_LABEL + "\"}}"],
+            timeout=15,
         )
-        lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
-        if lines:
-            return lines[0]
+        if result.returncode == 0:
+            label = result.stdout.strip().rstrip("/")
     except Exception as exc:  # noqa: BLE001
-        _log(f"could not resolve db container via compose: {exc}")
-    return "vigil-db-1"
+        _log(f"could not read {WORKING_DIR_LABEL}: {exc}")
+    if label and label != REPO_PATH.rstrip("/") and label.startswith("/"):
+        return label
+    _log("WARNING: host project directory unknown"
+         + (f" (label points at the sidecar mount {label})" if label else "")
+         + " — relative bind mounts would resolve against " + REPO_PATH
+         + " ON THE HOST. Set HOST_PROJECT_DIR in .env. The preflight check "
+         "refuses the update if /data would move.")
+    return ""
+
+
+def _alias_project_dir(host_dir: str) -> str:
+    """Make ``host_dir`` resolve to the repo mount inside this container.
+
+    Compose must see the host path (so bind sources are host paths) but has to
+    read the compose file, .env and build contexts from the repo mount. A
+    symlink host_dir -> REPO_PATH provides both. Returns the directory to use,
+    or ``""`` if the alias cannot be set up (legacy behaviour; the preflight
+    data-mount check is the safety net).
+    """
+    if not host_dir:
+        return ""
+    repo_real = os.path.realpath(REPO_PATH)
+    if os.path.lexists(host_dir):
+        if os.path.realpath(host_dir) == repo_real:
+            return host_dir
+        _log(f"WARNING: {host_dir} exists inside the sidecar but is not the repo "
+             f"mount; not using it as project directory")
+        return ""
+    try:
+        parent = os.path.dirname(host_dir)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        os.symlink(REPO_PATH, host_dir)
+    except OSError as exc:
+        _log(f"WARNING: could not link {host_dir} -> {REPO_PATH}: {exc}")
+        return ""
+    _log(f"linked {host_dir} -> {REPO_PATH} so compose sees host paths")
+    return host_dir
 
 
 def build_ctx(run_id: str) -> Ctx:
     """Assemble the orchestrator context with real I/O."""
+    project = _resolve_compose_project()
+    project_dir = _alias_project_dir(_resolve_host_project_dir())
+    compose_file = f"{project_dir}/docker-compose.yml" if project_dir else COMPOSE_FILE
     return Ctx(
         run_cmd=_run_cmd,
         run_dump=_run_dump,
@@ -143,15 +249,16 @@ def build_ctx(run_id: str) -> Ctx:
         path_exists=os.path.exists,
         log=_log,
         repo_path=REPO_PATH,
-        compose_file=COMPOSE_FILE,
-        compose_project=_resolve_compose_project(),
+        compose_file=compose_file,
+        compose_project=project,
         backup_dir=BACKUP_DIR,
         backup_retention=BACKUP_RETENTION,
-        db_container=_resolve_db_container(),
+        db_container=_resolve_db_container(project),
         db_user=DB_USER,
         db_name=DB_NAME,
         state_path=STATE_PATH,
         run_id=run_id,
+        project_dir=project_dir,
     )
 
 
@@ -180,6 +287,8 @@ def start_run(runner=run_update):
     with _run_lock:
         if _run_thread is not None and _run_thread.is_alive():
             return 409, {"ok": False, "error": "An update run is already active"}
+        if _backup_status["running"]:
+            return 409, {"ok": False, "error": "A scheduled backup is running; retry in a few minutes"}
 
         run_id = time.strftime("%Y-%m-%dT%H-%M-%S")
         ctx = build_ctx(run_id)
@@ -197,6 +306,66 @@ def start_run(runner=run_update):
         _run_thread.start()
         _log(f"update run {run_id} started")
         return 202, {"ok": True, "run_id": run_id}
+
+
+def scheduled_backup_once(backup=run_scheduled_backup) -> dict | None:
+    """Take one scheduled dump unless an update run is active.
+
+    An update takes its own pre-update dump, so skipping a slot while one runs
+    loses nothing. Returns the status record, or None when skipped.
+    """
+    with _run_lock:
+        if _run_thread is not None and _run_thread.is_alive():
+            _log("scheduled backup skipped: an update run is active")
+            return None
+        _backup_status["running"] = True
+    try:
+        ctx = build_ctx(f"backup-{time.strftime('%Y-%m-%dT%H-%M-%S')}")
+        result = backup(ctx)
+    except Exception as exc:  # noqa: BLE001 — the loop must survive anything
+        result = {"ok": False, "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                  "name": None, "size": 0, "error": str(exc)[-500:]}
+        _log(f"scheduled backup crashed: {exc}")
+    finally:
+        _backup_status["running"] = False
+    _backup_status["last"] = result
+    return result
+
+
+def _backup_loop(schedule, stop: threading.Event) -> None:
+    while not stop.is_set():
+        wait = seconds_until_next(schedule, datetime.now())
+        _backup_status["next_at"] = (datetime.now() + timedelta(seconds=wait)).strftime(
+            "%Y-%m-%dT%H:%M:%S")
+        if stop.wait(wait):
+            return
+        scheduled_backup_once()
+
+
+def start_backup_scheduler(spec: str = BACKUP_SCHEDULE, stop: threading.Event | None = None):
+    """Start the scheduled-backup thread. Returns it, or None when disabled."""
+    _backup_status["schedule"] = spec or None
+    try:
+        schedule = parse_schedule(spec)
+    except ValueError as exc:
+        _backup_status.update(enabled=False, error=str(exc))
+        _log(f"WARNING: scheduled backups DISABLED — {exc}")
+        return None
+    if schedule is None:
+        _backup_status.update(enabled=False, error=None)
+        _log("scheduled backups disabled (BACKUP_SCHEDULE=off)")
+        return None
+    _backup_status.update(enabled=True, error=None)
+    thread = threading.Thread(target=_backup_loop, args=(schedule, stop or threading.Event()),
+                              name="backup-scheduler", daemon=True)
+    thread.start()
+    _log(f"scheduled backups enabled ({spec or 'default 02:30'}), "
+         f"keeping {BACKUP_RETENTION}")
+    return thread
+
+
+def backup_schedule_status() -> dict:
+    return dict(_backup_status)
 
 
 class UpdateHandler(BaseHTTPRequestHandler):
@@ -232,7 +401,8 @@ class UpdateHandler(BaseHTTPRequestHandler):
         elif self.path == "/status":
             self._json(200, current_status())
         elif self.path == "/backups":
-            self._json(200, {"backups": list_backups(BACKUP_DIR)})
+            self._json(200, {"backups": list_backups(BACKUP_DIR),
+                             "schedule": backup_schedule_status()})
         else:
             self._json(404, {"error": "Not found"})
 
@@ -265,13 +435,7 @@ class UpdateHandler(BaseHTTPRequestHandler):
             commit = r.stdout.strip() if r.returncode == 0 else "unknown"
         except Exception:
             commit = "unknown"
-        version = ""
-        try:
-            with open(f"{REPO_PATH}/VERSION") as f:
-                version = f.read().strip()
-        except Exception:
-            pass
-        return {"commit": commit, "version": version}
+        return {"commit": commit, "version": read_version(REPO_PATH)}
 
     def _check_updates(self):
         if not os.path.isdir(f"{REPO_PATH}/.git"):
@@ -313,6 +477,10 @@ if __name__ == "__main__":
     if not AUTH_TOKEN:
         print("[update-sidecar] WARNING: UPDATE_SIDECAR_TOKEN is empty — "
               "all mutating endpoints will return 401 until it is set.")
+    # Set up the host-path alias early so a misconfiguration shows in the log
+    # at start, not only when an update is attempted.
+    _alias_project_dir(_resolve_host_project_dir())
+    start_backup_scheduler()
     server = HTTPServer(("0.0.0.0", port), UpdateHandler)
     print(f"[update-sidecar] listening on :{port}")
     server.serve_forever()

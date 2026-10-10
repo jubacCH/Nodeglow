@@ -1,9 +1,13 @@
 """Synology DSM integration – storage and system stats."""
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+
+logger = logging.getLogger(__name__)
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -42,7 +46,7 @@ class SynologyAPI:
                 "session": "Nodeglow", "_sid": sid,
             })
         except Exception:
-            pass
+            logger.debug("Synology logout failed", exc_info=True)
 
     async def _api(self, client: httpx.AsyncClient, api: str, method: str,
                    version: int, sid: str, extra_params: dict | None = None) -> dict:

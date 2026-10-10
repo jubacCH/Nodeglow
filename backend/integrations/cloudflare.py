@@ -88,6 +88,7 @@ class CloudflareAPI:
             return resp.get("result", [])
         except Exception:
             # Firewall events API may not be available on all plans
+            log.debug("Firewall events unavailable for zone %s", zone_id, exc_info=True)
             return []
 
     async def fetch_all(self) -> dict:
