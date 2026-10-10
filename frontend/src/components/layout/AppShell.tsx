@@ -29,10 +29,7 @@ export function AppShell({ children }: AppShellProps) {
   // Individual selectors: re-render only when one of these values changes,
   // not on every theme-store update.
   const sidebarPosition = useThemeStore((s) => s.sidebarPosition);
-  const accentColor = useThemeStore((s) => s.accentColor);
-  const colorMode = useThemeStore((s) => s.colorMode);
   const density = useThemeStore((s) => s.density);
-  const fontSize = useThemeStore((s) => s.fontSize);
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
@@ -56,15 +53,6 @@ export function AppShell({ children }: AppShellProps) {
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
-
-  // Apply theme settings as CSS custom properties
-  useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty('--accent', accentColor);
-    root.style.setProperty('--font-size-base', `${fontSize}px`);
-    root.style.fontSize = `${fontSize}px`;
-    root.setAttribute('data-theme', colorMode);
-  }, [accentColor, fontSize, colorMode]);
 
   // Do not render protected app children until auth state is resolved.
   // While loading, or when unauthenticated (redirect pending), show a spinner.
