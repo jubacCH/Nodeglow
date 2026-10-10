@@ -401,7 +401,7 @@ def _resolve_host_id(source_ip: str, hostname: Optional[str]) -> Optional[int]:
     rdns_name = _rdns_cache.get(source_ip)
     if rdns_name and rdns_name.lower() in _host_cache:
         return _host_cache[rdns_name.lower()]
-    # Also try short hostname from FQDN (e.g. "ucg.b8n.ch" → "ucg")
+    # Also try short hostname from FQDN (e.g. "gw.example.com" → "gw")
     if rdns_name and "." in rdns_name:
         short = rdns_name.split(".")[0].lower()
         if short in _host_cache:

@@ -139,9 +139,9 @@ async def _consume_install_token(db, raw_token: str, hostname: str) -> tuple[boo
         return False, "expired"
     if row.hostname_pattern:
         # fnmatch is case-sensitive by default; lower() both sides so patterns
-        # like "web-*.b8n.ch" are host-case-insensitive but still anchored
-        # (substring matching was replaced because ".b8n.ch" would otherwise
-        # accept evil.b8n.ch.attacker.com).
+        # like "web-*.example.com" are host-case-insensitive but still anchored
+        # (substring matching was replaced because ".example.com" would otherwise
+        # accept evil.example.com.attacker.com).
         pat = row.hostname_pattern.strip().lower()
         if pat and not fnmatch.fnmatchcase(hostname.lower(), pat):
             return False, "hostname_mismatch"

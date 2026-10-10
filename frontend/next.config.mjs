@@ -2,7 +2,7 @@
 const nextConfig = {
   output: 'standalone',
 
-  // Proxy API + data routes to backend. In dev: set BACKEND_URL=http://10.10.30.52:8000
+  // Proxy API + data routes to backend. In dev: set BACKEND_URL=http://<backend-host>:8000
   async rewrites() {
     const backend = process.env.BACKEND_URL || 'http://nodeglow:8000';
     return [
@@ -42,7 +42,7 @@ const nextConfig = {
       // extensively across the app.
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
-      // Self-hosted Geist/Inter fonts served from /_next.
+      // Self-hosted fonts (Sora, Inter Tight, JetBrains Mono) served from /_next.
       "font-src 'self' data:",
       `connect-src ${connectSrc}`,
       // echarts may use blob workers.
