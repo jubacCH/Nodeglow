@@ -5,6 +5,7 @@ use tracing::{debug, warn};
 use crate::checks::{CheckAssignment, CheckResult};
 use crate::collector::SystemMetrics;
 use crate::config::{Config, ServerConfig};
+use crate::services::ServiceStatus;
 
 /// Hard cap on update-binary download size to prevent OOM/DoS from a malicious
 /// or compromised server returning an unbounded body. 200 MiB.
@@ -31,19 +32,25 @@ fn build_client(cfg: &Config) -> Client {
 }
 
 /// Heartbeat request body: the metrics object exactly as before, with
-/// `check_results` added next to it. The field is omitted entirely when there
-/// is nothing to deliver, so a non-probe agent sends the same bytes it always
-/// did.
+/// `check_results` and `service_states` added next to it. Each field is
+/// omitted entirely when there is nothing to deliver, so an agent that is
+/// neither a probe nor watching services sends the same bytes it always did.
 #[derive(Serialize)]
 struct ReportPayload<'a> {
     #[serde(flatten)]
     metrics: &'a SystemMetrics,
     #[serde(skip_serializing_if = "is_empty")]
     check_results: &'a [CheckResult],
+    #[serde(skip_serializing_if = "no_services")]
+    service_states: &'a [ServiceStatus],
 }
 
 fn is_empty(results: &&[CheckResult]) -> bool {
     results.is_empty()
+}
+
+fn no_services(states: &&[ServiceStatus]) -> bool {
+    states.is_empty()
 }
 
 #[derive(Debug, Serialize)]
@@ -142,12 +149,13 @@ impl ApiClient {
     }
 
     /// Send metrics + logs to the server, plus any probe check results that are
-    /// waiting for delivery.
+    /// waiting for delivery and the state of the watched services.
     pub async fn report(
         &self,
         metrics: &SystemMetrics,
         logs: &[LogEntry],
         check_results: &[CheckResult],
+        service_states: &[ServiceStatus],
     ) -> anyhow::Result<ReportResponse> {
         let resp = self
             .client
@@ -156,6 +164,7 @@ impl ApiClient {
             .json(&ReportPayload {
                 metrics,
                 check_results,
+                service_states,
             })
             .send()
             .await?;
@@ -326,6 +335,7 @@ mod tests {
         let payload = ReportPayload {
             metrics: &metrics,
             check_results: &[],
+            service_states: &[],
         };
         let with_probe_field = serde_json::to_value(&payload).unwrap();
         let plain = serde_json::to_value(&metrics).unwrap();
@@ -342,6 +352,7 @@ mod tests {
         let payload = ReportPayload {
             metrics: &metrics,
             check_results: &results,
+            service_states: &[],
         };
         let json = serde_json::to_value(&payload).unwrap();
 
@@ -357,6 +368,57 @@ mod tests {
                 "ts": "2026-08-28T09:01:13Z"
             }])
         );
+    }
+
+    #[test]
+    fn service_states_ride_along_at_the_top_level() {
+        use crate::services::{ServiceState, ServiceStatus};
+        let metrics = sample_metrics();
+        let states = vec![ServiceStatus {
+            name: "nginx".into(),
+            state: ServiceState::Stopped,
+            start_type: Some("enabled".into()),
+        }];
+        let payload = ReportPayload {
+            metrics: &metrics,
+            check_results: &[],
+            service_states: &states,
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["hostname"], "probe01");
+        assert!(json.get("check_results").is_none());
+        assert_eq!(
+            json["service_states"],
+            serde_json::json!([{"name": "nginx", "state": "stopped", "start_type": "enabled"}])
+        );
+    }
+
+    #[test]
+    fn the_watched_service_list_arrives_in_the_config() {
+        let resp: ReportResponse = serde_json::from_str(
+            r#"{"ok": true, "config": {"log_levels": "1", "log_channels": "System",
+                "log_file_paths": "", "agent_log_level": "errors",
+                "watched_services": ["Spooler", "W32Time"]}}"#,
+        )
+        .unwrap();
+        let sc = resp.config.unwrap();
+        assert_eq!(
+            sc.watched_services.unwrap_or_default(),
+            vec!["Spooler".to_string(), "W32Time".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_old_server_or_a_null_list_means_nothing_to_watch() {
+        let resp: ReportResponse = serde_json::from_str(
+            r#"{"ok": true, "config": {"log_levels": "1", "log_channels": "System",
+                "log_file_paths": "", "agent_log_level": "errors"}}"#,
+        )
+        .unwrap();
+        assert!(resp.config.unwrap().watched_services.unwrap_or_default().is_empty());
+        let resp: ReportResponse =
+            serde_json::from_str(r#"{"ok": true, "config": {"watched_services": null}}"#).unwrap();
+        assert!(resp.config.unwrap().watched_services.unwrap_or_default().is_empty());
     }
 
     #[test]
