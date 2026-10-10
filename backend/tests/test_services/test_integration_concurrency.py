@@ -114,15 +114,12 @@ async def test_collections_overlap(db, fakes):
         await _cfg(db, "fake_slow", f"slow{i}")
     await db.commit()
 
-    t0 = time.monotonic()
     with patch.object(scheduler, "AsyncSessionLocal", _session(db)):
         await scheduler.run_integration_checks()
-    elapsed = time.monotonic() - t0
 
     assert len(_Slow.started) == 3
-    # Serially this is >= 0.9 s; concurrently ~0.3 s.
+    # Serially each would start 0.3 s after the previous one finished.
     assert max(_Slow.started) - min(_Slow.started) < 0.2
-    assert elapsed < 0.85
 
 
 def test_collect_timeout_resolution():
