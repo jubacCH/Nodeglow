@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from templating import templates
-import bcrypt
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db, is_setup_complete, set_setting
+from utils.password import hash_password
 
 router = APIRouter(prefix="/setup")
 
@@ -42,7 +42,7 @@ async def complete_setup(
     # Only create user if none exist
     count = (await db.execute(select(func.count()).select_from(User))).scalar()
     if count == 0:
-        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+        pw_hash = hash_password(password)
         db.add(User(username=username.strip() or "admin", password_hash=pw_hash, role="admin"))
 
     await set_setting(db, "site_name", site_name.strip() or "NODEGLOW")

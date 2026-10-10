@@ -16,6 +16,7 @@ from database import Session, User, get_db, get_current_user
 from models.settings import _hash_token, _hash_token_legacy, get_setting, set_setting
 from ratelimit import rate_limit, failed_auth_throttled
 from services.audit import log_action
+from utils.password import verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +353,7 @@ async def login(
 
     _dummy_hash = b"$2b$12$000000000000000000000uGHEjmFMntPDYjXJPBT3V44YS5gL0nS"
     stored_hash = user.password_hash.encode() if user else _dummy_hash
-    pw_ok = bcrypt.checkpw(body.password.encode(), stored_hash)
+    pw_ok = verify_password(body.password, stored_hash)
     if not user or not pw_ok:
         return await _fail()
 

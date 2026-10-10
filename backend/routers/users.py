@@ -1,4 +1,3 @@
-import bcrypt
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete as sa_delete, select
@@ -7,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import User, get_db
 from models.settings import Session as UserSession, _hash_token, _hash_token_legacy
 from ratelimit import rate_limit
-from utils.password import validate_password
+from utils.password import hash_password, validate_password, verify_password
 
 router = APIRouter(prefix="/users")
 api_router = APIRouter()
@@ -33,7 +32,7 @@ def _verify_password(user, candidate) -> bool:
     if (getattr(user, "auth_source", "local") or "local") == "ldap":
         return False
     try:
-        return bcrypt.checkpw(candidate.encode(), (user.password_hash or "").encode())
+        return verify_password(candidate, user.password_hash or "")
     except ValueError:
         return False
 
@@ -79,7 +78,7 @@ async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
     existing = (await db.execute(select(User).where(User.username == username))).scalar_one_or_none()
     if existing:
         return JSONResponse({"error": "Username already exists"}, status_code=409)
-    pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    pw_hash = hash_password(password)
     user = User(username=username, password_hash=pw_hash, role=role)
     db.add(user)
     await db.commit()
@@ -136,7 +135,7 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
         pw_error = validate_password(body["password"])
         if pw_error:
             return JSONResponse({"error": pw_error}, status_code=400)
-        user.password_hash = bcrypt.hashpw(body["password"].encode(), bcrypt.gensalt(rounds=12)).decode()
+        user.password_hash = hash_password(body["password"])
         await db.execute(sa_delete(UserSession).where(UserSession.user_id == user_id))
     await db.commit()
     return JSONResponse({"ok": True})
@@ -165,7 +164,7 @@ async def change_own_password(
     if pw_error:
         return JSONResponse({"error": pw_error}, status_code=400)
     if db_user:
-        db_user.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+        db_user.password_hash = hash_password(password)
         # Invalidate all other sessions (keep current one via new login)
         current_token = request.cookies.get("nodeglow_session")
         if current_token:
@@ -221,7 +220,7 @@ async def add_user(
     existing = (await db.execute(select(User).where(User.username == username.strip()))).scalar_one_or_none()
     if existing:
         return RedirectResponse(url="/users?error=exists", status_code=303)
-    pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    pw_hash = hash_password(password)
     db.add(User(username=username.strip(), password_hash=pw_hash, role=role))
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)
@@ -266,7 +265,7 @@ async def reset_password(
     user = await db.get(User, user_id)
     if not user:
         return RedirectResponse(url="/users", status_code=303)
-    user.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    user.password_hash = hash_password(password)
     await db.execute(sa_delete(UserSession).where(UserSession.user_id == user_id))
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)
