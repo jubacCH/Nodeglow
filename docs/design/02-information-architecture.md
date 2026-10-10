@@ -649,6 +649,12 @@ Wallboard-Modus (`/?mode=wallboard`): nur E1 und E2, grosse Schrift, ohne Naviga
 
 Sortiert nach Priorität. „Für“ verweist auf Befunde (F-xx, `01-ux-audit.md`) und Workflows (W-x).
 
+> **API für die neu gestaltete Oberfläche:** umgesetzt sind B-01, B-02 (`/api/v2/summary`), B-03
+> (`is_probe` in PATCH/GET, Probe-Frische), B-04 für Incidents, B-05, B-07, B-08
+> (`/api/v2/changes`), aus B-10 der letzte Besuch, B-15 (Verfügbarkeit ohne Wartung, globales Ziel)
+> und das Dashboard in einem Aufruf (`/api/v2/dashboard`). Felder, Herleitung und was nicht ableitbar
+> ist: [`05-dashboard-api.md`](05-dashboard-api.md).
+
 | ID | Arbeit | Inhalt | Für | Prio |
 |---|---|---|---|---|
 | B-01 | Einheitlicher, probe-bewusster Host-Status | `services/probes.statuses_for` in `/hosts/api/status`, `/api/v1/hosts`, `/api/dashboard` nutzen; Felder `state` (ok/degraded/down/unknown/maintenance/disabled), `state_reason`, `observed_at` | F-01, F-34, Frage 1, W2 | P1 |
