@@ -225,6 +225,12 @@ def test_preflight_rejects_foreign_head(tmp_path):
         step_preflight(ctx)
 
 
+def test_preflight_names_db_container_when_unresolved(tmp_path):
+    ctx = make_ctx(tmp_path, run_cmd=_git_responder(), db_container="")
+    with pytest.raises(StepError, match="DB_CONTAINER"):
+        step_preflight(ctx)
+
+
 def test_preflight_rejects_stopped_database(tmp_path):
     ctx = make_ctx(tmp_path, run_cmd=_git_responder({
         ("docker", "inspect", "-f", "{{.State.Running}}", "vigil-db-1"): CmdResult(1, "", "no such object"),

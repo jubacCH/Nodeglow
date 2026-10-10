@@ -236,6 +236,11 @@ def step_preflight(ctx: Ctx) -> str:
             f"HEAD is not on {EXPECTED_REF} (got {head.stdout.strip() or 'detached'})"
         )
 
+    if not ctx.db_container:
+        raise StepError(
+            f"Database container not found for compose project {ctx.compose_project!r}; "
+            "set DB_CONTAINER in .env"
+        )
     inspect = ctx.run_cmd(
         ["docker", "inspect", "-f", "{{.State.Running}}", ctx.db_container], timeout=15
     )
