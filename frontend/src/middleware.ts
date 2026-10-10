@@ -26,6 +26,11 @@ export function middleware(request: NextRequest) {
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
   if (!hasSession) {
     const loginUrl = new URL('/login', request.url);
+    // Remember where the visitor was going; /login honours it (same-origin
+    // paths only, see lib/redirect.ts).
+    if (pathname !== '/') {
+      loginUrl.searchParams.set('next', pathname + request.nextUrl.search);
+    }
     return NextResponse.redirect(loginUrl);
   }
 

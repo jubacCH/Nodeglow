@@ -81,6 +81,8 @@ interface SettingsData {
   ldap_editor_group: string;
   ldap_use_ssl: string;
   ldap_start_tls: string;
+  /** "1" (default) or "0"; absent on backends that predate the setting. */
+  ldap_tls_verify?: string;
 }
 
 interface ApiKeyEntry {
@@ -363,6 +365,7 @@ export default function SettingsPage() {
   const [ldapEditorGroup, setLdapEditorGroup] = useState('');
   const [ldapUseSsl, setLdapUseSsl] = useState(false);
   const [ldapStartTls, setLdapStartTls] = useState(false);
+  const [ldapTlsVerify, setLdapTlsVerify] = useState(true);
   const [ldapSaving, setLdapSaving] = useState(false);
   const [ldapTesting, setLdapTesting] = useState(false);
   const [ldapTestResult, setLdapTestResult] = useState<{ ok: boolean; error?: string; users_found?: number } | null>(null);
@@ -438,6 +441,8 @@ export default function SettingsPage() {
     setLdapEditorGroup(s.ldap_editor_group || '');
     setLdapUseSsl(s.ldap_use_ssl === '1');
     setLdapStartTls(s.ldap_start_tls === '1');
+    // Default on: only an explicit "0" turns certificate verification off.
+    setLdapTlsVerify(s.ldap_tls_verify !== '0');
   }, []);
 
   useEffect(() => {
@@ -983,6 +988,10 @@ export default function SettingsPage() {
                 <p className="text-xs text-slate-500 mt-0.5">Send alerts when incidents are created or resolved.</p>
               </div>
               <button
+                type="button"
+                role="switch"
+                aria-checked={notifyEnabled}
+                aria-label="Enable notifications"
                 onClick={() => setNotifyEnabled(!notifyEnabled)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   notifyEnabled ? 'bg-sky-500' : 'bg-white/[0.1]'
@@ -1296,6 +1305,10 @@ export default function SettingsPage() {
                 <p className="text-xs text-slate-500 mt-0.5">Send a weekly summary of incidents, host uptime, syslog stats, and SSL expiry. Requires SMTP configured above.</p>
               </div>
               <button
+                type="button"
+                role="switch"
+                aria-checked={digestEnabled}
+                aria-label="Weekly digest email"
                 onClick={() => setDigestEnabled(!digestEnabled)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                   digestEnabled ? 'bg-sky-500' : 'bg-white/[0.1]'
@@ -1868,7 +1881,16 @@ export default function SettingsPage() {
                         <input type="checkbox" className="ng-checkbox" checked={ldapStartTls} onChange={e => setLdapStartTls(e.target.checked)} />
                         <span className="text-xs text-slate-300">StartTLS</span>
                       </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" className="ng-checkbox" checked={ldapTlsVerify} onChange={e => setLdapTlsVerify(e.target.checked)} />
+                        <span className="text-xs text-slate-300">Verify TLS certificate</span>
+                      </label>
                     </div>
+                    {!ldapTlsVerify && (ldapUseSsl || ldapStartTls) && (
+                      <p className="text-[10px] text-amber-400 mt-2">
+                        Certificate verification is off — the connection is encrypted but the server&apos;s identity is not checked.
+                      </p>
+                    )}
                   </div>
 
                   {/* User Search */}
@@ -1928,6 +1950,7 @@ export default function SettingsPage() {
                           fd.append('ldap_editor_group', ldapEditorGroup);
                           fd.append('ldap_use_ssl', ldapUseSsl ? '1' : '0');
                           fd.append('ldap_start_tls', ldapStartTls ? '1' : '0');
+                          fd.append('ldap_tls_verify', ldapTlsVerify ? '1' : '0');
                           await api('/settings/ldap/save', { method: 'POST', body: fd });
                           toast.show('LDAP settings saved', 'success');
                           qc.invalidateQueries({ queryKey: ['settings'] });
@@ -1961,6 +1984,7 @@ export default function SettingsPage() {
                           fd.append('ldap_editor_group', ldapEditorGroup);
                           fd.append('ldap_use_ssl', ldapUseSsl ? '1' : '0');
                           fd.append('ldap_start_tls', ldapStartTls ? '1' : '0');
+                          fd.append('ldap_tls_verify', ldapTlsVerify ? '1' : '0');
                           await api('/settings/ldap/save', { method: 'POST', body: fd });
                           const res = await post<{ ok: boolean; error?: string; users_found?: number }>('/settings/ldap/test', {});
                           setLdapTestResult(res);

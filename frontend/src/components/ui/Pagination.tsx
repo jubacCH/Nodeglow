@@ -25,6 +25,7 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
         <button
           onClick={() => onPageChange(page - 1)}
           disabled={page === 0}
+          aria-label="Previous page"
           className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-white/[0.08] transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
           <ChevronLeft size={16} />
@@ -40,6 +41,8 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
             <button
               key={i}
               onClick={() => onPageChange(i)}
+              aria-label={`Page ${i + 1}`}
+              aria-current={i === page ? 'page' : undefined}
               className={`min-w-[28px] h-7 rounded-md text-xs font-medium transition-colors ${
                 i === page
                   ? 'accent-bg text-white'
@@ -53,6 +56,7 @@ export function Pagination({ page, pageSize, total, onPageChange }: PaginationPr
         <button
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages - 1}
+          aria-label="Next page"
           className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-white/[0.08] transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
           <ChevronRight size={16} />

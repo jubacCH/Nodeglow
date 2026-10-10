@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { GlassCard } from '@/components/ui/GlassCard';
+import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -12,12 +13,12 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { useHost, useHostHistory, useHosts } from '@/hooks/queries/useHosts';
 import { useAgents } from '@/hooks/queries/useAgents';
 import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import { ArrowLeft, RefreshCw, Cpu, MemoryStick, HardDrive, Clock, Activity, Network, Wifi, Pencil, Cable, Zap, Users, ArrowUpDown, FileText, AlertTriangle, Scan, Check, X, Lock, Shield } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { get, patch, post } from '@/lib/api';
+import { ApiError, get, patch, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { Modal } from '@/components/ui/Modal';
 import type { EChartsOption } from 'echarts';
@@ -204,9 +205,11 @@ export default function HostDetailPage() {
   const qc = useQueryClient();
   const toast = useToastStore((s) => s.show);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: host, isLoading } = useHost(hostId) as { data: any; isLoading: boolean };
+  const hostQuery = useHost(hostId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const host = hostQuery.data as any;
+  const { isLoading } = hostQuery;
   const { data: history, isLoading: historyLoading } = useHostHistory(hostId, 24);
-  const { data: allHosts } = useHosts();
 
   const { data: relatedIncidents } = useQuery({
     queryKey: ['host-incidents', hostId, host?.name],
@@ -265,9 +268,27 @@ export default function HostDetailPage() {
               ? 'online' as const
               : 'unknown' as const;
 
+  // A failed or 404 request must not render an empty host page.
+  if (!isLoading && !host && hostQuery.isError) {
+    const notFound = hostQuery.error instanceof ApiError && hostQuery.error.status === 404;
+    return (
+      <div>
+        <Breadcrumbs items={[{ label: 'Hosts', href: '/hosts' }, { label: `Host #${hostId}` }]} />
+        <GlassCard className="mt-4">
+          <QueryErrorState
+            error={hostQuery.error}
+            onRetry={notFound ? undefined : hostQuery.refetch}
+            title={notFound ? 'Host not found' : 'Could not load this host'}
+          />
+        </GlassCard>
+      </div>
+    );
+  }
+
   return (
     <div>
       <Breadcrumbs items={[{ label: 'Hosts', href: '/hosts' }, { label: host?.name ?? `Host #${hostId}` }]} />
+      {hostQuery.isError && host && <StaleDataBanner error={hostQuery.error} onRetry={hostQuery.refetch} />}
       <PageHeader
         title={isLoading ? 'Loading...' : (host?.name ?? 'Host')}
         description={
@@ -293,14 +314,14 @@ export default function HostDetailPage() {
                 Back
               </Button>
             </Link>
-            <Button variant="ghost" size="sm" onClick={() => setShowEdit(true)}>
-              <Pencil size={16} />
+            <Button variant="ghost" size="sm" onClick={() => setShowEdit(true)} aria-label="Edit host" title="Edit host">
+              <Pencil size={16} aria-hidden="true" />
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => {
+            <Button variant="ghost" size="sm" aria-label="Refresh" title="Refresh" onClick={() => {
               qc.invalidateQueries({ queryKey: ['host', hostId] });
               qc.invalidateQueries({ queryKey: ['host-history', hostId] });
             }}>
-              <RefreshCw size={16} />
+              <RefreshCw size={16} aria-hidden="true" />
             </Button>
           </div>
         }
@@ -1138,7 +1159,7 @@ export default function HostDetailPage() {
       )}
 
       {activeTab === 'ports' && hasPorts && (
-        <PortsTab ports={device.port_table} clients={device.connected_clients ?? []} allHosts={allHosts ?? []} />
+        <PortsTab ports={device.port_table} clients={device.connected_clients ?? []} />
       )}
 
       {activeTab === 'timeline' && (
@@ -1177,7 +1198,11 @@ function formatRate(bytesPerSec: number | null | undefined): string {
   return `${(bits / 1_000_000_000).toFixed(2)} Gbps`;
 }
 
-function PortsTab({ ports, clients, allHosts }: { ports: PortInfo[]; clients: ConnectedClient[]; allHosts: { id: number; hostname: string; name: string }[] }) {
+function PortsTab({ ports, clients }: { ports: PortInfo[]; clients: ConnectedClient[] }) {
+  // Only needed to link connected clients to their hosts — fetched when the
+  // Ports tab is opened instead of on every host detail page.
+  const { data: allHostsData } = useHosts();
+  const allHosts = useMemo(() => allHostsData ?? [], [allHostsData]);
   // Build lookup: IP → host id, MAC → host id
   const hostByIp = useMemo(() => {
     const map: Record<string, number> = {};
@@ -1437,6 +1462,10 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
                 {s === 'fail' && <span className="text-[10px] text-red-400">failed</span>}
               </div>
               <button
+                type="button"
+                role="switch"
+                aria-checked={active}
+                aria-label={label}
                 onClick={() => toggle(key, !active)}
                 className={`relative w-8 h-[18px] rounded-full transition-colors ${active ? 'bg-sky-500/60' : 'bg-white/10'}`}
               >
