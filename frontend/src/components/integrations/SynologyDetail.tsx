@@ -1,7 +1,10 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
-import { formatUptime } from '@/lib/utils';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { StatusPill } from '@/components/ui/StatusPill';
+import type { HealthState } from '@/lib/status';
+import { cn } from '@/lib/utils';
+import { KV, KVGrid, SectionTitle, UsageBar, isNum, tempClass, uptime } from './parts';
 
 interface SynologySystem {
   model: string;
@@ -25,86 +28,56 @@ interface SynologyData {
   storage_pools: SynologyPool[];
 }
 
-function barColor(pct: number): string {
-  if (pct >= 90) return 'bg-red-500';
-  if (pct >= 75) return 'bg-amber-500';
-  return 'bg-emerald-500';
-}
-
-function ProgressBar({ label, pct, detail }: { label: string; pct: number; detail?: string }) {
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-slate-400">
-        <span>{label}</span>
-        <span>{detail ?? `${pct.toFixed(1)}%`}</span>
-      </div>
-      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function poolStatusColor(status: string): string {
-  if (status === 'normal' || status === 'healthy') return 'text-emerald-400';
-  if (status === 'degraded') return 'text-amber-400';
-  return 'text-red-400';
+function poolState(status: string | null | undefined): HealthState {
+  if (!status) return 'unknown';
+  if (status === 'normal' || status === 'healthy') return 'ok';
+  if (status === 'degraded') return 'degraded';
+  return 'down';
 }
 
 export function SynologyDetail({ data }: { data: SynologyData }) {
-  const { system, storage_pools } = data;
+  const { storage_pools } = data;
+  const system = data.system ?? ({} as SynologySystem);
 
   return (
     <div className="space-y-6">
       {/* System info */}
-      <GlassCard className="p-5">
-        <h3 className="text-sm font-medium text-slate-300 mb-4">System Information</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-3">
-          <div>
-            <p className="text-xs text-slate-500">Model</p>
-            <p className="text-sm text-slate-200">{system.model}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">DSM Version</p>
-            <p className="text-sm text-slate-200">{system.dsm_version}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Uptime</p>
-            <p className="text-sm text-slate-200">{formatUptime(system.uptime_s)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Temperature</p>
-            <p className="text-sm text-slate-200">{system.temp_c}&deg;C</p>
-          </div>
+      <Card as="section">
+        <CardHeader title="System information" />
+        <KVGrid>
+          <KV label="Model">{system.model}</KV>
+          <KV label="DSM version" mono>{system.dsm_version}</KV>
+          <KV label="Uptime">{uptime(system.uptime_s)}</KV>
+          <KV label="Temperature">
+            {isNum(system.temp_c) ? <span className={cn('num', tempClass(system.temp_c, 60, 75))}>{system.temp_c} °C</span> : null}
+          </KV>
+        </KVGrid>
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <UsageBar label="CPU" pct={system.cpu_pct} />
+          <UsageBar label="Memory" pct={system.mem_pct} />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          <ProgressBar label="CPU" pct={system.cpu_pct} />
-          <ProgressBar label="Memory" pct={system.mem_pct} />
-        </div>
-      </GlassCard>
+      </Card>
 
       {/* Storage pools */}
       {storage_pools && storage_pools.length > 0 && (
-        <div>
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Storage Pools</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <section>
+          <SectionTitle>Storage pools</SectionTitle>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {storage_pools.map((pool) => (
-              <GlassCard key={pool.name} className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-200">{pool.name}</span>
-                  <span className={`text-xs font-medium ${poolStatusColor(pool.status)}`}>
-                    {pool.status}
-                  </span>
+              <Card key={pool.name} padding="sm" className="space-y-3">
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate text-ui font-medium text-fg">{pool.name}</span>
+                  <StatusPill status={poolState(pool.status)}>{pool.status || undefined}</StatusPill>
                 </div>
-                <ProgressBar
+                <UsageBar
                   label="Usage"
                   pct={pool.used_pct}
-                  detail={`${pool.used_human} / ${pool.total_human}`}
+                  detail={pool.used_human && pool.total_human ? `${pool.used_human} / ${pool.total_human}` : undefined}
                 />
-              </GlassCard>
+              </Card>
             ))}
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

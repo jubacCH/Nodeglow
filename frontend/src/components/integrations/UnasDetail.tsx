@@ -1,8 +1,12 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
+import { Card, CardHeader } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { formatUptime } from '@/lib/utils';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import type { HealthState } from '@/lib/status';
+import { cn } from '@/lib/utils';
+import { KV, KVGrid, KVList, KVRow, SectionTitle, TableCard, UsageBar, isNum, tempClass, uptime } from './parts';
 
 interface UnasSystem {
   hostname: string;
@@ -71,175 +75,139 @@ interface UnasData {
   totals: UnasTotals;
 }
 
-function barColor(pct: number): string {
-  if (pct >= 90) return 'bg-red-500';
-  if (pct >= 75) return 'bg-amber-500';
-  return 'bg-emerald-500';
+function boolState(v: boolean | null | undefined): HealthState {
+  return v === true ? 'ok' : v === false ? 'down' : 'unknown';
 }
 
-function ProgressBar({ label, pct, detail }: { label: string; pct: number; detail?: string }) {
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-slate-400">
-        <span>{label}</span>
-        <span>{detail ?? `${pct.toFixed(1)}%`}</span>
-      </div>
-      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-    </div>
-  );
+function gb(used: unknown, total: unknown, free?: unknown): string | undefined {
+  if (!isNum(used) || !isNum(total)) return undefined;
+  const base = `${used.toFixed(1)} / ${total.toFixed(1)} GB`;
+  return isNum(free) ? `${base} (${free.toFixed(1)} GB free)` : base;
 }
 
 export function UnasDetail({ data }: { data: UnasData }) {
-  const { system, disks, raids, storage_pools, totals } = data;
+  const { disks, raids, storage_pools } = data;
+  const system = data.system ?? ({} as UnasSystem);
+  const totals = data.totals ?? ({} as UnasTotals);
 
   return (
     <div className="space-y-6">
       {/* System info */}
-      <GlassCard className="p-5">
-        <h3 className="text-sm font-medium text-slate-300 mb-4">System Information</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-3">
-          <div>
-            <p className="text-xs text-slate-500">Hostname</p>
-            <p className="text-sm text-slate-200">{system.hostname}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Version</p>
-            <p className="text-sm text-slate-200">{system.version}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Uptime</p>
-            <p className="text-sm text-slate-200">{formatUptime(system.uptime_s)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Temperature</p>
-            <p className="text-sm text-slate-200">{system.temp_c}&deg;C</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-500">Memory</p>
-            <p className="text-sm text-slate-200">{system.mem_used_gb.toFixed(1)} / {system.mem_total_gb.toFixed(1)} GB</p>
-          </div>
+      <Card as="section">
+        <CardHeader title="System information" />
+        <KVGrid className="md:grid-cols-3 lg:grid-cols-5">
+          <KV label="Hostname" mono>{system.hostname}</KV>
+          <KV label="Version" mono>{system.version}</KV>
+          <KV label="Uptime">{uptime(system.uptime_s)}</KV>
+          <KV label="Temperature">
+            {isNum(system.temp_c) ? <span className={cn('num', tempClass(system.temp_c, 60, 75))}>{system.temp_c} °C</span> : null}
+          </KV>
+          <KV label="Memory">{gb(system.mem_used_gb, system.mem_total_gb)}</KV>
+        </KVGrid>
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <UsageBar label="CPU" pct={system.cpu_pct} />
+          <UsageBar label="Memory" pct={system.mem_pct} />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          <ProgressBar label="CPU" pct={system.cpu_pct} />
-          <ProgressBar label="Memory" pct={system.mem_pct} />
-        </div>
-      </GlassCard>
+      </Card>
 
       {/* Disk table */}
       {disks && disks.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-medium text-slate-300">
-              Disks ({totals.disks_ok}/{totals.disks_total} OK
-              {totals.disks_error > 0 && <span className="text-red-400">, {totals.disks_error} error</span>}
-              {totals.disks_hot > 0 && <span className="text-amber-400">, {totals.disks_hot} hot</span>})
-            </h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Name</th>
-                  <th className="px-4 py-2 text-left">Model</th>
-                  <th className="px-4 py-2 text-left">Type</th>
-                  <th className="px-4 py-2 text-right">Size</th>
-                  <th className="px-4 py-2 text-right">Temp</th>
-                  <th className="px-4 py-2 text-center">Status</th>
-                  <th className="px-4 py-2 text-center">SMART</th>
-                  <th className="px-4 py-2 text-right">Power-On</th>
-                </tr>
-              </thead>
-              <tbody>
-                {disks.map((d) => (
-                  <tr key={d.name} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-slate-200">{d.name}</td>
-                    <td className="px-4 py-2 text-slate-400">{d.model}</td>
-                    <td className="px-4 py-2">
-                      <Badge>{d.type}</Badge>
-                    </td>
-                    <td className="px-4 py-2 text-right text-slate-400">{d.size_gb.toFixed(0)} GB</td>
-                    <td className="px-4 py-2 text-right text-slate-400">{d.temp}&deg;C</td>
-                    <td className="px-4 py-2 text-center">
-                      <span className={d.ok ? 'text-emerald-400' : 'text-red-400'}>
-                        {d.status_label}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-center">
-                      <span className={d.smart_ok ? 'text-emerald-400' : 'text-red-400'}>
-                        {d.smart_ok ? 'OK' : 'FAIL'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-right text-slate-400">
-                      {d.power_on_hrs != null ? `${d.power_on_hrs.toLocaleString()} h` : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard
+          title="Disks"
+          meta={isNum(totals.disks_ok) && isNum(totals.disks_total) ? `${totals.disks_ok}/${totals.disks_total} OK` : undefined}
+          actions={
+            <>
+              {isNum(totals.disks_error) && totals.disks_error > 0 && <StatusPill status="down">{totals.disks_error} error</StatusPill>}
+              {isNum(totals.disks_hot) && totals.disks_hot > 0 && <StatusPill status="warning">{totals.disks_hot} hot</StatusPill>}
+            </>
+          }
+        >
+          <Table>
+            <THead>
+              <Tr>
+                <Th>Status</Th>
+                <Th>SMART</Th>
+                <Th>Name</Th>
+                <Th>Model</Th>
+                <Th>Type</Th>
+                <Th numeric>Size</Th>
+                <Th numeric>Temp</Th>
+                <Th numeric>Power-on</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {disks.map((d) => (
+                <Tr key={d.name}>
+                  <Td><StatusPill size="sm" status={boolState(d.ok)}>{d.status_label || undefined}</StatusPill></Td>
+                  <Td>
+                    <StatusPill size="sm" status={boolState(d.smart_ok)}>
+                      {d.smart_ok === true ? 'OK' : d.smart_ok === false ? 'Fail' : undefined}
+                    </StatusPill>
+                  </Td>
+                  <Td className="whitespace-nowrap font-mono">{d.name}</Td>
+                  <Td muted className="whitespace-nowrap">{d.model || '—'}</Td>
+                  <Td>{d.type ? <Badge>{d.type}</Badge> : '—'}</Td>
+                  <Td numeric muted className="whitespace-nowrap">{isNum(d.size_gb) ? `${d.size_gb.toFixed(0)} GB` : '—'}</Td>
+                  <Td numeric className={cn('whitespace-nowrap', tempClass(d.temp, 45, 55))}>{isNum(d.temp) ? `${d.temp} °C` : '—'}</Td>
+                  <Td numeric muted className="whitespace-nowrap">
+                    {isNum(d.power_on_hrs) ? `${d.power_on_hrs.toLocaleString()} h` : '—'}
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
 
-      {/* RAID status cards */}
+      {/* RAID arrays */}
       {raids && raids.length > 0 && (
-        <div>
-          <h3 className="text-sm font-medium text-slate-300 mb-3">
-            RAID Arrays ({totals.raids_healthy}/{totals.raids_total} healthy)
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <section>
+          <SectionTitle meta={isNum(totals.raids_healthy) && isNum(totals.raids_total) ? `${totals.raids_healthy}/${totals.raids_total} healthy` : undefined}>
+            RAID arrays
+          </SectionTitle>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {raids.map((r) => (
-              <GlassCard key={r.name} className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-200">{r.name}</span>
+              <Card key={r.name} padding="sm" className="space-y-3">
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <span className="truncate text-ui font-medium text-fg">{r.name}</span>
                   <div className="flex items-center gap-2">
-                    <Badge>{r.type_label}</Badge>
-                    <span className={`text-xs font-medium ${r.healthy ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {r.state}
-                    </span>
+                    {r.type_label && <Badge>{r.type_label}</Badge>}
+                    <StatusPill status={boolState(r.healthy)}>{r.state || undefined}</StatusPill>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-400">
-                  <span>Active devices</span><span className="text-slate-300">{r.active_devices}</span>
-                  <span>Failed devices</span>
-                  <span className={r.failed_devices > 0 ? 'text-red-400' : 'text-slate-300'}>
-                    {r.failed_devices}
-                  </span>
-                </div>
-                <ProgressBar
-                  label="Usage"
-                  pct={r.pct}
-                  detail={`${r.used_gb.toFixed(1)} / ${r.size_gb.toFixed(1)} GB`}
-                />
-              </GlassCard>
+                <KVList>
+                  <KVRow label="Active devices">{isNum(r.active_devices) ? r.active_devices : null}</KVRow>
+                  <KVRow label="Failed devices">
+                    {isNum(r.failed_devices) ? (
+                      <span className={r.failed_devices > 0 ? 'text-down' : undefined}>{r.failed_devices}</span>
+                    ) : null}
+                  </KVRow>
+                </KVList>
+                <UsageBar label="Usage" pct={r.pct} detail={gb(r.used_gb, r.size_gb)} />
+              </Card>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
-      {/* Storage pool usage bars */}
+      {/* Storage pools */}
       {storage_pools && storage_pools.length > 0 && (
-        <div>
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Storage Pools</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <section>
+          <SectionTitle>Storage pools</SectionTitle>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {storage_pools.map((p) => (
-              <GlassCard key={p.name} className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-200">{p.name}</span>
-                  <span className={`text-xs font-medium ${p.healthy ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {p.healthy ? 'healthy' : 'degraded'}
-                  </span>
+              <Card key={p.name} padding="sm" className="space-y-3">
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate text-ui font-medium text-fg">{p.name}</span>
+                  <StatusPill status={p.healthy === false ? 'degraded' : boolState(p.healthy)}>
+                    {p.healthy === true ? 'Healthy' : p.healthy === false ? 'Degraded' : undefined}
+                  </StatusPill>
                 </div>
-                <ProgressBar
-                  label="Usage"
-                  pct={p.pct}
-                  detail={`${p.used_gb.toFixed(1)} / ${p.size_gb.toFixed(1)} GB (${p.free_gb.toFixed(1)} GB free)`}
-                />
-              </GlassCard>
+                <UsageBar label="Usage" pct={p.pct} detail={gb(p.used_gb, p.size_gb, p.free_gb)} />
+              </Card>
             ))}
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

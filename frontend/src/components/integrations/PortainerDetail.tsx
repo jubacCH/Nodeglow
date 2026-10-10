@@ -1,7 +1,8 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
 import { Badge } from '@/components/ui/Badge';
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import { StatGrid, StatTile, StateLabel, TableCard } from './parts';
 
 interface PortainerContainer {
   name: string;
@@ -23,23 +24,18 @@ interface PortainerData {
   stacks: PortainerStack[];
 }
 
-function stateColor(state: string): string {
+/** Container state. Stopped/exited/paused are usually intentional → dimmed, not red. */
+function ContainerState({ state }: { state: string | null | undefined }) {
   switch (state) {
-    case 'running': return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+    case 'running': return <StateLabel status="ok">running</StateLabel>;
     case 'stopped':
-    case 'exited': return 'bg-red-500/20 text-red-400 border-red-500/30';
-    case 'paused': return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
-    default: return 'bg-slate-500/20 text-slate-400 border-slate-500/30';
+    case 'exited':
+    case 'paused':
+    case 'created': return <StateLabel status="disabled">{state}</StateLabel>;
+    case 'restarting': return <StateLabel status="warning">restarting</StateLabel>;
+    case 'dead': return <StateLabel status="down">dead</StateLabel>;
+    default: return <StateLabel status="unknown">{state || 'No data'}</StateLabel>;
   }
-}
-
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <GlassCard className="p-4 text-center">
-      <p className="text-2xl font-semibold text-slate-100">{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
-  );
 }
 
 export function PortainerDetail({ data }: { data: PortainerData }) {
@@ -50,77 +46,63 @@ export function PortainerDetail({ data }: { data: PortainerData }) {
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Containers" value={(containers ?? []).length} />
-        <StatCard label="Running" value={running} />
-        <StatCard label="Stopped" value={stopped} />
-        <StatCard label="Stacks" value={(stacks ?? []).length} />
-      </div>
+      <StatGrid>
+        <StatTile label="Total containers" value={containers ? containers.length : null} />
+        <StatTile label="Running" value={containers ? running : null} />
+        <StatTile label="Stopped" value={containers ? stopped : null} />
+        <StatTile label="Stacks" value={stacks ? stacks.length : null} />
+      </StatGrid>
 
       {/* Container table */}
       {containers && containers.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-medium text-slate-300">Containers</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Name</th>
-                  <th className="px-4 py-2 text-left">Image</th>
-                  <th className="px-4 py-2 text-left">State</th>
-                  <th className="px-4 py-2 text-left">Status</th>
-                  <th className="px-4 py-2 text-left">Ports</th>
-                </tr>
-              </thead>
-              <tbody>
-                {containers.map((c, i) => (
-                  <tr key={`${c.name}-${i}`} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-slate-200 font-medium">{c.name}</td>
-                    <td className="px-4 py-2 text-slate-400 font-mono text-xs truncate max-w-[200px]">{c.image}</td>
-                    <td className="px-4 py-2">
-                      <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium border ${stateColor(c.state)}`}>
-                        {c.state}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-slate-400 text-xs">{c.status}</td>
-                    <td className="px-4 py-2 text-slate-400 font-mono text-xs">{c.ports || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard title="Containers" meta={`${containers.length}`}>
+          <Table>
+            <THead>
+              <Tr>
+                <Th>State</Th>
+                <Th>Name</Th>
+                <Th>Image</Th>
+                <Th>Status</Th>
+                <Th>Ports</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {containers.map((c, i) => (
+                <Tr key={`${c.name}-${i}`}>
+                  <Td className="whitespace-nowrap"><ContainerState state={c.state} /></Td>
+                  <Td className="max-w-[220px] truncate font-medium">{c.name}</Td>
+                  <Td muted className="max-w-[200px] truncate font-mono text-meta">{c.image}</Td>
+                  <Td muted className="whitespace-nowrap text-meta">{c.status || '—'}</Td>
+                  <Td muted className="max-w-[240px] truncate font-mono text-meta">{c.ports || '—'}</Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
 
       {/* Stacks */}
       {stacks && stacks.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-medium text-slate-300">Stacks</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Name</th>
-                  <th className="px-4 py-2 text-left">Type</th>
-                  <th className="px-4 py-2 text-left">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stacks.map((s, i) => (
-                  <tr key={`${s.name}-${i}`} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-slate-200">{s.name}</td>
-                    <td className="px-4 py-2"><Badge>{s.type}</Badge></td>
-                    <td className="px-4 py-2 text-slate-400">{s.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard title="Stacks" meta={`${stacks.length}`}>
+          <Table>
+            <THead>
+              <Tr>
+                <Th>Name</Th>
+                <Th>Type</Th>
+                <Th>Status</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {stacks.map((s, i) => (
+                <Tr key={`${s.name}-${i}`}>
+                  <Td>{s.name}</Td>
+                  <Td><Badge>{s.type}</Badge></Td>
+                  <Td muted>{s.status || '—'}</Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
     </div>
   );

@@ -1,9 +1,10 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
-import { EChart } from '@/components/charts/LazyEChart';
-import type { EChartsOption } from 'echarts';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { Badge } from '@/components/ui/Badge';
+import { StatusPill } from '@/components/ui/StatusPill';
 import Link from 'next/link';
+import { BlockedAllowedChart, KV, KVGrid, StatGrid, StatTile, TopList, fixed, formatCount } from './parts';
 
 interface PiholeData {
   status: string;
@@ -21,119 +22,58 @@ interface PiholeData {
   reply_types?: Record<string, number>;
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <GlassCard className="p-4 text-center">
-      <p className="text-2xl font-semibold text-slate-100">{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
-  );
-}
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+/** Pi-hole blocking status: enabled = ok, disabled = warning (no filtering), missing = no data. */
+function BlockingStatus({ status }: { status: string | null | undefined }) {
+  if (!status) return <StatusPill status="unknown" />;
+  return <StatusPill status={status === 'enabled' ? 'ok' : 'warning'}>{status}</StatusPill>;
 }
 
 export function PiholeDetail({ data }: { data: PiholeData }) {
-  const pieOption: EChartsOption = {
-    tooltip: { trigger: 'item' },
-    series: [
-      {
-        type: 'pie',
-        radius: ['40%', '70%'],
-        avoidLabelOverlap: false,
-        itemStyle: { borderRadius: 6, borderColor: 'transparent', borderWidth: 2 },
-        label: { show: false },
-        data: [
-          { value: data.blocked_today, name: 'Blocked', itemStyle: { color: '#ef4444' } },
-          { value: data.queries_today - data.blocked_today, name: 'Allowed', itemStyle: { color: '#22c55e' } },
-        ],
-      },
-    ],
-  };
-
   return (
     <div className="space-y-6">
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Queries" value={formatNumber(data.queries_today)} />
-        <StatCard label="Blocked" value={formatNumber(data.blocked_today)} />
-        <StatCard label="Block Rate" value={`${data.blocked_pct.toFixed(1)}%`} />
-        <StatCard label="Domains on List" value={formatNumber(data.domains_blocked)} />
-      </div>
+      {/* Stat tiles */}
+      <StatGrid>
+        <StatTile label="Total queries" value={formatCount(data.queries_today)} />
+        <StatTile label="Blocked" value={formatCount(data.blocked_today)} />
+        <StatTile label="Block rate" value={fixed(data.blocked_pct)} unit="%" />
+        <StatTile label="Domains on list" value={formatCount(data.domains_blocked)} />
+      </StatGrid>
 
-      {/* Status row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Status" value={data.status} />
-        <StatCard label="Clients" value={data.clients} />
-        <StatCard label="API Version" value={`v${data.api_version}`} />
-        {data.gravity_last_updated && (
-          <StatCard label="Gravity Updated" value={data.gravity_last_updated} />
-        )}
-      </div>
+      {/* Status */}
+      <Card as="section">
+        <CardHeader title="Service" />
+        <KVGrid>
+          <KV label="Blocking"><BlockingStatus status={data.status} /></KV>
+          <KV label="Clients">{data.clients}</KV>
+          <KV label="API version" mono>{data.api_version != null ? `v${data.api_version}` : null}</KV>
+          <KV label="Gravity updated">{data.gravity_last_updated}</KV>
+        </KVGrid>
+      </Card>
 
-      {/* Pie chart + lists */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Pie chart */}
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Blocked vs Allowed</h3>
-          <EChart option={pieOption} height={220} />
-        </GlassCard>
-
-        {/* Top blocked */}
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Top Blocked Domains</h3>
-          <div className="space-y-2">
-            {(data.top_blocked ?? []).slice(0, 10).map((entry, i) => (
-              <div key={entry.domain ?? i} className="flex items-center justify-between text-xs">
-                <span className="text-slate-300 truncate mr-2 font-mono">{entry.domain}</span>
-                <span className="text-slate-500 tabular-nums shrink-0">{formatNumber(entry.count)}</span>
-              </div>
-            ))}
-            {(!data.top_blocked || data.top_blocked.length === 0) && (
-              <p className="text-xs text-slate-500">No data</p>
-            )}
-          </div>
-        </GlassCard>
-
-        {/* Top queries */}
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Top Queries</h3>
-          <div className="space-y-2">
-            {(data.top_queries ?? []).slice(0, 10).map((entry, i) => (
-              <div key={entry.domain ?? i} className="flex items-center justify-between text-xs">
-                <span className="text-slate-300 truncate mr-2 font-mono">{entry.domain}</span>
-                <span className="text-slate-500 tabular-nums shrink-0">{formatNumber(entry.count)}</span>
-              </div>
-            ))}
-            {(!data.top_queries || data.top_queries.length === 0) && (
-              <p className="text-xs text-slate-500">No data</p>
-            )}
-          </div>
-        </GlassCard>
+      {/* Chart + lists */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <BlockedAllowedChart blocked={data.blocked_today} total={data.queries_today} />
+        <TopList title="Top blocked domains" rows={(data.top_blocked ?? []).map((e) => ({ label: e.domain, count: e.count }))} />
+        <TopList title="Top queries" rows={(data.top_queries ?? []).map((e) => ({ label: e.domain, count: e.count }))} />
       </div>
 
       {/* Local DNS */}
       {data.local_dns && data.local_dns.length > 0 && (
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Local DNS Records ({data.local_dns.length})</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+        <Card as="section">
+          <CardHeader title="Local DNS records" meta={`${data.local_dns.length}`} />
+          <ul className="grid grid-cols-1 gap-x-6 gap-y-1 md:grid-cols-2">
             {data.local_dns.map((entry, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs py-1">
-                {entry.type === 'CNAME' && (
-                  <span className="text-[10px] px-1 py-0.5 rounded bg-sky-500/10 text-sky-400">CNAME</span>
-                )}
-                <span className="text-slate-300 font-mono truncate">{entry.domain}</span>
-                <span className="text-slate-500">→</span>
-                <Link href={'/hosts?q=' + encodeURIComponent(entry.ip)} className="text-sky-400 hover:underline font-mono truncate">
+              <li key={i} className="flex min-w-0 items-center gap-2 py-1 text-ui">
+                {entry.type === 'CNAME' && <Badge tone="accent">CNAME</Badge>}
+                <span className="truncate font-mono text-fg-2">{entry.domain}</span>
+                <span className="shrink-0 text-fg-3" aria-hidden="true">→</span>
+                <Link href={'/hosts?q=' + encodeURIComponent(entry.ip)} className="truncate font-mono text-accent hover:underline">
                   {entry.ip}
                 </Link>
-              </div>
+              </li>
             ))}
-          </div>
-        </GlassCard>
+          </ul>
+        </Card>
       )}
     </div>
   );

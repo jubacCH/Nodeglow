@@ -1,8 +1,9 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Badge } from '@/components/ui/Badge';
-import { formatUptime } from '@/lib/utils';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import type { HealthState } from '@/lib/status';
+import { KV, KVGrid, StatGrid, StatTile, StateLabel, TableCard, UsageBar, isNum, uptime } from './parts';
 
 interface FirewallInterface {
   name?: string;
@@ -23,93 +24,65 @@ interface FirewallData {
   alerts: number;
 }
 
-function barColor(pct: number): string {
-  if (pct >= 90) return 'bg-red-500';
-  if (pct >= 75) return 'bg-amber-500';
-  return 'bg-emerald-500';
-}
-
-function ProgressBar({ label, pct }: { label: string; pct: number }) {
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-slate-400">
-        <span>{label}</span>
-        <span>{pct.toFixed(1)}%</span>
-      </div>
-      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <GlassCard className="p-4 text-center">
-      <p className="text-2xl font-semibold text-slate-100">{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
-  );
+function ifaceState(status: string | undefined): HealthState {
+  const s = status?.toLowerCase();
+  if (s === 'up') return 'ok';
+  if (s === 'down' || s === 'no carrier') return 'down';
+  return 'unknown';
 }
 
 export function FirewallDetail({ data }: { data: FirewallData }) {
+  const alerts = isNum(data.alerts) ? data.alerts : null;
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Type" value={data.fw_type.toUpperCase()} />
-        <StatCard label="Uptime" value={formatUptime(data.uptime_s)} />
-        <StatCard label="Interfaces" value={data.interfaces?.length ?? 0} />
-        <StatCard label="Alerts" value={data.alerts ?? 0} />
-      </div>
+      <StatGrid>
+        <StatTile label="Type" value={data.fw_type ? data.fw_type.toUpperCase() : null} />
+        <StatTile label="Uptime" value={uptime(data.uptime_s)} />
+        <StatTile label="Interfaces" value={data.interfaces ? data.interfaces.length : null} />
+        <StatTile label="Alerts" value={alerts} state={alerts !== null && alerts > 0 ? 'warning' : undefined} />
+      </StatGrid>
 
       {/* System info + metrics */}
-      <GlassCard className="p-4 space-y-4">
-        <h3 className="text-sm font-medium text-slate-300">System</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs">
-          <div><span className="text-slate-500">Hostname</span><p className="text-slate-200 mt-1 font-mono">{data.hostname}</p></div>
-          <div><span className="text-slate-500">Version</span><p className="text-slate-300 mt-1">{data.version}</p></div>
-          <div><span className="text-slate-500">Firewall</span><p className="text-slate-300 mt-1">{data.fw_type}</p></div>
+      <Card as="section" className="space-y-4">
+        <CardHeader title="System" className="mb-0" />
+        <KVGrid className="md:grid-cols-3">
+          <KV label="Hostname" mono>{data.hostname}</KV>
+          <KV label="Version" mono>{data.version}</KV>
+          <KV label="Firewall">{data.fw_type}</KV>
+        </KVGrid>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <UsageBar label="CPU" pct={data.cpu_pct} />
+          <UsageBar label="Memory" pct={data.mem_pct} />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <ProgressBar label="CPU" pct={data.cpu_pct} />
-          <ProgressBar label="Memory" pct={data.mem_pct} />
-        </div>
-      </GlassCard>
+      </Card>
 
       {/* Interfaces */}
       {data.interfaces && data.interfaces.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-medium text-slate-300">Interfaces</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Name</th>
-                  <th className="px-4 py-2 text-left">Status</th>
-                  <th className="px-4 py-2 text-left">IP Address</th>
-                  <th className="px-4 py-2 text-left">Media</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.interfaces.map((iface, i) => (
-                  <tr key={iface.name ?? i} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-slate-300 font-mono">{iface.name ?? '—'}</td>
-                    <td className="px-4 py-2">
-                      <Badge variant="severity" severity={iface.status === 'up' ? 'info' : 'warning'}>
-                        {iface.status ?? 'unknown'}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-2 text-slate-400 font-mono">{iface.ipaddr ?? '—'}</td>
-                    <td className="px-4 py-2 text-slate-400">{iface.media ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard title="Interfaces" meta={`${data.interfaces.length}`}>
+          <Table>
+            <THead>
+              <Tr>
+                <Th>Status</Th>
+                <Th>Name</Th>
+                <Th>IP address</Th>
+                <Th>Media</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {data.interfaces.map((iface, i) => (
+                <Tr key={iface.name ?? i}>
+                  <Td className="whitespace-nowrap">
+                    <StateLabel status={ifaceState(iface.status)}>{iface.status ?? 'No data'}</StateLabel>
+                  </Td>
+                  <Td className="font-mono">{iface.name ?? '—'}</Td>
+                  <Td muted className="font-mono">{iface.ipaddr || '—'}</Td>
+                  <Td muted>{iface.media || '—'}</Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
     </div>
   );
