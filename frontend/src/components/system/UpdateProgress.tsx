@@ -15,17 +15,24 @@ import {
 const POLL_INTERVAL_MS = 2000;
 
 function StepIcon({ status }: { status: UpdateStep['status'] }) {
-  if (status === 'ok') return <Check size={14} className="text-emerald-400 shrink-0" />;
-  if (status === 'failed') return <AlertTriangle size={14} className="text-rose-400 shrink-0" />;
-  if (status === 'running') return <Loader2 size={14} className="text-sky-400 shrink-0 animate-spin" />;
-  return <Circle size={14} className="text-slate-600 shrink-0" />;
+  if (status === 'ok') return <Check size={14} aria-hidden="true" className="shrink-0 text-ok" />;
+  if (status === 'failed') return <AlertTriangle size={14} aria-hidden="true" className="shrink-0 text-down" />;
+  if (status === 'running') return <Loader2 size={14} aria-hidden="true" className="shrink-0 animate-spin text-accent" />;
+  return <Circle size={14} aria-hidden="true" className="shrink-0 text-fg-3" />;
 }
 
 const BANNER_STYLES: Record<string, string> = {
-  running: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
-  restarting: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-  success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
-  error: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
+  running: 'border-border-2 bg-surface-2 text-fg',
+  restarting: 'border-degraded/30 bg-degraded-soft text-degraded',
+  success: 'border-ok/30 bg-ok-soft text-ok',
+  error: 'border-down/30 bg-down-soft text-down',
+};
+
+const STEP_STATE_LABEL: Record<UpdateStep['status'], string> = {
+  pending: 'pending',
+  running: 'running',
+  ok: 'done',
+  failed: 'failed',
 };
 
 export function UpdateProgress({
@@ -84,18 +91,18 @@ export function UpdateProgress({
   return (
     <div className="mt-3 space-y-3">
       {banner && (
-        <div className={`rounded border px-3 py-2 text-xs ${BANNER_STYLES[banner.kind]}`}>
+        <div role={banner.kind === 'error' ? 'alert' : 'status'} className={`rounded-ctl border px-3 py-2 text-meta ${BANNER_STYLES[banner.kind]}`}>
           <div className="flex items-center gap-2 font-medium">
-            {banner.kind === 'restarting' && <RefreshCw size={13} className="animate-spin" />}
+            {banner.kind === 'restarting' && <RefreshCw size={13} aria-hidden="true" className="animate-spin" />}
             {banner.title}
           </div>
-          {banner.detail && <p className="mt-1 opacity-80 break-words">{banner.detail}</p>}
+          {banner.detail && <p className="mt-1 break-words text-fg-2">{banner.detail}</p>}
         </div>
       )}
 
-      <ol className="space-y-1.5">
+      <ol className="space-y-1.5" aria-label="Update steps">
         {state.steps.map((step) => (
-          <li key={step.name} className="flex items-start gap-2 text-xs">
+          <li key={step.name} className="flex items-start gap-2 text-meta">
             <span className="mt-0.5">
               <StepIcon status={restarting && step.name === 'restart' ? 'running' : step.status} />
             </span>
@@ -103,16 +110,17 @@ export function UpdateProgress({
               <span
                 className={
                   step.status === 'pending'
-                    ? 'text-slate-500'
+                    ? 'text-fg-3'
                     : step.status === 'failed'
-                      ? 'text-rose-300'
-                      : 'text-slate-300'
+                      ? 'text-down'
+                      : 'text-fg'
                 }
               >
                 {stepLabel(step.name)}
+                <span className="sr-only"> ({STEP_STATE_LABEL[restarting && step.name === 'restart' ? 'running' : step.status]})</span>
               </span>
               {step.detail && (
-                <span className="block text-slate-500 break-words">{step.detail}</span>
+                <span className="block break-words font-mono text-fg-3">{step.detail}</span>
               )}
             </span>
           </li>
