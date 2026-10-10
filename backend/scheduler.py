@@ -567,6 +567,7 @@ async def cleanup_old_results():
         int_ret = int(await get_setting(db, "integration_retention_days", "7"))
         ev_ret = int(await get_setting(db, "incident_event_retention_days", "30"))
         tpl_ret = int(await get_setting(db, "template_retention_days", "90"))
+        tpl_single_ret = int(await get_setting(db, "template_singleton_retention_days", "7"))
 
     async with AsyncSessionLocal() as db:
         await snap_svc.cleanup_all(db, int_ret)
@@ -580,9 +581,14 @@ async def cleanup_old_results():
         ev_deleted = await cleanup_incident_events(db, ev_ret)
         # Log templates are never overwritten, only added to — without a
         # retention pass the table grows for the lifetime of the installation.
-        from services.log_intelligence import cleanup_log_templates
-        tpl_deleted = await cleanup_log_templates(db, tpl_ret)
+        from services.log_intelligence import cleanup_log_templates, load_template_cache
+        tpl_deleted = await cleanup_log_templates(db, tpl_ret, tpl_single_ret)
         await db.commit()
+        if tpl_deleted:
+            # The in-memory hash -> id cache still lists the deleted rows. A
+            # template seen again would count as known, its counts would go
+            # to an UPDATE matching nothing, and it would never be re-created.
+            await load_template_cache(db)
 
     logger.info(
         "Cleanup done (integrations: %dd, incident events: %dd/%d pruned, "
