@@ -9,6 +9,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+### Fixed
+- Release workflow: cosign-installer v4 (v3 cannot install cosign 3).
+
 ## [2.0.0-rc.3] - 2026-10-10
 
 ### Changed
@@ -18,7 +21,6 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ### Fixed
 - Updater image: cosign 3.1.3 (grpc-go CVE-2026-33186 in cosign 2.x).
-- Release workflow: cosign-installer v4 (v3 cannot install cosign 3).
 
 ## [2.0.0-rc.2] - 2026-10-10
 
