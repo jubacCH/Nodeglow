@@ -2,14 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, Plus, Trash2, Pencil, Shield, ShieldCheck, Terminal, MonitorDot } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Lock, Plus, Trash2, Pencil, Shield, ShieldCheck, Terminal, MonitorDot } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { Badge } from '@/components/ui/Badge';
+import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Field, Input, Select, Textarea } from '@/components/ui/Field';
+import { QueryState } from '@/components/ui/QueryState';
+import { TableContainer, Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
 import { get, post, api, del } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 
@@ -32,11 +37,11 @@ interface CredentialForm {
 
 /* ---------- Constants ---------- */
 
-const TYPE_META: Record<CredentialType, { label: string; color: string; icon: typeof Shield }> = {
-  snmp_v2c: { label: 'SNMPv2c', color: 'text-sky-400 bg-sky-500/15 border-sky-500/30', icon: Shield },
-  snmp_v3:  { label: 'SNMPv3',  color: 'text-violet-400 bg-violet-500/15 border-violet-500/30', icon: ShieldCheck },
-  winrm:    { label: 'WinRM',   color: 'text-amber-400 bg-amber-500/15 border-amber-500/30', icon: MonitorDot },
-  ssh:      { label: 'SSH',     color: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30', icon: Terminal },
+const TYPE_META: Record<CredentialType, { label: string; icon: typeof Shield }> = {
+  snmp_v2c: { label: 'SNMPv2c', icon: Shield },
+  snmp_v3:  { label: 'SNMPv3',  icon: ShieldCheck },
+  winrm:    { label: 'WinRM',   icon: MonitorDot },
+  ssh:      { label: 'SSH',     icon: Terminal },
 };
 
 const AUTH_PROTOCOLS = ['SHA', 'SHA256', 'MD5'] as const;
@@ -86,12 +91,6 @@ function emptyData(type: CredentialType): Record<string, string> {
   return data;
 }
 
-const inputCls =
-  'w-full rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500/40 transition-colors';
-
-const selectCls =
-  'w-full rounded-md border border-white/[0.08] bg-[var(--ng-surface)] px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500/40 transition-colors [&>option]:text-[var(--ng-text-primary)]';
-
 /* ---------- Component ---------- */
 
 export default function CredentialsPage() {
@@ -103,10 +102,21 @@ export default function CredentialsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Credential | null>(null);
   const [form, setForm] = useState<CredentialForm>({ name: '', type: 'snmp_v2c', data: emptyData('snmp_v2c') });
+  const [nameError, setNameError] = useState(false);
+  // Secret inputs are masked by default; the eye button reveals what is being typed.
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+
+  function toggleReveal(key: string) {
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
 
   /* ----- Queries ----- */
 
-  const { data: credentials, isLoading } = useQuery<Credential[]>({
+  const query = useQuery<Credential[]>({
     queryKey: ['credentials'],
     queryFn: () => get('/api/credentials/list'),
   });
@@ -161,6 +171,8 @@ export default function CredentialsPage() {
   function closeModal() {
     setModalOpen(false);
     setEditing(null);
+    setNameError(false);
+    setRevealed(new Set());
   }
 
   function handleTypeChange(type: CredentialType) {
@@ -174,7 +186,7 @@ export default function CredentialsPage() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) {
-      toast.show('Name is required', 'warning');
+      setNameError(true);
       return;
     }
     if (editing) {
@@ -198,118 +210,130 @@ export default function CredentialsPage() {
     <div>
       <PageHeader
         title="Credentials"
-        description="Stored credentials for integrations"
+        description="Encrypted credentials for SNMP, WinRM and SSH. Stored secrets are never shown again."
         actions={
-          <Button onClick={openCreate} size="sm">
-            <Plus size={15} />
-            Add Credential
+          <Button onClick={openCreate}>
+            <Plus size={15} aria-hidden="true" />
+            Add credential
           </Button>
         }
       />
 
-      <GlassCard className="p-0 overflow-hidden">
-        {isLoading ? (
-          <div className="p-6 space-y-3">
-            {[...Array(3)].map((_, i) => (
-              <Skeleton key={i} className="h-12 w-full" />
-            ))}
-          </div>
-        ) : !credentials?.length ? (
-          <EmptyState
-            icon={KeyRound}
-            title="No credentials stored"
-            description="Add your first credential to authenticate SNMP, WinRM, SSH or REST integrations. Stored values are encrypted with Fernet."
-            action={
-              <Button onClick={openCreate} size="sm">
-                <Plus size={14} />
-                Add Credential
-              </Button>
-            }
-          />
-        ) : (
-          /* Table */
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06] text-left text-xs text-slate-400 uppercase tracking-wider">
-                <th className="px-6 py-3 font-medium">Name</th>
-                <th className="px-6 py-3 font-medium">Type</th>
-                <th className="px-6 py-3 font-medium hidden sm:table-cell">Created</th>
-                <th className="px-6 py-3 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
-              {credentials.map((cred) => {
-                const meta = TYPE_META[cred.type];
-                const Icon = meta.icon;
-                return (
-                  <tr key={cred.id} className="hover:bg-white/[0.06] transition-colors">
-                    <td className="px-6 py-3 text-slate-200 font-medium">
-                      <div className="flex items-center gap-2">
-                        <KeyRound size={14} className="text-slate-500" />
-                        {cred.name}
-                      </div>
-                    </td>
-                    <td className="px-6 py-3">
-                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium border ${meta.color}`}>
-                        <Icon size={12} />
-                        {meta.label}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 text-slate-400 hidden sm:table-cell">
-                      {cred.created
-                        ? new Date(cred.created).toLocaleDateString('en-US', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                          })
-                        : '\u2014'}
-                    </td>
-                    <td className="px-6 py-3 text-right">
-                      <div className="inline-flex items-center gap-1">
-                        <button
-                          onClick={() => openEdit(cred)}
-                          className="p-1.5 rounded-md text-slate-400 hover:text-sky-400 hover:bg-sky-500/10 transition-colors"
-                          title="Edit"
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(cred)}
-                          className="p-1.5 rounded-md text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                          title="Delete"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </GlassCard>
+      <Card padding="none">
+        <QueryState
+          query={query}
+          errorTitle="Could not load credentials"
+          loading={
+            <div className="space-y-3 p-5" aria-busy="true" aria-label="Loading credentials">
+              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+            </div>
+          }
+          empty={
+            <EmptyState
+              icon={KeyRound}
+              title="No credentials stored"
+              description="Add your first credential to authenticate SNMP, WinRM, SSH or REST integrations. Stored values are encrypted with Fernet."
+              action={
+                <Button onClick={openCreate} size="sm">
+                  <Plus size={14} aria-hidden="true" />
+                  Add credential
+                </Button>
+              }
+            />
+          }
+        >
+          {(rows) => (
+            <TableContainer>
+              <Table className="min-w-[560px]">
+                <THead>
+                  <Tr>
+                    <Th>Name</Th>
+                    <Th>Type</Th>
+                    <Th>Secret</Th>
+                    <Th>Created</Th>
+                    <Th><span className="sr-only">Actions</span></Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {rows.map((cred) => {
+                    const meta = TYPE_META[cred.type] ?? { label: cred.type, icon: KeyRound };
+                    const Icon = meta.icon;
+                    return (
+                      <Tr key={cred.id}>
+                        <Td className="max-w-[280px]">
+                          <span className="flex min-w-0 items-center gap-2 font-medium text-fg">
+                            <KeyRound size={14} className="shrink-0 text-fg-3" aria-hidden="true" />
+                            <span className="truncate">{cred.name}</span>
+                          </span>
+                        </Td>
+                        <Td>
+                          <Badge>
+                            <Icon size={11} aria-hidden="true" />
+                            {meta.label}
+                          </Badge>
+                        </Td>
+                        <Td>
+                          <span className="inline-flex items-center gap-1.5 text-meta text-fg-2">
+                            <Lock size={12} aria-hidden="true" />
+                            <span aria-hidden="true" className="font-mono tracking-wider text-fg-3">••••••••</span>
+                            <span>Encrypted</span>
+                          </span>
+                        </Td>
+                        <Td muted className="whitespace-nowrap">
+                          {cred.created
+                            ? new Date(cred.created).toLocaleDateString('en-US', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                              })
+                            : '—'}
+                        </Td>
+                        <Td className="whitespace-nowrap text-right">
+                          <IconButton size="sm" aria-label={`Edit ${cred.name}`} title="Edit" onClick={() => openEdit(cred)}>
+                            <Pencil size={14} aria-hidden="true" />
+                          </IconButton>
+                          <IconButton size="sm" aria-label={`Delete ${cred.name}`} title="Delete" onClick={() => handleDelete(cred)}>
+                            <Trash2 size={14} aria-hidden="true" />
+                          </IconButton>
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableContainer>
+          )}
+        </QueryState>
+      </Card>
 
       {/* ----- Add / Edit Modal ----- */}
-      <Modal open={modalOpen} onClose={closeModal} title={editing ? 'Edit Credential' : 'Add Credential'}>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Name */}
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Name</label>
-            <input
-              className={inputCls}
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        title={editing ? `Edit ${editing.name}` : 'Add credential'}
+        description={editing ? 'Stored secrets are not shown. Leave secret fields blank to keep the existing values.' : 'Secrets are encrypted at rest and cannot be viewed after saving.'}
+        footer={
+          <>
+            <Button type="button" variant="secondary" onClick={closeModal}>
+              Cancel
+            </Button>
+            <Button type="submit" form="credential-form" loading={isSaving}>
+              {isSaving ? 'Saving…' : editing ? 'Update' : 'Create'}
+            </Button>
+          </>
+        }
+      >
+        <form id="credential-form" onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <Field label="Name" required error={nameError ? 'Name is required.' : undefined}>
+            <Input
               value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="e.g. Core Switch SNMP"
-              autoFocus
+              onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); setNameError(false); }}
+              placeholder="e.g. Core switch SNMP"
             />
-          </div>
+          </Field>
 
-          {/* Type */}
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Type</label>
-            <select
-              className={selectCls}
+          <Field label="Type">
+            <Select
               value={form.type}
               onChange={(e) => handleTypeChange(e.target.value as CredentialType)}
             >
@@ -318,64 +342,69 @@ export default function CredentialsPage() {
                   {TYPE_META[t].label}
                 </option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
 
-          {/* Divider */}
-          <div className="border-t border-white/[0.06]" />
+          <div className="border-t border-border" />
 
-          {/* Dynamic fields */}
-          {FIELDS[form.type].map((field) => (
-            <div key={field.key}>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">{field.label}</label>
-
-              {field.type === 'select' && field.options ? (
-                <select
-                  className={selectCls}
-                  value={form.data[field.key] ?? ''}
-                  onChange={(e) => handleDataChange(field.key, e.target.value)}
-                >
-                  {field.options.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
-                  ))}
-                </select>
-              ) : field.type === 'textarea' ? (
-                <textarea
-                  className={`${inputCls} min-h-[100px] font-mono text-xs`}
-                  value={form.data[field.key] ?? ''}
-                  onChange={(e) => handleDataChange(field.key, e.target.value)}
-                  placeholder={field.placeholder}
-                  rows={4}
-                />
-              ) : (
-                <input
-                  className={inputCls}
-                  type={field.type}
-                  value={form.data[field.key] ?? ''}
-                  onChange={(e) => handleDataChange(field.key, e.target.value)}
-                  placeholder={editing && field.type === 'password' ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : field.placeholder}
-                />
-              )}
-            </div>
-          ))}
-
-          {editing && (
-            <p className="text-xs text-slate-500">
-              Leave password fields blank to keep existing values.
-            </p>
-          )}
-
-          {/* Actions */}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="ghost" size="sm" onClick={closeModal}>
-              Cancel
-            </Button>
-            <Button type="submit" size="sm" disabled={isSaving}>
-              {isSaving ? 'Saving\u2026' : editing ? 'Update' : 'Create'}
-            </Button>
-          </div>
+          {FIELDS[form.type].map((field) => {
+            if (field.type === 'select' && field.options) {
+              return (
+                <Field key={field.key} label={field.label}>
+                  <Select
+                    value={form.data[field.key] ?? ''}
+                    onChange={(e) => handleDataChange(field.key, e.target.value)}
+                  >
+                    {field.options.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              );
+            }
+            const secret = field.type === 'password' || field.key === 'private_key';
+            const shown = revealed.has(field.key);
+            const placeholder = editing && secret ? '••••••••  (unchanged)' : field.placeholder;
+            return (
+              <div key={field.key} className="relative">
+                <Field label={field.label} hint={editing && secret ? 'Stored value hidden. Leave blank to keep it.' : undefined}>
+                  {field.type === 'textarea' ? (
+                    <Textarea
+                      className={cn('min-h-[100px] pr-10 font-mono text-meta', secret && !shown && '[-webkit-text-security:disc]')}
+                      value={form.data[field.key] ?? ''}
+                      onChange={(e) => handleDataChange(field.key, e.target.value)}
+                      placeholder={placeholder}
+                      rows={4}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  ) : (
+                    <Input
+                      className={secret ? 'pr-10' : undefined}
+                      type={secret && !shown ? 'password' : 'text'}
+                      value={form.data[field.key] ?? ''}
+                      onChange={(e) => handleDataChange(field.key, e.target.value)}
+                      autoComplete={secret ? 'new-password' : 'off'}
+                      placeholder={placeholder}
+                    />
+                  )}
+                </Field>
+                {secret && (
+                  <IconButton
+                    size="sm"
+                    className="absolute right-1 top-[26px]"
+                    aria-label={shown ? `Hide ${field.label}` : `Show ${field.label}`}
+                    aria-pressed={shown}
+                    onClick={() => toggleReveal(field.key)}
+                  >
+                    {shown ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+                  </IconButton>
+                )}
+              </div>
+            );
+          })}
         </form>
       </Modal>
       {ConfirmDialogElement}
