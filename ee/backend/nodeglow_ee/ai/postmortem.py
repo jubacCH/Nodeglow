@@ -9,6 +9,7 @@ from datetime import datetime
 from models.base import AsyncSessionLocal
 from models.incident import Incident
 from services.ai_config import is_ai_enabled
+from nodeglow_ee import license_runtime
 from nodeglow_ee.ai.context import gather_incident_context
 from services.ai_client import generate_completion
 
@@ -31,6 +32,9 @@ async def generate_postmortem(incident_id: int) -> None:
     All errors are caught and stored — this must never crash.
     """
     try:
+        if not await license_runtime.is_active("ai_postmortem"):
+            log.info("Postmortem skipped for incident %d: not covered by the license", incident_id)
+            return
         async with AsyncSessionLocal() as db:
             # Opt-in: without it nothing about the incident leaves Nodeglow.
             # Nothing is stored either, so enabling AI later and pressing

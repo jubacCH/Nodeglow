@@ -102,6 +102,10 @@ services:
       NODEGLOW_ALLOW_SHARED_ENROLLMENT: ${NODEGLOW_ALLOW_SHARED_ENROLLMENT:-}
       # "1" runs the community edition even though ee/ is built in.
       NODEGLOW_DISABLE_EE: ${NODEGLOW_DISABLE_EE:-}
+      # Enterprise license key, or a path to a file holding it (e.g.
+      # /data/nodeglow-license.txt). Optional: admins can also install it
+      # under Settings → License. See docs/OPERATIONS.md.
+      NODEGLOW_LICENSE: ${NODEGLOW_LICENSE:-}
       # Logging: LOG_LEVEL=DEBUG|INFO|WARNING|ERROR, LOG_FORMAT=text|json.
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}

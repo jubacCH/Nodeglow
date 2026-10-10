@@ -19,7 +19,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '@/components/ui/Table';
 import { Tag } from '@/components/ui/Tag';
 import { aiUnavailableMessage, useAiStatus, type AiStatus } from '@/hooks/queries/useAiStatus';
-import { ENTERPRISE_NOTES, hasFeature, lacksFeature, useFeatures } from '@/hooks/queries/useFeatures';
+import { enterpriseNote, hasFeature, lacksFeature, useFeatures } from '@/hooks/queries/useFeatures';
 import { useIncidentAction } from '@/hooks/queries/useAlerts';
 import { apiErrorMessage, get, post } from '@/lib/api';
 import {
@@ -279,6 +279,7 @@ export default function IncidentDetailPage() {
                   onRegenerate={() => query.refetch()}
                   aiStatus={aiStatus}
                   installed={postmortemInstalled}
+                  enterpriseNote={enterpriseNote(features, 'ai_postmortem')}
                 />
               )}
 
@@ -337,15 +338,18 @@ function TimelineCard({ events, total }: { events: TimelineEvent[]; total?: numb
 /* ---------- Postmortem ---------- */
 
 function PostmortemSection({
-  incidentId, postmortem, generatedAt, onRegenerate, aiStatus, installed,
+  incidentId, postmortem, generatedAt, onRegenerate, aiStatus, installed, enterpriseNote: note,
 }: {
   incidentId: number;
   postmortem?: string | null;
   generatedAt?: string | null;
   onRegenerate: () => void;
   aiStatus?: AiStatus;
-  /** False in the community edition: no generation, only a stored draft is shown. */
+  /** False in the community edition or without a usable license: no
+   *  generation, only a stored draft is shown. */
   installed: boolean;
+  /** Shown instead of a draft when `installed` is false. */
+  enterpriseNote: string;
 }) {
   const toast = useToastStore((s) => s.show);
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
@@ -383,7 +387,7 @@ function PostmortemSection({
         actions={postmortem ? regen(isFailed ? 'Retry' : 'Regenerate') : undefined}
       />
       {!installed && (!postmortem || isFailed) ? (
-        <p className="text-ui text-fg-2" data-testid="postmortem-enterprise">{ENTERPRISE_NOTES.ai_postmortem}</p>
+        <p className="text-ui text-fg-2" data-testid="postmortem-enterprise">{note}</p>
       ) : aiUnavailable && !postmortem ? (
         <p className="text-ui text-fg-2" data-testid="postmortem-ai-disabled">
           {aiUnavailableMessage(aiStatus, isAdmin)}{' '}

@@ -33,8 +33,21 @@ class LeaderElectionCoordinator:
         self._task: asyncio.Task | None = None
 
     def wants_control(self) -> bool:
+        """Redis configured and HA licensed (read by the license scheduler hook,
+        which runs just before this in ``start_scheduler``)."""
         from services import shared_state
-        return bool(shared_state.redis_url())
+        from nodeglow_ee import license_runtime
+
+        if not shared_state.redis_url():
+            return False
+        status = license_runtime.manager.cached()
+        if not status.feature_active("ha_scheduler"):
+            logger.warning(
+                "REDIS_URL is set, but scheduler leader election is not licensed (license %s). "
+                "Running single-instance: run exactly one backend process.", status.status,
+            )
+            return False
+        return True
 
     async def start(self, scheduler) -> None:
         # Start paused; the loop resumes jobs once this instance wins the lease

@@ -10,6 +10,7 @@ from models.incident import Incident
 from routers.api_v1 import require_editor
 from services.ai_config import load_ai_config
 
+from nodeglow_ee import license_runtime
 from nodeglow_ee.ai import postmortem
 from nodeglow_ee.ai.common import ai_unavailable
 
@@ -22,6 +23,8 @@ async def regenerate_postmortem(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_editor),
 ):
+    if refused := await license_runtime.blocked("ai_postmortem"):
+        return refused
     incident = await db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(404, "Incident not found")

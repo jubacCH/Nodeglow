@@ -18,10 +18,13 @@ class EnterprisePlugin:
     EDITION = EDITION
 
     def register(self, registry) -> None:
-        # TODO(license): verify the license key here before registering
-        # anything (see ee/README.md, "License keys").
-        from nodeglow_ee import ai, ha
+        # Everything registers; each feature checks the license when it is
+        # used (nodeglow_ee.license_runtime), so a license installed or
+        # removed in Settings applies without a restart. Without a usable
+        # license the features stay inactive and the core is unaffected.
+        from nodeglow_ee import ai, ha, license_runtime
 
+        license_runtime.register(registry)
         ha.register(registry)
         ai.register(registry)
 

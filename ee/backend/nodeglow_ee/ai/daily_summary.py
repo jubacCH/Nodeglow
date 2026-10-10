@@ -30,6 +30,8 @@ from routers.settings._helpers import require_admin
 from services import ai_client
 from services.ai_config import AI_DISABLED_MESSAGE, load_ai_config
 
+from nodeglow_ee import license_runtime
+
 logger = logging.getLogger("nodeglow.ee.daily_summary")
 
 # Functions are looked up through the module at call time, so tests can patch
@@ -281,6 +283,10 @@ async def run_daily_ai_summary():
     )
     from models.ai_usage import AiUsageLog
 
+    if not await license_runtime.is_active("ai_daily_summary"):
+        logger.info("Daily AI summary skipped: not covered by the license")
+        return
+
     async with AsyncSessionLocal() as db:
         enabled = await get_setting(db, "daily_ai_summary_enabled", "0")
         if enabled != "1":
@@ -475,6 +481,8 @@ async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get
     """Trigger a one-off daily AI summary (ignores schedule + duplicate protection)."""
     if err := require_admin(request):
         return err
+    if refused := await license_runtime.blocked("ai_daily_summary"):
+        return refused
 
     from notifications import (
         _send_telegram, _send_discord, _send_webhook, _send_email, _build_html_email,
