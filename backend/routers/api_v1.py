@@ -31,6 +31,13 @@ from ratelimit import rate_limit
 from services import ping as ping_svc
 from services import snapshot as snap_svc
 from services.audit import log_action
+from services.agent_services import (
+    apply_watch_list_change,
+    normalize_watch_list,
+    send_notifications as send_service_notifications,
+    service_view,
+    watched_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -997,6 +1004,8 @@ async def get_agent(
         "log_channels": agent.log_channels or "",
         "log_file_paths": agent.log_file_paths or "",
         "agent_log_level": agent.agent_log_level or "errors",
+        # watched_services, services (with last reported state), services_reported_at
+        **service_view(agent),
         "snapshots": [
             {
                 "agent_id": agent_id,
@@ -2067,8 +2076,13 @@ async def get_watched_services(
     agent = await db.get(Agent, agent_id)
     if not agent:
         raise HTTPException(404, "Agent not found")
-    services = json.loads(agent.watched_services) if agent.watched_services else []
-    return {"agent_id": agent_id, "services": services}
+    view = service_view(agent)
+    return {
+        "agent_id": agent_id,
+        "services": view["watched_services"],
+        "states": view["services"],
+        "reported_at": view["services_reported_at"],
+    }
 
 
 @router.put("/agents/{agent_id}/services", summary="Set watched services for an agent")
@@ -2081,10 +2095,24 @@ async def set_watched_services(
     agent = await db.get(Agent, agent_id)
     if not agent:
         raise HTTPException(404, "Agent not found")
-    body = await request.json()
-    services = body.get("services", [])
-    agent.watched_services = json.dumps(services) if services else None
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "Invalid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Body must be an object with a 'services' list")
+    try:
+        services = normalize_watch_list(body.get("services", []))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    before = watched_list(agent)
+    notifications = await apply_watch_list_change(db, agent, services)
+    if before != services:
+        await log_action(db, request, "agent.services", "agent", agent.id, agent.name,
+                         {"before": before, "after": services})
     await db.commit()
+    send_service_notifications(notifications)
     return {"ok": True, "services": services}
 
 

@@ -101,9 +101,15 @@ async def cleanup_incident_events(db, retention_days: int) -> int:
 async def _find_or_create_incident(
     db, rule: str, title: str, severity: str,
     host_ids: list[int], event_type: str, summary: str, detail: str = None,
+    key_hash: str | None = None, send_notification: bool = True,
 ) -> Incident:
-    """Find existing open incident for this rule+hosts combo, or create new one."""
-    h = _host_ids_hash(host_ids)
+    """Find existing open incident for this rule+hosts combo, or create new one.
+
+    ``key_hash`` replaces the host-id hash as dedup key for incidents that are
+    not about ping hosts (e.g. a service on an agent). ``send_notification=False``
+    leaves notifying to the caller, which can then do it after its commit.
+    """
+    h = key_hash or _host_ids_hash(host_ids)
 
     existing = (await db.execute(
         select(Incident).where(
@@ -140,6 +146,9 @@ async def _find_or_create_incident(
         summary=summary,
         detail=detail,
     ))
+
+    if not send_notification:
+        return incident
 
     # Send notification for new incidents
     try:
@@ -844,6 +853,13 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
         # itself. Without this they were recreated every 5 minutes and resolved
         # 60 seconds later, flapping indefinitely.
         if incident.rule == "self_check":
+            continue
+
+        # Watched-service incidents are keyed by agent + service, not by ping
+        # hosts, so the check below would resolve them on the next cycle while
+        # the service is still down. The agent heartbeat resolves them itself
+        # (services.agent_services) when the service reports running again.
+        if incident.rule == "agent_service":
             continue
 
         if not incident.host_ids_hash:
