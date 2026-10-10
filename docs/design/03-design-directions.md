@@ -8,6 +8,10 @@ Informationsarchitektur (`02-information-architecture.md`).
 Dashboard-Aufbau), ergänzt um die Strata-Landschaft aus Konzept C als Infrastruktur-Signatur
 und um die Evidenzkette mit Quellenangabe aus Konzept B im Incident-Workspace.
 
+## Entscheid (10.10.2026)
+
+Freigegeben: **Konzept E3 „Nodeglow“** (`directions/concept-e3.md`, `prototypes/concept-e3/index.html`), entstanden aus dem UniFi-Stil E2 mit eigener Glow-Signatur, eigenem Logo und eigener Typografie. Akzent: Glow Violet. Die Konzepte A–D bleiben als Referenz im Repo.
+
 ## Nachtrag: Konzept D „Calm“
 
 Rückmeldung zu A–C: zu unübersichtlich. Konzept D vereinfacht A radikal
