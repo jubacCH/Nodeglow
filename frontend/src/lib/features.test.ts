@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { hasAnyAiFeature, hasFeature, lacksFeature, type Features } from './features';
+import {
+  ENTERPRISE_NOTES, enterpriseNote, hasAnyAiFeature, hasFeature, lacksFeature, licenseBanner,
+  type Features, type LicenseSummary,
+} from './features';
 
 const community: Features = {
   edition: 'community',
@@ -25,6 +28,34 @@ describe('feature flags', () => {
     expect(lacksFeature(community, 'ai_postmortem')).toBe(true);
     expect(lacksFeature({ edition: 'community', features: {} }, 'ai_postmortem')).toBe(true);
     expect(lacksFeature(enterprise, 'ai_postmortem')).toBe(false);
+  });
+
+  it('enterpriseNote tells "not in this edition" apart from "not licensed"', () => {
+    expect(enterpriseNote(community, 'ai')).toBe(ENTERPRISE_NOTES.ai);
+    const unlicensed: Features = {
+      edition: 'enterprise',
+      features: { ai_postmortem: false },
+      installed: { ai_postmortem: true },
+      license: { status: 'missing', message: 'No license installed' },
+    };
+    expect(enterpriseNote(unlicensed, 'ai_postmortem')).toMatch(/need a Nodeglow Enterprise license/);
+    const expired: Features = { ...unlicensed, license: { status: 'expired', message: 'expired' } };
+    expect(enterpriseNote(expired, 'ai_postmortem')).toMatch(/has expired.*Existing data stays visible/);
+    // Older backend without `installed`: the edition note.
+    expect(enterpriseNote({ edition: 'enterprise', features: {} }, 'ai')).toBe(ENTERPRISE_NOTES.ai);
+  });
+
+  it('licenseBanner shows only for grace, expired and invalid licenses', () => {
+    const withLicense = (status: LicenseSummary['status']): Features => ({
+      ...enterprise, license: { status, message: `license ${status}` },
+    });
+    expect(licenseBanner(community)).toBeNull();
+    expect(licenseBanner(undefined)).toBeNull();
+    expect(licenseBanner(withLicense('valid'))).toBeNull();
+    expect(licenseBanner(withLicense('missing'))).toBeNull();
+    expect(licenseBanner(withLicense('grace'))).toEqual({ tone: 'warning', text: 'license grace' });
+    expect(licenseBanner(withLicense('expired'))?.tone).toBe('down');
+    expect(licenseBanner(withLicense('invalid'))?.tone).toBe('down');
   });
 
   it('hasAnyAiFeature looks at the AI flags only', () => {

@@ -12,7 +12,7 @@ import { SegmentedControl } from '@/components/ui/Tabs';
 import { api, apiErrorBody, apiErrorMessage, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { AI_STATUS_KEY } from '@/hooks/queries/useAiStatus';
-import { ENTERPRISE_NOTES, hasAnyAiFeature, hasFeature, useFeatures } from '@/hooks/queries/useFeatures';
+import { enterpriseNote, hasAnyAiFeature, hasFeature, useFeatures } from '@/hooks/queries/useFeatures';
 import { describeDestination, type AiProvider as Provider } from '@/lib/ai';
 import { Code, Notice, SaveBar, SettingsSection, useSaveStatus, useSectionForm } from './formKit';
 
@@ -227,7 +227,7 @@ export function AiSettingsTab() {
     return (
       <SettingsSection id="ai-optin" title="AI features">
         <Notice tone="info">
-          <span data-testid="ai-enterprise-note">{ENTERPRISE_NOTES.ai}</span>
+          <span data-testid="ai-enterprise-note">{enterpriseNote(features, 'ai')}</span>
         </Notice>
       </SettingsSection>
     );
