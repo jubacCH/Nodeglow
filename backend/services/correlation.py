@@ -26,6 +26,7 @@ from models.ping import PingHost
 from services import clickhouse_client as _ch
 from services.clickhouse_client import query as ch_query
 from services.clickhouse_client import query_scalar as ch_scalar
+from services.maintenance import without_maintenance
 from models.integration import IntegrationConfig
 from models.incident import Incident, IncidentEvent
 from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
@@ -163,9 +164,9 @@ async def _get_offline_hosts(db, min_failures: int = 3) -> list[PingHost]:
     from services.clickhouse_client import get_offline_hosts_since
 
     hosts_q = await db.execute(
-        select(PingHost).where(PingHost.enabled == True, PingHost.maintenance == False)
+        select(PingHost).where(PingHost.enabled == True)
     )
-    hosts = hosts_q.scalars().all()
+    hosts = await without_maintenance(db, list(hosts_q.scalars().all()))
     if not hosts:
         return []
 
@@ -402,11 +403,10 @@ async def _rule_port_error(db, min_cycles: int = 2):
     results = await db.execute(
         select(PingHost).where(
             PingHost.enabled == True,
-            PingHost.maintenance == False,
             PingHost.port_error == True,
         )
     )
-    hosts = results.scalars().all()
+    hosts = await without_maintenance(db, list(results.scalars().all()))
     if not hosts:
         return
 

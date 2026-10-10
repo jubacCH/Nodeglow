@@ -493,10 +493,14 @@ async def run_ping_checks():
                 h.maintenance_until = None
         await db.commit()
 
+        # Manual flag or an active maintenance window — one rule everywhere.
+        from services.maintenance import maintenance_ids
+        in_maintenance = await maintenance_ids(db, hosts, now) if hosts else set()
+
     if not hosts:
         return
 
-    active_hosts = [h for h in hosts if not h.maintenance]
+    active_hosts = [h for h in hosts if h.id not in in_maintenance]
     if not active_hosts:
         return
 
