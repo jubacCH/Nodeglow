@@ -897,12 +897,20 @@ async def update_host(
         body["hostname"] = hostname
     if "http_options" in body:
         body["http_options"] = http_opts.dump(await _http_options_from_body(body))
+    if "probe_id" in body and body["probe_id"] is not None:
+        try:
+            body["probe_id"] = int(body["probe_id"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "probe_id must be an agent id or null")
+        probe = await db.get(Agent, body["probe_id"])
+        if not probe or not probe.is_probe:
+            raise HTTPException(400, "probe_id does not refer to a probe agent")
     # Record what actually changed, so the host timeline can show the edit
     # rather than just the fact that an edit happened. Fields present in the
     # body but unchanged are left out — they are noise, not history.
     changes: dict[str, dict] = {}
     for field in ("name", "hostname", "check_type", "port", "latency_threshold_ms",
-                  "enabled", "maintenance", "maintenance_until", "http_options"):
+                  "enabled", "maintenance", "maintenance_until", "http_options", "probe_id"):
         if field in body:
             val = body[field]
             if field == "maintenance_until" and isinstance(val, str):

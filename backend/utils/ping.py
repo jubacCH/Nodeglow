@@ -156,7 +156,7 @@ async def _redirect_block_reason(url: httpx.URL) -> str | None:
     """
     if url.scheme not in ("http", "https"):
         return f"unsupported scheme '{url.scheme}'"
-    from routers.integrations import _validate_host  # lazy: routers import utils
+    from utils.net_safety import validate_host as _validate_host
 
     return await asyncio.to_thread(_validate_host, url.host)
 
