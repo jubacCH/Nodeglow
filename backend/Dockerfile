@@ -78,6 +78,26 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Client IPs. Every browser request reaches this process through the Next.js
+# frontend, so without proxy headers request.client is always the frontend
+# container: the per-IP login throttle became one global counter (one client
+# could lock everybody out) and the audit log recorded one address for all.
+#
+# --proxy-headers makes uvicorn take the client from X-Forwarded-For, but only
+# when the direct peer is in FORWARDED_ALLOW_IPS (uvicorn reads this env var
+# itself; CIDRs allowed). The default trusts Docker's default bridge/compose
+# address pool, where the frontend container lives.
+#
+# Trade-off: any peer inside 172.16.0.0/12 can now set its own client IP. In
+# the shipped compose file port 8000 is only `expose`d on the internal
+# network, so that is just the frontend. If you publish 8000, or your LAN
+# itself uses 172.16/12, pin this to the frontend network's exact subnet.
+# Note that Next.js 14 passes a client-sent X-Forwarded-For through unchanged
+# (it does not append the peer address), so the IP is only trustworthy when a
+# reverse proxy in front of the frontend (NPM, Traefik, Caddy) sets the header.
+ENV FORWARDED_ALLOW_IPS="127.0.0.1,172.16.0.0/12"
+
 # asyncio loop, not uvloop: uvloop resolves hostnames in C and would bypass
 # the getaddrinfo cache in utils/dns_cache.py.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio", "--proxy-headers"]
