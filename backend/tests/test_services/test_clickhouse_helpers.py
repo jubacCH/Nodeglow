@@ -87,23 +87,51 @@ async def test_get_latest_ping_per_host_argmax_and_keys(fake_query):
 
     result = await ch.get_latest_ping_per_host([1, 2, 3])
 
-    assert len(fake_query.calls) == 1
-    sql = fake_query.last_sql.lower()
+    # First the bounded query; then one unbounded lookup for the single host
+    # (3) that had no row inside the window.
+    assert len(fake_query.calls) == 2
+    sql, params = fake_query.calls[0]
+    sql = sql.lower()
     assert "from ping_checks" in sql
     assert "argmax" in sql
     assert "group by host_id" in sql
-    assert fake_query.last_params == {"hids": [1, 2, 3]}
+    assert "timestamp >= now() - tointervalhour" in sql
+    assert params == {"hids": [1, 2, 3], "lb": ch.PING_LOOKBACK_HOURS}
+
+    fallback_sql, fallback_params = fake_query.calls[1]
+    assert "tointervalhour" not in fallback_sql.lower()
+    assert fallback_params == {"hids": [3]}
 
     assert set(result.keys()) == {1, 2}
     assert result[1]["host_name"] == "router-01"
     assert result[2]["success"] == 0
 
 
+async def test_get_latest_ping_per_host_no_fallback_when_all_found(fake_query):
+    fake_query.returns([
+        {"host_id": 1, "_ts": datetime(2026, 4, 10, 12, 0), "success": 1,
+         "latency_ms": 1.0, "host_name": "a"},
+    ])
+    await ch.get_latest_ping_per_host([1])
+    assert len(fake_query.calls) == 1
+
+
 async def test_get_latest_ping_per_host_no_filter(fake_query):
     fake_query.returns([])
     await ch.get_latest_ping_per_host()
     sql = fake_query.last_sql.lower()
-    assert "where" not in sql  # global query, no host_id filter
+    assert "host_id in" not in sql  # global query, no host_id filter
+    # ...but still bounded in time, so it never scans the 30-day table.
+    assert "timestamp >= now() - tointervalhour" in sql
+    assert len(fake_query.calls) == 1
+
+
+async def test_get_latest_ping_per_host_unbounded_on_request(fake_query):
+    fake_query.returns([])
+    await ch.get_latest_ping_per_host([4], lookback_hours=None)
+    assert "where host_id in" in " ".join(fake_query.last_sql.lower().split())
+    assert "tointervalhour" not in fake_query.last_sql.lower()
+    assert len(fake_query.calls) == 1
 
 
 async def test_get_ping_uptime_aggregation(fake_query):
@@ -150,7 +178,15 @@ async def test_get_offline_hosts_since_returns_only_all_failed(fake_query):
     sql = fake_query.last_sql.lower()
     assert "grouparray" in sql
     assert "arraysum" in sql
-    assert fake_query.last_params == {"hids": [1, 5, 9], "n": 3}
+    # Newest checks are chosen by sorting, not by an ORDER BY subquery whose
+    # order aggregation does not have to preserve.
+    assert "arrayreversesort" in sql
+    assert "order by" not in sql
+    # Bounded read: the last N checks are always inside the window.
+    assert "timestamp >= now() - tointervalhour" in sql
+    assert fake_query.last_params == {
+        "hids": [1, 5, 9], "n": 3, "lb": ch.PING_LOOKBACK_HOURS,
+    }
 
 
 async def test_get_ping_status_transitions(fake_query):
