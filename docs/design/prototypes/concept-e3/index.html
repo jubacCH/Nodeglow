@@ -1,0 +1,1306 @@
+<title>Nodeglow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Sora:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Concept E3 "Nodeglow": E2-Layout (UniFi-ruhig) + Glow als Signatur, eigener Akzent, eigenes Zeichen + Typo.
+   Glow-Regel: nur was Aufmerksamkeit braucht, leuchtet. Gesund und unbekannt leuchten nie ("kein Licht = keine Daten").
+   Simulierte Daten aus SCENARIO.md. */
+
+/* ---- 1. Basis dunkel (Default) + Akzent "Glow Violet" ---- */
+:root{
+  --bg:#101217; --rail:#0C0E12; --surface:#181A20; --surface-2:#1F222A; --surface-3:#282B34;
+  --border:rgba(255,255,255,.06); --border-2:rgba(255,255,255,.11); --line:#363A45;
+  --text:#ECEEF2; --text-2:#A2A6B1; --text-3:#6E7380;
+  --st-ok:#3CC37A; --st-degraded:#E7C04C; --st-warning:#F2923C; --st-down:#F2545B;
+  --st-maint:#8F97A8; --st-unknown:#565B66; --hatch-2:#252830;
+  --grid:rgba(255,255,255,.05);
+  --scrim:rgba(4,5,8,.6); --shadow:0 16px 48px rgba(0,0,0,.55),0 1px 0 rgba(255,255,255,.03) inset;
+  --tip-bg:#262932; --tip-text:#ECEEF2;
+  /* Akzent: Glow Violet */
+  --accent:#7C6CFF; --accent-text:#9488FF; --accent-hover:#8F81FF;
+  --accent-btn:#6656F2; --accent-btn-hover:#7363FA; --on-accent:#FFFFFF; --focus:#9488FF;
+  --soft-pct:16%; --fill-pct:18%;
+  /* Glow (dunkel = Licht) */
+  --glow-crit:0 0 0 1px color-mix(in srgb,var(--st-down) 34%,transparent),0 0 24px 2px color-mix(in srgb,var(--st-down) 30%,transparent);
+  --glow-warn:0 0 0 1px color-mix(in srgb,var(--st-warning) 18%,transparent),0 0 14px 0 color-mix(in srgb,var(--st-warning) 16%,transparent);
+  --glow-dot-crit:0 0 0 3px color-mix(in srgb,var(--st-down) 16%,transparent),0 0 10px 1px color-mix(in srgb,var(--st-down) 55%,transparent);
+  --glow-dot-warn:0 0 7px 0 color-mix(in srgb,var(--st-warning) 42%,transparent);
+  --wire-glow:drop-shadow(0 0 3px color-mix(in srgb,var(--st-down) 65%,transparent));
+  --ring-core:color-mix(in srgb,color-mix(in srgb,var(--st-down) 72%,var(--st-warning)) 26%,transparent);
+  --accent-glow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent),0 0 18px 0 color-mix(in srgb,var(--accent) 36%,transparent);
+  --branch-glow:-4px 0 10px -6px color-mix(in srgb,var(--st-down) 70%,transparent);
+  --mark-halo:.55; --wm-glow:0 0 14px color-mix(in srgb,var(--accent) 45%,transparent);
+  --breathe:ng-breathe 6s ease-in-out infinite;
+  --f-ui:"Inter Tight","SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --f-display:"Sora","Inter Tight","Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace;
+  --r:10px; --r-sm:7px;
+  --sw-violet:#7C6CFF; --sw-ember:#FFB547; --sw-aurora:#FF5FC8;
+  color-scheme:dark;
+}
+/* ---- 2. Basis hell: Glow wird farbiger Schatten / Tönung, nie Licht auf Weiss, kein Atmen ---- */
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#F4F5F8; --rail:#FFFFFF; --surface:#FFFFFF; --surface-2:#F2F3F6; --surface-3:#E8EAEF;
+    --border:#E3E5EA; --border-2:#D6D9E0; --line:#C9CED7;
+    --text:#191B21; --text-2:#5A5E69; --text-3:#868B96;
+    --st-ok:#1E9E57; --st-degraded:#B98A00; --st-warning:#DD6B12; --st-down:#DC3540;
+    --st-maint:#6F7788; --st-unknown:#A4A8B0; --hatch-2:#E3E5E9;
+    --grid:#EEF0F3;
+    --scrim:rgba(20,22,28,.28); --shadow:0 16px 48px rgba(20,24,32,.16),0 1px 3px rgba(20,24,32,.06);
+    --tip-bg:#1D1F25; --tip-text:#F2F3F5;
+    --accent:#5B4BE0; --accent-text:#5242D6; --accent-hover:#4C3CD2;
+    --accent-btn:#5B4BE0; --accent-btn-hover:#4C3CD2; --on-accent:#FFFFFF; --focus:#5B4BE0;
+    --soft-pct:10%; --fill-pct:12%;
+    --glow-crit:0 0 0 1px color-mix(in srgb,var(--st-down) 26%,transparent),0 6px 16px -6px color-mix(in srgb,var(--st-down) 34%,transparent);
+    --glow-warn:0 4px 12px -6px color-mix(in srgb,var(--st-warning) 30%,transparent);
+    --glow-dot-crit:0 0 0 3px color-mix(in srgb,var(--st-down) 15%,transparent);
+    --glow-dot-warn:0 0 0 3px color-mix(in srgb,var(--st-warning) 12%,transparent);
+    --wire-glow:none;
+    --ring-core:color-mix(in srgb,var(--st-down) 6%,transparent);
+    --accent-glow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent);
+    --branch-glow:none;
+    --mark-halo:.28; --wm-glow:none;
+    --breathe:none;
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#F4F5F8; --rail:#FFFFFF; --surface:#FFFFFF; --surface-2:#F2F3F6; --surface-3:#E8EAEF;
+  --border:#E3E5EA; --border-2:#D6D9E0; --line:#C9CED7;
+  --text:#191B21; --text-2:#5A5E69; --text-3:#868B96;
+  --st-ok:#1E9E57; --st-degraded:#B98A00; --st-warning:#DD6B12; --st-down:#DC3540;
+  --st-maint:#6F7788; --st-unknown:#A4A8B0; --hatch-2:#E3E5E9;
+  --grid:#EEF0F3;
+  --scrim:rgba(20,22,28,.28); --shadow:0 16px 48px rgba(20,24,32,.16),0 1px 3px rgba(20,24,32,.06);
+  --tip-bg:#1D1F25; --tip-text:#F2F3F5;
+  --accent:#5B4BE0; --accent-text:#5242D6; --accent-hover:#4C3CD2;
+  --accent-btn:#5B4BE0; --accent-btn-hover:#4C3CD2; --on-accent:#FFFFFF; --focus:#5B4BE0;
+  --soft-pct:10%; --fill-pct:12%;
+  --glow-crit:0 0 0 1px color-mix(in srgb,var(--st-down) 26%,transparent),0 6px 16px -6px color-mix(in srgb,var(--st-down) 34%,transparent);
+  --glow-warn:0 4px 12px -6px color-mix(in srgb,var(--st-warning) 30%,transparent);
+  --glow-dot-crit:0 0 0 3px color-mix(in srgb,var(--st-down) 15%,transparent);
+  --glow-dot-warn:0 0 0 3px color-mix(in srgb,var(--st-warning) 12%,transparent);
+  --wire-glow:none;
+  --ring-core:color-mix(in srgb,var(--st-down) 6%,transparent);
+  --accent-glow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent);
+  --branch-glow:none;
+  --mark-halo:.28; --wm-glow:none;
+  --breathe:none;
+  color-scheme:light;
+}
+/* ---- 3. Akzent-Varianten dunkel (überschreiben nur Akzent + nötige Status-Verschiebung) ---- */
+:root[data-accent="ember"]{
+  --accent:#FFB547; --accent-text:#FFC266; --accent-hover:#FFC266;
+  --accent-btn:#FFB547; --accent-btn-hover:#FFC46C; --on-accent:#1C1405; --focus:#FFC266;
+  --st-warning:#F27C3A; --st-degraded:#E5D45A; /* Ember 36° liegt zwischen Warning und Degraded: beide weggeschoben (22° / 53°) */
+}
+:root[data-accent="aurora"]{
+  --accent:#FF5FC8; --accent-text:#FF7AD2; --accent-hover:#FF7AD2;
+  --accent-btn:#FF5FC8; --accent-btn-hover:#FF7AD2; --on-accent:#1E0716; --focus:#FF7AD2;
+  --st-down:#F2584E; /* Down leicht Richtung Orange-Rot (4°), damit Magenta (321°) nie wie "kritisch" wirkt */
+}
+/* ---- 4. Akzent-Varianten hell (höhere Spezifität als 3.) ---- */
+@media (prefers-color-scheme: light){
+  :root[data-accent="violet"]:not([data-theme="dark"]),:root:not([data-accent]):not([data-theme="dark"]){
+    --accent:#5B4BE0; --accent-text:#5242D6; --accent-hover:#4C3CD2;
+    --accent-btn:#5B4BE0; --accent-btn-hover:#4C3CD2; --on-accent:#FFFFFF; --focus:#5B4BE0;
+  }
+  :root[data-accent="ember"]:not([data-theme="dark"]){
+    --accent:#C77A0A; --accent-text:#9A5B00; --accent-hover:#8A5100;
+    --accent-btn:#F0A63A; --accent-btn-hover:#E6982A; --on-accent:#1C1405; --focus:#9A5B00;
+    --st-warning:#C9560F; --st-degraded:#9A8A00;
+  }
+  :root[data-accent="aurora"]:not([data-theme="dark"]){
+    --accent:#C0288C; --accent-text:#B4237F; --accent-hover:#A81F77;
+    --accent-btn:#C0288C; --accent-btn-hover:#A81F77; --on-accent:#FFFFFF; --focus:#C0288C;
+    --st-down:#D7362A;
+  }
+}
+:root[data-theme="light"][data-accent="ember"]{
+  --accent:#C77A0A; --accent-text:#9A5B00; --accent-hover:#8A5100;
+  --accent-btn:#F0A63A; --accent-btn-hover:#E6982A; --on-accent:#1C1405; --focus:#9A5B00;
+  --st-warning:#C9560F; --st-degraded:#9A8A00;
+}
+:root[data-theme="light"][data-accent="aurora"]{
+  --accent:#C0288C; --accent-text:#B4237F; --accent-hover:#A81F77;
+  --accent-btn:#C0288C; --accent-btn-hover:#A81F77; --on-accent:#FFFFFF; --focus:#C0288C;
+  --st-down:#D7362A;
+}
+/* ---- 5. Abgeleitete Akzent-Töne (folgen automatisch jedem Akzent und Theme) ---- */
+:root{
+  --accent-soft:color-mix(in srgb,var(--accent) var(--soft-pct),transparent);
+  --chart-fill:color-mix(in srgb,var(--accent) var(--fill-pct),transparent);
+  --chart-fill-0:color-mix(in srgb,var(--accent) 0%,transparent);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:400 14px/1.45 var(--f-ui);
+  font-feature-settings:"tnum" 1,"cv11" 1;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:inherit}
+a{color:var(--accent-text);text-decoration:none}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:6px}
+.sr{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mono{font-family:var(--f-mono);font-size:12px}
+.muted{color:var(--text-2)}
+.faint{color:var(--text-3)}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---------- App frame ---------- */
+.rail{position:fixed;inset:0 auto 0 0;width:60px;background:var(--rail);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:4px;z-index:30}
+.mark{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;margin-bottom:12px;color:var(--text)}
+.mark svg{width:30px;height:30px;overflow:visible}
+.mark:hover{background:var(--surface-2)}
+/* Nodeglow-Zeichen (#ng-mark): Knoten im Akzent + weicher Halo + dünner Orbit mit Satellit.
+   Einfarbig: Klasse .mono setzt alles auf currentColor. */
+.ngm{display:block;color:var(--text);overflow:visible}
+.ngm.mono{--mk-core:currentColor;--mk-halo:currentColor;--mk-halo-o:.16}
+.wordmark{font:600 17px/1 var(--f-display);letter-spacing:-.035em;color:var(--text);white-space:nowrap}
+.wordmark .o{color:var(--accent-text);text-shadow:var(--wm-glow)}
+.lockup{display:inline-flex;align-items:center;gap:8px}
+
+/* Akzent-Umschalter (nur Prototyp) */
+.accentsw{display:flex;align-items:center;gap:8px;margin:0;padding:0;border:0;min-width:0;flex-wrap:wrap}
+.accentsw legend{float:left;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-3);padding:0;margin-right:2px}
+.seg{display:inline-flex;padding:3px;border-radius:9px;background:var(--surface);border:1px dashed var(--border-2);gap:2px}
+.seg label{position:relative;display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 10px;border-radius:6px;font-size:12px;font-weight:500;color:var(--text-2);cursor:pointer;white-space:nowrap}
+.seg label:hover{color:var(--text);background:var(--surface-2)}
+.seg input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.seg label:has(input:checked){background:var(--surface-3);color:var(--text)}
+.seg label:has(input:focus-visible){outline:2px solid var(--focus);outline-offset:1px}
+.seg .sw{width:10px;height:10px;border-radius:50%;flex:none}
+.sw-violet{background:var(--sw-violet)}.sw-ember{background:var(--sw-ember)}.sw-aurora{background:var(--sw-aurora)}
+.phead .acts{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+
+/* About */
+.about{width:320px;padding:16px}
+.about .lockup .wordmark{font-size:22px}
+.about p{margin:12px 0 0;font-size:12px;color:var(--text-2);line-height:1.5}
+.about .sizes{display:flex;align-items:flex-end;gap:14px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);color:var(--text-3);font-size:11px}
+.about .sizes span{display:flex;flex-direction:column;align-items:center;gap:6px}
+.foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:28px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-3)}
+.foot .wordmark{font-size:14px}
+.rail nav{display:flex;flex-direction:column;gap:4px;align-items:center;flex:1}
+.rail .spacer{flex:1}
+.rbtn{position:relative;width:40px;height:40px;border-radius:9px;display:grid;place-items:center;color:var(--text-3);transition:background .15s,color .15s}
+.rbtn svg{width:20px;height:20px}
+.rbtn:hover{background:var(--surface-2);color:var(--text)}
+.rbtn[aria-current="page"]{color:var(--accent-text);background:var(--accent-soft)}
+.rbtn .badge{position:absolute;top:5px;right:5px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--st-down);color:#fff;font-size:10px;font-weight:600;line-height:15px;text-align:center}
+.rbtn .lbl{position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);white-space:nowrap;
+  background:var(--tip-bg);color:var(--tip-text);font-size:12px;font-weight:500;padding:5px 9px;border-radius:6px;
+  opacity:0;pointer-events:none;transition:opacity .12s;box-shadow:var(--shadow)}
+.rbtn:hover .lbl,.rbtn:focus-visible .lbl{opacity:1}
+
+.top{position:sticky;top:0;z-index:20;height:60px;margin-left:60px;display:flex;align-items:center;gap:10px;padding:0 24px;
+  background:var(--bg);border-bottom:1px solid var(--border)}
+.tenant{display:flex;align-items:center;gap:8px;height:36px;padding:0 10px 0 6px;border-radius:8px;min-width:0}
+.tenant:hover{background:var(--surface-2)}
+.tenant .av{width:24px;height:24px;border-radius:6px;background:var(--surface-3);display:grid;place-items:center;font-size:11px;font-weight:600;color:var(--text-2);flex:none}
+.tenant .tn{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tenant svg{width:14px;height:14px;color:var(--text-3);flex:none}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:5px;font-size:11px;font-weight:500;white-space:nowrap;
+  border:1px solid var(--border-2);color:var(--text-2)}
+.tag.planned{border-style:dashed}
+.sep{width:1px;height:20px;background:var(--border-2)}
+.sitesel{display:flex;align-items:center;gap:6px;height:36px;padding:0 10px;border-radius:8px;color:var(--text-2);white-space:nowrap}
+.sitesel:hover{background:var(--surface-2);color:var(--text)}
+.sitesel svg{width:14px;height:14px}
+.top .grow{flex:1}
+.search{display:flex;align-items:center;gap:8px;height:36px;width:300px;max-width:32vw;padding:0 8px 0 12px;border-radius:8px;
+  background:var(--surface);border:1px solid var(--border);color:var(--text-3)}
+.search:hover{border-color:var(--border-2)}
+.search svg{width:16px;height:16px;flex:none}
+.search span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+kbd{font:500 11px var(--f-ui);padding:2px 6px;border-radius:5px;background:var(--surface-2);border:1px solid var(--border-2);color:var(--text-2)}
+.sim{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:14px;font-size:12px;font-weight:500;white-space:nowrap;
+  color:var(--st-degraded);border:1px solid color-mix(in srgb,var(--st-degraded) 45%,transparent);background:color-mix(in srgb,var(--st-degraded) 10%,transparent)}
+.sim i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.sim .ss{display:none}
+.card{scroll-margin-top:76px}
+.ibtn{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;color:var(--text-2);flex:none}
+.ibtn:hover{background:var(--surface-2);color:var(--text)}
+.ibtn svg{width:18px;height:18px}
+.me{width:30px;height:30px;border-radius:50%;background:var(--surface-3);display:grid;place-items:center;font-size:12px;font-weight:600;color:var(--text-2);flex:none}
+
+main{margin-left:60px;padding:28px 24px 48px}
+.wrap{max-width:1760px;margin:0 auto}
+.phead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.phead h1{margin:0;font:600 24px/1.2 var(--f-display);letter-spacing:-.03em}
+.phead p{margin:4px 0 0;color:var(--text-2);font-size:13px}
+.since{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text-2);font-size:13px}
+.since:hover{border-color:var(--border-2);color:var(--text)}
+.since b{color:var(--text);font-weight:500}
+
+/* ---------- Grid ---------- */
+.grid{display:grid;gap:16px;grid-template-columns:repeat(12,minmax(0,1fr));
+  grid-template-areas:
+   "health health health health health inet inet inet inc inc inc inc"
+   "topo topo topo topo topo topo topo topo sites sites sites sites"
+   "topo topo topo topo topo topo topo topo upc upc upc upc"
+   "lat lat lat lat lat lat sys sys sys avail avail avail"
+   "chg chg chg chg chg chg chg chg chg chg chg chg"}
+.a-health{grid-area:health}.a-inet{grid-area:inet}.a-inc{grid-area:inc}.a-topo{grid-area:topo}.a-sites{grid-area:sites}
+.a-upc{grid-area:upc}.a-lat{grid-area:lat}.a-sys{grid-area:sys}.a-avail{grid-area:avail}.a-chg{grid-area:chg}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px;min-width:0;display:flex;flex-direction:column}
+.ch{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;min-height:22px}
+.ch h2{margin:0;font-size:14px;font-weight:500;letter-spacing:0}
+.ch .r{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:12px;white-space:nowrap}
+.link{color:var(--accent-text);font-size:13px;font-weight:500;white-space:nowrap}
+.link:hover{color:var(--accent-hover)}
+.big{font-family:var(--f-display);font-size:36px;font-weight:500;letter-spacing:-.045em;line-height:1.05;font-variant-numeric:tabular-nums}
+.big small{font-family:var(--f-ui);font-size:14px;font-weight:400;color:var(--text-2);letter-spacing:0;margin-left:6px}
+.lbl-s{font-size:12px;color:var(--text-2)}
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:11px;font-size:12px;font-weight:500;white-space:nowrap}
+.pill i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.p-ok{color:var(--st-ok);background:color-mix(in srgb,var(--st-ok) 13%,transparent)}
+.p-down{color:var(--st-down);background:color-mix(in srgb,var(--st-down) 13%,transparent)}
+.p-warning{color:var(--st-warning);background:color-mix(in srgb,var(--st-warning) 13%,transparent)}
+.p-degraded{color:var(--st-degraded);background:color-mix(in srgb,var(--st-degraded) 13%,transparent)}
+.p-maint{color:var(--st-maint);background:color-mix(in srgb,var(--st-maint) 15%,transparent)}
+.p-unknown{color:var(--text-2);background:color-mix(in srgb,var(--st-unknown) 20%,transparent)}
+.p-accent{color:var(--accent-text);background:var(--accent-soft)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--st-ok)}
+.d-ok{background:var(--st-ok)}.d-down{background:var(--st-down)}.d-warning{background:var(--st-warning)}.d-degraded{background:var(--st-degraded)}
+.d-maint{background:var(--st-maint)}
+.d-unknown{background:transparent;box-shadow:inset 0 0 0 1.5px var(--st-unknown)}
+.hatch{background-color:var(--hatch-2);background-image:repeating-linear-gradient(135deg,var(--st-unknown) 0 2px,transparent 2px 5px)}
+
+/* ---------- Glow (Signatur) ----------
+   Nur Kritisch/Warnung leuchtet. Kritisch: stärker, atmet langsam (6 s, nur dunkel, nie bei reduced motion).
+   Warnung: schwächer, statisch. Gesund, Wartung und "No data" leuchten nie. */
+@keyframes ng-breathe{0%,100%{opacity:.62}50%{opacity:1}}
+.sev.crit,.sev.warn,.tcol.bad>.node{position:relative}
+.sev.crit::after,.sev.warn::after,.tcol.bad>.node::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none}
+.sev.crit::after,.tcol.bad>.node::after{box-shadow:var(--glow-crit);animation:var(--breathe)}
+.sev.warn::after{box-shadow:var(--glow-warn)}
+.irow.acked .sev::after{animation:none;opacity:.5} /* bestätigt: Halo bleibt, atmet aber nicht mehr */
+.dot.d-down,.sd.d-down{box-shadow:var(--glow-dot-crit)}
+.dot.d-warning,.sd.d-warning{box-shadow:var(--glow-dot-warn)}
+.tcol.bad .tlist{box-shadow:var(--branch-glow)}
+.rbtn .badge{box-shadow:var(--glow-dot-crit)}
+.ring::before{content:"";position:absolute;inset:14%;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle closest-side,var(--ring-core) 0%,color-mix(in srgb,var(--ring-core) 45%,transparent) 55%,transparent 100%);animation:var(--breathe)}
+.tcol.unk>.node .g svg,.trow.unknown .gi svg{opacity:.7} /* kein Licht = keine Daten */
+
+/* Health */
+.health-body{display:flex;align-items:center;gap:28px;flex:1}
+.ring{position:relative;width:184px;height:184px;flex:none}
+.ring svg{width:100%;height:100%;display:block;position:relative}
+.ring .c{position:absolute;inset:0;display:grid;place-content:center;text-align:center;pointer-events:none}
+.ring .c .big{font-size:40px}
+.ring circle.seg{cursor:default;transition:stroke-width .15s}
+.ring circle.seg:hover{stroke-width:17}
+.legend{flex:1;display:grid;grid-template-columns:1fr;gap:2px;min-width:0}
+.lg{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)}
+.lg:last-child{border-bottom:0}
+.lg .sw{width:10px;height:10px;border-radius:3px}
+.lg .n{font-weight:500;font-size:15px}
+.lg .t small{display:block;color:var(--text-3);font-size:12px;line-height:1.3}
+.statusline{display:flex;gap:8px;flex-wrap:wrap}
+.hfoot{display:flex;gap:24px;flex-wrap:wrap;margin-top:18px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text-2)}
+.hfoot b{color:var(--text);font-weight:500;font-size:13px;margin-right:4px}
+
+/* Internet */
+.inet-nums{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.a-inet .kv{margin-top:auto}
+.a-inet .speedhist{margin-bottom:20px}
+.inet-nums .k{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);margin-bottom:6px}
+.inet-nums .k svg{width:14px;height:14px;color:var(--accent)}
+.kv{display:grid;grid-template-columns:1fr auto;gap:8px 12px;margin-top:20px;padding-top:14px;border-top:1px solid var(--border);font-size:13px}
+.kv dt{color:var(--text-2)}
+.kv dd{margin:0;text-align:right;font-weight:500}
+
+/* Incidents */
+.inc-top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}
+.minibars{display:flex;align-items:flex-end;gap:3px;height:36px}
+.minibars span{width:7px;border-radius:2px;background:var(--surface-3);min-height:2px}
+.minibars span.today{background:var(--accent)}
+.irow{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px;padding:10px 10px;margin:0 -10px;border-radius:8px;width:calc(100% + 20px)}
+.irow:hover{background:var(--surface-2)}
+.irow+.irow{margin-top:2px}
+.sev{width:30px;height:30px;border-radius:8px;display:grid;place-items:center}
+.sev svg{width:16px;height:16px}
+.sev.crit{color:var(--st-down);background:color-mix(in srgb,var(--st-down) 14%,transparent)}
+.sev.warn{color:var(--st-warning);background:color-mix(in srgb,var(--st-warning) 14%,transparent)}
+.irow .t1{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.irow .t2{font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.irow .age{font-size:12px;color:var(--text-2);text-align:right;white-space:nowrap}
+.irow .age .ack{display:block;color:var(--accent-text);font-size:11px}
+.ifoot{margin-top:auto;padding-top:14px;border-top:1px solid var(--border);font-size:13px;color:var(--text-2)}
+.ifh{font-size:12px;color:var(--text-3);margin-bottom:6px}
+.rrow{display:grid;grid-template-columns:18px 1fr auto;gap:8px;align-items:center;padding:4px 0}
+.rrow span:nth-child(2){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow .ck{color:var(--st-ok);font-size:12px}
+.rrow .num{font-size:12px;color:var(--text-3)}
+.speedhist{margin-top:22px}
+.sbars{display:flex;align-items:flex-end;gap:3px;height:56px;margin-top:10px}
+.sbars span{flex:1;border-radius:2px;background:var(--surface-3);min-height:2px}
+.sbars span:last-child{background:var(--accent)}
+.sbars span:hover{background:var(--accent-hover)}
+
+/* Topology */
+.topo{position:relative;padding:4px 4px 0;flex:1}
+.topo svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.troot{display:flex;justify-content:center;align-items:center;gap:56px;margin-bottom:46px;position:relative}
+.tcols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;position:relative}
+.node{display:flex;align-items:center;gap:10px;padding:8px 12px 8px 8px;border-radius:9px;background:var(--surface-2);border:1px solid var(--border);
+  position:relative;z-index:1;min-width:0;text-align:left;transition:border-color .15s,background .15s}
+button.node:hover{border-color:var(--border-2);background:var(--surface-3)}
+.node .g{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;background:var(--surface);color:var(--text);flex:none;position:relative}
+.node .g svg{width:20px;height:20px}
+.node .g .sd{position:absolute;right:-3px;bottom:-3px;width:10px;height:10px;border-radius:50%;border:2px solid var(--surface-2)}
+.node .nm{font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .sb{font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .tx{min-width:0}
+.tcol{min-width:0;display:flex;flex-direction:column}
+.tcol>.node{align-self:stretch}
+.tcol.bad>.node{border-color:color-mix(in srgb,var(--st-down) 55%,transparent);background:color-mix(in srgb,var(--st-down) 8%,var(--surface-2))}
+.tcol.unk>.node{border-style:dashed;border-color:var(--border-2)}
+.tcol.unk>.node .g{color:var(--text-3)}
+.tbanner{display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:12px;color:var(--st-down);font-weight:500;padding:0 2px}
+.tbanner.unk{color:var(--text-2);font-weight:400}
+.tlist{list-style:none;margin:10px 0 0 17px;padding:0 0 0 0;border-left:1px solid var(--line);position:relative}
+.tcol.bad .tlist{border-left-color:color-mix(in srgb,var(--st-down) 60%,transparent)}
+.tcol.unk .tlist{border-left-style:dashed;border-left-color:var(--st-unknown)}
+.tlist li{position:relative;padding-left:14px}
+.tlist li::before{content:"";position:absolute;left:0;top:50%;width:10px;border-top:1px solid var(--line)}
+.tcol.bad .tlist li::before{border-top-color:color-mix(in srgb,var(--st-down) 60%,transparent)}
+.tcol.unk .tlist li::before{border-top:1px dashed var(--st-unknown)}
+.tlist li:last-child::after{content:"";position:absolute;left:-1px;top:calc(50% + 1px);bottom:0;width:1px;background:var(--surface)}
+.trow{display:grid;grid-template-columns:22px 1fr auto 8px;align-items:center;gap:8px;width:100%;height:32px;padding:0 8px;border-radius:7px;font-size:13px}
+button.trow:hover{background:var(--surface-2)}
+.trow .gi{width:22px;height:22px;display:grid;place-items:center;color:var(--text-2)}
+.trow .gi svg{width:16px;height:16px}
+.trow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow .v{font-size:12px;color:var(--text-2);white-space:nowrap}
+.trow .v.down{color:var(--st-down);font-weight:500}.trow .v.warning{color:var(--st-warning)}.trow .v.degraded{color:var(--st-degraded)}
+.trow.unknown .nm,.trow.unknown .gi{color:var(--text-3)}
+.trow.more{color:var(--text-3);font-size:12px}
+.tcap{display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--text-3)}
+.tcap span{display:inline-flex;align-items:center;gap:6px}
+.tcap .ln{width:18px;border-top:2px solid var(--line)}
+.tcap .ln.bad{border-top-color:var(--st-down);filter:var(--wire-glow)}
+.tcap .ln.unk{border-top:2px dashed var(--st-unknown)}
+
+/* Sites */
+.site{padding:12px 0;border-bottom:1px solid var(--border)}
+.site:first-of-type{padding-top:0}
+.site:last-child{border-bottom:0;padding-bottom:0}
+.site .h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px}
+.site .h b{font-weight:500}
+.site .h span{font-size:12px;color:var(--text-2)}
+.site .h .n{font:500 20px/1.1 var(--f-display);color:var(--text);letter-spacing:-.04em}
+.sbar{display:flex;height:6px;border-radius:3px;overflow:hidden;gap:2px;background:var(--surface-2)}
+.sbar i{display:block;height:100%}
+.site .f{margin-top:7px;font-size:12px;color:var(--text-2)}
+
+/* Upcoming */
+.urow{display:grid;grid-template-columns:32px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
+.urow:first-of-type{padding-top:0}
+.urow:last-child{border-bottom:0;padding-bottom:0}
+.uic{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--surface-2);color:var(--text-2)}
+.uic svg{width:16px;height:16px}
+.urow .t1{font-weight:500;font-size:13px}
+.urow .t2{font-size:12px;color:var(--text-2)}
+.urow .w{text-align:right;font-weight:500;white-space:nowrap}
+.urow .w small{display:block;font-weight:400;font-size:11px;color:var(--text-3)}
+.prog{height:4px;border-radius:2px;background:var(--surface-3);margin-top:6px;overflow:hidden;max-width:180px}
+.prog i{display:block;height:100%;background:var(--st-warning)}
+
+/* Charts */
+.chart{position:relative;outline:none;min-height:60px}
+.chart svg{display:block;width:100%;overflow:visible}
+.chart:focus-visible{outline:2px solid var(--focus);outline-offset:4px}
+.chart text{font:400 11px var(--f-ui);fill:var(--text-3)}
+.lat-head{display:flex;gap:28px;flex-wrap:wrap;margin-bottom:12px}
+.lat-head .lbl-s{display:flex;align-items:center;gap:6px}
+.key{width:14px;height:3px;border-radius:2px;display:inline-block}
+.sys-nums{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.tip{position:fixed;z-index:80;pointer-events:none;background:var(--tip-bg);color:var(--tip-text);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.45;
+  box-shadow:var(--shadow);opacity:0;transition:opacity .08s;max-width:240px}
+.tip.on{opacity:1}
+.tip b{font-weight:600}
+.tip .row{display:flex;justify-content:space-between;gap:14px}
+.tip .row span:first-child{opacity:.7}
+
+/* Availability */
+.avbar{position:relative;height:8px;border-radius:4px;background:var(--surface-3);margin:22px 0 6px}
+.avbar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--st-ok)}
+.avbar b{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--text);border-radius:1px}
+.avscale{display:flex;justify-content:space-between;font-size:11px;color:var(--text-3);position:relative}
+.avscale .tg{position:absolute;transform:translateX(-50%);color:var(--text-2)}
+
+/* Changes */
+.chg{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0}
+.chg>div{padding:2px 20px;border-left:1px solid var(--border);min-width:0}
+.chg>div:first-child{border-left:0;padding-left:0}
+.chg .big{font-size:28px}
+.chg .t{font-size:13px;font-weight:500;margin-top:6px}
+.chg .d{font-size:12px;color:var(--text-2);margin-top:2px}
+
+/* ---------- Side panel ---------- */
+.scrim{position:fixed;inset:0;background:var(--scrim);z-index:60;opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim.on{opacity:1;pointer-events:auto}
+.panel{position:fixed;top:0;right:0;bottom:0;width:460px;max-width:100%;z-index:70;background:var(--surface);border-left:1px solid var(--border);
+  box-shadow:var(--shadow);transform:translateX(100%);transition:transform .22s cubic-bezier(.2,.7,.2,1);display:flex;flex-direction:column;visibility:hidden}
+.panel.on{transform:none;visibility:visible}
+.ph{display:flex;align-items:flex-start;gap:12px;padding:18px 20px 16px;border-bottom:1px solid var(--border)}
+.ph .g{width:44px;height:44px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center;flex:none;position:relative}
+.ph .g svg{width:22px;height:22px}
+.ph .g .sd{position:absolute;right:-3px;bottom:-3px;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface)}
+.ph h2{margin:0;font:600 17px/1.3 var(--f-display);letter-spacing:-.025em;word-break:break-word}
+.ph .meta{font-size:12px;color:var(--text-2);margin-top:3px}
+.ph .x{margin-left:auto}
+.pb{flex:1;overflow-y:auto;padding:4px 20px 24px;overscroll-behavior:contain}
+.pf{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap}
+.btn{height:36px;padding:0 14px;border-radius:8px;font-weight:500;font-size:13px;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text)}
+.btn:hover{background:var(--surface-3)}
+.btn.pri{background:var(--accent-btn);border-color:var(--accent-btn);color:var(--on-accent);transition:background .15s,box-shadow .2s}
+.btn.pri:not([disabled]):hover{background:var(--accent-btn-hover);box-shadow:var(--accent-glow)}
+.btn.pri:focus-visible{box-shadow:var(--accent-glow)}
+.btn[disabled]{opacity:.6;cursor:default}
+.ps{padding:16px 0;border-bottom:1px solid var(--border)}
+.ps:last-child{border-bottom:0}
+.ps h3{margin:0 0 10px;font-size:12px;font-weight:500;color:var(--text-2)}
+.ps p{margin:0;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{background:var(--surface-2);border-radius:8px;padding:10px 12px;min-width:0}
+.stat .v{font:500 19px/1.25 var(--f-display);letter-spacing:-.035em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat .k{font-size:11px;color:var(--text-2)}
+.next{display:flex;gap:10px;align-items:flex-start;background:var(--accent-soft);border-radius:8px;padding:12px}
+.next svg{width:16px;height:16px;color:var(--accent-text);flex:none;margin-top:2px}
+.rel{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;padding:8px 0}
+.rel+.rel{border-top:1px solid var(--border)}
+.rl{display:inline-flex;height:20px;align-items:center;padding:0 7px;border-radius:5px;font-size:11px;font-weight:600;white-space:nowrap;width:96px;justify-content:center}
+.rl.confirmed{color:var(--st-ok);background:color-mix(in srgb,var(--st-ok) 13%,transparent)}
+.rl.rule{color:var(--accent-text);background:var(--accent-soft)}
+.rl.suspected{color:var(--st-degraded);border:1px dashed color-mix(in srgb,var(--st-degraded) 60%,transparent)}
+.rl.planned{color:var(--text-3);border:1px dashed var(--border-2)}
+.rel .d{font-size:13px}
+.rel .d small{display:block;font-size:12px;color:var(--text-3)}
+.hl{list-style:none;margin:0;padding:0}
+.hl li button{display:grid;grid-template-columns:8px 1fr auto;gap:10px;align-items:center;width:100%;padding:7px 8px;margin:0 -8px;width:calc(100% + 16px);border-radius:6px;font-size:13px}
+.hl li button:hover{background:var(--surface-2)}
+.hl .v{font-size:12px;color:var(--text-2)}
+.log{margin:0;padding:10px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--border);font:12px/1.6 var(--f-mono);color:var(--text-2);white-space:pre-wrap;word-break:break-word}
+.log b{color:var(--st-down);font-weight:500}
+.linkbtn{color:var(--accent-text);font-weight:500;font-size:13px}
+.linkbtn:hover{color:var(--accent-hover)}
+.callout{display:flex;gap:10px;align-items:flex-start;padding:12px;border-radius:8px;border:1px solid var(--border-2);font-size:13px}
+.callout.unk{border-style:dashed}
+.callout svg{width:16px;height:16px;flex:none;margin-top:2px;color:var(--text-2)}
+
+/* Palette */
+.pal{position:fixed;left:50%;top:12vh;transform:translateX(-50%) scale(.98);width:min(620px,calc(100% - 32px));z-index:75;background:var(--surface);border:1px solid var(--border-2);
+  border-radius:12px;box-shadow:var(--shadow);opacity:0;pointer-events:none;visibility:hidden;transition:opacity .14s,transform .14s}
+.pal.on{opacity:1;pointer-events:auto;transform:translateX(-50%);visibility:visible}
+.pal .in{display:flex;align-items:center;gap:10px;padding:0 16px;height:52px;border-bottom:1px solid var(--border)}
+.pal .in svg{width:18px;height:18px;color:var(--text-3)}
+.pal input{flex:1;background:none;border:0;outline:0;color:var(--text);font:400 15px var(--f-ui);min-width:0}
+.pal ul{list-style:none;margin:0;padding:8px;max-height:min(420px,60vh);overflow:auto}
+.pal li{display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:13px}
+.pal li svg{width:16px;height:16px;color:var(--text-2)}
+.pal li .k{font-size:12px;color:var(--text-3)}
+.pal li[aria-selected="true"]{background:var(--accent-soft)}
+.pal li[aria-selected="true"] svg{color:var(--accent-text)}
+.pal .grp{font-size:11px;color:var(--text-3);padding:8px 10px 4px;cursor:default;display:block}
+.pal .empty{padding:18px 10px;color:var(--text-3);font-size:13px;display:block;cursor:default}
+.pal .ft{display:flex;gap:14px;padding:10px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-3)}
+
+/* Popover + toast */
+.pop{position:fixed;z-index:65;width:300px;background:var(--surface);border:1px solid var(--border-2);border-radius:10px;box-shadow:var(--shadow);padding:6px;display:none}
+.pop.on{display:block}
+.pop .opt{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:7px;font-size:13px}
+.pop .opt.cur{background:var(--surface-2)}
+.pop .opt .av{width:22px;height:22px;border-radius:6px;background:var(--surface-3);display:grid;place-items:center;font-size:10px;font-weight:600;color:var(--text-2)}
+.pop .note{padding:8px 10px 6px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border);margin-top:4px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);z-index:90;background:var(--tip-bg);color:var(--tip-text);padding:10px 14px;border-radius:9px;
+  font-size:13px;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;max-width:calc(100% - 32px)}
+.toast.on{opacity:1;transform:translateX(-50%)}
+
+/* ---------- Responsive ---------- */
+@media (max-width:1439px){
+  /* E2-Fix: bei 1200–1439 px bekommt die Topologie die volle Breite, damit Hostnamen nicht abgeschnitten werden */
+  .grid{grid-template-areas:
+   "health health health health health inet inet inet inc inc inc inc"
+   "topo topo topo topo topo topo topo topo topo topo topo topo"
+   "sites sites sites sites sites sites upc upc upc upc upc upc"
+   "lat lat lat lat lat lat sys sys sys avail avail avail"
+   "chg chg chg chg chg chg chg chg chg chg chg chg"}
+  .health-body{gap:22px}
+  .ring{width:168px;height:168px}
+}
+@media (max-width:1199px){
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr));
+    grid-template-areas:"health health" "inet inc" "topo topo" "sites upc" "lat lat" "sys avail" "chg chg"}
+  .chg{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:18px}
+  .chg>div:nth-child(4){border-left:0;padding-left:0}
+}
+@media (max-width:899px){
+  .search{width:auto;max-width:none}
+  .search span,.search kbd{display:none}
+  .search{width:36px;padding:0;justify-content:center;background:none;border-color:transparent}
+  .sitesel .st{display:none}
+}
+@media (max-width:759px){
+  .rail{inset:auto 0 0 0;width:auto;height:58px;flex-direction:row;border-right:0;border-top:1px solid var(--border);padding:0 8px;justify-content:space-around}
+  .rail .mark,.rail .spacer{display:none}
+  .rail nav{flex-direction:row;flex:1;justify-content:space-around;gap:0}
+  .rbtn .lbl{display:none}
+  .top{margin-left:0;padding:0 16px;gap:6px}
+  .top .sep,.sitesel,.tenant .tag,.me{display:none}
+  main{margin-left:0;padding:20px 16px 90px}
+  .grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"health" "inc" "inet" "topo" "sites" "upc" "lat" "sys" "avail" "chg"}
+  .health-body{flex-direction:column;align-items:stretch}
+  .ring{align-self:center}
+  .tcols{grid-template-columns:minmax(0,1fr);gap:22px}
+  .troot{gap:24px;margin-bottom:34px}
+  .chg{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .chg>div{border-left:0;padding-left:0;padding-right:8px}
+  .phead h1{font-size:22px}
+  .card{padding:16px}
+  .panel{width:100%}
+  .toast{bottom:76px}
+}
+@media (max-width:420px){
+  .sim .sl{display:none}
+  .sim .ss{display:inline}
+  .sim{padding:0 9px}
+  .tenant .tn{max-width:130px}
+  .tenant{padding-right:4px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}
+}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <pattern id="hatch" patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
+      <rect width="5" height="5" style="fill:var(--hatch-2)"/>
+      <rect width="2" height="5" style="fill:var(--st-unknown)"/>
+    </pattern>
+    <radialGradient id="ngHalo" cx="16" cy="16" r="10.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" style="stop-color:var(--accent);stop-opacity:1"/>
+      <stop offset=".45" style="stop-color:var(--accent);stop-opacity:.45"/>
+      <stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/>
+    </radialGradient>
+    <linearGradient id="latfill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" style="stop-color:var(--accent);stop-opacity:.22"/>
+      <stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/>
+    </linearGradient>
+  </defs>
+  <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.5"/></symbol>
+  <symbol id="i-topo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="5" rx="1.2"/><rect x="3" y="16" width="6" height="5" rx="1.2"/><rect x="15" y="16" width="6" height="5" rx="1.2"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/></symbol>
+  <symbol id="i-devices" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="8" width="19" height="8" rx="2"/><path d="M6 12h.01M9 12h.01M12 12h.01M15 12h.01"/><path d="M18 12h.5"/></symbol>
+  <symbol id="i-hosts" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-inc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.2 2.9 17.5A2 2 0 0 0 4.6 20.5h14.8a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></symbol>
+  <symbol id="i-logs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 10h10M4 14h16M4 18h8"/></symbol>
+  <symbol id="i-int" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-disk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-cert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 1.7-1.3a4 4 0 0 1-5-5L3 8l3-3 3.7 3.7a4 4 0 0 1 5-2.4z"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-step" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m10 8 4 4-4 4"/></symbol>
+  <!-- Nodeglow mark: halo (r 10.5), orbit r 11.5 with a 40° gap around the satellite at -45°, core r 4.6 -->
+  <symbol id="ng-mark" viewBox="0 0 32 32">
+    <circle cx="16" cy="16" r="10.5" style="fill:var(--mk-halo,url(#ngHalo));opacity:var(--mk-halo-o,var(--mark-halo))"/>
+    <path d="M26.42 11.14A11.5 11.5 0 1 1 20.86 5.58" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+    <circle cx="24.13" cy="7.87" r="2.15" fill="currentColor"/>
+    <circle cx="16" cy="16" r="4.6" style="fill:var(--mk-core,var(--accent))"/>
+  </symbol>
+  <!-- device glyphs -->
+  <symbol id="g-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></symbol>
+  <symbol id="g-firewall" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M3 14.5h18M9 5v5M15 10v4.5M9 14.5V19"/></symbol>
+  <symbol id="g-switch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"><rect x="2.5" y="7.5" width="19" height="9" rx="2"/><path d="M6 12.5v-1.5M9 12.5v-1.5M12 12.5v-1.5M15 12.5v-1.5M18 12.5v-1.5"/></symbol>
+  <symbol id="g-ap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="13" r="7.5"/><circle cx="12" cy="13" r="1.3" fill="currentColor"/><path d="M8.5 6.2A9 9 0 0 1 12 5.5a9 9 0 0 1 3.5.7" opacity=".55"/></symbol>
+  <symbol id="g-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="16" height="7" rx="1.6"/><rect x="4" y="13.5" width="16" height="7" rx="1.6"/><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5"/></symbol>
+  <symbol id="g-hyper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5l9 4.5 9-4.5L12 3z"/><path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></symbol>
+  <symbol id="g-nas" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8.5 7h7M8.5 11h7M8.5 15h7"/><circle cx="12" cy="18.3" r=".4" fill="currentColor"/></symbol>
+  <symbol id="g-printer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9V3.5h10V9"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v6.5H7z"/></symbol>
+  <symbol id="g-probe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M12 13V9"/><path d="M8.5 7.5a5 5 0 0 1 7 0M6 5a8.5 8.5 0 0 1 12 0"/><path d="M8 16.5h.01"/></symbol>
+  <symbol id="g-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M7 18.5a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9.5H7z"/></symbol>
+  <symbol id="g-vm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="12" rx="2"/><path d="M8 20h8" stroke-linecap="round"/><path d="M9 9.5l3 1.7 3-1.7M12 11.2v3" stroke-linecap="round"/></symbol>
+</svg>
+
+<aside class="rail" aria-label="Primary">
+  <button class="mark" id="aboutBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="aboutPop">
+    <svg class="ngm" aria-hidden="true"><use href="#ng-mark"/></svg>
+    <span class="sr">About Nodeglow</span>
+  </button>
+  <nav>
+    <button class="rbtn" aria-current="page" data-nav="dashboard"><svg aria-hidden="true"><use href="#i-dash"/></svg><span class="lbl">Dashboard</span><span class="sr">Dashboard</span></button>
+    <button class="rbtn" data-nav="topology"><svg aria-hidden="true"><use href="#i-topo"/></svg><span class="lbl">Topology</span><span class="sr">Topology</span></button>
+    <button class="rbtn" data-nav="devices"><svg aria-hidden="true"><use href="#i-devices"/></svg><span class="lbl">Devices</span><span class="sr">Devices</span></button>
+    <button class="rbtn" data-nav="hosts"><svg aria-hidden="true"><use href="#i-hosts"/></svg><span class="lbl">Hosts</span><span class="sr">Hosts</span></button>
+    <button class="rbtn" data-nav="incidents"><svg aria-hidden="true"><use href="#i-inc"/></svg><span class="badge" aria-hidden="true">2</span><span class="lbl">Incidents · 2 open</span><span class="sr">Incidents, 2 open</span></button>
+    <button class="rbtn" data-nav="logs"><svg aria-hidden="true"><use href="#i-logs"/></svg><span class="lbl">Logs</span><span class="sr">Logs</span></button>
+    <button class="rbtn" data-nav="integrations"><svg aria-hidden="true"><use href="#i-int"/></svg><span class="lbl">Integrations</span><span class="sr">Integrations</span></button>
+    <div class="spacer"></div>
+    <button class="rbtn" data-nav="settings"><svg aria-hidden="true"><use href="#i-set"/></svg><span class="lbl">Settings</span><span class="sr">Settings</span></button>
+  </nav>
+</aside>
+
+<header class="top">
+  <button class="tenant" id="tenantBtn" aria-haspopup="true" aria-expanded="false" aria-controls="tenantPop">
+    <span class="av" aria-hidden="true">MT</span><span class="tn">Muster Treuhand AG</span>
+    <svg aria-hidden="true"><use href="#i-chev"/></svg>
+    <span class="tag planned">Multi-tenant · Planned</span>
+  </button>
+  <span class="sep" aria-hidden="true"></span>
+  <button class="sitesel" id="siteBtn"><svg aria-hidden="true"><use href="#i-pin"/></svg><span class="st">All sites · 3</span><span class="sr">Show sites</span></button>
+  <span class="grow"></span>
+  <button class="search" id="searchBtn" aria-label="Search (Ctrl+K)"><svg aria-hidden="true"><use href="#i-search"/></svg><span>Search hosts, incidents…</span><kbd>Ctrl K</kbd></button>
+  <span class="sim" role="note" title="All values on this page are simulated (SCENARIO.md)"><i aria-hidden="true"></i><span class="sl">Simulated data</span><span class="ss" aria-hidden="true">Simulated</span><b class="sr">: all values on this page are simulated</b></span>
+  <button class="ibtn" id="themeBtn" aria-label="Switch to light theme"><svg aria-hidden="true"><use href="#i-sun"/></svg></button>
+  <span class="me" aria-label="Signed in as JB" role="img">JB</span>
+</header>
+
+<div class="pop" id="tenantPop" role="dialog" aria-label="Tenant">
+  <div class="opt cur"><span class="av">MT</span><span>Muster Treuhand AG</span><span style="margin-left:auto" class="faint">Current</span></div>
+  <div class="note">Switching between customers (multi-tenant) is <b>planned</b> and not available yet.</div>
+</div>
+
+<div class="pop about" id="aboutPop" role="dialog" aria-label="About Nodeglow">
+  <div class="lockup"><svg class="ngm" width="40" height="40" aria-hidden="true"><use href="#ng-mark"/></svg><span class="wordmark">Nodegl<span class="o">o</span>w</span></div>
+  <p>Monitoring for Swiss SMEs and MSPs. Concept E3 prototype: only what needs attention glows. No light means no data.</p>
+  <div class="sizes" aria-hidden="true">
+    <span><svg class="ngm" width="40" height="40"><use href="#ng-mark"/></svg>40 px</span>
+    <span><svg class="ngm" width="20" height="20"><use href="#ng-mark"/></svg>20 px</span>
+    <span><svg class="ngm mono" width="20" height="20"><use href="#ng-mark"/></svg>mono</span>
+    <span style="margin-left:auto;align-items:flex-end">Simulated data</span>
+  </div>
+</div>
+
+<main id="main">
+ <div class="wrap">
+  <div class="phead">
+    <div>
+      <h1>Dashboard</h1>
+      <p>Fri 10 Oct 2026, 14:32 · Updated just now</p>
+    </div>
+    <div class="acts">
+      <fieldset class="accentsw" id="accentSw">
+        <legend>Accent <span class="tag planned">Prototype</span></legend>
+        <div class="seg">
+          <label><input type="radio" name="accent" value="violet"><span class="sw sw-violet" aria-hidden="true"></span>Glow Violet</label>
+          <label><input type="radio" name="accent" value="ember"><span class="sw sw-ember" aria-hidden="true"></span>Ember</label>
+          <label><input type="radio" name="accent" value="aurora"><span class="sw sw-aurora" aria-hidden="true"></span>Aurora</label>
+        </div>
+      </fieldset>
+      <button class="since" id="sinceBtn"><span>Since your last visit <b>09:12</b></span><span class="faint">·</span><span><b>4</b> opened · <b>2</b> resolved</span></button>
+    </div>
+  </div>
+
+  <div class="grid">
+
+   <!-- Health -->
+   <section class="card a-health" aria-labelledby="h-health">
+     <div class="ch"><h2 id="h-health">Health</h2>
+       <div class="statusline"><span class="pill p-down"><i></i>1 critical</span><span class="pill p-unknown"><i></i>9 no data</span></div></div>
+     <div class="health-body">
+       <div class="ring" id="ring">
+         <svg viewBox="0 0 200 200" role="img" aria-label="48 hosts: 29 up, 5 degraded, 2 warning, 2 down, 1 in maintenance, 9 without data"></svg>
+         <div class="c"><div class="big num">48</div><div class="lbl-s">Hosts</div></div>
+       </div>
+       <div class="legend" id="legend"></div>
+     </div>
+     <div class="hfoot">
+       <span><b class="num">39 / 48</b>with current data</span>
+       <span><b class="num">14</b>agents</span>
+       <span><b class="num">13</b>integrations</span>
+     </div>
+   </section>
+
+   <!-- Internet -->
+   <section class="card a-inet" aria-labelledby="h-inet">
+     <div class="ch"><h2 id="h-inet">Internet</h2><span class="pill p-ok"><i></i>WAN up</span></div>
+     <div class="inet-nums">
+       <div><div class="k"><svg aria-hidden="true"><use href="#i-down"/></svg>Download</div><div class="big num">942<small>Mbit/s</small></div></div>
+       <div><div class="k"><svg aria-hidden="true"><use href="#i-up"/></svg>Upload</div><div class="big num">98<small>Mbit/s</small></div></div>
+     </div>
+     <div class="speedhist">
+       <div class="lbl-s" style="display:flex;justify-content:space-between"><span>Download · last 24 tests</span><span class="faint">hourly</span></div>
+       <div class="sbars" id="speedBars" role="img" aria-label="Download speed of the last 24 hourly tests, between 921 and 948 Mbit/s, latest 942"></div>
+     </div>
+     <dl class="kv">
+       <dt>Latency</dt><dd class="num">6 ms</dd>
+       <dt>Gateway</dt><dd>fw-zh-01</dd>
+       <dt>Source</dt><dd>Speedtest integration</dd>
+     </dl>
+   </section>
+
+   <!-- Incidents -->
+   <section class="card a-inc" aria-labelledby="h-inc" id="incCard">
+     <div class="ch"><h2 id="h-inc">Incidents</h2><button class="link" data-nav="incidents">View all</button></div>
+     <div class="inc-top">
+       <div><div class="big num">2<small>open</small></div><div class="lbl-s" style="margin-top:4px">1 critical · 1 warning</div></div>
+       <div class="minibars" id="minibars" role="img" aria-label="Incidents per day, last 14 days: 2,1,0,3,1,1,0,2,4,1,0,1,2,4. Today 4."></div>
+     </div>
+     <div id="incList"></div>
+     <div class="ifoot">
+       <div class="ifh">Resolved today</div>
+       <div class="rrow"><span class="ck" aria-hidden="true">✓</span><span>#1069 HTTP 503 on intranet</span><span class="num">13:36–13:48</span></div>
+       <div class="rrow"><span class="ck" aria-hidden="true">✓</span><span>#1068 Latency spike AP-ZH-OG3</span><span class="num">11:02–11:09</span></div>
+     </div>
+   </section>
+
+   <!-- Topology -->
+   <section class="card a-topo" aria-labelledby="h-topo" id="topology">
+     <div class="ch"><h2 id="h-topo">Topology</h2><div class="r"><span>Zürich HQ + Bern</span><button class="link" data-nav="topology">Open map</button></div></div>
+     <div class="topo" id="topo">
+       <svg class="wires" id="wires" aria-hidden="true"></svg>
+       <div class="troot">
+         <button class="node" data-dev="wan" id="n-wan"><span class="g"><svg aria-hidden="true"><use href="#g-globe"/></svg><span class="sd d-ok"></span></span><span class="tx"><span class="nm" style="display:block">Internet</span><span class="sb" style="display:block">WAN up · 6 ms</span></span></button>
+         <button class="node" data-dev="fw-zh-01" id="n-fw"><span class="g"><svg aria-hidden="true"><use href="#g-firewall"/></svg><span class="sd d-ok"></span></span><span class="tx"><span class="nm" style="display:block">fw-zh-01</span><span class="sb" style="display:block">Firewall · pfSense</span></span></button>
+       </div>
+       <div class="tcols" id="tcols"></div>
+     </div>
+     <div class="tcap">
+       <span><i class="ln"></i>Uplink</span>
+       <span><i class="ln bad glowing"></i>Affected by #1071 · glows</span>
+       <span><i class="ln unk"></i>Via probe · no light = no data</span>
+       <span style="margin-left:auto">Links from UniFi + Proxmox parent data</span>
+     </div>
+   </section>
+
+   <!-- Sites -->
+   <section class="card a-sites" aria-labelledby="h-sites" id="sitesCard">
+     <div class="ch"><h2 id="h-sites">Sites</h2><span class="r">48 hosts</span></div>
+     <div id="sites"></div>
+   </section>
+
+   <!-- Upcoming -->
+   <section class="card a-upc" aria-labelledby="h-upc">
+     <div class="ch"><h2 id="h-upc">Upcoming</h2></div>
+     <div>
+       <div class="urow"><span class="uic"><svg aria-hidden="true"><use href="#i-wrench"/></svg></span>
+         <div><div class="t1">NAS firmware update</div><div class="t2">NAS-ZH-01 · maintenance 14:00–15:00</div></div>
+         <div class="w num">15:00<small>ends in 28 min</small></div></div>
+       <div class="urow"><span class="uic"><svg aria-hidden="true"><use href="#i-disk"/></svg></span>
+         <div><div class="t1">SRV-FILE-01 · D: 91 %</div><div class="t2">Trend · linear projection</div><div class="prog" aria-hidden="true"><i style="width:91%"></i></div></div>
+         <div class="w num">~5 days<small>until full</small></div></div>
+       <div class="urow"><span class="uic"><svg aria-hidden="true"><use href="#i-cert"/></svg></span>
+         <div><div class="t1">Certificate expires</div><div class="t2">portal.mustertreuhand.ch</div></div>
+         <div class="w num">9 days<small>19 Oct</small></div></div>
+     </div>
+   </section>
+
+   <!-- Latency -->
+   <section class="card a-lat" aria-labelledby="h-lat">
+     <div class="ch"><h2 id="h-lat">Latency · hosts behind SW-ZH-CORE-02</h2><span class="r">Last 2 h</span></div>
+     <div class="lat-head">
+       <div><div class="big num" style="font-size:28px">14.2<small>ms median</small></div><div class="lbl-s">was 0.3 ms before 14:05</div></div>
+       <div class="lbl-s" style="align-self:flex-end"><span class="key" style="background:var(--accent)"></span>Median of 7 hosts</div>
+       <div class="lbl-s" style="align-self:flex-end"><span class="key" style="background:var(--chart-fill);height:8px"></span>Max</div>
+     </div>
+     <div class="chart" id="latChart" tabindex="0" role="img" aria-label="Latency of 7 hosts behind SW-ZH-CORE-02, 12:32 to 14:32. About 0.3 ms until 14:05, then 3 to 40 ms with spikes. Two hosts stop answering at 14:07. Use arrow keys to inspect values."></div>
+   </section>
+
+   <!-- Syslog -->
+   <section class="card a-sys" aria-labelledby="h-sys">
+     <div class="ch"><h2 id="h-sys">Syslog</h2><span class="r">24 h</span></div>
+     <div class="sys-nums">
+       <div class="big num">46<small>/min</small></div>
+       <span class="pill p-warning" style="margin-bottom:6px">usual 8–14</span>
+     </div>
+     <div class="chart" id="sysChart" tabindex="0" role="img" aria-label="Syslog rate, last 24 hours in 15-minute buckets. Baseline 8 to 14 messages per minute, now 46 per minute since 14:15. Use arrow keys to inspect values."></div>
+     <div class="kv" style="margin-top:12px">
+       <dt>Messages 24 h</dt><dd class="num">11,622</dd>
+       <dt>Error or worse</dt><dd class="num">214</dd>
+     </div>
+   </section>
+
+   <!-- Availability -->
+   <section class="card a-avail" aria-labelledby="h-av">
+     <div class="ch"><h2 id="h-av">Availability</h2><span class="r">30 days</span></div>
+     <div class="big num">99.94<small>%</small></div>
+     <div style="margin-top:8px"><span class="pill p-ok"><i></i>Above target 99.90 %</span></div>
+     <div class="avbar" role="img" aria-label="99.94 percent on a scale from 99.80 to 100 percent, target 99.90 percent"><i style="width:70%"></i><b style="left:50%"></b></div>
+     <div class="avscale"><span>99.80</span><span class="tg" style="left:50%">target</span><span>100 %</span></div>
+     <dl class="kv" style="margin-top:auto">
+       <dt>Downtime</dt><dd class="num">26 of 43 min budget</dd>
+     </dl>
+     <p class="faint" style="font-size:12px;margin:10px 0 0">No-data periods are excluded, never counted as up.</p>
+   </section>
+
+   <!-- Changes -->
+   <section class="card a-chg" aria-labelledby="h-chg" id="chgCard" tabindex="-1">
+     <div class="ch"><h2 id="h-chg">Since your last visit</h2><span class="r">09:12 – 14:32</span></div>
+     <div class="chg">
+       <div><div class="big num">4</div><div class="t">Incidents opened</div><div class="d">#1069 – #1072</div></div>
+       <div><div class="big num">2</div><div class="t">Resolved</div><div class="d">#1068 AP-ZH-OG3 11:02–11:09 · #1069 intranet 13:36–13:48</div></div>
+       <div><div class="big num">2</div><div class="t">New hosts discovered</div><div class="d">Subnet scanner · awaiting review</div></div>
+       <div><div class="big num">1</div><div class="t">Maintenance started</div><div class="d">NAS-ZH-01 at 14:00</div></div>
+       <div><div class="big num">1</div><div class="t">Agent updated</div><div class="d">SRV-RDS-01 → 0.4.2</div></div>
+     </div>
+   </section>
+
+  </div>
+  <footer class="foot">
+    <span class="lockup"><svg class="ngm" width="20" height="20" aria-hidden="true"><use href="#ng-mark"/></svg><span class="wordmark">Nodegl<span class="o">o</span>w</span></span>
+    <span>Concept E3 prototype · simulated data · glow = needs attention, no light = no data</span>
+  </footer>
+ </div>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="pTitle" aria-hidden="true">
+  <div class="ph" id="pHead"></div>
+  <div class="pb" id="pBody"></div>
+  <div class="pf" id="pFoot"></div>
+</aside>
+
+<div class="pal" id="pal" role="dialog" aria-modal="true" aria-label="Search" aria-hidden="true">
+  <div class="in"><svg aria-hidden="true"><use href="#i-search"/></svg>
+    <input id="palIn" type="text" placeholder="Search hosts, incidents, pages…" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list">
+    <kbd>Esc</kbd></div>
+  <ul id="palList" role="listbox" aria-label="Results"></ul>
+  <div class="ft"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span style="margin-left:auto">Simulated data</span></div>
+</div>
+
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+"use strict";
+var $=function(s,r){return (r||document).querySelector(s)};
+var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+var NS="http://www.w3.org/2000/svg";
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+
+/* ---------- Simulated data (SCENARIO.md) ---------- */
+var ST={ok:{l:"Up",p:"p-ok"},degraded:{l:"Degraded",p:"p-degraded"},warning:{l:"Warning",p:"p-warning"},down:{l:"Down",p:"p-down"},maint:{l:"Maintenance",p:"p-maint"},unknown:{l:"No data",p:"p-unknown"}};
+var D={
+ "wan":{n:"Internet",g:"globe",type:"WAN",site:"Zürich HQ",st:"ok",lat:"6 ms",ip:"WAN1",parent:"fw-zh-01",extra:[["Download","942 Mbit/s"],["Upload","98 Mbit/s"]],note:"Speedtest integration, last result."},
+ "fw-zh-01":{n:"fw-zh-01",g:"firewall",type:"Firewall · pfSense",site:"Zürich HQ",st:"ok",lat:"0.2 ms",ip:"10.10.0.1",parent:"Internet",susp:true,
+   log:["14:28:41 filterlog: block in on igb1 TCP 10.10.40.17:51522 → 10.10.10.3:22","14:28:41 filterlog: block in on igb1 UDP 10.10.40.22:5353 → 224.0.0.251:5353","<b>volume +420 % vs. Friday 14:00 baseline</b>"]},
+ "SW-ZH-CORE-01":{n:"SW-ZH-CORE-01",g:"switch",type:"Core switch",site:"Zürich HQ",st:"ok",lat:"0.3 ms",ip:"10.10.10.2",parent:"fw-zh-01"},
+ "SW-ZH-CORE-02":{n:"SW-ZH-CORE-02",g:"switch",type:"Core switch",site:"Zürich HQ",st:"ok",lat:"0.4 ms",ip:"10.10.10.3",parent:"fw-zh-01",inc:1071,
+   note:"Reachable, but uplink Te1/0/48 is flapping: 38 link events in 10 min.",
+   log:["14:31:52 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to <b>down</b>","14:31:55 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to up","14:31:09 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to <b>down</b>","14:31:12 %LINK-3-UPDOWN: Interface Te1/0/48, changed state to up"]},
+ "SW-ZH-ACC-01":{n:"SW-ZH-ACC-01",g:"switch",type:"Access switch",site:"Zürich HQ",st:"ok",lat:"0.3 ms",ip:"10.10.10.11",parent:"SW-ZH-CORE-01"},
+ "SW-ZH-ACC-02":{n:"SW-ZH-ACC-02",g:"switch",type:"Access switch",site:"Zürich HQ",st:"ok",lat:"0.3 ms",ip:"10.10.10.12",parent:"SW-ZH-CORE-01"},
+ "pve-zh-01":{n:"pve-zh-01",g:"hyper",type:"Hypervisor · Proxmox",site:"Zürich HQ",st:"ok",lat:"0.2 ms",ip:"10.10.20.11",parent:"SW-ZH-CORE-01",extra:[["Guests","11"]]},
+ "pve-zh-02":{n:"pve-zh-02",g:"hyper",type:"Hypervisor · Proxmox",site:"Zürich HQ",st:"ok",lat:"0.2 ms",ip:"10.10.20.12",parent:"SW-ZH-CORE-01",extra:[["Guests","10"]]},
+ "SRV-BACKUP-01":{n:"SRV-BACKUP-01",g:"server",type:"Windows server",site:"Zürich HQ",st:"warning",lat:"0.4 ms",ip:"10.10.20.31",parent:"SW-ZH-CORE-01",inc:1072,
+   note:"Service VeeamBackupSvc stopped (3 consecutive agent reports).",
+   log:["14:26:03 Service Control Manager 7036: The Veeam Backup Service entered the <b>stopped</b> state.","14:20:00 Veeam: Job 'Nightly-FS' last result Success"]},
+ "web-01":{n:"web-01",g:"vm",type:"Linux VM",site:"Zürich HQ",st:"warning",lat:"0.3 ms",ip:"10.10.30.21",parent:"pve-zh-01",note:"Port check 443 failed. Host itself answers ping."},
+ "NAS-ZH-01":{n:"NAS-ZH-01",g:"nas",type:"Storage · Synology",site:"Zürich HQ",st:"maint",lat:"—",ip:"10.10.20.40",parent:"SW-ZH-CORE-01",note:"Maintenance window “NAS firmware update” 14:00–15:00. Alerts are paused, checks keep running."},
+ "SRV-APP-01":{n:"SRV-APP-01",g:"server",type:"Windows server",site:"Zürich HQ",st:"down",lat:"—",ip:"10.10.20.33",parent:"SW-ZH-CORE-02",inc:1071,v:"Down since 14:07"},
+ "PRN-ZH-02":{n:"PRN-ZH-02",g:"printer",type:"Printer",site:"Zürich HQ",st:"down",lat:"—",ip:"10.10.50.12",parent:"SW-ZH-CORE-02",inc:1071,v:"Down since 14:07"},
+ "SW-ZH-ACC-03":{n:"SW-ZH-ACC-03",g:"switch",type:"Access switch",site:"Zürich HQ",st:"degraded",lat:"38.6 ms",ip:"10.10.10.13",parent:"SW-ZH-CORE-02",inc:1071},
+ "AP-ZH-OG3":{n:"AP-ZH-OG3",g:"ap",type:"Access point",site:"Zürich HQ",st:"degraded",lat:"31.8 ms",ip:"10.10.60.13",parent:"SW-ZH-CORE-02",inc:1071},
+ "AP-ZH-OG4":{n:"AP-ZH-OG4",g:"ap",type:"Access point",site:"Zürich HQ",st:"degraded",lat:"27.1 ms",ip:"10.10.60.14",parent:"SW-ZH-CORE-02",inc:1071},
+ "SRV-RDS-01":{n:"SRV-RDS-01",g:"server",type:"Windows server",site:"Zürich HQ",st:"degraded",lat:"8.6 ms",ip:"10.10.20.35",parent:"SW-ZH-CORE-02",inc:1071},
+ "PRN-ZH-03":{n:"PRN-ZH-03",g:"printer",type:"Printer",site:"Zürich HQ",st:"degraded",lat:"3.9 ms",ip:"10.10.50.13",parent:"SW-ZH-CORE-02",inc:1071},
+ "probe-bern-01":{n:"probe-bern-01",g:"probe",type:"Remote probe",site:"Bern branch",st:"unknown",lat:"—",ip:"10.20.0.5",parent:"Site-to-site VPN",probe:true,
+   note:"Last heartbeat 14:21, silent for 11 min (threshold 3 min). Its 9 hosts are shown as unknown, not as up."},
+ "fw-be-01":{n:"fw-be-01",g:"firewall",type:"Firewall",site:"Bern branch",st:"unknown",lat:"—",ip:"10.20.0.1",parent:"probe-bern-01"},
+ "SW-BE-01":{n:"SW-BE-01",g:"switch",type:"Switch",site:"Bern branch",st:"unknown",lat:"—",ip:"10.20.10.2",parent:"probe-bern-01"},
+ "NAS-BE-01":{n:"NAS-BE-01",g:"nas",type:"Storage · Synology",site:"Bern branch",st:"unknown",lat:"—",ip:"10.20.20.40",parent:"probe-bern-01"},
+ "AP-BE-01":{n:"AP-BE-01",g:"ap",type:"Access point",site:"Bern branch",st:"unknown",lat:"—",ip:"10.20.60.11",parent:"probe-bern-01"}
+};
+var AFFECTED=["SRV-APP-01","PRN-ZH-02","SW-ZH-ACC-03","AP-ZH-OG3","AP-ZH-OG4","SRV-RDS-01","PRN-ZH-03"];
+var INC={
+ 1071:{id:1071,sev:"crit",sevL:"Critical",title:"Uplink flapping on SW-ZH-CORE-02",since:"14:07",age:"25 min",hosts:"7 hosts affected",dev:"SW-ZH-CORE-02",
+   what:"Uplink Te1/0/48 on SW-ZH-CORE-02 changes state repeatedly (38 events in 10 min). Behind the switch, 5 hosts answer slowly (3–40 ms instead of ~0.3 ms) and 2 stopped answering at 14:07.",
+   next:"Check the uplink Te1/0/48 on SW-ZH-CORE-02 (cable, SFP, port errors). Downstream alerts are grouped here, so there is nothing else to work through.",
+   stats:[["7","Affected hosts"],["38","Flaps in 10 min"],["25 min","Open"]],
+   rules:"multi_host_down + host_down_syslog",
+   rel:[["confirmed","Confirmed","All 7 hosts share the parent SW-ZH-CORE-02","Topology parent_id (UniFi / Proxmox). Their own alerts are suppressed into this incident."],
+        ["rule","Rule-based","Syslog burst on the parent within the incident window","Rule host_down_syslog: %LINK-3-UPDOWN on Te1/0/48"],
+        ["suspected","Suspected","fw-zh-01 filterlog +420 % vs. Friday 14:00 baseline","Overlaps in time only. Not confirmed as related."],
+        ["planned","Planned","Root-cause ranking across metrics","Not available yet"]],
+   log:D["SW-ZH-CORE-02"].log},
+ 1072:{id:1072,sev:"warn",sevL:"Warning",title:"VeeamBackupSvc stopped",since:"14:26",age:"6 min",hosts:"SRV-BACKUP-01",dev:"SRV-BACKUP-01",
+   what:"The Windows service VeeamBackupSvc on SRV-BACKUP-01 is stopped. Reported by the agent 3 times in a row.",
+   next:"Start the service on SRV-BACKUP-01 and check the Veeam event log for the reason it stopped. Tonight's backup job depends on it.",
+   stats:[["1","Affected host"],["3","Agent reports"],["6 min","Open"]],
+   rules:"service_stopped",
+   rel:[["confirmed","Confirmed","Single host, reported by its own agent","Agent SRV-BACKUP-01"],
+        ["planned","Planned","Impact on backup jobs","Not available yet"]],
+   log:D["SRV-BACKUP-01"].log}
+};
+var acked={};
+
+/* ---------- Health ring ---------- */
+var HS=[["ok","Up",29,"var(--st-ok)",""],["degraded","Degraded",5,"var(--st-degraded)","latency 3–40 ms"],["warning","Warning",2,"var(--st-warning)","service, port check"],
+  ["down","Down",2,"var(--st-down)","behind SW-ZH-CORE-02"],["maint","Maintenance",1,"var(--st-maint)","NAS-ZH-01 until 15:00"],["unknown","No data",9,"url(#hatch)","Bern · probe silent 11 min"]];
+(function(){
+  var svg=$("#ring svg"),r=80,C=2*Math.PI*r,gap=3,off=0,total=48;
+  var bg=document.createElementNS(NS,"circle");bg.setAttribute("cx",100);bg.setAttribute("cy",100);bg.setAttribute("r",r);
+  bg.setAttribute("fill","none");bg.setAttribute("stroke-width","14");bg.style.stroke="var(--surface-2)";svg.appendChild(bg);
+  HS.forEach(function(h){
+    var len=h[2]/total*C;
+    var c=document.createElementNS(NS,"circle");c.setAttribute("class","seg");
+    c.setAttribute("cx",100);c.setAttribute("cy",100);c.setAttribute("r",r);c.setAttribute("fill","none");c.setAttribute("stroke-width","14");
+    c.style.stroke=h[3];c.setAttribute("stroke-dasharray",Math.max(len-gap,1)+" "+(C-Math.max(len-gap,1)));
+    c.setAttribute("stroke-dashoffset",-off);c.setAttribute("transform","rotate(-90 100 100)");
+    off+=len;svg.appendChild(c);
+    c.addEventListener("mousemove",function(e){tipShow(e.clientX,e.clientY,"<b>"+h[1]+"</b> · "+h[2]+" host"+(h[2]>1?"s":"")+(h[4]?"<br>"+esc(h[4]):""))});
+    c.addEventListener("mouseleave",tipHide);
+  });
+  $("#legend").innerHTML=HS.map(function(h){
+    var sw=h[0]==="unknown"?'<span class="sw hatch"></span>':'<span class="sw" style="background:'+h[3]+'"></span>';
+    return '<div class="lg">'+sw+'<span class="t">'+h[1]+(h[4]?'<small>'+esc(h[4])+'</small>':'')+'</span><span class="n num">'+h[2]+'</span></div>';
+  }).join("");
+})();
+
+/* ---------- Incidents card ---------- */
+(function(){
+  var per=[2,1,0,3,1,1,0,2,4,1,0,1,2,4],mx=4;
+  var mb=$("#minibars");
+  per.forEach(function(v,i){var s=document.createElement("span");s.style.height=(v?v/mx*100:6)+"%";if(i===13)s.className="today";
+    var d=new Date(2026,9,10-(13-i));var lbl=i===13?"Today":d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
+    s.addEventListener("mousemove",function(e){tipShow(e.clientX,e.clientY,"<b>"+lbl+"</b> · "+v+" incident"+(v===1?"":"s"))});
+    s.addEventListener("mouseleave",tipHide);mb.appendChild(s)});
+})();
+(function(){ // speedtest history: simulated, consistent with the latest 942/98
+  var v=[938,941,944,936,929,921,933,940,946,943,939,935,931,927,936,942,948,944,940,937,934,939,945,942],sb=$("#speedBars");
+  v.forEach(function(x,i){var s=document.createElement("span");s.style.height=(x/1000*100)+"%";var h=(14-(23-i)+24)%24;
+    s.addEventListener("mousemove",function(e){tipShow(e.clientX,e.clientY,"<b>"+(h<10?"0":"")+h+":00</b> · "+x+" Mbit/s down")});
+    s.addEventListener("mouseleave",tipHide);sb.appendChild(s)});
+})();
+function renderIncList(){
+  $("#incList").innerHTML=[1071,1072].map(function(id){var x=INC[id];
+    return '<button class="irow'+(acked[id]?' acked':'')+'" data-inc="'+id+'"><span class="sev '+x.sev+'"><svg aria-hidden="true"><use href="#i-inc"/></svg></span>'+
+     '<span style="min-width:0"><span class="t1" style="display:block">'+esc(x.title)+'</span><span class="t2" style="display:block">#'+id+' · '+x.sevL+' · '+esc(x.hosts)+'</span></span>'+
+     '<span class="age">'+x.age+(acked[id]?'<span class="ack">Acknowledged</span>':'')+'</span></button>';}).join("");
+}
+renderIncList();
+
+/* ---------- Topology ---------- */
+function dotCls(st){return "d-"+st}
+function rowVal(d){
+  if(d.st==="down")return ["down","Down"];
+  if(d.st==="unknown")return ["","No data"];
+  if(d.st==="maint")return ["","Maintenance"];
+  if(d.st==="warning")return ["warning","Warning"];
+  if(d.st==="degraded")return ["degraded",d.lat];
+  return ["",d.lat];
+}
+function trow(id){var d=D[id],v=rowVal(d);
+  return '<li><button class="trow '+d.st+'" data-dev="'+id+'"><span class="gi"><svg aria-hidden="true"><use href="#g-'+d.g+'"/></svg></span><span class="nm">'+esc(d.n)+'</span><span class="v '+v[0]+'">'+esc(v[1])+'</span><span class="dot '+dotCls(d.st)+'" aria-hidden="true"></span><span class="sr">, '+ST[d.st].l+'</span></button></li>';}
+function headNode(id,sub){var d=D[id];
+  return '<button class="node" data-dev="'+id+'" id="n-'+id+'"><span class="g"><svg aria-hidden="true"><use href="#g-'+d.g+'"/></svg><span class="sd '+dotCls(d.st)+'"></span></span><span class="tx"><span class="nm" style="display:block">'+esc(d.n)+'</span><span class="sb" style="display:block">'+esc(sub)+'</span></span></button>';}
+$("#tcols").innerHTML=
+ '<div class="tcol" id="col1">'+headNode("SW-ZH-CORE-01","Core switch · 27 downstream")+
+   '<ul class="tlist">'+["SW-ZH-ACC-01","SW-ZH-ACC-02","pve-zh-01","pve-zh-02","SRV-BACKUP-01","web-01","NAS-ZH-01"].map(trow).join("")+
+   '<li><div class="trow more"><span></span><span class="nm">+ 20 more</span><span class="v">all up</span><span class="dot d-ok" aria-hidden="true"></span></div></li></ul></div>'+
+ '<div class="tcol bad" id="col2">'+headNode("SW-ZH-CORE-02","Up · uplink Te1/0/48 flapping")+
+   '<button class="tbanner" data-inc="1071"><svg width="14" height="14" aria-hidden="true"><use href="#i-inc"/></svg>#1071 · 7 hosts affected</button>'+
+   '<ul class="tlist">'+AFFECTED.map(trow).join("")+'</ul></div>'+
+ '<div class="tcol unk" id="col3">'+headNode("probe-bern-01","Bern · last heartbeat 14:21")+
+   '<div class="tbanner unk">9 hosts · no data for 11 min</div>'+
+   '<ul class="tlist">'+["fw-be-01","SW-BE-01","NAS-BE-01","AP-BE-01"].map(trow).join("")+
+   '<li><div class="trow more unknown"><span></span><span class="nm">+ 5 more</span><span class="v">No data</span><span class="dot d-unknown" aria-hidden="true"></span></div></li></ul></div>';
+
+function drawWires(){
+  var topo=$("#topo"),svg=$("#wires");svg.innerHTML="";
+  var tb=topo.getBoundingClientRect();
+  function box(el){var b=el.getBoundingClientRect();return {l:b.left-tb.left,t:b.top-tb.top,r:b.right-tb.left,b:b.bottom-tb.top,cx:(b.left+b.right)/2-tb.left,cy:(b.top+b.bottom)/2-tb.top}}
+  function path(d,stroke,dash,w){var p=document.createElementNS(NS,"path");p.setAttribute("d",d);p.setAttribute("fill","none");p.style.stroke=stroke;
+    p.setAttribute("stroke-width",w||1.5);if(dash)p.setAttribute("stroke-dasharray",dash);p.setAttribute("stroke-linecap","round");svg.appendChild(p);return p}
+  function label(x,y,t){var tx=document.createElementNS(NS,"text");tx.setAttribute("x",x);tx.setAttribute("y",y);tx.setAttribute("text-anchor","middle");
+    tx.style.fill="var(--text-3)";tx.style.font="400 11px var(--f-ui)";tx.textContent=t;svg.appendChild(tx)}
+  var wan=box($("#n-wan")),fw=box($("#n-fw"));
+  path("M"+wan.r+" "+wan.cy+" H"+fw.l,"var(--line)");
+  var cols=[["n-SW-ZH-CORE-01","var(--line)",""],["n-SW-ZH-CORE-02","var(--st-down)","",1],["n-probe-bern-01","var(--st-unknown)","4 4"]];
+  var stacked=window.matchMedia("(max-width:759px)").matches;
+  var sx=fw.cx,sy=fw.b;
+  cols.forEach(function(c,i){
+    var n=box(document.getElementById(c[0]));var R=8;
+    if(stacked){if(i===0)path("M"+sx+" "+sy+" V"+n.t,c[1],c[2]);return} // phone: columns stack, only the first one hangs off the firewall
+    var my=sy+(n.t-sy)/2,tx=n.cx;
+    var w=c[1]==="var(--line)"?1.5:2,p;
+    if(Math.abs(tx-sx)<1)p=path("M"+sx+" "+sy+" V"+n.t,c[1],c[2],w);
+    else{var dir=tx>sx?1:-1;
+      p=path("M"+sx+" "+sy+" V"+(my-R)+" Q"+sx+" "+my+" "+(sx+dir*R)+" "+my+" H"+(tx-dir*R)+" Q"+tx+" "+my+" "+tx+" "+(my+R)+" V"+n.t,c[1],c[2],w);}
+    if(c[3])p.style.filter="var(--wire-glow)"; // the affected branch glows, healthy and no-data wires never do
+    if(i===2)label((tx+sx)/2+30,my-6,"Site-to-site VPN");
+  });
+}
+
+/* ---------- Sites ---------- */
+(function(){
+  var sites=[
+   {n:"Zürich HQ",s:"Direct",c:37,parts:[[27,"ok"],[5,"degraded"],[2,"warning"],[2,"down"],[1,"maint"]],f:"27 up · 5 degraded · 2 down · 2 warning · 1 maintenance"},
+   {n:"Bern branch",s:"via probe-bern-01",c:9,parts:[[9,"unknown"]],f:"No data since 14:21 · probe silent 11 min"},
+   {n:"Cloud",s:"HTTP / SSL checks",c:2,parts:[[2,"ok"]],f:"2 up · certificate expires in 9 days"}];
+  $("#sites").innerHTML=sites.map(function(s){
+    return '<div class="site"><div class="h"><div><b>'+s.n+'</b> <span>'+s.s+'</span></div><span class="n num">'+s.c+'</span></div>'+
+     '<div class="sbar" role="img" aria-label="'+esc(s.f)+'">'+s.parts.map(function(p){return '<i class="'+(p[1]==="unknown"?"hatch":"")+'" style="flex:'+p[0]+';'+(p[1]==="unknown"?"":"background:var(--st-"+p[1]+")")+'"></i>'}).join("")+'</div>'+
+     '<div class="f">'+s.f+'</div></div>';}).join("");
+})();
+
+/* ---------- Seeded data for charts ---------- */
+var seed=1071;function rnd(){seed=(seed*16807)%2147483647;return (seed-1)/2147483646}
+var LAT=[];(function(){ // 121 points, 12:32..14:32
+  for(var i=0;i<=120;i++){var m=12*60+32+i,p={t:m};
+    if(m<14*60+5){p.med=.28+rnd()*.08;p.max=p.med+.05+rnd()*.12;p.n=7}
+    else{var k=Math.min(1,(m-(14*60+5))/4);p.med=(3+rnd()*13+(rnd()<.12?8:0))*k+.3*(1-k);p.max=Math.min(42,p.med+6+rnd()*18+(rnd()<.18?12:0))*k+.4*(1-k);p.n=m>=14*60+7?5:7}
+    LAT.push(p)}
+  LAT[120].med=14.2;
+})();
+var SYS=[];(function(){ // 96 buckets ending 14:30
+  var start=14*60+30-96*15,raw=[],sum=0;
+  for(var i=0;i<96;i++){var m=(start+i*15+1440)%1440,h=m/60;
+    var base=(h>=7&&h<19)?9+rnd()*4.5:(h>=6&&h<7||h>=19&&h<21)?6+rnd()*2.5:3.8+rnd()*1.6;raw.push({m:m,v:base})}
+  raw[94].v=24;raw[95].v=46;
+  var fixed=(24+46)*15,rest=0;for(i=0;i<94;i++)rest+=raw[i].v*15;
+  var f=(11622-fixed)/rest;for(i=0;i<94;i++)raw[i].v=Math.round(raw[i].v*f*10)/10;
+  SYS=raw;
+})();
+function hm(m){m=(m+1440)%1440;var h=Math.floor(m/60),mm=Math.round(m%60);return (h<10?"0":"")+h+":"+(mm<10?"0":"")+mm}
+function fmt(v){return v<1?v.toFixed(2):v<10?v.toFixed(1):Math.round(v)+""}
+
+/* ---------- Chart drawing ---------- */
+function el(tag,attrs,style){var e=document.createElementNS(NS,tag);for(var k in attrs)e.setAttribute(k,attrs[k]);if(style)for(var s in style)e.style[s]=style[s];return e}
+function drawLat(){
+  var box=$("#latChart"),W=Math.max(260,box.clientWidth),H=210,L=34,R=8,T=16,B=24;box.innerHTML="";
+  var svg=el("svg",{viewBox:"0 0 "+W+" "+H,height:H,"aria-hidden":"true"});box.appendChild(svg);
+  var x=function(i){return L+i/120*(W-L-R)},ymax=45,y=function(v){return T+(1-v/ymax)*(H-T-B)};
+  [0,10,20,30,40].forEach(function(v){svg.appendChild(el("line",{x1:L,x2:W-R,y1:y(v),y2:y(v)},{stroke:"var(--grid)"}));
+    var t=el("text",{x:L-8,y:y(v)+4,"text-anchor":"end"});t.textContent=v+(v===40?" ms":"");svg.appendChild(t)});
+  [[28,"13:00"],[58,"13:30"],[88,"14:00"],[118,"14:30"]].forEach(function(a){var t=el("text",{x:x(a[0]),y:H-6,"text-anchor":"middle"});t.textContent=a[1];svg.appendChild(t)});
+  var area="M"+x(0)+" "+y(0);LAT.forEach(function(p,i){area+=" L"+x(i)+" "+y(p.max)});area+=" L"+x(120)+" "+y(0)+" Z";
+  svg.appendChild(el("path",{d:area},{fill:"var(--chart-fill)"}));
+  var ln="";LAT.forEach(function(p,i){ln+=(i?" L":"M")+x(i).toFixed(1)+" "+y(p.med).toFixed(1)});
+  svg.appendChild(el("path",{d:ln,fill:"none","stroke-width":1.8,"stroke-linejoin":"round"},{stroke:"var(--accent)"}));
+  var on=x(93);svg.appendChild(el("line",{x1:on,x2:on,y1:T-4,y2:H-B},{stroke:"var(--st-down)",strokeDasharray:"3 3"}));
+  var lt=el("text",{x:on-6,y:T+4,"text-anchor":"end"},{fill:"var(--text-2)"});lt.textContent="Onset 14:05";svg.appendChild(lt);
+  var cur=el("g",{},{display:"none"});var cl=el("line",{y1:T,y2:H-B},{stroke:"var(--text-3)"});var cd=el("circle",{r:4,"stroke-width":2},{fill:"var(--surface)",stroke:"var(--accent)"});
+  cur.appendChild(cl);cur.appendChild(cd);svg.appendChild(cur);
+  function show(i,cx,cy){var p=LAT[i];cur.style.display="";cl.setAttribute("x1",x(i));cl.setAttribute("x2",x(i));cd.setAttribute("cx",x(i));cd.setAttribute("cy",y(p.med));
+    var r=svg.getBoundingClientRect();
+    tipShow(cx!=null?cx:r.left+x(i)*r.width/W,cy!=null?cy:r.top+y(p.med),"<b>"+hm(p.t)+"</b>"+(p.t===14*60+5?" · onset":"")+(p.t===14*60+7?" · #1071 opened":"")+
+      '<div class="row"><span>Median</span><span>'+fmt(p.med)+' ms</span></div><div class="row"><span>Max</span><span>'+fmt(p.max)+' ms</span></div><div class="row"><span>Answering</span><span>'+p.n+' of 7</span></div>')}
+  bindChart(box,svg,W,121,function(px){return Math.round((px-L)/(W-L-R)*120)},show,function(){cur.style.display="none"});
+}
+function drawSys(){
+  var box=$("#sysChart"),W=Math.max(200,box.clientWidth),H=116,L=2,R=2,T=6,B=18;box.innerHTML="";
+  var svg=el("svg",{viewBox:"0 0 "+W+" "+H,height:H,"aria-hidden":"true"});box.appendChild(svg);
+  var n=SYS.length,x=function(i){return L+i/(n-1)*(W-L-R)},y=function(v){return T+(1-v/50)*(H-T-B)};
+  svg.appendChild(el("rect",{x:L,width:W-L-R,y:y(14),height:y(8)-y(14)},{fill:"var(--grid)"}));
+  var area="M"+x(0)+" "+y(0),ln="";SYS.forEach(function(p,i){area+=" L"+x(i)+" "+y(p.v);ln+=(i?" L":"M")+x(i).toFixed(1)+" "+y(p.v).toFixed(1)});
+  area+=" L"+x(n-1)+" "+y(0)+" Z";
+  svg.appendChild(el("path",{d:area},{fill:"url(#latfill)"}));
+  svg.appendChild(el("path",{d:ln,fill:"none","stroke-width":1.6,"stroke-linejoin":"round"},{stroke:"var(--accent)"}));
+  [[0,"14:30","start"],[38,"00:00","middle"],[95,"now","end"]].forEach(function(a){var t=el("text",{x:x(a[0]),y:H-4,"text-anchor":a[2]});t.textContent=a[1];svg.appendChild(t)});
+  var cur=el("g",{},{display:"none"}),cl=el("line",{y1:T,y2:H-B},{stroke:"var(--text-3)"}),cd=el("circle",{r:3.5,"stroke-width":2},{fill:"var(--surface)",stroke:"var(--accent)"});
+  cur.appendChild(cl);cur.appendChild(cd);svg.appendChild(cur);
+  function show(i,cx,cy){var p=SYS[i];cur.style.display="";cl.setAttribute("x1",x(i));cl.setAttribute("x2",x(i));cd.setAttribute("cx",x(i));cd.setAttribute("cy",y(p.v));
+    var r=svg.getBoundingClientRect();
+    tipShow(cx!=null?cx:r.left+x(i)*r.width/W,cy!=null?cy:r.top+y(p.v),"<b>"+hm(p.m)+"–"+hm(p.m+15)+"</b>"+'<div class="row"><span>Rate</span><span>'+fmt(p.v)+' /min</span></div>'+(i>=94?'<div class="row"><span>Usual</span><span>8–14 /min</span></div>':""))}
+  bindChart(box,svg,W,n,function(px){return Math.round((px-L)/(W-L-R)*(n-1))},show,function(){cur.style.display="none"});
+}
+function bindChart(box,svg,W,n,toIdx,show,hide){
+  var idx=n-1;
+  svg.addEventListener("mousemove",function(e){var r=svg.getBoundingClientRect();var i=Math.max(0,Math.min(n-1,toIdx((e.clientX-r.left)*W/r.width)));idx=i;show(i,e.clientX,e.clientY)});
+  svg.addEventListener("mouseleave",function(){hide();tipHide()});
+  box.onkeydown=function(e){if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();idx=Math.max(0,Math.min(n-1,idx+(e.key==="ArrowLeft"?-1:1)*(e.shiftKey?10:1)));show(idx)}
+    else if(e.key==="Home"){idx=0;show(idx)}else if(e.key==="End"){idx=n-1;show(idx)}};
+  box.onfocus=function(){show(idx)};box.onblur=function(){hide();tipHide()};
+}
+
+/* ---------- Tooltip ---------- */
+var tip=$("#tip");
+function tipShow(x,y,html){tip.innerHTML=html;tip.classList.add("on");var w=tip.offsetWidth,h=tip.offsetHeight;
+  var lx=x+14,ly=y-h-12;if(lx+w>innerWidth-8)lx=x-w-14;if(lx<8)lx=8;if(ly<8)ly=y+16;tip.style.left=lx+"px";tip.style.top=ly+"px"}
+function tipHide(){tip.classList.remove("on")}
+
+/* ---------- Focus trap helper ---------- */
+function focusables(root){return $$('button,[href],input,[tabindex]:not([tabindex="-1"])',root).filter(function(e){return !e.disabled&&e.offsetParent!==null})}
+function trap(root,e){if(e.key!=="Tab")return;var f=focusables(root);if(!f.length)return;var a=f[0],z=f[f.length-1];
+  if(e.shiftKey&&document.activeElement===a){e.preventDefault();z.focus()}else if(!e.shiftKey&&document.activeElement===z){e.preventDefault();a.focus()}}
+
+/* ---------- Side panel ---------- */
+var panel=$("#panel"),scrim=$("#scrim"),lastFocus=null,openState=null;
+function relHtml(r){return '<div class="rel"><span class="rl '+r[0]+'">'+r[1]+'</span><span class="d">'+esc(r[2])+'<small>'+esc(r[3])+'</small></span></div>'}
+function statsHtml(a){return '<div class="stats">'+a.map(function(s){return '<div class="stat"><div class="v num">'+esc(s[0])+'</div><div class="k">'+esc(s[1])+'</div></div>'}).join("")+'</div>'}
+function openIncident(id){var x=INC[id];
+  $("#pHead").innerHTML='<span class="sev '+x.sev+'" style="width:44px;height:44px;border-radius:10px"><svg aria-hidden="true" style="width:22px;height:22px"><use href="#i-inc"/></svg></span>'+
+   '<div style="min-width:0"><h2 id="pTitle">'+esc(x.title)+'</h2><div class="meta">Incident #'+id+' · open since '+x.since+' ('+x.age+')</div>'+
+   '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><span class="pill '+(x.sev==="crit"?"p-down":"p-warning")+'"><i></i>'+x.sevL+'</span>'+(acked[id]?'<span class="pill p-accent">Acknowledged by you</span>':'')+'</div></div>'+
+   '<button class="ibtn x" data-close aria-label="Close panel"><svg aria-hidden="true"><use href="#i-x"/></svg></button>';
+  var hosts=id===1071?AFFECTED:["SRV-BACKUP-01"];
+  $("#pBody").innerHTML=
+   '<div class="ps">'+statsHtml(x.stats)+'</div>'+
+   '<div class="ps"><h3>What is happening</h3><p>'+esc(x.what)+'</p><p class="faint" style="font-size:12px;margin-top:8px">Rule: <span class="mono">'+esc(x.rules)+'</span></p></div>'+
+   '<div class="ps"><h3>Next step</h3><div class="next"><svg aria-hidden="true"><use href="#i-step"/></svg><p>'+esc(x.next)+'</p></div></div>'+
+   '<div class="ps"><h3>Affected hosts</h3><ul class="hl">'+hosts.map(function(h){var d=D[h];return '<li><button data-dev="'+h+'"><span class="dot '+dotCls(d.st)+'" aria-hidden="true"></span><span>'+esc(d.n)+' <span class="faint" style="font-size:12px">'+esc(d.type)+'</span></span><span class="v">'+esc(d.st==="down"?"Down since 14:07":d.st==="degraded"?d.lat:ST[d.st].l)+'</span></button></li>'}).join("")+'</ul></div>'+
+   '<div class="ps"><h3>Relations</h3>'+x.rel.map(relHtml).join("")+'</div>'+
+   '<div class="ps"><h3>Log excerpt · '+esc(x.dev)+'</h3><pre class="log">'+x.log.join("\n")+'</pre><p style="margin-top:8px"><button class="linkbtn" data-nav="logs">Open in Logs</button></p></div>';
+  $("#pFoot").innerHTML=(acked[id]?'<button class="btn pri" disabled>Acknowledged</button>':'<button class="btn pri" id="ackBtn">Acknowledge</button>')+
+   '<button class="btn" data-dev="'+x.dev+'">Show '+esc(x.dev)+'</button>';
+  showPanel({k:"inc",id:id});
+}
+function openDevice(id){var d=D[id];if(!d)return;var s=ST[d.st];
+  $("#pHead").innerHTML='<span class="g"><svg aria-hidden="true"><use href="#g-'+d.g+'"/></svg><span class="sd '+dotCls(d.st)+'"></span></span>'+
+   '<div style="min-width:0"><h2 id="pTitle">'+esc(d.n)+'</h2><div class="meta">'+esc(d.type)+' · '+esc(d.site)+'</div>'+
+   '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><span class="pill '+s.p+'"><i></i>'+(d.v||s.l)+'</span>'+(d.inc?'<span class="pill '+(d.inc===1071?"p-down":"p-warning")+'">#'+d.inc+'</span>':'')+'</div></div>'+
+   '<button class="ibtn x" data-close aria-label="Close panel"><svg aria-hidden="true"><use href="#i-x"/></svg></button>';
+  var unk=d.st==="unknown";
+  var stats=[[unk?"—":d.lat,"Latency"],[d.ip,"Address"],[unk?"14:21":"14:32","Last data"]];
+  var body='<div class="ps">'+statsHtml(stats)+'</div>';
+  if(unk)body+='<div class="ps"><div class="callout unk"><svg aria-hidden="true"><use href="#i-info"/></svg><span>'+(d.probe?esc(d.note):'No data since 14:21. <b>probe-bern-01</b> has been silent for 11 min (threshold 3 min). This host’s state is unknown, it is not shown as up.')+'</span></div></div>';
+  else if(d.note)body+='<div class="ps"><h3>Status</h3><p>'+esc(d.note)+'</p></div>';
+  if(d.inc){var x=INC[d.inc];body+='<div class="ps"><h3>Incident</h3><button class="irow" data-inc="'+d.inc+'"><span class="sev '+x.sev+'"><svg aria-hidden="true"><use href="#i-inc"/></svg></span><span style="min-width:0"><span class="t1" style="display:block">'+esc(x.title)+'</span><span class="t2" style="display:block">#'+x.id+' · '+x.sevL+' · '+x.hosts+'</span></span><span class="age">'+x.age+'</span></button></div>';}
+  var rels=[];
+  if(AFFECTED.indexOf(id)>=0)rels.push(["confirmed","Confirmed","Parent is SW-ZH-CORE-02","Topology parent_id · alert suppressed into #1071"]);
+  if(id==="SW-ZH-CORE-02"){rels.push(["confirmed","Confirmed","Parent of 7 affected hosts","Topology parent_id"]);rels.push(["rule","Rule-based","Syslog burst within incident window","Rule host_down_syslog"]);}
+  if(id==="fw-zh-01")rels.push(["suspected","Suspected","Filterlog +420 % overlaps #1071","Time overlap only, not confirmed"]);
+  if(unk)rels.push(["confirmed","Confirmed",d.probe?"Probe for 9 Bern hosts":"Monitored through probe-bern-01","Same probe"]);
+  if(id==="SRV-BACKUP-01")rels.push(["confirmed","Confirmed","Reported by its own agent","Agent SRV-BACKUP-01"]);
+  if(rels.length)body+='<div class="ps"><h3>Relations</h3>'+rels.map(relHtml).join("")+'</div>';
+  var nx=id==="SW-ZH-CORE-02"?INC[1071].next:id==="SRV-BACKUP-01"?INC[1072].next:unk?"Check probe-bern-01: power and the VPN to Bern. Host states return once the probe reports again.":
+    AFFECTED.indexOf(id)>=0?"Nothing to do on this host. Work on #1071 (uplink on SW-ZH-CORE-02).":d.st==="warning"?"Check the service on port 443 on web-01.":d.st==="maint"?"No action. Alerts resume at 15:00.":"";
+  if(nx)body+='<div class="ps"><h3>Next step</h3><div class="next"><svg aria-hidden="true"><use href="#i-step"/></svg><p>'+esc(nx)+'</p></div></div>';
+  body+='<div class="ps"><h3>Details</h3><dl class="kv" style="margin:0;padding:0;border:0"><dt>Parent</dt><dd>'+esc(d.parent)+'</dd><dt>Site</dt><dd>'+esc(d.site)+'</dd>'+(d.extra||[]).map(function(e){return '<dt>'+esc(e[0])+'</dt><dd>'+esc(e[1])+'</dd>'}).join("")+'</dl></div>';
+  if(d.log)body+='<div class="ps"><h3>Log excerpt</h3><pre class="log">'+d.log.join("\n")+'</pre></div>';
+  $("#pBody").innerHTML=body;
+  $("#pFoot").innerHTML=(d.inc?'<button class="btn pri" data-inc="'+d.inc+'">Open incident #'+d.inc+'</button>':'')+'<button class="btn" data-nav="hosts">Host details</button>';
+  showPanel({k:"dev",id:id});
+}
+function showPanel(st){
+  if(!panel.classList.contains("on"))lastFocus=document.activeElement;
+  openState=st;tipHide();
+  panel.classList.add("on");scrim.classList.add("on");panel.setAttribute("aria-hidden","false");
+  $("#pBody").scrollTop=0;
+  $("#main").setAttribute("inert","");$(".rail").setAttribute("inert","");$(".top").setAttribute("inert","");
+  setTimeout(function(){var c=$("[data-close]",panel);c&&c.focus()},30);
+}
+function closePanel(){
+  if(!panel.classList.contains("on"))return;
+  panel.classList.remove("on");scrim.classList.remove("on");panel.setAttribute("aria-hidden","true");openState=null;
+  $("#main").removeAttribute("inert");$(".rail").removeAttribute("inert");$(".top").removeAttribute("inert");
+  if(lastFocus&&document.contains(lastFocus))lastFocus.focus();
+}
+panel.addEventListener("keydown",function(e){if(e.key==="Escape"){e.preventDefault();closePanel()}else trap(panel,e)});
+scrim.addEventListener("click",closePanel);
+
+/* ---------- Global click delegation ---------- */
+var NAVMSG={devices:"Devices",hosts:"Hosts",integrations:"Integrations",settings:"Settings"};
+document.addEventListener("click",function(e){
+  var t=e.target.closest("[data-close],[data-inc],[data-dev],[data-nav],#ackBtn");
+  if(!t)return;
+  if(t.hasAttribute("data-close")){closePanel();return}
+  if(t.id==="ackBtn"){acked[openState.id]=true;renderIncList();openIncident(openState.id);toast("Incident #"+openState.id+" acknowledged (prototype, not saved)");return}
+  if(t.hasAttribute("data-inc")){openIncident(+t.getAttribute("data-inc"));return}
+  if(t.hasAttribute("data-dev")){openDevice(t.getAttribute("data-dev"));return}
+  var nv=t.getAttribute("data-nav");
+  if(nv){
+    if(panel.classList.contains("on"))closePanel();
+    if(nv==="dashboard"){scrollTo({top:0,behavior:smooth()});return}
+    if(nv==="topology"){goCard("#topology");return}
+    if(nv==="incidents"){goCard("#incCard");return}
+    if(nv==="logs"){goCard(".a-sys");return}
+    toast((NAVMSG[nv]||"This")+" page is not part of this prototype");
+  }
+});
+function smooth(){return matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"}
+function goCard(sel){var c=$(sel);c.scrollIntoView({behavior:smooth(),block:"start"});c.setAttribute("tabindex","-1");c.focus({preventScroll:true})}
+$("#sinceBtn").addEventListener("click",function(){goCard("#chgCard")});
+$("#siteBtn").addEventListener("click",function(){goCard("#sitesCard")});
+
+/* ---------- Tenant popover ---------- */
+var tb=$("#tenantBtn"),tp=$("#tenantPop");
+tb.addEventListener("click",function(e){e.stopPropagation();var on=!tp.classList.contains("on");tp.classList.toggle("on",on);tb.setAttribute("aria-expanded",on);
+  if(on){var r=tb.getBoundingClientRect();tp.style.left=Math.max(16,Math.min(r.left,innerWidth-316))+"px";tp.style.top=(r.bottom+6)+"px"}});
+document.addEventListener("click",function(e){if(!tp.contains(e.target)&&e.target!==tb){tp.classList.remove("on");tb.setAttribute("aria-expanded","false")}});
+
+/* ---------- About popover (logo spot) ---------- */
+var ab=$("#aboutBtn"),ap=$("#aboutPop");
+function aboutClose(back){if(!ap.classList.contains("on"))return;ap.classList.remove("on");ab.setAttribute("aria-expanded","false");if(back)ab.focus()}
+ab.addEventListener("click",function(e){e.stopPropagation();if(ap.classList.contains("on")){aboutClose();return}
+  ap.classList.add("on");ab.setAttribute("aria-expanded","true");var r=ab.getBoundingClientRect();
+  ap.style.left=(r.right+10)+"px";ap.style.top=Math.max(8,r.top)+"px"});
+document.addEventListener("click",function(e){if(!ap.contains(e.target)&&!ab.contains(e.target))aboutClose()});
+
+/* ---------- Accent (prototype control) ---------- */
+var ACCENTS={violet:"Glow Violet",ember:"Ember",aurora:"Aurora"};
+function setAccent(a,save){if(!ACCENTS[a])a="violet";document.documentElement.setAttribute("data-accent",a);
+  $$('#accentSw input').forEach(function(i){i.checked=i.value===a});
+  if(save){try{localStorage.setItem("ng-e3-accent",a)}catch(e){}}}
+(function(){var a="violet";try{a=localStorage.getItem("ng-e3-accent")||"violet"}catch(e){}setAccent(a,false)})();
+$("#accentSw").addEventListener("change",function(e){if(e.target.name==="accent"){setAccent(e.target.value,true);redraw()}});
+
+/* ---------- Toast ---------- */
+var tt;function toast(m){var t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(tt);tt=setTimeout(function(){t.classList.remove("on")},2600)}
+
+/* ---------- Ctrl+K palette ---------- */
+var pal=$("#pal"),pin=$("#palIn"),plist=$("#palList"),pItems=[],pSel=0,palLast=null;
+var ITEMS=[].concat(
+  [1071,1072].map(function(i){return {g:"Incidents",ic:"i-inc",t:"#"+i+" "+INC[i].title,k:INC[i].sevL,a:function(){openIncident(i)}}}),
+  Object.keys(D).filter(function(k){return k!=="wan"}).map(function(k){var d=D[k];return {g:"Hosts & devices",ic:"g-"+d.g,t:d.n,k:ST[d.st].l,a:function(){openDevice(k)}}}),
+  [["Topology","i-topo","#topology"],["Incidents","i-inc","#incCard"],["Sites","i-pin","#sitesCard"],["Since your last visit","i-dash","#chgCard"]].map(function(p){return {g:"Go to",ic:p[1],t:p[0],k:"Dashboard",a:function(){goCard(p[2])}}})
+);
+function palRender(){var q=pin.value.trim().toLowerCase();
+  pItems=ITEMS.filter(function(it){return !q||it.t.toLowerCase().indexOf(q)>=0||it.k.toLowerCase().indexOf(q)>=0}).slice(0,14);
+  if(pSel>=pItems.length)pSel=0;
+  if(!pItems.length){plist.innerHTML='<li class="empty" role="presentation">No results for “'+esc(pin.value)+'”</li>';pin.removeAttribute("aria-activedescendant");return}
+  var h="",g="";pItems.forEach(function(it,i){if(it.g!==g){g=it.g;h+='<li class="grp" role="presentation">'+g+'</li>'}
+    h+='<li role="option" id="po'+i+'" data-i="'+i+'" aria-selected="'+(i===pSel)+'"><svg aria-hidden="true"><use href="#'+it.ic+'"/></svg><span>'+esc(it.t)+'</span><span class="k">'+esc(it.k)+'</span></li>'});
+  plist.innerHTML=h;pin.setAttribute("aria-activedescendant","po"+pSel);var s=$("#po"+pSel);s&&s.scrollIntoView({block:"nearest"})}
+function palOpen(){if(panel.classList.contains("on"))closePanel();palLast=document.activeElement;pin.value="";pSel=0;palRender();pal.classList.add("on");pal.setAttribute("aria-hidden","false");
+  scrim.classList.add("on");$("#main").setAttribute("inert","");pin.focus()}
+function palClose(back){pal.classList.remove("on");pal.setAttribute("aria-hidden","true");scrim.classList.remove("on");$("#main").removeAttribute("inert");if(back!==false&&palLast)palLast.focus()}
+function palGo(i){var it=pItems[i];if(!it)return;palClose(false);it.a()}
+pin.addEventListener("input",function(){pSel=0;palRender()});
+pal.addEventListener("keydown",function(e){
+  if(e.key==="Escape"){e.preventDefault();palClose()}
+  else if(e.key==="ArrowDown"){e.preventDefault();pSel=(pSel+1)%Math.max(1,pItems.length);palRender()}
+  else if(e.key==="ArrowUp"){e.preventDefault();pSel=(pSel-1+pItems.length)%Math.max(1,pItems.length);palRender()}
+  else if(e.key==="Enter"){e.preventDefault();palGo(pSel)}
+  else trap(pal,e)});
+plist.addEventListener("click",function(e){var li=e.target.closest("[data-i]");if(li)palGo(+li.getAttribute("data-i"))});
+plist.addEventListener("mousemove",function(e){var li=e.target.closest("[data-i]");if(li&&+li.getAttribute("data-i")!==pSel){pSel=+li.getAttribute("data-i");palRender()}});
+scrim.addEventListener("click",function(){if(pal.classList.contains("on"))palClose()});
+$("#searchBtn").addEventListener("click",palOpen);
+document.addEventListener("keydown",function(e){
+  if((e.ctrlKey||e.metaKey)&&(e.key==="k"||e.key==="K")){e.preventDefault();pal.classList.contains("on")?palClose():palOpen()}
+  else if(e.key==="Escape"&&tp.classList.contains("on")){tp.classList.remove("on");tb.setAttribute("aria-expanded","false");tb.focus()}
+  else if(e.key==="Escape"&&ap.classList.contains("on"))aboutClose(true);
+});
+
+/* ---------- Theme ---------- */
+var root=document.documentElement,themeBtn=$("#themeBtn");
+function curTheme(){var a=root.getAttribute("data-theme");if(a)return a;return matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}
+function syncThemeBtn(){var t=curTheme();themeBtn.innerHTML='<svg aria-hidden="true"><use href="#i-'+(t==="dark"?"sun":"moon")+'"/></svg>';themeBtn.setAttribute("aria-label","Switch to "+(t==="dark"?"light":"dark")+" theme")}
+try{var sv=localStorage.getItem("ng-e3-theme");if(sv==="light"||sv==="dark")root.setAttribute("data-theme",sv)}catch(e){}
+syncThemeBtn();
+themeBtn.addEventListener("click",function(){var n=curTheme()==="dark"?"light":"dark";root.setAttribute("data-theme",n);try{localStorage.setItem("ng-e3-theme",n)}catch(e){}syncThemeBtn();redraw()});
+try{matchMedia("(prefers-color-scheme: light)").addEventListener("change",function(){syncThemeBtn()})}catch(e){}
+
+/* ---------- Layout-dependent drawing ---------- */
+function redraw(){drawLat();drawSys();drawWires()}
+var rt;window.addEventListener("resize",function(){clearTimeout(rt);rt=setTimeout(redraw,80)});
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(redraw);
+redraw();
+
+/* deep links for review: #inc-1071, #dev-SW-ZH-CORE-02, #search */
+function fromHash(){var h=decodeURIComponent(location.hash.slice(1));
+  if(/^inc-\d+$/.test(h)&&INC[+h.slice(4)])openIncident(+h.slice(4));
+  else if(h.indexOf("dev-")===0&&D[h.slice(4)])openDevice(h.slice(4));
+  else if(h==="search")palOpen()}
+fromHash();
+})();
+</script>
