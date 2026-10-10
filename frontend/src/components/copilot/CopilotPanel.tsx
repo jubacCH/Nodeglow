@@ -1,10 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Sparkles, X, Send, AlertCircle } from 'lucide-react';
+import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
+import { Sparkles, X, Send, AlertCircle, ShieldOff } from 'lucide-react';
 import { useGlowStore } from '@/stores/glow';
+import { useAuthStore } from '@/stores/auth';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { getCsrfToken } from '@/lib/api';
+import { AI_STATUS_KEY, aiUnavailableMessage, useAiStatus } from '@/hooks/queries/useAiStatus';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -38,6 +42,12 @@ export function GlowPanel() {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const qc = useQueryClient();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const { data: aiStatus } = useAiStatus(isOpen);
+  // Unknown status (still loading / old backend) does not block the chat;
+  // the server refuses anyway when AI is off.
+  const aiUnavailable = aiStatus ? !aiStatus.available : false;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -54,7 +64,7 @@ export function GlowPanel() {
   }, [isOpen]);
 
   const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || isStreaming) return;
+    if (!text.trim() || isStreaming || aiUnavailable) return;
 
     const userMsg: Message = { role: 'user', content: text.trim() };
     const history = messages.map((m) => ({ role: m.role, content: m.content }));
@@ -81,6 +91,10 @@ export function GlowPanel() {
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         setError(data.error || `Request failed (${res.status})`);
+        // AI was switched off (or never set up) since the status was fetched.
+        if (data.code === 'ai_disabled' || data.code === 'ai_not_configured') {
+          qc.invalidateQueries({ queryKey: AI_STATUS_KEY });
+        }
         // Remove the empty assistant message
         setMessages((prev) => prev.slice(0, -1));
         setIsStreaming(false);
@@ -113,6 +127,13 @@ export function GlowPanel() {
 
           try {
             const data = JSON.parse(jsonStr);
+            if (data.error) {
+              setError(data.error);
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                return last && last.role === 'assistant' && !last.content ? prev.slice(0, -1) : prev;
+              });
+            }
             if (data.done) continue;
             if (data.delta) {
               setMessages((prev) => {
@@ -144,7 +165,7 @@ export function GlowPanel() {
     } finally {
       setIsStreaming(false);
     }
-  }, [messages, isStreaming]);
+  }, [messages, isStreaming, aiUnavailable, qc]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -186,7 +207,27 @@ export function GlowPanel() {
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {messages.length === 0 && !error && (
+        {aiUnavailable && messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-center px-4" data-testid="glow-ai-disabled">
+            <ShieldOff size={32} className="mb-3" style={{ color: 'var(--ng-text-muted)' }} />
+            <p className="text-sm font-medium mb-2" style={{ color: 'var(--ng-text-primary)' }}>
+              Glow is not available
+            </p>
+            <p className="text-xs mb-4" style={{ color: 'var(--ng-text-muted)' }}>
+              {aiUnavailableMessage(aiStatus, isAdmin)}
+            </p>
+            {isAdmin && (
+              <Link
+                href="/settings?tab=ai"
+                onClick={close}
+                className="px-3 py-1.5 text-xs rounded-full border text-sky-400 border-sky-500/30 hover:bg-sky-500/5 transition-colors"
+              >
+                Open AI settings
+              </Link>
+            )}
+          </div>
+        )}
+        {!aiUnavailable && messages.length === 0 && !error && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <Sparkles size={32} className="text-violet-400/40 mb-3" />
             <p className="text-sm mb-4" style={{ color: 'var(--ng-text-muted)' }}>
@@ -263,7 +304,7 @@ export function GlowPanel() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about your infrastructure..."
+            placeholder={aiUnavailable ? 'AI features are off' : 'Ask about your infrastructure...'}
             rows={1}
             className="flex-1 resize-none rounded-lg px-3 py-2 text-sm border focus:outline-none focus:ring-1 focus:ring-sky-500/50 transition-colors"
             style={{
@@ -271,11 +312,11 @@ export function GlowPanel() {
               borderColor: 'var(--ng-glass-border)',
               color: 'var(--ng-text-primary)',
             }}
-            disabled={isStreaming}
+            disabled={isStreaming || aiUnavailable}
           />
           <button
             onClick={() => sendMessage(input)}
-            disabled={!input.trim() || isStreaming}
+            disabled={!input.trim() || isStreaming || aiUnavailable}
             aria-label="Send message"
             className="p-2 rounded-lg bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >

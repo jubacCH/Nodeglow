@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { AiSettingsTab } from '@/components/settings/AiSettingsTab';
 import { api, get, post, del } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useThemeStore } from '@/stores/theme';
@@ -129,50 +130,6 @@ function SetupGuide({ steps }: { steps: React.ReactNode[] }) {
   );
 }
 
-/* ---------- AiUsageCard ---------- */
-
-interface AiUsageBucket {
-  input_tokens: number;
-  output_tokens: number;
-  cost_usd: number;
-  calls: number;
-  month?: string;
-}
-
-function AiUsageCard() {
-  const { data } = useQuery<{ monthly: AiUsageBucket; total: AiUsageBucket }>({
-    queryKey: ['ai-usage'],
-    queryFn: () => get('/settings/ai/usage'),
-  });
-
-  if (!data) return null;
-
-  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
-
-  return (
-    <GlassCard className="p-4">
-      <h3 className="text-base font-semibold text-slate-200 mb-3 flex items-center gap-2">
-        <Activity size={16} className="text-violet-400" />
-        AI Token Usage
-      </h3>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">This Month</div>
-          <div className="text-lg font-bold text-[var(--ng-text-primary)]">{fmt(data.monthly.input_tokens + data.monthly.output_tokens)}</div>
-          <div className="text-[11px] text-slate-500">tokens &middot; {data.monthly.calls} calls</div>
-          <div className="text-xs text-emerald-400 mt-1">${data.monthly.cost_usd.toFixed(4)}</div>
-        </div>
-        <div className="rounded-lg bg-white/[0.03] border border-white/[0.06] p-3">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">All Time</div>
-          <div className="text-lg font-bold text-[var(--ng-text-primary)]">{fmt(data.total.input_tokens + data.total.output_tokens)}</div>
-          <div className="text-[11px] text-slate-500">tokens &middot; {data.total.calls} calls</div>
-          <div className="text-xs text-emerald-400 mt-1">${data.total.cost_usd.toFixed(4)}</div>
-        </div>
-      </div>
-    </GlassCard>
-  );
-}
-
 /* ---------- Constants ---------- */
 
 const TIMEZONES = [
@@ -286,6 +243,11 @@ export default function SettingsPage() {
   const { confirm, ConfirmDialogElement } = useConfirm();
 
   const [activeTab, setActiveTab] = useState<Tab>('system');
+  // Deep link: /settings?tab=ai (used by the "AI features are off" notices).
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && t in TAB_ICONS) setActiveTab(t as Tab);
+  }, []);
 
   /* ---- System + Monitoring state ---- */
   const [siteName, setSiteName] = useState('');
@@ -343,14 +305,6 @@ export default function SettingsPage() {
   const [fontSize, setFontSize] = useState<'sm' | 'base' | 'lg'>(
     themeStore.fontSize <= 12 ? 'sm' : themeStore.fontSize >= 16 ? 'lg' : 'base'
   );
-
-  /* ---- AI settings state ---- */
-  const [claudeApiKey, setClaudeApiKey] = useState('');
-  const [dailyAiEnabled, setDailyAiEnabled] = useState(false);
-  const [dailyAiHour, setDailyAiHour] = useState('8');
-  const [dailyAiChannels, setDailyAiChannels] = useState<Set<string>>(new Set(['telegram', 'discord', 'webhook', 'email']));
-  const [aiSaving, setAiSaving] = useState(false);
-  const [aiTesting, setAiTesting] = useState(false);
 
   /* ---- LDAP state ---- */
   const [ldapEnabled, setLdapEnabled] = useState(false);
@@ -425,9 +379,6 @@ export default function SettingsPage() {
     setDiscordMinSev(s.notify_discord_min_severity || 'all');
     setWebhookMinSev(s.notify_webhook_min_severity || 'all');
     setEmailMinSev(s.notify_email_min_severity || 'all');
-    setDailyAiEnabled(s.daily_ai_summary_enabled === '1');
-    setDailyAiHour(s.daily_ai_summary_hour || '8');
-    setDailyAiChannels(new Set((s.daily_ai_summary_channels || 'telegram,discord,webhook,email').split(',').filter(Boolean)));
     // LDAP
     setLdapEnabled(s.ldap_enabled === '1');
     setLdapServer(s.ldap_server || '');
@@ -1662,171 +1613,7 @@ export default function SettingsPage() {
       )}
 
       {/* ==================== AI TAB ==================== */}
-      {activeTab === 'ai' && (
-        <div className="space-y-4">
-          <GlassCard className="p-4">
-            <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
-              <Sparkles size={16} className="text-violet-400" />
-              Claude API Key
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Powers Glow and auto-postmortem features. Requires a Claude API key from{' '}
-              <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">
-                console.anthropic.com
-              </a>
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label className="ng-label">API Key</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="password"
-                    value={claudeApiKey}
-                    onChange={(e) => setClaudeApiKey(e.target.value)}
-                    className={inputCls}
-                    placeholder="sk-ant-..."
-                  />
-                  {settings && (
-                    <span className={`text-xs whitespace-nowrap ${
-                      settings.claude_has_key
-                        ? 'text-emerald-400'
-                        : 'text-slate-500'
-                    }`}>
-                      {settings.claude_has_key
-                        ? 'Key configured'
-                        : 'No key configured'}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </GlassCard>
-
-          {/* Daily AI Summary */}
-          <GlassCard className="p-4">
-            <h3 className="text-base font-semibold text-slate-200 mb-1 flex items-center gap-2">
-              <Bell size={16} className="text-violet-400" />
-              Daily AI Summary
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Sends a daily AI-generated briefing with incidents, root cause analysis, and resolution suggestions via your selected notification channels.
-            </p>
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={dailyAiEnabled}
-                  onChange={(e) => setDailyAiEnabled(e.target.checked)}
-                  className="rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50"
-                />
-                <span className="text-sm text-[var(--ng-text-primary)]">Enable daily AI summary</span>
-              </label>
-              <div>
-                <label className="ng-label">Send at (UTC)</label>
-                <select
-                  value={dailyAiHour}
-                  onChange={(e) => setDailyAiHour(e.target.value)}
-                  className={selectSmCls}
-                  disabled={!dailyAiEnabled}
-                >
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <option key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="ng-label">Channels</label>
-                <div className="flex flex-wrap gap-3 mt-1">
-                  {(['telegram', 'discord', 'webhook', 'email'] as const).map((ch) => (
-                    <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={dailyAiChannels.has(ch)}
-                        disabled={!dailyAiEnabled}
-                        onChange={(e) => {
-                          const next = new Set(dailyAiChannels);
-                          if (e.target.checked) next.add(ch); else next.delete(ch);
-                          setDailyAiChannels(next);
-                        }}
-                        className="rounded border-white/20 bg-white/[0.04] text-sky-500 focus:ring-sky-500/50"
-                      />
-                      <span className="text-xs text-[var(--ng-text-secondary)] capitalize">{ch}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              {!settings?.claude_has_key && (
-                <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
-                  Requires a Claude API key (configure above).
-                </p>
-              )}
-            </div>
-          </GlassCard>
-
-          {/* AI Usage Stats */}
-          <AiUsageCard />
-
-          <div className="flex justify-end gap-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={aiTesting || !settings?.claude_has_key}
-              onClick={async () => {
-                setAiTesting(true);
-                try {
-                  // Save settings first, then trigger test
-                  const params = new URLSearchParams();
-                  if (claudeApiKey.trim()) {
-                    params.set('claude_api_key', claudeApiKey);
-                  }
-                  params.set('daily_ai_summary_enabled', dailyAiEnabled ? 'on' : '0');
-                  params.set('daily_ai_summary_hour', dailyAiHour);
-                  params.set('daily_ai_summary_channels', Array.from(dailyAiChannels).join(','));
-                  await api('/settings/ai/save', { method: 'POST', body: params });
-                  if (claudeApiKey.trim()) setClaudeApiKey('');
-                  qc.invalidateQueries({ queryKey: ['settings'] });
-
-                  const res = await post<{ ok: boolean; message: string }>('/settings/ai/test-summary');
-                  toast.show(res.message || 'Test summary sent', 'success');
-                } catch {
-                  toast.show('Test summary failed — check server logs', 'error');
-                } finally {
-                  setAiTesting(false);
-                }
-              }}
-            >
-              <Send size={12} />
-              {aiTesting ? 'Generating...' : 'Test Summary'}
-            </Button>
-            <Button
-              size="sm"
-              disabled={aiSaving}
-              onClick={async () => {
-                setAiSaving(true);
-                try {
-                  const params = new URLSearchParams();
-                  if (claudeApiKey.trim()) {
-                    params.set('claude_api_key', claudeApiKey);
-                  }
-                  params.set('daily_ai_summary_enabled', dailyAiEnabled ? 'on' : '0');
-                  params.set('daily_ai_summary_hour', dailyAiHour);
-                  params.set('daily_ai_summary_channels', Array.from(dailyAiChannels).join(','));
-                  await api('/settings/ai/save', { method: 'POST', body: params });
-                  if (claudeApiKey.trim()) setClaudeApiKey('');
-                  qc.invalidateQueries({ queryKey: ['settings'] });
-                  toast.show('AI settings saved', 'success');
-                } catch {
-                  toast.show('Failed to save AI settings', 'error');
-                } finally {
-                  setAiSaving(false);
-                }
-              }}
-            >
-              {aiSaving ? 'Saving...' : 'Save AI Settings'}
-            </Button>
-          </div>
-        </div>
-      )}
+      {activeTab === 'ai' && <AiSettingsTab />}
 
       {/* ==================== AUTH TAB ==================== */}
       {activeTab === 'auth' && (

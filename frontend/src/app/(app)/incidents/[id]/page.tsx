@@ -9,6 +9,8 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useQuery } from '@tanstack/react-query';
 import { get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
+import { useAuthStore } from '@/stores/auth';
+import { aiUnavailableMessage, useAiStatus, type AiStatus } from '@/hooks/queries/useAiStatus';
 import type { Incident, IncidentEvent } from '@/types';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { ArrowLeft, CheckCircle, Eye, FileText, Zap, Search, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
@@ -86,6 +88,9 @@ export default function IncidentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const incidentId = Number(id);
   const toast = useToastStore((s) => s.show);
+  const { data: aiStatus } = useAiStatus();
+  // No AI, no postmortem on its way: stop polling for one.
+  const aiAvailable = aiStatus?.available ?? true;
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['incident', incidentId],
@@ -93,7 +98,7 @@ export default function IncidentDetailPage() {
     enabled: incidentId > 0,
     refetchInterval: (query) => {
       const d = query.state.data;
-      if (d && d.status === 'resolved' && !d.postmortem) return 5000;
+      if (aiAvailable && d && d.status === 'resolved' && !d.postmortem) return 5000;
       return false;
     },
   });
@@ -251,6 +256,7 @@ export default function IncidentDetailPage() {
               postmortem={data.postmortem}
               generatedAt={data.postmortem_generated_at}
               onRegenerate={refetch}
+              aiStatus={aiStatus}
             />
           )}
 
@@ -280,14 +286,18 @@ function PostmortemSection({
   postmortem,
   generatedAt,
   onRegenerate,
+  aiStatus,
 }: {
   incidentId: number;
   postmortem?: string | null;
   generatedAt?: string | null;
   onRegenerate: () => void;
+  aiStatus?: AiStatus;
 }) {
   const toast = useToastStore((s) => s.show);
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const [regenerating, setRegenerating] = useState(false);
+  const aiUnavailable = aiStatus ? !aiStatus.available : false;
 
   async function handleRegenerate() {
     setRegenerating(true);
@@ -303,6 +313,23 @@ function PostmortemSection({
   }
 
   const isFailed = postmortem?.startsWith('[Generation failed]');
+
+  if (aiUnavailable && !postmortem) {
+    return (
+      <GlassCard className="p-4 mt-6">
+        <div className="flex items-center gap-2 mb-2">
+          <FileText size={16} className="text-sky-400" />
+          <h3 className="text-sm font-medium text-slate-300">Postmortem</h3>
+        </div>
+        <p className="text-xs text-slate-400" data-testid="postmortem-ai-disabled">
+          {aiUnavailableMessage(aiStatus, isAdmin)}{' '}
+          {isAdmin && (
+            <Link href="/settings?tab=ai" className="text-sky-400 hover:underline">Open AI settings</Link>
+          )}
+        </p>
+      </GlassCard>
+    );
+  }
 
   return (
     <GlassCard className="p-4 mt-6">
@@ -328,7 +355,8 @@ function PostmortemSection({
               size="sm"
               variant="ghost"
               onClick={handleRegenerate}
-              disabled={regenerating}
+              disabled={regenerating || aiUnavailable}
+              title={aiUnavailable ? 'AI features are off (Settings → AI)' : undefined}
             >
               <RefreshCw size={14} className={regenerating ? 'animate-spin' : ''} />
               Regenerate
@@ -345,7 +373,8 @@ function PostmortemSection({
               size="sm"
               variant="ghost"
               onClick={handleRegenerate}
-              disabled={regenerating}
+              disabled={regenerating || aiUnavailable}
+              title={aiUnavailable ? 'AI features are off (Settings → AI)' : undefined}
             >
               <RefreshCw size={14} className={regenerating ? 'animate-spin' : ''} />
               Retry
