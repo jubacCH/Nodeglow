@@ -43,8 +43,9 @@ ISC and similar), and say where it came from in the pull request. New
 dependencies need the same check — add them to
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Changes in `ee/` must not be imported from core code — see
-[`ee/README.md`](ee/README.md) for the boundary.
+Changes in `ee/` must not be imported from core code — enterprise features
+plug in through `backend/extensions.py`, loaded by `backend/ee_loader.py`. See
+[`ee/README.md`](ee/README.md) for the boundary and how to add a feature.
 
 ## Development setup
 
@@ -66,8 +67,10 @@ runs the same ones.
 # Backend
 cd backend
 pip install -r requirements-dev.txt
-pytest -q
+pytest -q                                      # core + ee/backend/tests
+NODEGLOW_DISABLE_EE=1 pytest -q                # core alone (community edition)
 ruff check .                                   # CI pins ruff==0.17.0
+ruff check --config ruff.toml ../ee/backend
 
 # Sidecar (from the repo root)
 ruff check --config backend/ruff.toml sidecar
