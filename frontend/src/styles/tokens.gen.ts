@@ -266,9 +266,9 @@ export const ngTokensRaw = {
     "radius-chip": "5px",
     "radius-lg": "12px",
     "radius-pill": "9999px",
-    "font-ui": "var(--font-inter-tight), \"Inter Tight\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
-    "font-display": "var(--font-sora), \"Sora\", var(--font-inter-tight), \"Segoe UI Variable Display\", \"Segoe UI\", system-ui, sans-serif",
-    "font-mono": "var(--font-jetbrains-mono), \"JetBrains Mono\", ui-monospace, \"SF Mono\", \"Cascadia Mono\", Consolas, monospace",
+    "font-ui": "var(--font-inter-tight), var(--font-inter-tight-ext), \"Inter Tight\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
+    "font-display": "var(--font-sora), var(--font-sora-ext), \"Sora\", var(--font-inter-tight), var(--font-inter-tight-ext), \"Segoe UI Variable Display\", \"Segoe UI\", system-ui, sans-serif",
+    "font-mono": "var(--font-jetbrains-mono), var(--font-jetbrains-mono-ext), \"JetBrains Mono\", ui-monospace, \"SF Mono\", \"Cascadia Mono\", Consolas, monospace",
     "fs-micro": "0.7857rem",
     "fs-meta": "0.8571rem",
     "fs-ui": "0.9286rem",
@@ -311,7 +311,7 @@ export const ngRadius = {
 } as const;
 
 export const ngFont = {
-  "sans": "var(--font-inter-tight), \"Inter Tight\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
-  "display": "var(--font-sora), \"Sora\", var(--font-inter-tight), \"Segoe UI Variable Display\", \"Segoe UI\", system-ui, sans-serif",
-  "mono": "var(--font-jetbrains-mono), \"JetBrains Mono\", ui-monospace, \"SF Mono\", \"Cascadia Mono\", Consolas, monospace"
+  "sans": "var(--font-inter-tight), var(--font-inter-tight-ext), \"Inter Tight\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
+  "display": "var(--font-sora), var(--font-sora-ext), \"Sora\", var(--font-inter-tight), var(--font-inter-tight-ext), \"Segoe UI Variable Display\", \"Segoe UI\", system-ui, sans-serif",
+  "mono": "var(--font-jetbrains-mono), var(--font-jetbrains-mono-ext), \"JetBrains Mono\", ui-monospace, \"SF Mono\", \"Cascadia Mono\", Consolas, monospace"
 } as const;

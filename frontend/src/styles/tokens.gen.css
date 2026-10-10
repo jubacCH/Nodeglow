@@ -144,9 +144,9 @@
   --ng-radius-chip: 5px;
   --ng-radius-lg: 12px;
   --ng-radius-pill: 9999px;
-  --ng-font-ui: var(--font-inter-tight), "Inter Tight", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --ng-font-display: var(--font-sora), "Sora", var(--font-inter-tight), "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-  --ng-font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --ng-font-ui: var(--font-inter-tight), var(--font-inter-tight-ext), "Inter Tight", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --ng-font-display: var(--font-sora), var(--font-sora-ext), "Sora", var(--font-inter-tight), var(--font-inter-tight-ext), "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --ng-font-mono: var(--font-jetbrains-mono), var(--font-jetbrains-mono-ext), "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   --ng-fs-micro: 0.7857rem;
   --ng-fs-meta: 0.8571rem;
   --ng-fs-ui: 0.9286rem;
