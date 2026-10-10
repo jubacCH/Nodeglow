@@ -32,51 +32,18 @@ TTL
     toDateTime(timestamp) + INTERVAL 30 DAY  WHERE severity = 4,
     toDateTime(timestamp) + INTERVAL 90 DAY  WHERE severity IN (0, 1, 2, 3),
     toDateTime(timestamp) + INTERVAL 180 DAY WHERE noise_score <= 10
+-- ttl_only_drop_parts = 0: the TTL rules above are row-level (WHERE severity
+-- ...) on monthly partitions, so dropping only fully expired parts would keep
+-- 1-day debug rows until the month's 90-day error rows expire. TTL merges
+-- delete expired rows instead (at most every merge_with_ttl_timeout per
+-- partition). Existing installs are switched by the app's startup migrations.
 SETTINGS
     index_granularity = 8192,
-    ttl_only_drop_parts = 1;
+    ttl_only_drop_parts = 0;
 
--- Aggregated syslog table for dashboards and trend analysis (storage-level dedup)
-CREATE TABLE IF NOT EXISTS syslog_aggregated
-(
-    bucket          DateTime NOT NULL,
-    source_ip       LowCardinality(String) NOT NULL,
-    hostname        LowCardinality(String) DEFAULT '',
-    host_id         Nullable(Int32),
-    severity        Int8 DEFAULT 6,
-    app_name        LowCardinality(String) DEFAULT '',
-    template_hash   LowCardinality(String) DEFAULT '',
-    message_sample  String DEFAULT '',
-    count           UInt32 DEFAULT 1,
-    first_seen      DateTime64(3, 'UTC') NOT NULL,
-    last_seen       DateTime64(3, 'UTC') NOT NULL
-)
-ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(bucket)
-ORDER BY (source_ip, template_hash, severity, bucket)
-TTL
-    toDateTime(bucket) + INTERVAL 90 DAY
-SETTINGS
-    index_granularity = 8192;
-
--- Materialized view: auto-aggregate incoming messages into 1-minute buckets
-CREATE MATERIALIZED VIEW IF NOT EXISTS syslog_aggregated_mv
-TO syslog_aggregated
-AS
-SELECT
-    toStartOfMinute(timestamp) AS bucket,
-    source_ip,
-    hostname,
-    host_id,
-    severity,
-    app_name,
-    template_hash,
-    any(message) AS message_sample,
-    count() AS count,
-    min(timestamp) AS first_seen,
-    max(timestamp) AS last_seen
-FROM syslog_messages
-GROUP BY bucket, source_ip, hostname, host_id, severity, app_name, template_hash;
+-- (syslog_aggregated and syslog_aggregated_mv were removed: nothing read them,
+-- and the view aggregated every insert. The app's startup migrations drop them
+-- on existing installs.)
 
 
 -- ─────────────────────────────────────────────────────────────────────────────

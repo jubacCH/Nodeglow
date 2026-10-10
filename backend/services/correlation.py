@@ -23,6 +23,7 @@ from sqlalchemy import delete, func, select
 
 from models.base import AsyncSessionLocal
 from models.ping import PingHost
+from services import clickhouse_client as _ch
 from services.clickhouse_client import query as ch_query
 from services.clickhouse_client import query_scalar as ch_scalar
 from models.integration import IntegrationConfig
@@ -196,10 +197,14 @@ async def _get_topology(db) -> dict[int, int | None]:
 
 # ── Rule 1: Host Down + Syslog Errors ───────────────────────────────────────
 
-async def _rule_host_down_syslog(db, min_failures: int = 3, min_cycles: int = 2):
+async def _rule_host_down_syslog(
+    db, min_failures: int = 3, min_cycles: int = 2,
+    offline_hosts: list[PingHost] | None = None,
+):
     """Host offline AND syslog severity <= 3 from same host in 5min window.
     Skips hosts whose upstream parent is also offline (topology cascading)."""
-    offline_hosts = await _get_offline_hosts(db, min_failures)
+    if offline_hosts is None:
+        offline_hosts = await _get_offline_hosts(db, min_failures)
     if not offline_hosts:
         return
 
@@ -210,15 +215,15 @@ async def _rule_host_down_syslog(db, min_failures: int = 3, min_cycles: int = 2)
 
     window = datetime.utcnow() - timedelta(minutes=5)
 
-    for host in offline_hosts:
-        if host.id in cascaded_ids:
-            continue  # upstream is down — suppress individual alert
+    # Error-level syslog counts for every candidate in one grouped query
+    # instead of one count() per offline host.
+    candidates = [h for h in offline_hosts if h.id not in cascaded_ids]
+    error_counts = await _ch.count_syslog_by_host(
+        [h.id for h in candidates], window, max_severity=3,
+    ) if candidates else {}
 
-        # Check for error-level syslog messages from this host
-        syslog_count = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE host_id = {hid:Int32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
-            {"hid": host.id, "t": window},
-        ) or 0)
+    for host in candidates:
+        syslog_count = error_counts.get(host.id, 0)
 
         if syslog_count > 0:
             if not _track_rule_hit("host_down_syslog", [host.id], min_cycles):
@@ -268,10 +273,14 @@ async def _rule_host_down_syslog(db, min_failures: int = 3, min_cycles: int = 2)
 
 # ── Rule 2: Multi-Host Down ─────────────────────────────────────────────────
 
-async def _rule_multi_host_down(db, min_failures: int = 3, min_cycles: int = 2):
+async def _rule_multi_host_down(
+    db, min_failures: int = 3, min_cycles: int = 2,
+    offline_hosts: list[PingHost] | None = None,
+):
     """3+ hosts offline simultaneously → likely network problem.
     Excludes hosts already explained by upstream failure."""
-    offline_hosts = await _get_offline_hosts(db, min_failures)
+    if offline_hosts is None:
+        offline_hosts = await _get_offline_hosts(db, min_failures)
     if len(offline_hosts) < 3:
         return
 
@@ -337,11 +346,15 @@ async def _rule_multi_host_down(db, min_failures: int = 3, min_cycles: int = 2):
 
 # ── Rule 3: Integration + Host ──────────────────────────────────────────────
 
-async def _rule_integration_host(db, min_failures: int = 3, min_cycles: int = 2):
+async def _rule_integration_host(
+    db, min_failures: int = 3, min_cycles: int = 2,
+    offline_hosts: list[PingHost] | None = None,
+):
     """Integration unreachable AND the host running it is also offline."""
     from services import snapshot as snap_svc
 
-    offline_hosts = await _get_offline_hosts(db, min_failures)
+    if offline_hosts is None:
+        offline_hosts = await _get_offline_hosts(db, min_failures)
     if not offline_hosts:
         return
 
@@ -467,80 +480,80 @@ async def _rule_syslog_spike(db, min_cycles: int = 2):
 # ── Rule 5: Log Anomaly ────────────────────────────────────────────────
 
 async def _rule_log_anomaly(db, min_cycles: int = 2):
-    """Detect per-host log volume anomalies vs. learned baselines."""
+    """Detect per-host log volume anomalies vs. learned baselines.
+
+    Baselines come from load_effective_baselines: the weekday slot once it
+    has enough samples, the hour-of-day slot until then. Current volume is
+    counted for all candidates in one grouped query per key type, not one
+    query per baseline row.
+    """
+    from services.log_intelligence import load_effective_baselines
+
     now = datetime.utcnow()
-    hour = now.hour
-    dow = now.weekday()
-
-    # Get baselines for current time slot with sufficient data
-    baselines = (await db.execute(
-        select(HostBaseline).where(
-            HostBaseline.hour_of_day == hour,
-            HostBaseline.day_of_week == dow,
-            HostBaseline.sample_count >= 3,
-            HostBaseline.avg_rate > 0,
-        )
-    )).scalars().all()
-
+    baselines = [
+        b for b in (await load_effective_baselines(db, now)).values()
+        if (b.avg_rate or 0) > 0
+    ]
     if not baselines:
         return
 
     window_10m = now - timedelta(minutes=10)
 
+    by_source: dict[str, HostBaseline] = {}
+    by_host_id: dict[int, HostBaseline] = {}
     for bl in baselines:
-        # Current rate: messages in last 10min, extrapolated to per-hour
         if bl.host_key.startswith("host:"):
-            parts = bl.host_key.split(":", 1)
-            if len(parts) < 2 or not parts[1].isdigit():
-                continue
-            host_id = int(parts[1])
-            count = int(await ch_scalar(
-                "SELECT count() FROM syslog_messages WHERE host_id = {hid:Int32} AND timestamp >= {t:DateTime64(3)}",
-                {"hid": host_id, "t": window_10m},
-            ) or 0)
+            part = bl.host_key.split(":", 1)[1]
+            if part.isdigit():
+                by_host_id[int(part)] = bl
         else:
-            count = int(await ch_scalar(
-                "SELECT count() FROM syslog_messages WHERE source_ip = {ip:String} AND timestamp >= {t:DateTime64(3)}",
-                {"ip": bl.host_key, "t": window_10m},
-            ) or 0)
+            by_source[bl.host_key] = bl
 
+    source_counts = await _ch.count_syslog_received_by_source(
+        window_10m, list(by_source),
+    ) if by_source else {}
+    host_counts = await _ch.count_syslog_received_by_host(
+        window_10m, list(by_host_id),
+    ) if by_host_id else {}
+
+    candidates: list[tuple[HostBaseline, int, int | None]] = [
+        (bl, source_counts.get(ip, 0), None) for ip, bl in by_source.items()
+    ] + [
+        (bl, host_counts.get(hid, 0), hid) for hid, bl in by_host_id.items()
+    ]
+
+    hosts_by_id: dict[int, PingHost] = {}
+    if by_host_id:
+        hosts_by_id = {h.id: h for h in (await db.execute(
+            select(PingHost).where(PingHost.id.in_(list(by_host_id)))
+        )).scalars().all()}
+
+    for bl, count, host_id in candidates:
         current_rate = count * 6  # extrapolate 10min → 1hr
-        threshold = bl.avg_rate + 3 * max(bl.std_rate, bl.avg_rate * 0.3)
+        threshold = bl.avg_rate + 3 * max(bl.std_rate or 0.0, bl.avg_rate * 0.3)
+        if not (current_rate > threshold and count >= 20):
+            continue
 
-        if current_rate > threshold and count >= 20:
-            # Determine host_ids early for hit tracking
-            _host_ids_for_track = [0]
-            if bl.host_key.startswith("host:"):
-                _p = bl.host_key.split(":", 1)
-                if len(_p) > 1 and _p[1].isdigit():
-                    _host_ids_for_track = [int(_p[1])]
-            if not _track_rule_hit("log_anomaly", _host_ids_for_track, min_cycles):
-                continue
-            host_label = bl.host_key
-            if bl.host_key.startswith("host:"):
-                _parts = bl.host_key.split(":", 1)
-                _hid = int(_parts[1]) if len(_parts) > 1 and _parts[1].isdigit() else 0
-                host = (await db.execute(
-                    select(PingHost).where(PingHost.id == _hid)
-                )).scalar_one_or_none()
-                if host:
-                    host_label = host.name
-                    host_ids = [host.id]
-                else:
-                    host_ids = [0]
-            else:
-                host_ids = [0]
+        # Per-source discriminator: every source-keyed baseline maps to host 0,
+        # so a shared key let two anomalous sources reach min_cycles within a
+        # single cycle.
+        if not _track_rule_hit(f"log_anomaly_{bl.host_key}", [host_id or 0], min_cycles):
+            continue
 
-            await _find_or_create_incident(
-                db,
-                rule="log_anomaly",
-                title=f"Log volume anomaly: {host_label}",
-                severity="warning",
-                host_ids=host_ids,
-                event_type="syslog_error",
-                summary=f"{host_label}: {current_rate}/hr (baseline: {int(bl.avg_rate)}/hr ± {int(bl.std_rate)})",
-                detail=f"{count} messages in last 10min, expected ~{int(bl.avg_rate / 6)}",
-            )
+        host = hosts_by_id.get(host_id) if host_id is not None else None
+        host_label = host.name if host else bl.host_key
+        host_ids = [host.id] if host else [0]
+
+        await _find_or_create_incident(
+            db,
+            rule="log_anomaly",
+            title=f"Log volume anomaly: {host_label}",
+            severity="warning",
+            host_ids=host_ids,
+            event_type="syslog_error",
+            summary=f"{host_label}: {current_rate}/hr (baseline: {int(bl.avg_rate)}/hr ± {int(bl.std_rate or 0)})",
+            detail=f"{count} messages in last 10min, expected ~{int(bl.avg_rate / 6)}",
+        )
 
 
 # ── Rule 7: Fleet-Wide Issue ───────────────────────────────────────────────
@@ -772,7 +785,7 @@ async def _rule_precursor_observed(
 
 # ── Auto-Resolve ────────────────────────────────────────────────────────────
 
-async def _auto_resolve(db) -> list[int]:
+async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list[int]:
     """Auto-resolve incidents where all affected hosts are back online.
 
     Returns the ids of incidents that were resolved and should get a
@@ -788,9 +801,15 @@ async def _auto_resolve(db) -> list[int]:
     if not open_incidents:
         return postmortem_ids
 
-    # Get current offline host IDs
-    offline_hosts = await _get_offline_hosts(db)
+    # Get current offline host IDs (computed once per cycle by the caller)
+    if offline_hosts is None:
+        offline_hosts = await _get_offline_hosts(db)
     offline_ids = {h.id for h in offline_hosts}
+
+    # Looked up lazily, once per call, and only if an incident needs them —
+    # these used to be one query per incident (and per offline host).
+    syslog_error_counts: dict[int, int] | None = None
+    port_error_hashes: set[str] | None = None
 
     for incident in open_incidents:
         # Skip syslog/fleet/trend/content/precursor rules – auto-resolve after timeout
@@ -838,15 +857,15 @@ async def _auto_resolve(db) -> list[int]:
 
         if incident.rule == "host_down_syslog":
             # If any offline host still has syslog errors, keep open
-            window = datetime.utcnow() - timedelta(minutes=5)
+            if syslog_error_counts is None:
+                window = datetime.utcnow() - timedelta(minutes=5)
+                syslog_error_counts = await _ch.count_syslog_by_host(
+                    [h.id for h in offline_hosts], window, max_severity=3,
+                ) if offline_hosts else {}
             for host in offline_hosts:
                 h = _host_ids_hash([host.id])
                 if h == incident.host_ids_hash:
-                    syslog_count = int(await ch_scalar(
-                        "SELECT count() FROM syslog_messages WHERE host_id = {hid:Int32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
-                        {"hid": host.id, "t": window},
-                    ) or 0)
-                    if syslog_count > 0:
+                    if syslog_error_counts.get(host.id, 0) > 0:
                         should_resolve = False
                         break
 
@@ -865,16 +884,17 @@ async def _auto_resolve(db) -> list[int]:
 
         elif incident.rule == "port_error":
             # Check if the host still has port_error
-            port_error_hosts = (await db.execute(
-                select(PingHost).where(
-                    PingHost.enabled == True,
-                    PingHost.port_error == True,
-                )
-            )).scalars().all()
-            for host in port_error_hosts:
-                if _host_ids_hash([host.id]) == incident.host_ids_hash:
-                    should_resolve = False
-                    break
+            if port_error_hashes is None:
+                port_error_hashes = {
+                    _host_ids_hash([hid]) for (hid,) in (await db.execute(
+                        select(PingHost.id).where(
+                            PingHost.enabled == True,
+                            PingHost.port_error == True,
+                        )
+                    )).all()
+                }
+            if incident.host_ids_hash in port_error_hashes:
+                should_resolve = False
 
         if should_resolve:
             incident.status = "resolved"
@@ -900,40 +920,107 @@ async def _auto_resolve(db) -> list[int]:
 
 # ── Main entry point ────────────────────────────────────────────────────────
 
-async def run_correlation():
-    """Run all correlation rules. Called every 60s by scheduler."""
-    postmortem_ids: list[int] = []
+async def _load_correlation_settings(db) -> tuple[int, int]:
+    from models.settings import get_setting
+    try:
+        min_failures = max(1, int(await get_setting(db, "correlation_min_failures", "3")))
+    except (ValueError, TypeError):
+        min_failures = 3
+    try:
+        min_cycles = max(1, int(await get_setting(db, "correlation_min_cycles", "2")))
+    except (ValueError, TypeError):
+        min_cycles = 2
+    return min_failures, min_cycles
+
+
+async def _run_rule(name: str, fn) -> bool:
+    """Run one rule in its own session and transaction.
+
+    A failing rule rolls back only its own work; the others still commit.
+    Previously all rules shared one transaction, so a single bad query threw
+    away every incident the cycle had found.
+    """
     async with AsyncSessionLocal() as db:
         try:
-            # Load consecutive-failure settings
-            from models.settings import get_setting
-            try:
-                min_failures = max(1, int(await get_setting(db, "correlation_min_failures", "3")))
-            except (ValueError, TypeError):
-                min_failures = 3
-            try:
-                min_cycles = max(1, int(await get_setting(db, "correlation_min_cycles", "2")))
-            except (ValueError, TypeError):
-                min_cycles = 2
-
-            await _rule_host_down_syslog(db, min_failures, min_cycles)
-            await _rule_multi_host_down(db, min_failures, min_cycles)
-            await _rule_integration_host(db, min_failures, min_cycles)
-            await _rule_port_error(db, min_cycles)
-            await _rule_syslog_spike(db, min_cycles)
-            await _rule_log_anomaly(db, min_cycles)
-            await _rule_fleet_wide(db, min_cycles)
-            await _rule_severity_trend(db, min_cycles)
-            await _rule_content_anomaly(db, min_cycles)
-            await _rule_precursor_observed(db, min_cycles=min_cycles)
-            postmortem_ids = await _auto_resolve(db)
-            _prune_stale_hits()
+            await fn(db)
             await db.commit()
+            return True
         except Exception as e:
-            log.error("Correlation engine error: %s", e, exc_info=True)
-            _current_cycle_hits.clear()
-            await db.rollback()
-            return
+            log.error("Correlation rule %s failed: %s", name, e, exc_info=True)
+            try:
+                await db.rollback()
+            except Exception:
+                log.debug("Rollback after failed rule %s also failed", name, exc_info=True)
+            return False
+
+
+async def run_correlation():
+    """Run all correlation rules. Called every 60s by scheduler."""
+    try:
+        async with AsyncSessionLocal() as db:
+            min_failures, min_cycles = await _load_correlation_settings(db)
+    except Exception as e:
+        log.error("Correlation engine error: %s", e, exc_info=True)
+        _current_cycle_hits.clear()
+        return
+
+    # Offline hosts once per cycle, shared by every rule that needs them. They
+    # used to be recomputed — a full ClickHouse pass each time — by four
+    # separate callers per cycle. The ORM rows are only read afterwards, so
+    # they are safe to use across the per-rule sessions.
+    offline_hosts: list[PingHost] | None
+    try:
+        async with AsyncSessionLocal() as db:
+            offline_hosts = await _get_offline_hosts(db, min_failures)
+    except Exception as e:
+        log.error("Correlation engine: offline-host lookup failed: %s", e, exc_info=True)
+        offline_hosts = None
+
+    rules = [
+        # (name, callable, needs offline hosts)
+        ("host_down_syslog", lambda db: _rule_host_down_syslog(
+            db, min_failures, min_cycles, offline_hosts=offline_hosts), True),
+        ("multi_host_down", lambda db: _rule_multi_host_down(
+            db, min_failures, min_cycles, offline_hosts=offline_hosts), True),
+        ("integration_host", lambda db: _rule_integration_host(
+            db, min_failures, min_cycles, offline_hosts=offline_hosts), True),
+        ("port_error", lambda db: _rule_port_error(db, min_cycles), False),
+        ("syslog_spike", lambda db: _rule_syslog_spike(db, min_cycles), False),
+        ("log_anomaly", lambda db: _rule_log_anomaly(db, min_cycles), False),
+        ("fleet_wide", lambda db: _rule_fleet_wide(db, min_cycles), False),
+        ("severity_trend", lambda db: _rule_severity_trend(db, min_cycles), False),
+        ("content_anomaly", lambda db: _rule_content_anomaly(db, min_cycles), False),
+        ("precursor_observed", lambda db: _rule_precursor_observed(
+            db, min_cycles=min_cycles), False),
+    ]
+
+    all_ok = offline_hosts is not None
+    for name, fn, needs_offline in rules:
+        if needs_offline and offline_hosts is None:
+            continue
+        if not await _run_rule(name, fn):
+            all_ok = False
+
+    # Auto-resolve with an unknown offline set would resolve every host-down
+    # incident as "back online"; skip it rather than guess.
+    postmortem_ids: list[int] = []
+    if offline_hosts is not None:
+        async with AsyncSessionLocal() as db:
+            try:
+                postmortem_ids = await _auto_resolve(db, offline_hosts=offline_hosts)
+                await db.commit()
+            except Exception as e:
+                log.error("Correlation auto-resolve failed: %s", e, exc_info=True)
+                await db.rollback()
+                postmortem_ids = []
+                all_ok = False
+
+    if all_ok:
+        _prune_stale_hits()
+    else:
+        # A partial cycle cannot tell "stopped matching" from "did not run";
+        # keep the streak counters and let the next complete cycle prune.
+        _current_cycle_hits.clear()
 
     # Spawn post-mortem tasks only after the transaction has committed, so the
     # background task (fresh session) reads incidents that are durably persisted.

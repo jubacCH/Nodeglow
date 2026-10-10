@@ -71,15 +71,52 @@ async def ping_host(hostname: str, timeout: float = 2.0) -> tuple[bool, float | 
 
 # ── HTTP / HTTPS ───────────────────────────────────────────────────────────────
 
+# One client per TLS-verification mode, shared by every check. Building an
+# AsyncClient per check meant a fresh SSL context (and CA bundle load) for each
+# HTTP check of each host every cycle. Keep-alive is disabled on purpose: every
+# check still opens its own connection, so the latency it reports keeps
+# including connect + TLS handshake, and a host that went away cannot hide
+# behind a pooled connection.
+_http_clients: dict[tuple[int, bool], httpx.AsyncClient] = {}
+
+
+def _http_client(verify_ssl: bool) -> httpx.AsyncClient:
+    # Keyed by event loop too: a client's pool belongs to the loop it was
+    # used on (the test suite runs each test on a fresh loop).
+    loop_id = id(asyncio.get_running_loop())
+    key = (loop_id, bool(verify_ssl))
+    client = _http_clients.get(key)
+    if client is None or client.is_closed:
+        for stale in [k for k in _http_clients if k[0] != loop_id]:
+            _http_clients.pop(stale, None)
+        client = httpx.AsyncClient(
+            verify=verify_ssl,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
+        )
+        _http_clients[key] = client
+    return client
+
+
+async def close_http_clients() -> None:
+    """Close the shared HTTP check clients (call on shutdown)."""
+    clients = list(_http_clients.values())
+    _http_clients.clear()
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
+
 async def check_http(url: str, timeout: float = 5.0, verify_ssl: bool = True) -> tuple[bool, float | None]:
     """HTTP(S) GET check. Returns (success, latency_ms). Success = 2xx/3xx."""
     try:
-        async with httpx.AsyncClient(verify=verify_ssl, timeout=timeout,
-                                     follow_redirects=True) as client:
-            start = time.perf_counter()
-            resp = await client.get(url)
-            latency = round((time.perf_counter() - start) * 1000, 2)
-            return resp.status_code < 500, latency
+        client = _http_client(verify_ssl)
+        start = time.perf_counter()
+        resp = await client.get(url, timeout=timeout)
+        latency = round((time.perf_counter() - start) * 1000, 2)
+        return resp.status_code < 500, latency
     except (httpx.HTTPError, OSError, asyncio.TimeoutError):
         return False, None
 
