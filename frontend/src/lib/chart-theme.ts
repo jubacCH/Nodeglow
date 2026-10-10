@@ -11,7 +11,8 @@
  * change; pages only need useChartTheme() for per-series colours.
  */
 import { useMemo } from 'react';
-import { useResolvedTheme, type ResolvedTheme } from './theme';
+import type { ResolvedTheme } from './theme';
+import { useResolvedTheme } from './useResolvedTheme';
 import type { NgToken } from '@/styles/tokens.gen';
 
 let probe: HTMLSpanElement | null = null;

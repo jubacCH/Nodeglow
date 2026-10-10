@@ -7,7 +7,6 @@
  * - <ThemeController> keeps the attribute in sync with the theme store and,
  *   for "system", with prefers-color-scheme.
  */
-import { useSyncExternalStore } from 'react';
 
 export type ColorMode = 'dark' | 'light' | 'system';
 export type ResolvedTheme = 'dark' | 'light';
@@ -39,24 +38,3 @@ export function applyTheme(theme: ResolvedTheme, fontSize: number, root: HTMLEle
  * Keep in sync with the functions above (covered by lib/theme.test.ts).
  */
 export const THEME_INIT_SCRIPT = `(function(){var d=document.documentElement;try{var s=(JSON.parse(localStorage.getItem('${THEME_STORAGE_KEY}')||'{}')||{}).state||{};var m=s.colorMode;if(m!=='light'&&m!=='dark'){m=(m==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark'}var f=Number(s.fontSize);if(!(f>=10&&f<=24))f=${DEFAULT_FONT_SIZE};d.setAttribute('data-theme',m);d.style.colorScheme=m;d.style.fontSize=f+'px'}catch(e){d.setAttribute('data-theme','dark')}})();`;
-
-// ── Reading the active theme in components ───────────────────────────────
-
-function subscribe(cb: () => void) {
-  const obs = new MutationObserver(cb);
-  obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-  return () => obs.disconnect();
-}
-
-function getSnapshot(): ResolvedTheme {
-  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-}
-
-/**
- * The theme that is actually applied right now. Re-renders when it changes,
- * whatever changed it (toggle, system preference, another tab). Use it for
- * canvas/JS consumers such as ECharts that cannot follow CSS variables.
- */
-export function useResolvedTheme(): ResolvedTheme {
-  return useSyncExternalStore(subscribe, getSnapshot, () => 'dark');
-}
