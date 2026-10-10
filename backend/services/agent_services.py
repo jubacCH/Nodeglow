@@ -218,6 +218,22 @@ async def _host_in_maintenance(db, agent) -> bool:
     return any(bool(m) for m in rows)
 
 
+async def _agent_ping_host_ids(db, agent) -> list[int]:
+    """Ids of the ping hosts that represent this agent (matched like
+    :func:`_host_in_maintenance`), recorded as the incident's affected hosts."""
+    from models.ping import PingHost
+
+    if not agent.hostname:
+        return []
+    hn = agent.hostname.lower()
+    return [hid for (hid,) in (await db.execute(
+        select(PingHost.id).where(
+            PingHost.source == "agent",
+            (func.lower(PingHost.hostname) == hn) | (func.lower(PingHost.name) == hn),
+        )
+    )).all()]
+
+
 async def _resolve(db, agent_id: int, name: str, summary: str) -> Incident | None:
     open_incidents = (await db.execute(
         select(Incident).where(
@@ -279,6 +295,7 @@ async def apply_service_report(db, agent, reported, now: datetime | None = None)
                 summary=summary,
                 key_hash=incident_hash(agent.id, name),
                 send_notification=False,
+                affected_host_ids=await _agent_ping_host_ids(db, agent),
             )
             svc["alerted"] = True
             notifications.append((f"🔴 Incident: {title}", summary, "warning"))

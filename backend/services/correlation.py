@@ -99,18 +99,43 @@ async def cleanup_incident_events(db, retention_days: int) -> int:
     return result.rowcount or 0
 
 
+def affected_host_ids_json(host_ids) -> str | None:
+    """Incident.host_ids for the given ids: sorted JSON list, 0/None dropped.
+
+    ``None`` in → ``None`` out (not recorded). Callers pass ``[0]`` as a
+    "no specific host" marker for the dedup hash; that becomes ``"[]"``:
+    recorded, and known to name no host.
+    """
+    if host_ids is None:
+        return None
+    clean = sorted({int(h) for h in host_ids if h and not isinstance(h, bool) and int(h) > 0})
+    return json.dumps(clean, separators=(",", ":"))
+
+
 async def _find_or_create_incident(
     db, rule: str, title: str, severity: str,
     host_ids: list[int], event_type: str, summary: str, detail: str = None,
     key_hash: str | None = None, send_notification: bool = True,
+    affected_host_ids: list[int] | None = None,
 ) -> Incident:
     """Find existing open incident for this rule+hosts combo, or create new one.
 
     ``key_hash`` replaces the host-id hash as dedup key for incidents that are
     not about ping hosts (e.g. a service on an agent). ``send_notification=False``
     leaves notifying to the caller, which can then do it after its commit.
+
+    The affected hosts are stored on the incident (``Incident.host_ids``):
+    ``affected_host_ids`` when given, else ``host_ids`` — except for a custom
+    ``key_hash``, whose ``host_ids`` are not host ids, so nothing is recorded
+    unless the caller names the hosts.
     """
     h = key_hash or _host_ids_hash(host_ids)
+    if affected_host_ids is not None:
+        recorded = affected_host_ids_json(affected_host_ids)
+    elif key_hash is None:
+        recorded = affected_host_ids_json(host_ids)
+    else:
+        recorded = None
 
     existing = (await db.execute(
         select(Incident).where(
@@ -121,6 +146,11 @@ async def _find_or_create_incident(
     )).scalar_one_or_none()
 
     if existing:
+        # Same dedup key, so normally the same hosts. Record them when the
+        # incident predates the column, or when the caller's set changed (a
+        # key_hash incident whose host mapping moved).
+        if recorded is not None and existing.host_ids != recorded:
+            existing.host_ids = recorded
         # Append event to existing incident
         existing.updated_at = datetime.utcnow()
         db.add(IncidentEvent(
@@ -137,6 +167,7 @@ async def _find_or_create_incident(
         title=title,
         severity=severity,
         host_ids_hash=h,
+        host_ids=recorded,
     )
     db.add(incident)
     await db.flush()
