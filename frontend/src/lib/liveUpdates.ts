@@ -133,6 +133,25 @@ function patchQuery<T>(qc: QueryClient, key: readonly unknown[], patch: (d: T | 
   qc.setQueryData<T>(key, next, { updatedAt: state.dataUpdatedAt });
 }
 
+const REACHABLE_STATES = new Set(['up', 'degraded', 'warning']);
+
+/**
+ * True when a ping result contradicts a cached unified `state` (reachable vs.
+ * down/unknown). The unified state is derived server-side (probes,
+ * maintenance, check errors), so the client refetches instead of guessing it.
+ */
+export function hasStateFlip(
+  data: HostListItem[] | undefined,
+  updates: ReadonlyMap<number, WsPingUpdate>,
+): boolean {
+  if (!data || updates.size === 0) return false;
+  return data.some((h) => {
+    const u = updates.get(h.id);
+    if (!u || !h.state || h.state === 'maintenance' || h.state === 'disabled') return false;
+    return REACHABLE_STATES.has(h.state) !== u.online;
+  });
+}
+
 /** Apply one batch of buffered events to every cache entry they affect. */
 export function applyLiveUpdates(
   qc: QueryClient,
@@ -140,6 +159,10 @@ export function applyLiveUpdates(
   agents: ReadonlyMap<number, WsAgentMetric>,
 ): void {
   if (pings.size > 0) {
+    const flipped = qc
+      .getQueriesData<HostListItem[]>({ queryKey: ['hosts-v1'] })
+      .some(([, d]) => hasStateFlip(d, pings));
+    if (flipped) void qc.invalidateQueries({ queryKey: ['hosts-v1'] });
     patchQuery<DashboardData>(qc, ['dashboard'], (d) => patchDashboard(d, pings));
     patchQuery<HostStatus[]>(qc, ['hosts'], (d) => patchHostStatusList(d, pings));
     patchQuery<HostListItem[]>(qc, ['hosts-v1'], (d) => patchHostListV1(d, pings));
