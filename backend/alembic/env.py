@@ -39,11 +39,6 @@ target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 
-def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode — emit SQL to stdout."""
-    url = config.get_main_option("sqlalchemy.url")
-
-
 def _include_object(obj, name, type_, reflected, compare_to):
     """Filter comparison noise that is not schema drift.
 
@@ -63,6 +58,9 @@ def _include_object(obj, name, type_, reflected, compare_to):
     return True
 
 
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode — emit SQL to stdout."""
+    url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
