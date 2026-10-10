@@ -33,6 +33,8 @@ describe('navigation registry', () => {
     expect(findActive('/integration/unifi/3')?.item.id).toBe('integrations');
     expect(findActive('/syslog/templates')?.item.id).toBe('log-patterns');
     expect(findActive('/')?.section.id).toBe('overview');
+    expect(findActive('/changes')?.item.id).toBe('changes');
+    expect(findActive('/')?.item.id).toBe('dashboard');
   });
 
   it('prefers the item whose query matches', () => {

@@ -9,7 +9,7 @@
  * (navigation.test.ts enforces this).
  */
 import {
-  Activity, ArrowUpDown, BarChart3, Bell, BookOpen, Bot, ClipboardList, FileText,
+  Activity, ArrowUpDown, BarChart3, Bell, BookOpen, Bot, ClipboardList, FileText, History,
   KeyRound, LayoutDashboard, LayoutList, Network, Plug, Radio, Scan, ScrollText,
   Server, Settings, Shield, ShieldCheck, TriangleAlert, Users, Wrench, Archive,
   type LucideIcon,
@@ -58,6 +58,7 @@ export const NAV_SECTIONS: NavSection[] = [
     mobile: true,
     items: [
       { id: 'dashboard', label: 'Overview', href: '/', icon: LayoutDashboard, shortcut: 'd', keywords: 'dashboard home' },
+      { id: 'changes', label: 'Changes', href: '/changes', icon: History, keywords: 'since last visit feed activity what changed' },
     ],
   },
   {
