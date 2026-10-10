@@ -1,14 +1,19 @@
 'use client';
 
 import { useState } from 'react';
-import { GlassCard } from '@/components/ui/GlassCard';
+import { Card, CardHeader } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { StatusDot } from '@/components/ui/StatusDot';
-import { formatUptime } from '@/lib/utils';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { CopyButton } from '@/components/ui/CopyButton';
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
 import { post } from '@/lib/api';
-import { ScrollText, Copy, Check, CheckCircle, XCircle } from 'lucide-react';
+import type { HealthState } from '@/lib/status';
+import { cn } from '@/lib/utils';
+import { CheckCircle, XCircle } from 'lucide-react';
 import Link from 'next/link';
+import { SectionTitle, StatGrid, StatTile, StateLabel, TableCard, UsageBar, fixed, isNum, uptime } from './parts';
 
 interface ProxmoxTotals {
   nodes_online: number;
@@ -66,41 +71,6 @@ interface ProxmoxData {
   tasks?: Array<{ type?: string; status?: string; starttime?: number; node?: string; id?: string }>;
 }
 
-function barColor(pct: number): string {
-  if (pct >= 90) return 'bg-red-500';
-  if (pct >= 75) return 'bg-amber-500';
-  return 'bg-emerald-500';
-}
-
-function ProgressBar({ label, pct, detail }: { label: string; pct: number; detail?: string }) {
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-slate-400">
-        <span>{label}</span>
-        <span>{detail ?? `${pct.toFixed(1)}%`}</span>
-      </div>
-      <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <GlassCard className="p-4 text-center">
-      <p className="text-2xl font-semibold text-slate-100">{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
-  );
-}
-
-function guestStatusColor(status: string): string {
-  if (status === 'running') return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
-  if (status === 'stopped') return 'bg-red-500/20 text-red-400 border-red-500/30';
-  return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
-}
-
 interface DeployResult {
   ok: boolean;
   mode?: 'ssh' | 'script';
@@ -138,6 +108,31 @@ function backupAge(epoch: number | undefined | null): { text: string; severity: 
   return { text: timeAgo(epoch), severity: 'old' };
 }
 
+const AGE_TEXT = { ok: 'text-ok', warn: 'text-warning', old: 'text-down' } as const;
+
+/** "3/5" when both parts are known, otherwise null (→ "—"). */
+function ratio(a: unknown, b: unknown): string | null {
+  return isNum(a) && isNum(b) ? `${a}/${b}` : null;
+}
+
+function nodeState(online: boolean | null | undefined): HealthState {
+  if (online === true) return 'ok';
+  if (online === false) return 'down';
+  return 'unknown';
+}
+
+/** Stopped guests are usually intentional: dimmed, not red. */
+function GuestStatus({ status }: { status: string | null | undefined }) {
+  if (status === 'running') return <StateLabel status="ok">running</StateLabel>;
+  if (status === 'stopped') return <StateLabel status="disabled">stopped</StateLabel>;
+  if (!status) return <StateLabel status="unknown">No data</StateLabel>;
+  return <StateLabel status="degraded">{status}</StateLabel>;
+}
+
+function gb(used: unknown, total: unknown): string | undefined {
+  return isNum(used) && isNum(total) ? `${used.toFixed(1)} / ${total.toFixed(1)} GB` : undefined;
+}
+
 export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?: number }) {
   const { totals, nodes, vms, containers } = data;
   const allGuests = [
@@ -162,7 +157,6 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
 
   const [deploying, setDeploying] = useState(false);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
-  const [copied, setCopied] = useState(false);
 
   async function deploySyslog() {
     if (!configId) return;
@@ -178,45 +172,43 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
     }
   }
 
+  const backupCount = Object.keys(backupsByVmid).length;
+
   return (
     <div className="space-y-6">
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard label="Nodes" value={`${totals.nodes_online}/${totals.nodes_total}`} />
-        <StatCard label="VMs Running" value={`${totals.vms_running}/${totals.vms_total}`} />
-        <StatCard label="LXCs Running" value={`${totals.lxc_running}/${totals.lxc_total}`} />
-        <StatCard label="CPU Avg" value={`${totals.cpu_avg_pct.toFixed(1)}%`} />
-        <StatCard label="Memory" value={`${totals.mem_pct.toFixed(1)}%`} />
-      </div>
+      {/* Stat tiles */}
+      <StatGrid cols={5}>
+        <StatTile label="Nodes online" value={ratio(totals?.nodes_online, totals?.nodes_total)} />
+        <StatTile label="VMs running" value={ratio(totals?.vms_running, totals?.vms_total)} />
+        <StatTile label="LXCs running" value={ratio(totals?.lxc_running, totals?.lxc_total)} />
+        <StatTile label="CPU avg" value={fixed(totals?.cpu_avg_pct)} unit="%" />
+        <StatTile label="Memory" value={fixed(totals?.mem_pct)} unit="%" />
+      </StatGrid>
 
       {/* Nodes */}
-      <div>
-        <h3 className="text-sm font-medium text-slate-300 mb-3">Nodes</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <section>
+        <SectionTitle>Nodes</SectionTitle>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {(nodes ?? []).map((node) => (
-            <GlassCard key={node.name} className="p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <StatusDot status={node.online ? 'online' : 'offline'} />
-                <span className="text-sm font-medium text-slate-200">{node.name}</span>
-                <span className="ml-auto text-xs text-slate-500">{formatUptime(node.uptime_s)}</span>
+            <Card key={node.name} padding="sm" className="space-y-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <StatusDot status={nodeState(node.online)} />
+                <span className="truncate text-ui font-medium text-fg">{node.name}</span>
+                <span className="num ml-auto shrink-0 text-meta text-fg-3">{uptime(node.uptime_s) ?? '—'}</span>
               </div>
-              <ProgressBar label="CPU" pct={node.cpu_pct} />
-              <ProgressBar label="Memory" pct={node.mem_pct} detail={`${node.mem_used_gb.toFixed(1)} / ${node.mem_total_gb.toFixed(1)} GB`} />
-              <ProgressBar label="Disk" pct={node.disk_pct} detail={`${node.disk_used_gb.toFixed(1)} / ${node.disk_total_gb.toFixed(1)} GB`} />
-            </GlassCard>
+              <UsageBar label="CPU" pct={node.cpu_pct} />
+              <UsageBar label="Memory" pct={node.mem_pct} detail={gb(node.mem_used_gb, node.mem_total_gb)} />
+              <UsageBar label="Disk" pct={node.disk_pct} detail={gb(node.disk_used_gb, node.disk_total_gb)} />
+            </Card>
           ))}
         </div>
-      </div>
+      </section>
 
       {/* Backup summary */}
-      {Object.keys(backupsByVmid).length > 0 && (
-        <GlassCard className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle size={16} className="text-emerald-400" />
-            <h3 className="text-sm font-medium text-slate-300">Backup Status</h3>
-            <span className="text-xs text-slate-500">{Object.keys(backupsByVmid).length} VMs/LXCs with backups</span>
-          </div>
-          <div className="flex gap-3 text-xs">
+      {backupCount > 0 && (
+        <Card as="section" padding="sm">
+          <CardHeader title="Backup status" meta={`${backupCount} VMs/LXCs with backups`} className="mb-3" />
+          <div className="flex flex-wrap gap-2">
             {(() => {
               const now = Date.now() / 1000;
               const fresh = Object.values(backupsByVmid).filter(b => (now - b.ctime) < 36 * 3600).length;
@@ -224,153 +216,141 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
               const old = Object.values(backupsByVmid).filter(b => (now - b.ctime) >= 72 * 3600).length;
               return (
                 <>
-                  {fresh > 0 && <span className="text-emerald-400">{fresh} current</span>}
-                  {aging > 0 && <span className="text-amber-400">{aging} aging</span>}
-                  {old > 0 && <span className="text-red-400">{old} outdated</span>}
+                  {fresh > 0 && <StatusPill status="ok">{fresh} current</StatusPill>}
+                  {aging > 0 && <StatusPill status="warning">{aging} aging</StatusPill>}
+                  {old > 0 && <StatusPill status="down">{old} outdated</StatusPill>}
                 </>
               );
             })()}
           </div>
-        </GlassCard>
+        </Card>
       )}
 
       {/* VMs + Containers table */}
       {allGuests.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-medium text-slate-300">VMs &amp; Containers</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Type</th>
-                  <th className="px-4 py-2 text-left">ID</th>
-                  <th className="px-4 py-2 text-left">Name</th>
-                  <th className="px-4 py-2 text-left">Status</th>
-                  <th className="px-4 py-2 text-left">Node</th>
-                  <th className="px-4 py-2 text-left">Last Backup</th>
-                  <th className="px-4 py-2 text-right">Uptime</th>
-                </tr>
-              </thead>
-              <tbody>
-                {allGuests.map((g) => (
-                  <tr key={`${g.guestType}-${g.id}`} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2">
-                      <Badge>{g.guestType}</Badge>
-                    </td>
-                    <td className="px-4 py-2 text-slate-400">{g.id}</td>
-                    <td className="px-4 py-2 text-slate-200"><Link href={'/hosts?q=' + encodeURIComponent(g.name)} className="text-sky-400 hover:underline">{g.name}</Link></td>
-                    <td className="px-4 py-2">
-                      <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium border ${guestStatusColor(g.status)}`}>
-                        {g.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-slate-400">{g.node}</td>
-                    <td className="px-4 py-2">
-                      {(() => {
-                        const bk = g.id ? backupsByVmid[g.id] : undefined;
-                        if (!bk) return <span className="text-xs text-slate-600">No backup</span>;
-                        const age = backupAge(bk.ctime);
-                        const color = age.severity === 'ok' ? 'text-emerald-400' : age.severity === 'warn' ? 'text-amber-400' : 'text-red-400';
-                        return (
-                          <div className="flex items-center gap-1.5">
-                            <span className={`text-xs ${color}`}>{age.text}</span>
-                            <span className="text-[10px] text-slate-500">{formatSize(bk.size)}</span>
-                          </div>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-4 py-2 text-right text-slate-400">
-                      {g.uptime_s > 0 ? formatUptime(g.uptime_s) : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard title="VMs & containers" meta={`${allGuests.length}`}>
+          <Table>
+            <THead>
+              <Tr>
+                <Th>Status</Th>
+                <Th>Type</Th>
+                <Th>ID</Th>
+                <Th>Name</Th>
+                <Th>Node</Th>
+                <Th>Last backup</Th>
+                <Th numeric>Uptime</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {allGuests.map((g) => {
+                const bk = g.id ? backupsByVmid[g.id] : undefined;
+                const age = bk ? backupAge(bk.ctime) : null;
+                return (
+                  <Tr key={`${g.guestType}-${g.id}`}>
+                    <Td><GuestStatus status={g.status} /></Td>
+                    <Td><Badge>{g.guestType}</Badge></Td>
+                    <Td muted className="num">{g.id}</Td>
+                    <Td className="max-w-[240px] truncate">
+                      <Link href={'/hosts?q=' + encodeURIComponent(g.name)} className="text-accent hover:underline">{g.name}</Link>
+                    </Td>
+                    <Td muted>{g.node || '—'}</Td>
+                    <Td className="whitespace-nowrap">
+                      {!bk || !age ? (
+                        <span className="text-meta text-fg-3">No backup</span>
+                      ) : (
+                        <span className="flex items-center gap-1.5">
+                          <span className={cn('text-meta', AGE_TEXT[age.severity])}>{age.text}</span>
+                          <span className="num text-micro text-fg-3">{formatSize(bk.size)}</span>
+                        </span>
+                      )}
+                    </Td>
+                    <Td numeric muted className="whitespace-nowrap">
+                      {isNum(g.uptime_s) && g.uptime_s > 0 ? uptime(g.uptime_s) : '—'}
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
 
-      {/* Deploy Syslog */}
+      {/* Deploy agent */}
       {configId && (
-        <GlassCard className="p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <ScrollText size={16} className="text-sky-400" />
-              <h3 className="text-sm font-medium text-slate-300">Agent Deployment</h3>
-            </div>
-            <Button size="sm" disabled={deploying} onClick={deploySyslog}>
-              {deploying ? 'Installing...' : 'Install Agent on all LXCs'}
-            </Button>
-          </div>
-          <p className="text-xs text-slate-500 mb-3">
-            Installs the Nodeglow agent on all running LXCs. The agent collects <span className="text-slate-400">system metrics</span>, <span className="text-slate-400">system logs</span>, and <span className="text-slate-400">Docker container logs</span> — auto-enrolls and auto-updates.
-            {' '}Add SSH key in Proxmox config for automatic install.
+        <Card as="section">
+          <CardHeader
+            title="Agent deployment"
+            actions={
+              <Button size="sm" loading={deploying} onClick={deploySyslog}>
+                {deploying ? 'Installing…' : 'Install agent on all LXCs'}
+              </Button>
+            }
+            className="flex-wrap"
+          />
+          <p className="mb-3 text-ui text-fg-2">
+            Installs the Nodeglow agent on all running LXCs. The agent collects system metrics, system logs and Docker
+            container logs, enrolls itself and updates automatically. Add an SSH key in the Proxmox configuration for
+            automatic installation.
           </p>
 
           {deployResult && (
-            <div className="space-y-3">
+            <div className="space-y-3" aria-live="polite">
               {/* SSH mode: per-LXC results */}
               {deployResult.mode === 'ssh' && (
                 <>
-                  <div className={`p-3 rounded-lg text-sm ${deployResult.failed === 0 ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300' : 'bg-amber-500/10 border border-amber-500/20 text-amber-300'}`}>
-                    Deployed: {deployResult.deployed} | Failed: {deployResult.failed}
-                    {deployResult.syslog_target && <span className="text-xs text-slate-500 ml-2">→ {deployResult.syslog_target}</span>}
-                    {deployResult.skipped_self && <span className="text-xs text-slate-500 ml-2">(skipped {deployResult.skipped_self} — Nodeglow host)</span>}
+                  <div
+                    className={cn(
+                      'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-ctl border p-3 text-ui',
+                      deployResult.failed === 0 ? 'border-ok/30 bg-ok-soft text-ok' : 'border-warning/30 bg-warning-soft text-warning',
+                    )}
+                  >
+                    <span className="num">Deployed: {deployResult.deployed ?? '—'} · Failed: {deployResult.failed ?? '—'}</span>
+                    {deployResult.syslog_target && <span className="text-meta text-fg-2">→ <span className="font-mono">{deployResult.syslog_target}</span></span>}
+                    {deployResult.skipped_self && <span className="text-meta text-fg-2">(skipped {deployResult.skipped_self} — Nodeglow host)</span>}
                   </div>
-                  <div className="space-y-1 max-h-[250px] overflow-y-auto">
+                  <ul className="max-h-[250px] space-y-1 overflow-y-auto">
                     {deployResult.results.map((r) => (
-                      <div key={r.vmid} className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-white/[0.02]">
+                      <li key={r.vmid} className="flex min-w-0 items-center gap-2 rounded-chip px-2 py-1 text-meta hover:bg-surface-2">
                         {r.status === 'ok' ? (
-                          <CheckCircle size={12} className="text-emerald-400 shrink-0" />
+                          <CheckCircle size={12} className="shrink-0 text-ok" aria-label="Installed" />
                         ) : (
-                          <XCircle size={12} className="text-red-400 shrink-0" />
+                          <XCircle size={12} className="shrink-0 text-down" aria-label="Failed" />
                         )}
-                        <span className="text-slate-400 w-12">CT {r.vmid}</span>
-                        <span className="text-slate-200 flex-1">{r.name}</span>
-                        {r.detail && <span className="text-emerald-400/70 text-[10px]">{r.detail}</span>}
-                        {r.error && <span className="text-red-400 text-[10px] truncate max-w-[250px]">{r.error}</span>}
-                      </div>
+                        <span className="num w-14 shrink-0 text-fg-2">CT {r.vmid}</span>
+                        <span className="min-w-0 flex-1 truncate text-fg">{r.name}</span>
+                        {r.detail && <span className="shrink-0 text-micro text-fg-3">{r.detail}</span>}
+                        {r.error && <span className="max-w-[250px] truncate text-micro text-down">{r.error}</span>}
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 </>
               )}
 
-              {/* Script mode: show LXC list + copyable script */}
+              {/* Script mode: LXC list + copyable script */}
               {deployResult.mode === 'script' && (
                 <>
                   {deployResult.results.length > 0 && (
-                    <div className="p-3 rounded-lg bg-sky-500/5 border border-sky-500/20">
-                      <p className="text-xs text-sky-300 mb-2">
-                        {deployResult.results.length} running LXC(s) — add SSH key in Proxmox config to install automatically
-                        {deployResult.syslog_target && <span className="text-slate-500"> → {deployResult.syslog_target}</span>}
+                    <div className="rounded-ctl border border-border-2 bg-surface-2 p-3">
+                      <p className="mb-2 text-meta text-fg-2">
+                        {deployResult.results.length} running LXC(s) — add an SSH key in the Proxmox configuration to install automatically
+                        {deployResult.syslog_target && <span className="text-fg-3"> → <span className="font-mono">{deployResult.syslog_target}</span></span>}
                       </p>
                       <div className="flex flex-wrap gap-2">
                         {deployResult.results.map((r) => (
-                          <span key={r.vmid} className="px-2 py-0.5 rounded bg-white/[0.06] text-[11px] text-slate-300">
-                            CT {r.vmid} <span className="text-slate-500">{r.name}</span>
-                          </span>
+                          <Badge key={r.vmid}>
+                            CT {r.vmid} <span className="text-fg-3">{r.name}</span>
+                          </Badge>
                         ))}
                       </div>
                     </div>
                   )}
                   {deployResult.manual_script && (
                     <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs text-slate-400">Paste into Proxmox node shell:</span>
-                        <button
-                          className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
-                          onClick={() => {
-                            navigator.clipboard.writeText(deployResult.manual_script!);
-                            setCopied(true);
-                            setTimeout(() => setCopied(false), 2000);
-                          }}
-                        >
-                          {copied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
-                        </button>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-meta text-fg-2">Paste into the Proxmox node shell:</span>
+                        <CopyButton text={deployResult.manual_script} />
                       </div>
-                      <pre className="text-[11px] text-slate-300 font-mono bg-black/30 rounded-md p-3 overflow-x-auto whitespace-pre">
+                      <pre className="overflow-x-auto whitespace-pre rounded-ctl border border-border bg-surface-2 p-3 font-mono text-micro text-fg-2">
                         {deployResult.manual_script}
                       </pre>
                     </div>
@@ -380,13 +360,13 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
 
               {/* No mode (message only) */}
               {!deployResult.mode && deployResult.message && (
-                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
+                <div className="rounded-ctl border border-warning/30 bg-warning-soft p-3 text-ui text-warning" role="alert">
                   {deployResult.message}
                 </div>
               )}
             </div>
           )}
-        </GlassCard>
+        </Card>
       )}
     </div>
   );

@@ -1,9 +1,10 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
-import { StatusDot } from '@/components/ui/StatusDot';
-import { EChart } from '@/components/charts/LazyEChart';
-import type { EChartsOption } from 'echarts';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { Badge } from '@/components/ui/Badge';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Table, TableContainer, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import { BlockedAllowedChart, KV, KVGrid, StatGrid, StatTile, StateLabel, TopList, fixed, formatCount, isNum } from './parts';
 
 interface ClusterNode {
   name: string;
@@ -38,112 +39,93 @@ interface TechnitiumData {
   cluster_nodes_unhealthy: number;
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <GlassCard className="p-4 text-center">
-      <p className="text-2xl font-semibold text-slate-100">{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
-  );
-}
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
-function TopList({ title, rows }: { title: string; rows: { label: string; count: number }[] }) {
-  return (
-    <GlassCard className="p-4">
-      <h3 className="text-sm font-medium text-slate-300 mb-3">{title}</h3>
-      <div className="space-y-2">
-        {rows.slice(0, 10).map((row, i) => (
-          <div key={row.label || i} className="flex items-center justify-between text-xs">
-            <span className="text-slate-300 truncate mr-2 font-mono">{row.label}</span>
-            <span className="text-slate-500 tabular-nums shrink-0">{formatNumber(row.count)}</span>
-          </div>
-        ))}
-        {rows.length === 0 && <p className="text-xs text-slate-500">No data</p>}
-      </div>
-    </GlassCard>
-  );
-}
-
 export function TechnitiumDetail({ data }: { data: TechnitiumData }) {
-  const pieOption: EChartsOption = {
-    tooltip: { trigger: 'item' },
-    series: [
-      {
-        type: 'pie',
-        radius: ['40%', '70%'],
-        avoidLabelOverlap: false,
-        itemStyle: { borderRadius: 6, borderColor: 'transparent', borderWidth: 2 },
-        label: { show: false },
-        data: [
-          { value: data.blocked_today, name: 'Blocked', itemStyle: { color: '#ef4444' } },
-          { value: data.queries_today - data.blocked_today, name: 'Allowed', itemStyle: { color: '#22c55e' } },
-        ],
-      },
-    ],
-  };
-
   return (
     <div className="space-y-6">
-      {/* Stat cards (last 24h) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Queries (24h)" value={formatNumber(data.queries_today)} />
-        <StatCard label="Blocked (24h)" value={formatNumber(data.blocked_today)} />
-        <StatCard label="Block Rate" value={`${(data.blocked_pct ?? 0).toFixed(1)}%`} />
-        <StatCard label="Domains on List" value={formatNumber(data.domains_blocked)} />
-      </div>
+      {/* Stat tiles (last 24h) */}
+      <StatGrid>
+        <StatTile label="Queries (24h)" value={formatCount(data.queries_today)} />
+        <StatTile label="Blocked (24h)" value={formatCount(data.blocked_today)} />
+        <StatTile label="Block rate" value={fixed(data.blocked_pct)} unit="%" />
+        <StatTile label="Domains on list" value={formatCount(data.domains_blocked)} />
+      </StatGrid>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Blocking" value={data.status} />
-        <StatCard label="Clients (24h)" value={data.clients} />
-        <StatCard label="Server Failures (24h)" value={formatNumber(data.server_failures_today ?? 0)} />
-        <StatCard
-          label={data.update_available ? `Update to ${data.update_version} available` : 'Version (up to date)'}
-          value={`v${data.version}`}
-        />
-      </div>
+      {/* Service */}
+      <Card as="section">
+        <CardHeader title="Service" />
+        <KVGrid>
+          <KV label="Blocking">{data.status}</KV>
+          <KV label="Clients (24h)">{isNum(data.clients) ? data.clients : null}</KV>
+          <KV label="Server failures (24h)">{formatCount(data.server_failures_today)}</KV>
+          <KV label="Version">
+            {data.version ? (
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="font-mono">v{data.version}</span>
+                {data.update_available ? (
+                  <Badge tone="accent">Update to {data.update_version} available</Badge>
+                ) : (
+                  <span className="text-meta text-fg-3">up to date</span>
+                )}
+              </span>
+            ) : null}
+          </KV>
+        </KVGrid>
+      </Card>
 
       {/* Cluster */}
       {data.cluster_initialized && (
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">
-            Cluster {data.cluster_domain}
-            {data.cluster_nodes_unhealthy > 0 && (
-              <span className="ml-2 text-red-400">{data.cluster_nodes_unhealthy} node(s) unreachable</span>
-            )}
-          </h3>
-          <div className="space-y-2">
-            {(data.cluster_nodes ?? []).map((node) => {
-              const healthy = node.state === 'Self' || node.state === 'Connected';
-              return (
-                <div key={node.name} className="flex items-center gap-3 text-xs">
-                  <StatusDot status={healthy ? 'online' : 'offline'} pulse={!healthy} />
-                  <span className="text-slate-300 font-mono truncate">{node.name}</span>
-                  <span className="text-slate-500">{node.ip}</span>
-                  <span className="text-slate-400">{node.type}</span>
-                  <span className={healthy ? 'text-slate-500' : 'text-red-400'}>{node.state}</span>
-                  <span className="text-slate-500 ml-auto tabular-nums">v{node.version}</span>
-                </div>
-              );
-            })}
-          </div>
-        </GlassCard>
+        <Card
+          as="section"
+          padding="none"
+          glow={isNum(data.cluster_nodes_unhealthy) && data.cluster_nodes_unhealthy > 0 ? 'crit' : undefined}
+        >
+          <CardHeader
+            title={`Cluster ${data.cluster_domain ?? ''}`.trim()}
+            actions={
+              isNum(data.cluster_nodes_unhealthy) && data.cluster_nodes_unhealthy > 0 ? (
+                <StatusPill status="down">{data.cluster_nodes_unhealthy} node(s) unreachable</StatusPill>
+              ) : undefined
+            }
+            className="mb-2 px-4 pt-4"
+          />
+          <TableContainer>
+            <Table density="compact">
+              <THead>
+                <Tr>
+                  <Th>State</Th>
+                  <Th>Node</Th>
+                  <Th>IP</Th>
+                  <Th>Type</Th>
+                  <Th numeric>Version</Th>
+                </Tr>
+              </THead>
+              <TBody>
+                {(data.cluster_nodes ?? []).map((node) => {
+                  const healthy = node.state === 'Self' || node.state === 'Connected';
+                  return (
+                    <Tr key={node.name}>
+                      <Td className="whitespace-nowrap">
+                        <StateLabel status={!node.state ? 'unknown' : healthy ? 'ok' : 'down'}>{node.state || 'No data'}</StateLabel>
+                      </Td>
+                      <Td className="max-w-[240px] truncate font-mono">{node.name}</Td>
+                      <Td muted className="whitespace-nowrap font-mono">{node.ip || '—'}</Td>
+                      <Td muted>{node.type || '—'}</Td>
+                      <Td numeric muted>{node.version ? `v${node.version}` : '—'}</Td>
+                    </Tr>
+                  );
+                })}
+              </TBody>
+            </Table>
+          </TableContainer>
+        </Card>
       )}
 
-      {/* Pie chart + lists */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <GlassCard className="p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Blocked vs Allowed</h3>
-          <EChart option={pieOption} height={220} />
-        </GlassCard>
-        <TopList title="Top Blocked Domains" rows={(data.top_blocked ?? []).map((e) => ({ label: e.domain, count: e.count }))} />
-        <TopList title="Top Queries" rows={(data.top_queries ?? []).map((e) => ({ label: e.domain, count: e.count }))} />
-        <TopList title="Top Clients" rows={(data.top_clients ?? []).map((e) => ({ label: e.client, count: e.count }))} />
+      {/* Chart + lists */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+        <BlockedAllowedChart blocked={data.blocked_today} total={data.queries_today} />
+        <TopList title="Top blocked domains" rows={(data.top_blocked ?? []).map((e) => ({ label: e.domain, count: e.count }))} />
+        <TopList title="Top queries" rows={(data.top_queries ?? []).map((e) => ({ label: e.domain, count: e.count }))} />
+        <TopList title="Top clients" rows={(data.top_clients ?? []).map((e) => ({ label: e.client, count: e.count }))} />
       </div>
     </div>
   );
