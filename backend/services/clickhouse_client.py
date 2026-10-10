@@ -319,20 +319,25 @@ async def insert_bandwidth_metrics(rows: list[dict]) -> None:
 # All callers should use these helpers instead of writing raw SQL — keeps the
 # query patterns consistent and the typing stable.
 
-async def get_latest_ping_per_host(host_ids: list[int] | None = None) -> dict[int, dict]:
-    """Return {host_id: {timestamp, success, latency_ms, host_name}} for the
-    most recent ping per host. If host_ids is None, returns all hosts.
+# How far back the "latest state" lookups read ping_checks. The table keeps 30
+# days; reading all of it to find the newest row per host made the per-minute
+# ping job and every correlation cycle scan ~30 daily partitions. A day covers
+# any sane check interval many times over (even hourly checks give 24 rows).
+PING_LOOKBACK_HOURS = int(os.environ.get("NODEGLOW_PING_LOOKBACK_HOURS", "24"))
 
-    Note: the SQL aliases use `_ts` instead of `timestamp` to avoid a
-    ClickHouse 24.8 parser quirk where aliasing a column to its own name
-    while other aggregates reference the column triggers ILLEGAL_AGGREGATION
-    ("nested aggregate function"). We rename in Python after the query.
-    """
-    where = ""
+
+async def _latest_ping_rows(
+    host_ids: list[int] | None, lookback_hours: int | None,
+) -> list[dict]:
+    clauses: list[str] = []
     params: dict = {}
+    if lookback_hours:
+        clauses.append("timestamp >= now() - toIntervalHour({lb:UInt32})")
+        params["lb"] = int(lookback_hours)
     if host_ids:
-        where = "WHERE host_id IN ({hids:Array(UInt32)})"
+        clauses.append("host_id IN ({hids:Array(UInt32)})")
         params["hids"] = list(host_ids)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT
             host_id,
@@ -344,11 +349,40 @@ async def get_latest_ping_per_host(host_ids: list[int] | None = None) -> dict[in
         {where}
         GROUP BY host_id
     """
-    rows = await query(sql, params)
+    return await query(sql, params)
+
+
+async def get_latest_ping_per_host(
+    host_ids: list[int] | None = None,
+    lookback_hours: int | None = PING_LOOKBACK_HOURS,
+) -> dict[int, dict]:
+    """Return {host_id: {timestamp, success, latency_ms, host_name}} for the
+    most recent ping per host. If host_ids is None, returns all hosts that
+    were checked within the lookback window.
+
+    The main query only reads the last ``lookback_hours``. Hosts that were
+    asked for by id but have no row in that window (maintenance, disabled, a
+    probe that went quiet) are looked up once more without the bound; that
+    second query is restricted to those few ids, so the (host_id, timestamp)
+    sort key keeps it to their granules instead of the whole table.
+    ``lookback_hours=None`` disables the bound entirely.
+
+    Note: the SQL aliases use `_ts` instead of `timestamp` to avoid a
+    ClickHouse 24.8 parser quirk where aliasing a column to its own name
+    while other aggregates reference the column triggers ILLEGAL_AGGREGATION
+    ("nested aggregate function"). We rename in Python after the query.
+    """
+    rows = await _latest_ping_rows(host_ids, lookback_hours)
     out: dict[int, dict] = {}
     for r in rows:
         r["timestamp"] = r.pop("_ts")
         out[int(r["host_id"])] = r
+    if host_ids and lookback_hours:
+        missing = [int(h) for h in host_ids if int(h) not in out]
+        if missing:
+            for r in await _latest_ping_rows(missing, None):
+                r["timestamp"] = r.pop("_ts")
+                out[int(r["host_id"])] = r
     return out
 
 
@@ -481,11 +515,25 @@ async def get_syslog_events_for_host(
 async def get_offline_hosts_since(
     host_ids: list[int],
     min_failures: int,
+    lookback_hours: int = PING_LOOKBACK_HOURS,
 ) -> list[int]:
     """Return host_ids whose last `min_failures` checks all failed.
 
     Used by the correlation engine to detect host-down events without N+1
     queries against Postgres.
+
+    Only the newest ``min_failures`` checks matter, so only the last
+    ``lookback_hours`` are read — however long an outage has lasted, its most
+    recent failed checks are always inside that window as long as the host is
+    still being checked. A host with fewer than ``min_failures`` checks in the
+    window is not being checked at all; whether that is a problem is the
+    self-check's call (probe staleness), not an outage verdict based on
+    day-old rows.
+
+    The newest rows are picked by sorting (timestamp, success) tuples rather
+    than relying on an ORDER BY subquery feeding groupArray: aggregation is
+    free to read its input in any order, so the old form could compare the
+    wrong checks under parallel execution.
     """
     if not host_ids or min_failures <= 0:
         return []
@@ -494,19 +542,21 @@ async def get_offline_hosts_since(
         FROM (
             SELECT
                 host_id,
-                groupArray({n:UInt32})(success) AS recent
-            FROM (
-                SELECT host_id, success
-                FROM ping_checks
-                WHERE host_id IN ({hids:Array(UInt32)})
-                ORDER BY timestamp DESC
-            )
+                arraySlice(
+                    arrayReverseSort(groupArray((timestamp, success))),
+                    1, {n:UInt32}
+                ) AS recent
+            FROM ping_checks
+            WHERE host_id IN ({hids:Array(UInt32)})
+              AND timestamp >= now() - toIntervalHour({lb:UInt32})
             GROUP BY host_id
         )
         WHERE length(recent) >= {n:UInt32}
-          AND arraySum(recent) = 0
+          AND arraySum(x -> x.2, recent) = 0
     """
-    rows = await query(sql, {"hids": list(host_ids), "n": int(min_failures)})
+    rows = await query(sql, {
+        "hids": list(host_ids), "n": int(min_failures), "lb": int(lookback_hours),
+    })
     return [int(r["host_id"]) for r in rows]
 
 
