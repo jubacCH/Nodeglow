@@ -282,14 +282,31 @@ async def system_status(
 # ── Hosts ────────────────────────────────────────────────────────────────────
 
 
+def _csv_filter(raw: str | None, allowed, name: str) -> set[str] | None:
+    """'a,b' → {'a','b'}, validated against ``allowed`` (400 on unknown values)."""
+    if raw is None or not raw.strip():
+        return None
+    values = {v.strip() for v in raw.split(",") if v.strip()}
+    bad = sorted(values - set(allowed))
+    if bad:
+        raise HTTPException(400, f"unknown {name} value(s): {', '.join(bad)}; "
+                                 f"allowed: {', '.join(allowed)}")
+    return values
+
+
 @router.get("/hosts", summary="List all hosts with current status")
 async def list_hosts(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
-    status: str = Query(None, description="Filter: online, offline, maintenance, disabled"),
+    status: str = Query(None, description="Filter: online, offline, unknown, maintenance, disabled"),
+    state: str = Query(None, description="Filter by unified state, comma-separated: "
+                                          "up, degraded, warning, down, unknown, maintenance, disabled"),
     source: str = Query(None, description="Filter by source: manual, proxmox, agent, phpipam"),
     enabled: bool = Query(None, description="Filter by enabled status"),
 ):
+    from services import host_state as hs
+
+    wanted_states = _csv_filter(state, hs.STATES, "state")
     q = select(PingHost).order_by(PingHost.name)
     if enabled is not None:
         q = q.where(PingHost.enabled == enabled)
@@ -302,20 +319,18 @@ async def list_hosts(
     uptime_map = await ping_svc.get_uptime_map()
     now = datetime.utcnow()
     windows = await maint_svc.load_windows(db)
+    # One probe-aware rule for every list: a host behind a silent probe is
+    # "unknown", not its last value (it used to stay "online" here forever).
+    states = await hs.host_states(db, hosts, now, latest=latest_map, windows=windows)
 
     out = []
     for h in hosts:
         lr = latest_map.get(h.id)
-        is_online = bool(lr.get("success")) if lr else None
-        in_maint = maint_svc.is_in_maintenance(h, now, windows)
-        host_status = (
-            "disabled" if not h.enabled
-            else "maintenance" if in_maint
-            else "online" if is_online
-            else "offline" if is_online is False
-            else "unknown"
-        )
+        st = states[h.id]
+        host_status = hs.legacy_status(st.state)
         if status and host_status != status:
+            continue
+        if wanted_states and st.state not in wanted_states:
             continue
         um = uptime_map.get(h.id, {})
         _lat = lr.get("latency_ms") if lr else None
@@ -325,6 +340,8 @@ async def list_hosts(
             "name": h.name,
             "hostname": h.hostname,
             "status": host_status,
+            **st.fields(),
+            "probe_id": h.probe_id,
             "check_type": h.check_type or "icmp",
             "port": h.port,
             "source": h.source or "manual",
@@ -450,11 +467,14 @@ async def get_host(
     _now = datetime.utcnow()
     _windows = await maint_svc.load_windows(db)
     _maint = maint_svc.api_fields(host, _now, _windows)
-    if _online is False:
+    from services import host_state as hs
+    _state = (await hs.host_states(db, [host], _now, latest=latest_map, windows=_windows,
+                                   topology=None))[host.id]
+    if _state.state == hs.STATE_DOWN:
         health_score = 1.0
     elif _maint["maintenance"]:
         health_score = 0.5
-    elif _online is None:
+    elif _online is None or _state.state == hs.STATE_UNKNOWN:
         health_score = 0.8
     else:
         _hs = 0.0
@@ -480,6 +500,9 @@ async def get_host(
         "check_type": host.check_type or "icmp",
         "port": host.port,
         "enabled": host.enabled,
+        "status": hs.legacy_status(_state.state),
+        **_state.fields(),
+        "probe_id": host.probe_id,
         **_maint,
         "maintenance_until": host.maintenance_until.isoformat() if host.maintenance_until else None,
         "source": host.source or "manual",
@@ -874,6 +897,73 @@ def _audit_value(value):
     return str(value)
 
 
+# Declared BEFORE /hosts/{host_id}: Starlette matches routes in order and
+# "{host_id}" matches the literal "bulk", so declared after it this route was
+# unreachable — every bulk edit answered 422 from the single-host route.
+_BULK_FIELDS = {"check_type", "enabled", "latency_threshold_ms", "maintenance", "probe_id"}
+_BULK_MAX_IDS = 5000
+
+
+@router.patch("/hosts/bulk", summary="Bulk update hosts")
+async def bulk_update_hosts(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    body = await request.json()
+    raw_ids = body.get("ids", []) if isinstance(body, dict) else []
+    updates = body.get("updates", {}) if isinstance(body, dict) else {}
+    if not raw_ids or not isinstance(raw_ids, list) or not isinstance(updates, dict) or not updates:
+        raise HTTPException(400, "ids and updates required")
+    try:
+        host_ids = sorted({int(i) for i in raw_ids if not isinstance(i, bool)})
+    except (TypeError, ValueError):
+        raise HTTPException(400, "ids must be host ids") from None
+    if len(host_ids) > _BULK_MAX_IDS:
+        raise HTTPException(400, f"at most {_BULK_MAX_IDS} hosts per request")
+
+    values = {k: v for k, v in updates.items() if k in _BULK_FIELDS}
+    ignored = sorted(k for k in updates if k not in _BULK_FIELDS)
+    if "check_type" in values and values["check_type"] not in ("icmp", "http", "https", "tcp"):
+        raise HTTPException(400, "check_type must be icmp, http, https or tcp")
+    if "enabled" in values or "maintenance" in values:
+        for flag in ("enabled", "maintenance"):
+            if flag in values and not isinstance(values[flag], bool):
+                raise HTTPException(400, f"{flag} must be true or false")
+    if "maintenance" in values and values["maintenance"] is False:
+        values["maintenance_until"] = None
+    if "probe_id" in values and values["probe_id"] is not None:
+        try:
+            values["probe_id"] = int(values["probe_id"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "probe_id must be an agent id or null") from None
+        probe = await db.get(Agent, values["probe_id"])
+        if not probe or not probe.is_probe:
+            raise HTTPException(400, "probe_id does not refer to a probe agent")
+
+    existing = [hid for (hid,) in (await db.execute(
+        select(PingHost.id).where(PingHost.id.in_(host_ids))
+    )).all()]
+    if values and existing:
+        await db.execute(update(PingHost).where(PingHost.id.in_(existing)).values(**values))
+        if "check_type" in values:
+            from scheduler import reset_port_error_state
+            await db.execute(
+                update(PingHost).where(PingHost.id.in_(existing))
+                .values(port_error=False, check_detail=None, check_errors=None)
+            )
+            for hid in existing:
+                reset_port_error_state(hid)
+        await log_action(db, request, "host.bulk_update", "host", None,
+                         f"{len(existing)} hosts",
+                         details={"ids": existing,
+                                  "changes": {k: _audit_value(v) for k, v in values.items()}})
+    await db.commit()
+    missing = sorted(set(host_ids) - set(existing))
+    return {"ok": True, "updated": len(existing) if values else 0,
+            "ids": existing, "missing": missing, "ignored_fields": ignored}
+
+
 @router.patch("/hosts/{host_id}", summary="Update a host")
 async def update_host(
     host_id: int,
@@ -936,31 +1026,6 @@ async def update_host(
     return {"ok": True, "id": host.id}
 
 
-@router.patch("/hosts/bulk", summary="Bulk update hosts")
-async def bulk_update_hosts(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    _key: ApiKey = Depends(require_editor),
-):
-    body = await request.json()
-    host_ids = body.get("ids", [])
-    updates = body.get("updates", {})
-    if not host_ids or not updates:
-        raise HTTPException(400, "ids and updates required")
-
-    allowed_fields = {"check_type", "enabled", "latency_threshold_ms"}
-    for field, value in updates.items():
-        if field not in allowed_fields:
-            continue
-        await db.execute(
-            update(PingHost)
-            .where(PingHost.id.in_(host_ids))
-            .values(**{field: value})
-        )
-    await db.commit()
-    return {"ok": True, "updated": len(host_ids)}
-
-
 @router.delete("/hosts/{host_id}", summary="Delete a host")
 async def delete_host(
     host_id: int,
@@ -979,6 +1044,32 @@ async def delete_host(
 
 
 # ── Agents ───────────────────────────────────────────────────────────────────
+
+
+def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) -> dict:
+    """Probe role and freshness of an agent, as the API reports it."""
+    from services.probes import ProbeState, is_stale, staleness_window
+
+    epoch = datetime(1970, 1, 1)
+    out = {
+        "is_probe": bool(agent.is_probe),
+        "probe_interval_seconds": agent.probe_interval_seconds,
+    }
+    if agent.is_probe:
+        st = ProbeState(
+            probe_id=agent.id, name=agent.name or agent.hostname or f"agent-{agent.id}",
+            interval_seconds=agent.probe_interval_seconds,
+            last_report=(agent.last_seen - epoch).total_seconds() if agent.last_seen else None,
+        )
+        out["probe"] = {
+            "stale": is_stale(st, (now - epoch).total_seconds()),
+            "staleness_window_seconds": int(staleness_window(agent.probe_interval_seconds)),
+            "last_report": agent.last_seen.isoformat() + "Z" if agent.last_seen else None,
+            "host_count": host_count,
+        }
+    else:
+        out["probe"] = None
+    return out
 
 
 @router.get("/agents", summary="List all agents")
@@ -1005,6 +1096,15 @@ async def list_agents(
             host_by_name[ph.hostname.lower()] = ph.id
             host_by_name[ph.name.lower()] = ph.id
 
+    # Hosts each probe checks — one GROUP BY, only when probes exist.
+    probe_host_counts: dict[int, int] = {}
+    if any(a.is_probe for a in agents):
+        probe_host_counts = dict((await db.execute(
+            select(PingHost.probe_id, func.count())
+            .where(PingHost.probe_id.isnot(None), PingHost.enabled == True)  # noqa: E712
+            .group_by(PingHost.probe_id)
+        )).all())
+
     out = []
     for a in agents:
         s = snaps_by_agent.get(a.id)
@@ -1013,6 +1113,7 @@ async def list_agents(
         if a.hostname:
             host_id = host_by_name.get(a.hostname.lower())
         out.append({
+            **_probe_fields(a, now, probe_host_counts.get(a.id, 0)),
             "id": a.id,
             "name": a.name,
             "hostname": a.hostname,
@@ -1044,7 +1145,14 @@ async def get_agent(
     snaps = await get_agent_history(agent_id, limit=60)
 
     now = datetime.utcnow()
+    host_count = None
+    if agent.is_probe:
+        host_count = (await db.execute(
+            select(func.count(PingHost.id))
+            .where(PingHost.probe_id == agent.id, PingHost.enabled == True)  # noqa: E712
+        )).scalar() or 0
     return {
+        **_probe_fields(agent, now, host_count),
         "id": agent.id,
         "name": agent.name,
         "hostname": agent.hostname,
@@ -1095,8 +1203,38 @@ async def patch_agent(
     if "agent_log_level" in updates and updates["agent_log_level"] not in ("off", "errors", "all"):
         raise HTTPException(400, "agent_log_level must be 'off', 'errors', or 'all'")
 
+    # Probe role. It used to be silently dropped by the allowlist above while
+    # the UI reported success. Making an agent a probe hands it checks for a
+    # whole network, so it is admin-only and audited.
+    probe_changes: dict[str, dict] = {}
+    if "is_probe" in body or "probe_interval_seconds" in body:
+        if _key.role != "admin":
+            raise HTTPException(403, "Admin role required to change the probe role.")
+        if "is_probe" in body:
+            if not isinstance(body["is_probe"], bool):
+                raise HTTPException(400, "is_probe must be true or false")
+            updates["is_probe"] = body["is_probe"]
+        if "probe_interval_seconds" in body:
+            value = body["probe_interval_seconds"]
+            if value is not None:
+                if isinstance(value, bool):
+                    raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null")
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null") from None
+                if not 10 <= value <= 3600:
+                    raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null")
+            updates["probe_interval_seconds"] = value
+        for field in ("is_probe", "probe_interval_seconds"):
+            if field in updates and getattr(agent, field) != updates[field]:
+                probe_changes[field] = {"from": getattr(agent, field), "to": updates[field]}
+
     if updates:
         await db.execute(update(Agent).where(Agent.id == agent_id).values(**updates))
+        if probe_changes:
+            await log_action(db, request, "agent.probe", "agent", agent_id, agent.name,
+                             details={"changes": probe_changes})
         await db.commit()
 
     await db.refresh(agent)
@@ -1106,6 +1244,8 @@ async def patch_agent(
         "log_channels": agent.log_channels or "",
         "log_file_paths": agent.log_file_paths or "",
         "agent_log_level": agent.agent_log_level or "errors",
+        "is_probe": bool(agent.is_probe),
+        "probe_interval_seconds": agent.probe_interval_seconds,
     }
 
 
@@ -1237,36 +1377,63 @@ async def get_integration(
 # ── Incidents ────────────────────────────────────────────────────────────────
 
 
+def _parse_iso_utc(raw: str | None, name: str) -> datetime | None:
+    """ISO-8601 → naive UTC (the schema's convention); 400 on garbage."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"{name} must be an ISO-8601 date/time") from None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
 @router.get("/incidents", summary="List incidents")
 async def list_incidents(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
-    status: str = Query(None, description="Filter: open, acknowledged, resolved"),
-    severity: str = Query(None, description="Filter: critical, warning, info"),
+    status: str = Query(None, description="Filter, comma-separated: open, acknowledged, resolved "
+                                           "(e.g. status=open,acknowledged)"),
+    severity: str = Query(None, description="Filter, comma-separated: critical, warning, info"),
     search: str = Query(None, description="Search in title"),
     host_name: str = Query(None, description="Filter by host name in event summaries"),
+    host_id: int = Query(None, description="Only incidents whose recorded hosts include this id"),
+    rule: str = Query(None, description="Filter by rule name"),
+    created_from: str = Query(None, alias="from", description="created_at >= (ISO-8601)"),
+    created_to: str = Query(None, alias="to", description="created_at < (ISO-8601)"),
+    sort: str = Query("updated", pattern="^(updated|created|severity)$"),
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=100_000),
+    envelope: bool = Query(False, description="Return {items, total, limit, offset} instead of a bare list"),
 ):
-    if host_name:
-        # Join with events and find incidents that mention this host
-        q = (
-            select(Incident)
-            .join(IncidentEvent, IncidentEvent.incident_id == Incident.id)
-            .where(IncidentEvent.summary.ilike(f"%{host_name}%"))
-            .group_by(Incident.id)
-            .order_by(Incident.updated_at.desc())
-            .limit(limit)
+    from services import incident_view as iv
+
+    statuses = None if (status or "").strip() == "all" else _csv_filter(status, iv.STATUSES, "status")
+    severities = _csv_filter(severity, iv.SEVERITIES, "severity")
+    conds = iv.build_conditions(
+        statuses=statuses, severities=severities, rule=rule, search=search,
+        host_name=host_name, host_id=host_id,
+        created_from=_parse_iso_utc(created_from, "from"),
+        created_to=_parse_iso_utc(created_to, "to"),
+    )
+    total = (await db.execute(select(func.count(Incident.id)).where(*conds))).scalar() or 0
+
+    q = select(Incident).where(*conds)
+    if sort == "created":
+        q = q.order_by(Incident.created_at.desc(), Incident.id.desc())
+    elif sort == "severity":
+        from sqlalchemy import case
+        q = q.order_by(
+            case(iv.SEVERITY_RANK, value=Incident.severity, else_=9),
+            Incident.created_at.desc(), Incident.id.desc(),
         )
     else:
-        q = select(Incident).order_by(Incident.updated_at.desc()).limit(limit)
-    if status:
-        q = q.where(Incident.status == status)
-    if severity:
-        q = q.where(Incident.severity == severity)
-    if search:
-        q = q.where(Incident.title.ilike(f"%{search}%"))
-    result = await db.execute(q)
+        q = q.order_by(Incident.updated_at.desc(), Incident.id.desc())
+    result = await db.execute(q.offset(offset).limit(limit))
     incidents = result.scalars().all()
+    summaries = await iv.host_summaries(db, incidents)
 
     # Fetch latest non-system event summary per incident (explains the WHY).
     # Greatest-per-group via max(id) subquery — long-lived incidents accumulate
@@ -1290,21 +1457,29 @@ async def list_incidents(
         )
         summary_map = {incident_id: summary for incident_id, summary in events_q}
 
-    return [
+    items = [
         {
             "id": i.id,
             "rule": i.rule,
             "title": i.title,
             "severity": i.severity,
             "status": i.status,
+            "acknowledged": i.status == "acknowledged",
             "summary": summary_map.get(i.id),
             "created_at": i.created_at.isoformat(),
             "updated_at": i.updated_at.isoformat(),
             "resolved_at": i.resolved_at.isoformat() if i.resolved_at else None,
             "acknowledged_by": i.acknowledged_by,
+            **iv.host_fields(i, summaries),
         }
         for i in incidents
     ]
+    headers = {"X-Total-Count": str(total)}
+    if envelope:
+        return JSONResponse({"items": items, "total": total, "limit": limit, "offset": offset,
+                             "has_more": offset + len(items) < total}, headers=headers)
+    # Bare list for existing clients; the total travels in the header.
+    return JSONResponse(items, headers=headers)
 
 
 SEVERITY_NAMES = {0: "Emergency", 1: "Alert", 2: "Critical", 3: "Error"}
@@ -1520,7 +1695,12 @@ async def get_incident(
     except Exception:
         pass
 
+    from services import incident_view as iv
+    host_summary = await iv.host_summaries(db, [incident], limit_per_item=None)
+
     return {
+        **iv.host_fields(incident, host_summary),
+        "acknowledged": incident.status == "acknowledged",
         "id": incident.id,
         "rule": incident.rule,
         "title": incident.title,
@@ -1945,9 +2125,11 @@ async def get_topology(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_api_key),
 ):
+    from services import host_state as hs
     from services.topology import build_topology
 
-    topo = await build_topology(db)
+    provenance: dict[int, str] = {}
+    topo = await build_topology(db, provenance)
 
     # Load hosts for metadata
     result = await db.execute(select(PingHost))
@@ -1961,6 +2143,7 @@ async def get_topology(
     from services.probes import statuses_for
     statuses = await statuses_for(db, hosts, now.timestamp())
     windows = await maint_svc.load_windows(db)
+    states = await hs.host_states(db, hosts, now, windows=windows, topology=topo)
 
     nodes = []
     edges = []
@@ -1970,13 +2153,15 @@ async def get_topology(
             "name": h.name,
             "hostname": h.hostname,
             "status": statuses.get(h.id, "unknown"),
+            **states[h.id].fields(),
             "check_type": h.check_type,
             "source": h.source,
             "maintenance": maint_svc.is_in_maintenance(h, now, windows),
         })
         parent = topo.get(h.id)
         if parent is not None:
-            edges.append({"source": parent, "target": h.id})
+            edges.append({"source": parent, "target": h.id,
+                          "provenance": provenance.get(h.id)})
 
     return {"nodes": nodes, "edges": edges}
 

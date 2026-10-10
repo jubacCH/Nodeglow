@@ -141,6 +141,41 @@ async def test_every_api_v1_route_checks_the_key_itself(auth_client):
     assert not failures, "API v1 routes that do not validate the API key:\n  " + "\n  ".join(failures)
 
 
+def test_every_api_v2_router_route_declares_the_auth_dependency():
+    """The redesigned UI's read models (routers/api_v2.py) carry the same
+    require_api_key dependency as /api/v1 on every route, so they stay closed
+    even if the middleware ever starts passing /api/v2 requests with a key."""
+    from routers import api_v1, api_v2
+
+    def _deps(dependant):
+        for d in dependant.dependencies:
+            yield d.call
+            yield from _deps(d)
+
+    routes = [r for r in api_v2.router.routes if isinstance(r, APIRoute)]
+    expected = {
+        ("GET", "/api/v2/dashboard"), ("GET", "/api/v2/summary"),
+        ("GET", "/api/v2/me/seen"), ("POST", "/api/v2/me/seen"),
+        ("GET", "/api/v2/changes"),
+    }
+    present = {(m, r.path) for r in routes for m in r.methods}
+    assert expected <= present, f"missing v2 routes: {sorted(expected - present)}"
+    for r in routes:
+        assert api_v1.require_api_key in set(_deps(r.dependant)), f"{r.path} lacks require_api_key"
+
+
+async def test_api_v2_read_models_reject_anonymous_and_bogus_keys(auth_client):
+    client, _sf = auth_client
+    for method, path in (("GET", "/api/v2/dashboard"), ("GET", "/api/v2/summary"),
+                         ("GET", "/api/v2/changes?since=2026-01-01T00:00:00Z"),
+                         ("GET", "/api/v2/me/seen"), ("POST", "/api/v2/me/seen")):
+        resp = await client.request(method, path, json={} if method == "POST" else None)
+        assert resp.status_code in (401, 403), f"{method} {path} -> {resp.status_code}"
+        resp = await client.request(method, path, headers={"X-API-Key": "ng_bogus"},
+                                    json={} if method == "POST" else None)
+        assert resp.status_code in (401, 403), f"{method} {path} (bogus key) -> {resp.status_code}"
+
+
 async def test_api_v1_without_key_is_rejected_by_middleware(auth_client):
     """Defence in depth: /api/v1/* without session and without X-API-Key is
     refused before any route code runs, even for a route that forgot its

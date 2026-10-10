@@ -50,6 +50,7 @@ JOBS = [
     "cleanup_clickhouse_logs",
     "update_ssl_expiry",
     "run_self_check_job",
+    "refresh_disk_predictions",
 ]
 
 

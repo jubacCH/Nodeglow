@@ -163,57 +163,8 @@ router = APIRouter()
 
 
 async def _predict_agent_disks(db, days_back: int = 14) -> dict[str, dict]:
-    """Predict disk-full for agent disks using historical agent_metrics data."""
-    from models.agent import Agent
-    from services.predictions import _linear_predict
-    from services.clickhouse_client import get_agent_history
-
-    predictions: dict[str, dict] = {}
-
-    result = await db.execute(select(Agent).where(Agent.enabled == True))
-    agents = result.scalars().all()
-
-    for agent in agents:
-        snapshots = await get_agent_history(agent.id, limit=10000, hours=days_back * 24)
-        if len(snapshots) < 3:
-            continue
-
-        # Build time-series per mount: {mount: [(epoch, pct), ...]}
-        mount_series: dict[str, list[tuple[float, float]]] = {}
-        for snap in snapshots:
-            data_json = snap.get("data_json")
-            if not data_json:
-                continue
-            try:
-                data = json.loads(data_json)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            ts_val = snap.get("timestamp")
-            if not isinstance(ts_val, datetime):
-                continue
-            ts = ts_val.timestamp()
-            for disk in data.get("disks", []):
-                mount = disk.get("mount", "/")
-                pct = disk.get("pct")
-                total = disk.get("total_gb", 0)
-                if pct is not None and total > 0.5:
-                    mount_series.setdefault(mount, []).append((ts, float(pct)))
-
-        for mount, series in mount_series.items():
-            if len(series) < 3:
-                continue
-            pred = _linear_predict(series)
-            if pred is None:
-                continue
-            key = f"agent-{agent.id}:{mount}"
-            predictions[key] = {
-                "current_pct": pred["current"],
-                "trend_pct_per_day": pred["slope_per_day"],
-                "days_until_full": pred["days_until_full"],
-                "confidence": pred["r_squared"],
-            }
-
-    return predictions
+    """Predict disk-full for agent disks (moved to services.predictions)."""
+    return await pred_svc.predict_agent_disks(db, days_back)
 
 
 # ── Default dashboard widget layout (gridstack 12-col, cellHeight=40px) ──────
@@ -315,9 +266,16 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         for hid in sparklines_by_host:
             sparklines_by_host[hid] = sparklines_by_host[hid][-60:]
 
+    # The unified, probe-aware state (services.host_state): a host behind a
+    # silent probe or without a recent result counts as unknown, not online.
+    from services import host_state as hs
+    host_state_map = await hs.host_states(db, hosts, now, latest=latest_by_host)
+
     for host in hosts:
         latest_row = latest_by_host.get(host.id)
         latest_success = bool(latest_row.get("success")) if latest_row else None
+        if host_state_map[host.id].state == hs.STATE_UNKNOWN:
+            latest_success = None
         latest_latency = latest_row.get("latency_ms") if latest_row else None
         latest_ts = latest_row.get("timestamp") if latest_row else None
 
@@ -1313,6 +1271,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             "sparkline": s["sparkline"],
             "effective_threshold": s["effective_threshold"],
             "health_score": s["health_score"],
+            **host_state_map[s["host"].id].fields(),
         }
 
     def _incident_dict(inc):
@@ -1344,6 +1303,10 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         "online_count": online_count,
         "offline_count": offline_count,
         "total_count": len(active_stats),
+        # Unified host states (B-01): counts for every state incl. unknown and
+        # maintenance, plus the most common reasons per state.
+        "host_state_counts": hs.counts(host_state_map.values()),
+        "host_state_reasons": hs.reasons_by_state(host_state_map.values()),
         "integration_health": integration_health,
         "active_incidents": active_incident_count,
         "syslog_stats": {

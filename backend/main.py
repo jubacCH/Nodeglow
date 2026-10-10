@@ -29,6 +29,7 @@ from routers import (
     ssl_monitor,
     update,
     api_v1,
+    api_v2,
     rules as rules_router,
     digest as digest_router,
     bandwidth as bandwidth_router,
@@ -513,6 +514,7 @@ app.include_router(snmp_router.router)
 app.include_router(ssl_monitor.router)
 app.include_router(update.router)
 app.include_router(api_v1.router)
+app.include_router(api_v2.router)
 app.include_router(rules_router.router)
 app.include_router(digest_router.router)
 app.include_router(bandwidth_router.router)

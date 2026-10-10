@@ -206,6 +206,38 @@ def next_occurrence(w: WindowSpec, now: datetime) -> tuple[datetime, datetime] |
     return None
 
 
+MAX_OCCURRENCE_SPAN_DAYS = 62
+
+
+def occurrences_between(w: WindowSpec, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+    """Every occurrence (start, end) whose START lies in ``[start, end)``.
+
+    Naive UTC in and out. The span is capped at ``MAX_OCCURRENCE_SPAN_DAYS``
+    (counted back from ``end``) so a careless caller cannot loop for years.
+    """
+    if not w.enabled or end <= start:
+        return []
+    start = max(start, end - timedelta(days=MAX_OCCURRENCE_SPAN_DAYS))
+    if w.kind == "once":
+        if w.starts_at and w.ends_at and start <= w.starts_at < end:
+            return [(w.starts_at, w.ends_at)]
+        return []
+    if w.kind != "weekly" or not w.weekdays or w.start_time is None or w.duration_minutes <= 0:
+        return []
+    zone = ZoneInfo(w.tz)
+    first = start.replace(tzinfo=timezone.utc).astimezone(zone).date() - timedelta(days=1)
+    last = end.replace(tzinfo=timezone.utc).astimezone(zone).date() + timedelta(days=1)
+    out = []
+    day = first
+    while day <= last:
+        if day.weekday() in w.weekdays:
+            s = datetime.combine(day, w.start_time, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+            if start <= s < end:
+                out.append((s, s + timedelta(minutes=w.duration_minutes)))
+        day += timedelta(days=1)
+    return out
+
+
 def is_window_active(w: WindowSpec, now: datetime | None = None) -> bool:
     return occurrence_at(w, now or _utc_now()) is not None
 
