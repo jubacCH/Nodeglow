@@ -4,8 +4,10 @@ Ping/HTTP/TCP/DNS/SSL utilities for host monitoring.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import random
 import re
+import socket
 import ssl
 import struct
 import subprocess
@@ -21,12 +23,33 @@ if TYPE_CHECKING:
 
 # ── ICMP ──────────────────────────────────────────────────────────────────────
 
+async def _resolve_for_ping(hostname: str) -> str | None:
+    """Resolve a name in-process, so the getaddrinfo cache applies.
+
+    The ping binary would otherwise resolve it again in its own process on
+    every check. IP literals pass through; an unresolvable name returns None.
+    """
+    try:
+        ipaddress.ip_address(hostname)
+        return hostname
+    except ValueError:
+        pass
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(hostname, None, type=socket.SOCK_RAW)
+    except (socket.gaierror, UnicodeError):
+        return None
+    return infos[0][4][0] if infos else None
+
+
 async def ping_host(hostname: str, timeout: float = 2.0) -> tuple[bool, float | None]:
     """Ping a host using system ping binary. Returns (success, latency_ms)."""
+    target = await _resolve_for_ping(hostname)
+    if target is None:
+        return False, None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ping", "-c", "1", "-W", str(int(timeout)),
-            hostname,
+            target,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
