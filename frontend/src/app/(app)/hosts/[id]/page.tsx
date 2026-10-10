@@ -314,14 +314,14 @@ export default function HostDetailPage() {
                 Back
               </Button>
             </Link>
-            <Button variant="ghost" size="sm" onClick={() => setShowEdit(true)}>
-              <Pencil size={16} />
+            <Button variant="ghost" size="sm" onClick={() => setShowEdit(true)} aria-label="Edit host" title="Edit host">
+              <Pencil size={16} aria-hidden="true" />
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => {
+            <Button variant="ghost" size="sm" aria-label="Refresh" title="Refresh" onClick={() => {
               qc.invalidateQueries({ queryKey: ['host', hostId] });
               qc.invalidateQueries({ queryKey: ['host-history', hostId] });
             }}>
-              <RefreshCw size={16} />
+              <RefreshCw size={16} aria-hidden="true" />
             </Button>
           </div>
         }
@@ -1462,6 +1462,10 @@ function MonitoringCard({ host, hostId }: { host: any; hostId: number | string }
                 {s === 'fail' && <span className="text-[10px] text-red-400">failed</span>}
               </div>
               <button
+                type="button"
+                role="switch"
+                aria-checked={active}
+                aria-label={label}
                 onClick={() => toggle(key, !active)}
                 className={`relative w-8 h-[18px] rounded-full transition-colors ${active ? 'bg-sky-500/60' : 'bg-white/10'}`}
               >

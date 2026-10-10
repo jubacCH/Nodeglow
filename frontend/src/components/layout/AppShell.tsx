@@ -112,6 +112,8 @@ export function AppShell({ children }: AppShellProps) {
         <div className="lg:hidden flex items-center gap-3 px-4 h-14 sticky top-0 z-40" style={{ background: 'var(--ng-bg)', borderBottom: '1px solid var(--ng-glass-border)' }}>
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
+            aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={mobileOpen}
             className="p-1.5 rounded-md transition-colors"
             style={{ color: 'var(--ng-text-muted)' }}
           >

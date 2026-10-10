@@ -94,8 +94,8 @@ function AddAgentDialog({ onClose }: { onClose: () => void }) {
     <GlassCard className="p-6 mb-6 border border-sky-500/20">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-medium text-slate-200">Add New Agent</h3>
-        <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
-          <X size={16} />
+        <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-slate-200">
+          <X size={16} aria-hidden="true" />
         </button>
       </div>
 

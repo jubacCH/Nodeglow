@@ -37,7 +37,7 @@ export function ToastContainer() {
             >
               <Icon size={18} />
               <span className="text-sm text-slate-200">{t.message}</span>
-              <button onClick={() => dismiss(t.id)} className="ml-2 text-slate-500 hover:text-slate-300">
+              <button onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="ml-2 text-slate-500 hover:text-slate-300">
                 <X size={14} />
               </button>
             </motion.div>

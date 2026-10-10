@@ -137,8 +137,8 @@ export default function IntegrationListPage() {
             <h3 className="text-sm font-medium text-slate-200">
               New {fieldsData?.display_name ?? type} Instance
             </h3>
-            <button onClick={() => setShowAdd(false)} className="text-slate-400 hover:text-slate-200">
-              <X size={16} />
+            <button onClick={() => setShowAdd(false)} aria-label="Close" className="text-slate-400 hover:text-slate-200">
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
 
@@ -228,8 +228,8 @@ export default function IntegrationListPage() {
             <h3 className="text-sm font-medium text-slate-200">
               Edit {fieldsData?.display_name ?? type} Instance
             </h3>
-            <button onClick={() => { setEditId(null); setFormData({}); }} className="text-slate-400 hover:text-slate-200">
-              <X size={16} />
+            <button onClick={() => { setEditId(null); setFormData({}); }} aria-label="Close" className="text-slate-400 hover:text-slate-200">
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
 
