@@ -3,6 +3,11 @@ import time
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
+# Before anything resolves hostnames: cache getaddrinfo process-wide.
+from utils import dns_cache
+
+dns_cache.install()
+
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
