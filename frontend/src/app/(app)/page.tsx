@@ -13,10 +13,7 @@ const HeatmapGrid = dynamic(
   () => import('@/components/charts/HeatmapGrid').then(m => ({ default: m.HeatmapGrid })),
   { loading: () => <Skeleton className="h-40 w-full" />, ssr: false }
 );
-const EChart = dynamic(
-  () => import('@/components/charts/EChart').then(m => ({ default: m.EChart })),
-  { loading: () => <Skeleton className="h-[180px] w-full" />, ssr: false }
-);
+import { EChart } from '@/components/charts/LazyEChart';
 const GravityWidget = dynamic(
   () => import('@/components/dashboard/GravityWidget').then(m => ({ default: m.GravityWidget })),
   { loading: () => <div className="h-[380px] bg-slate-500/10 rounded-lg animate-pulse" />, ssr: false }

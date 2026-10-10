@@ -6,7 +6,7 @@ import { MessageSquare, BarChart3, Brain, AlertTriangle, Server, Activity, Shiel
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { EChart } from '@/components/charts/EChart';
+import { EChart } from '@/components/charts/LazyEChart';
 import { useSyslogStats } from '@/hooks/queries/useSyslogStats';
 import type { EChartsOption } from 'echarts';
 

@@ -2,18 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import dynamic from 'next/dynamic';
 import { get } from '@/lib/api';
+import { EChart } from '@/components/charts/LazyEChart';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ArrowDownToLine, ArrowUpFromLine, Network, Trophy } from 'lucide-react';
-
-const EChart = dynamic(
-  () => import('@/components/charts/EChart').then((m) => ({ default: m.EChart })),
-  { ssr: false, loading: () => <div className="h-[300px] bg-white/5 rounded animate-pulse" /> },
-);
 
 /* ---------- helpers ---------- */
 
