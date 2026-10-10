@@ -298,6 +298,10 @@ async def _get_ping_data(db: AsyncSession, source_id: int | None) -> dict | None
     if source_id:
         query = query.where(PingHost.id == source_id)
     hosts = (await db.execute(query)).scalars().all()
+    # Hosts in maintenance (manual flag or a scheduled window) must not fire
+    # ping rules, the same as they don't open incidents.
+    from services.maintenance import without_maintenance
+    hosts = await without_maintenance(db, list(hosts))
     if not hosts:
         return None
 

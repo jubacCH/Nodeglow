@@ -201,8 +201,12 @@ def validate_ai_base_url(url: str, resolve: bool = True) -> str | None:
     Redirects are not followed by the client, so a 3xx cannot bounce the
     request elsewhere. A name rebound after validation is not caught here.
     """
-    from routers.integrations import (
-        _INTERNAL_HOSTS, _METADATA_HOSTS, _METADATA_IPS, _ZERO_NET, _resolve_all,
+    from utils.net_safety import (
+        INTERNAL_HOSTS as _INTERNAL_HOSTS,
+        METADATA_HOSTS as _METADATA_HOSTS,
+        METADATA_IPS as _METADATA_IPS,
+        _ZERO_NET,
+        resolve_all as _resolve_all,
     )
 
     if not url:

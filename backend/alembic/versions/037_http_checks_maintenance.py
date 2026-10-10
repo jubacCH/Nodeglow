@@ -13,13 +13,13 @@ failed ({"https": "status 503"}), so the UI and incidents can say more than
 hosts into maintenance without touching the per-host flag.
 
 Revision ID: 037_http_checks_maintenance
-Revises: 034
+Revises: 036_agent_services
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "037_http_checks_maintenance"
-down_revision = "034"
+down_revision = "036_agent_services"
 branch_labels = None
 depends_on = None
 

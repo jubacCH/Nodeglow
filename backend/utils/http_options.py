@@ -217,7 +217,7 @@ async def normalize_checked(raw) -> dict | None:
     clean = normalize(raw)
     url = absolute_url(clean)
     if url:
-        from routers.integrations import validate_host_async  # lazy: routers import utils
+        from utils.net_safety import validate_host_async
 
         err = await validate_host_async(url)
         if err:
