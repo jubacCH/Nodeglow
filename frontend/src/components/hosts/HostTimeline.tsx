@@ -11,9 +11,12 @@ import {
   Settings2,
   Zap,
 } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryErrorState } from '@/components/ui/QueryState';
+import { SegmentedControl } from '@/components/ui/Tabs';
 import { cn, timeAgo } from '@/lib/utils';
 import {
   useHostTimeline,
@@ -26,49 +29,28 @@ interface HostTimelineProps {
   hostId: number;
 }
 
-const HOURS_OPTIONS: { value: number; label: string }[] = [
-  { value: 1, label: '1h' },
-  { value: 24, label: '24h' },
-  { value: 168, label: '7d' },
-  { value: 720, label: '30d' },
-  { value: 2160, label: '90d' },
-  { value: 8760, label: '1y' },
+const HOURS_OPTIONS: { value: string; label: string }[] = [
+  { value: '1', label: '1h' },
+  { value: '24', label: '24h' },
+  { value: '168', label: '7d' },
+  { value: '720', label: '30d' },
+  { value: '2160', label: '90d' },
+  { value: '8760', label: '1y' },
 ];
 
-const SOURCE_META: Record<
-  TimelineEventType,
-  { label: string; icon: typeof Activity; color: string }
-> = {
-  status: { label: 'Status', icon: Activity, color: 'text-sky-400' },
-  incident: { label: 'Incidents', icon: Zap, color: 'text-amber-400' },
-  syslog: { label: 'Syslog', icon: FileText, color: 'text-violet-400' },
-  change: { label: 'Changes', icon: Settings2, color: 'text-emerald-400' },
+// Sources are categories, not states: neutral icons, no status colours.
+const SOURCE_META: Record<TimelineEventType, { label: string; icon: typeof Activity }> = {
+  status: { label: 'Status', icon: Activity },
+  incident: { label: 'Incidents', icon: Zap },
+  syslog: { label: 'Syslog', icon: FileText },
+  change: { label: 'Changes', icon: Settings2 },
 };
 
-const SEVERITY_STYLES: Record<
-  TimelineSeverity,
-  { dot: string; ring: string; text: string }
-> = {
-  critical: {
-    dot: 'bg-red-500',
-    ring: 'ring-red-500/30',
-    text: 'text-red-400',
-  },
-  error: {
-    dot: 'bg-orange-500',
-    ring: 'ring-orange-500/30',
-    text: 'text-orange-400',
-  },
-  warning: {
-    dot: 'bg-amber-500',
-    ring: 'ring-amber-500/30',
-    text: 'text-amber-400',
-  },
-  info: {
-    dot: 'bg-sky-500',
-    ring: 'ring-sky-500/30',
-    text: 'text-sky-400',
-  },
+const SEVERITY_STYLES: Record<TimelineSeverity, { dot: string; text: string; label: string }> = {
+  critical: { dot: 'bg-down', text: 'text-down', label: 'Critical' },
+  error: { dot: 'bg-warning', text: 'text-warning', label: 'Error' },
+  warning: { dot: 'bg-degraded', text: 'text-degraded', label: 'Warning' },
+  info: { dot: 'bg-line', text: 'text-fg', label: 'Info' },
 };
 
 export function HostTimeline({ hostId }: HostTimelineProps) {
@@ -103,28 +85,14 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
 
   return (
     <div>
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        {/* Timespan toggle */}
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-white/[0.04] border border-white/[0.06]">
-          {HOURS_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => setHours(opt.value)}
-              className={cn(
-                'px-3 py-1 text-xs font-medium rounded-md transition-colors',
-                hours === opt.value
-                  ? 'bg-sky-500/20 text-sky-300'
-                  : 'text-slate-400 hover:text-slate-200',
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Source filter pills */}
-        <div className="flex items-center gap-1.5">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <SegmentedControl
+          label="Timeline range"
+          options={HOURS_OPTIONS}
+          value={String(hours)}
+          onChange={(v) => setHours(Number(v))}
+        />
+        <div role="group" aria-label="Event sources" className="flex flex-wrap items-center gap-1.5">
           {(['status', 'incident', 'syslog', 'change'] as TimelineEventType[]).map((src) => {
             const meta = SOURCE_META[src];
             const active = activeSources.includes(src);
@@ -132,157 +100,126 @@ export function HostTimeline({ hostId }: HostTimelineProps) {
             return (
               <button
                 key={src}
+                type="button"
+                aria-pressed={active}
                 onClick={() => toggleSource(src)}
                 className={cn(
-                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
+                  'inline-flex h-[28px] items-center gap-1.5 rounded-pill border px-2.5 text-meta font-medium transition-colors',
                   active
-                    ? 'bg-white/[0.08] border-white/[0.14] text-slate-100'
-                    : 'bg-white/[0.02] border-white/[0.06] text-slate-500 hover:text-slate-300',
+                    ? 'border-accent/40 bg-accent-soft text-accent'
+                    : 'border-border bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg',
                 )}
               >
-                <Icon size={12} className={active ? meta.color : undefined} />
+                <Icon size={12} aria-hidden="true" />
                 {meta.label}
               </button>
             );
           })}
         </div>
-
-        {/* Live / refresh */}
-        <div className="ml-auto flex items-center gap-2 text-[10px] text-slate-500">
-          {hours <= 1 && (
-            <span className="inline-flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              LIVE
-            </span>
-          )}
+        <div className="ml-auto flex items-center gap-2 text-meta text-fg-3">
+          {hours <= 1 && <span>Refreshes every 30 s</span>}
           {dataUpdatedAt > 0 && (
             <span title={new Date(dataUpdatedAt).toLocaleString()}>
               Updated {timeAgo(new Date(dataUpdatedAt).toISOString())}
             </span>
           )}
-          <button
-            onClick={() => refetch()}
-            disabled={isFetching}
-            className="p-1 rounded-md hover:bg-white/[0.06] text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-50"
-            title="Refresh"
-          >
-            <RefreshCw size={12} className={isFetching ? 'animate-spin' : ''} />
-          </button>
+          <IconButton size="sm" aria-label="Refresh timeline" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw size={13} aria-hidden="true" className={isFetching ? 'animate-spin' : undefined} />
+          </IconButton>
         </div>
       </div>
 
-      {/* Content */}
-      {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 w-full" />
-          ))}
-        </div>
-      ) : isError ? (
-        // A failed query must never look like a quiet host. On a monitoring
-        // product "no events" and "the query broke" lead to opposite actions.
-        <EmptyState
-          icon={AlertTriangle}
-          title="Timeline unavailable"
-          description={
-            error instanceof Error
-              ? `The timeline could not be loaded: ${error.message}`
-              : 'The timeline could not be loaded.'
-          }
-          action={
-            <Button size="sm" onClick={() => refetch()} disabled={isFetching}>
-              Retry
-            </Button>
-          }
-        />
-      ) : activeSources.length === 0 ? (
-        <EmptyState
-          icon={AlertTriangle}
-          title="No sources selected"
-          description="Select at least one event source above to see the timeline."
-        />
-      ) : !data?.events?.length ? (
-        <EmptyState
-          icon={Activity}
-          title="No events"
-          description={`Nothing happened on this host in the last ${hoursLabel(hours)} matching your filter.`}
-        />
-      ) : (
-        <div className="relative">
-          {/* Vertical rail */}
-          <div
-            aria-hidden
-            className="absolute left-[11px] top-2 bottom-2 w-px"
-            style={{ background: 'var(--ng-card-border)' }}
-          />
-          <div className="space-y-3">
-            {grouped.map((group) => (
-              <div key={group.day}>
-                <div className="flex items-center gap-2 mb-2 ml-7">
-                  <span className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">
-                    {group.day}
-                  </span>
-                  <span className="text-[10px] text-slate-600">
-                    {group.events.length} event{group.events.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-                <div className="space-y-1">
-                  {group.events.map((event, idx) => {
-                    const key = `${event.ts}-${event.type}-${idx}`;
-                    const isOpen = expanded.has(key);
-                    const sev = SEVERITY_STYLES[event.severity] ?? SEVERITY_STYLES.info;
-                    const meta = SOURCE_META[event.type];
-                    const Icon = meta.icon;
-                    return (
-                      <div key={key} className="relative">
-                        {/* Dot on the rail */}
-                        <span
-                          className={cn(
-                            'absolute left-[7px] top-3 w-2 h-2 rounded-full ring-2',
-                            sev.dot,
-                            sev.ring,
-                          )}
-                        />
-                        <button
-                          onClick={() => toggleExpand(key)}
-                          className="w-full flex items-start gap-2 pl-7 pr-2 py-2 rounded-md hover:bg-white/[0.03] transition-colors text-left"
-                        >
-                          {isOpen ? (
-                            <ChevronDown size={12} className="text-slate-500 mt-1 shrink-0" />
-                          ) : (
-                            <ChevronRight size={12} className="text-slate-500 mt-1 shrink-0" />
-                          )}
-                          <Icon size={12} className={cn('mt-1 shrink-0', meta.color)} />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-baseline gap-2">
-                              <span className={cn('text-xs font-medium truncate', sev.text)}>
-                                {event.title}
-                              </span>
-                              <span className="text-[10px] text-slate-600 font-mono shrink-0">
-                                {formatTime(event.ts)}
-                              </span>
-                            </div>
-                            {event.summary && (
-                              <p className="text-[11px] text-slate-500 truncate mt-0.5">
-                                {event.summary}
-                              </p>
-                            )}
-                            {isOpen && (
-                              <pre className="mt-2 p-2 rounded-md bg-white/[0.03] border border-white/[0.06] text-[10px] text-slate-400 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-                                {JSON.stringify(event.details, null, 2)}
-                              </pre>
-                            )}
-                          </div>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+      <Card padding="sm">
+        {isLoading ? (
+          <div className="space-y-2" aria-busy="true" aria-label="Loading timeline">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
             ))}
           </div>
-        </div>
-      )}
+        ) : isError ? (
+          // A failed query must never look like a quiet host.
+          <QueryErrorState error={error} onRetry={refetch} title="Timeline unavailable" />
+        ) : activeSources.length === 0 ? (
+          <EmptyState
+            icon={AlertTriangle}
+            variant="no-results"
+            title="No sources selected"
+            description="Select at least one event source above to see the timeline."
+          />
+        ) : !data?.events?.length ? (
+          <EmptyState
+            icon={Activity}
+            variant="no-results"
+            title="No events"
+            description={`Nothing recorded for this host in the last ${hoursLabel(hours)} for the selected sources.`}
+          />
+        ) : (
+          <div className="relative">
+            <div aria-hidden="true" className="absolute bottom-2 left-[11px] top-2 w-px bg-border-2" />
+            <div className="space-y-3">
+              {grouped.map((group) => (
+                <section key={group.day} aria-label={group.day}>
+                  <div className="mb-1.5 ml-7 flex items-baseline gap-2">
+                    <h3 className="text-meta font-medium text-fg-2">{group.day}</h3>
+                    <span className="text-micro text-fg-3">
+                      {group.events.length} event{group.events.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <ul className="space-y-0.5">
+                    {group.events.map((event, idx) => {
+                      const key = `${event.ts}-${event.type}-${idx}`;
+                      const isOpen = expanded.has(key);
+                      const sev = SEVERITY_STYLES[event.severity] ?? SEVERITY_STYLES.info;
+                      const meta = SOURCE_META[event.type];
+                      const Icon = meta.icon;
+                      return (
+                        <li key={key} className="relative">
+                          <span
+                            aria-hidden="true"
+                            className={cn('absolute left-[7px] top-3 h-2 w-2 rounded-full ring-2 ring-surface', sev.dot)}
+                          />
+                          <button
+                            type="button"
+                            aria-expanded={isOpen}
+                            onClick={() => toggleExpand(key)}
+                            className="flex w-full items-start gap-2 rounded-ng-sm py-2 pl-7 pr-2 text-left transition-colors hover:bg-surface-2"
+                          >
+                            {isOpen ? (
+                              <ChevronDown size={12} aria-hidden="true" className="mt-1 shrink-0 text-fg-3" />
+                            ) : (
+                              <ChevronRight size={12} aria-hidden="true" className="mt-1 shrink-0 text-fg-3" />
+                            )}
+                            <Icon size={12} aria-hidden="true" className="mt-1 shrink-0 text-fg-3" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-baseline gap-2">
+                                <span className={cn('truncate text-ui font-medium', sev.text)}>
+                                  <span className="sr-only">{meta.label}, {sev.label}: </span>
+                                  {event.title}
+                                </span>
+                                <span className="num shrink-0 font-mono text-micro text-fg-3">
+                                  {formatTime(event.ts)}
+                                </span>
+                              </div>
+                              {event.summary && (
+                                <p className="mt-0.5 truncate text-meta text-fg-2">{event.summary}</p>
+                              )}
+                              {isOpen && (
+                                <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-ng-sm border border-border bg-surface-2 p-2 font-mono text-micro text-fg-2">
+                                  {JSON.stringify(event.details, null, 2)}
+                                </pre>
+                              )}
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

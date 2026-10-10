@@ -1,118 +1,51 @@
 'use client';
 
-import { PageHeader } from '@/components/layout/PageHeader';
-import { Button } from '@/components/ui/Button';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { StatusDot } from '@/components/ui/StatusDot';
-import { Badge } from '@/components/ui/Badge';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { CopyButton } from '@/components/ui/CopyButton';
-import { Pagination } from '@/components/ui/Pagination';
-import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
-import { useHosts } from '@/hooks/queries/useHosts';
-import { useConfirm } from '@/hooks/useConfirm';
-import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
-import { post, patch, apiErrorMessage } from '@/lib/api';
-import { HttpOptionsFields } from '@/components/hosts/HttpOptionsFields';
-import { DEFAULT_HTTP_FORM, hasHttpCheck, httpOptionsPayload, validateHttpForm } from '@/lib/httpOptions';
-import { ExportButton } from '@/components/ui/ExportButton';
-import { Plus, Search, X, ArrowUpDown, ArrowUp, ArrowDown, Wrench, Trash2, CheckSquare, Square, Server, Pencil } from 'lucide-react';
-import { Modal } from '@/components/ui/Modal';
-import Link from 'next/link';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { HostStatus } from '@/types';
+import { Plus, Search, Server, X } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Button, IconButton } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { ExportButton } from '@/components/ui/ExportButton';
+import { Checkbox, Input } from '@/components/ui/Field';
+import { Pagination } from '@/components/ui/Pagination';
+import { QueryState, formatAsOf } from '@/components/ui/QueryState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { useAgents } from '@/hooks/queries/useAgents';
+import { useHostsV1, useHostsV1ByState, type HostListItem } from '@/hooks/queries/useHosts';
+import { cn } from '@/lib/utils';
+import { BulkActionsBar } from '@/components/hosts/BulkActionsBar';
+import type { BulkReport } from '@/components/hosts/bulk';
+import { HostCards, HostTable, toRow, type HostRow, type SortDir, type SortKey } from '@/components/hosts/HostList';
+import { HostFormModal } from '@/components/hosts/HostFormModal';
+import { StateFilterChips } from '@/components/hosts/StateFilterChips';
+import {
+  HOST_STATES, hostStateRank, normalizeHostState, stateFromLegacyParam, type HostState,
+} from '@/components/hosts/hostState';
+import type { ProbeAgent } from '@/components/hosts/probes';
 
-const inputClass = 'ng-input';
-const selectClass = 'ng-input [&>option]:text-[var(--ng-text-primary)]';
+const PAGE_SIZE = 50;
 
-function UptimeBar({ h24, d7, d30 }: { h24: number | null; d7: number | null; d30: number | null }) {
-  const bars = [
-    { label: '30d', value: d30 },
-    { label: '7d', value: d7 },
-    { label: '24h', value: h24 },
-  ];
-  const allNull = bars.every((b) => b.value === null);
-  if (allNull) return <span className="text-xs text-slate-600">—</span>;
-
-  function barColor(v: number | null): string {
-    if (v === null) return 'bg-slate-700';
-    if (v >= 99.9) return 'bg-emerald-500';
-    if (v >= 95) return 'bg-amber-500';
-    return 'bg-red-500';
+function compare(a: HostRow, b: HostRow, key: SortKey): number {
+  switch (key) {
+    case 'state': return hostStateRank(a.st) - hostStateRank(b.st) || a.name.localeCompare(b.name);
+    case 'name': return a.name.localeCompare(b.name);
+    case 'latency': return (a.latency_ms ?? Infinity) - (b.latency_ms ?? Infinity);
+    case 'uptime': return (a.uptime?.h24 ?? Infinity) - (b.uptime?.h24 ?? Infinity);
+    case 'observed': return (b.observed_at ? Date.parse(b.observed_at) : 0) - (a.observed_at ? Date.parse(a.observed_at) : 0);
   }
+}
 
-  const worst = bars.reduce((min, b) => (b.value !== null && (min === null || b.value < min)) ? b.value : min, null as number | null);
-
+function matches(h: HostListItem, q: string): boolean {
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex gap-0.5" title={bars.map((b) => `${b.label}: ${b.value != null ? b.value.toFixed(1) + '%' : '—'}`).join(' | ')}>
-        {bars.map((b) => (
-          <div key={b.label} className={`w-3 h-3 rounded-sm ${barColor(b.value)}`} />
-        ))}
-      </div>
-      <span className={`text-xs font-mono ${uptimeColor(worst)}`}>
-        {worst != null ? `${worst.toFixed(1)}%` : ''}
-      </span>
-    </div>
+    h.name.toLowerCase().includes(q) ||
+    h.hostname.toLowerCase().includes(q) ||
+    (h.check_type ?? '').toLowerCase().includes(q) ||
+    (h.source ?? '').toLowerCase().includes(q) ||
+    (h.state_reason ?? '').toLowerCase().includes(q)
   );
-}
-
-type SortKey = 'name' | 'status' | 'type' | 'source' | 'latency' | 'uptime';
-type SortDir = 'asc' | 'desc';
-
-function SortHeader({ label, sortKey, currentKey, dir, onSort }: {
-  label: string; sortKey: SortKey; currentKey: SortKey | null; dir: SortDir;
-  onSort: (key: SortKey) => void;
-}) {
-  const active = currentKey === sortKey;
-  return (
-    <th
-      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-      className={`text-left px-4 py-2 text-[10px] font-semibold uppercase tracking-widest transition-colors select-none ${active ? 'accent-text' : 'text-slate-500'}`}
-    >
-      <button
-        type="button"
-        onClick={() => onSort(sortKey)}
-        className="inline-flex items-center gap-1 uppercase tracking-widest hover:text-slate-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-500/60 rounded-sm"
-      >
-        {label}
-        {active ? (
-          dir === 'asc' ? <ArrowUp size={11} aria-hidden="true" /> : <ArrowDown size={11} aria-hidden="true" />
-        ) : (
-          <ArrowUpDown size={11} className="opacity-30" aria-hidden="true" />
-        )}
-      </button>
-    </th>
-  );
-}
-
-function statusOrder(h: HostStatus): number {
-  if (!h.enabled) return 5;
-  if (h.maintenance) return 4;
-  if (h.online === false) return 0;
-  if (h.online === null) return 3;
-  if (h.port_error) return 2;
-  return 1;
-}
-
-function hostStatusKey(h: HostStatus): 'disabled' | 'maintenance' | 'unknown' | 'offline' | 'error' | 'online' {
-  if (!h.enabled) return 'disabled';
-  if (h.maintenance) return 'maintenance';
-  if (h.online === null) return 'unknown';
-  if (h.online === false) return 'offline';
-  if (h.port_error) return 'error';
-  return 'online';
-}
-
-function hostStatusLabel(h: HostStatus): string {
-  const key = hostStatusKey(h);
-  const labels: Record<string, string> = {
-    disabled: 'Disabled', maintenance: 'Maint.', unknown: 'Not observed',
-    offline: 'Offline', error: 'Port Error', online: 'Online',
-  };
-  return labels[key];
 }
 
 function HostsPageInner() {
@@ -122,496 +55,235 @@ function HostsPageInner() {
   const qc = useQueryClient();
   const qParam = searchParams.get('q') ?? '';
   const [search, setSearch] = useState(qParam);
-  const { data: hosts, isLoading, isError, error, refetch } = useHosts();
-  const redirected = useRef(false);
-  const [showAdd, setShowAdd] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', hostname: '', check_type: 'icmp', port: '' });
-  const [httpForm, setHttpForm] = useState(DEFAULT_HTTP_FORM);
-  const [addError, setAddError] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [selectMode, setSelectMode] = useState(false);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [bulkLoading, setBulkLoading] = useState(false);
-  const [showBulkEdit, setShowBulkEdit] = useState(false);
-  const [bulkForm, setBulkForm] = useState({ check_type: '', enabled: '', latency_threshold_ms: '' });
-  const statusParam = searchParams.get('status') ?? 'all';
-  const [statusFilter, setStatusFilter] = useState<string>(statusParam);
-  const [page, setPage] = useState(0);
-  const PAGE_SIZE = 50;
-  const { confirm, ConfirmDialogElement } = useConfirm();
-
-  const handleSort = useCallback((key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortKey(key);
-      setSortDir('asc');
-    }
-  }, [sortKey]);
-
-  const filteredHosts = useMemo(() => {
-    let result = hosts ?? [];
-
-    if (statusFilter !== 'all') {
-      result = result.filter((h) => {
-        if (statusFilter === 'online') return h.online === true && !h.maintenance && !h.port_error;
-        if (statusFilter === 'offline') return h.online === false && !h.maintenance;
-        if (statusFilter === 'unknown') return h.online === null && !h.maintenance;
-        if (statusFilter === 'error') return h.online === true && h.port_error && !h.maintenance;
-        if (statusFilter === 'maintenance') return h.maintenance;
-        return true;
-      });
-    }
-
-    if (search) {
-      const q = search.toLowerCase();
-      result = result.filter((h) =>
-        h.name.toLowerCase().includes(q) ||
-        h.hostname.toLowerCase().includes(q) ||
-        (h.check_type && h.check_type.toLowerCase().includes(q)) ||
-        (h.source && h.source.toLowerCase().includes(q))
-      );
-    }
-
-    if (sortKey) {
-      const mult = sortDir === 'asc' ? 1 : -1;
-      result = [...result].sort((a, b) => {
-        switch (sortKey) {
-          case 'name': return mult * a.name.localeCompare(b.name);
-          case 'status': return mult * (statusOrder(a) - statusOrder(b));
-          case 'type': return mult * (a.check_type ?? '').localeCompare(b.check_type ?? '');
-          case 'source': return mult * (a.source ?? '').localeCompare(b.source ?? '');
-          case 'latency': return mult * ((a.latency_ms ?? 9999) - (b.latency_ms ?? 9999));
-          case 'uptime': return mult * ((a.uptime_h24 ?? 100) - (b.uptime_h24 ?? 100));
-          default: return 0;
-        }
-      });
-    }
-
-    return result;
-  }, [hosts, search, sortKey, sortDir, statusFilter]);
-
-  // Reset page when filters change
-  useEffect(() => { setPage(0); }, [search, statusFilter, sortKey, sortDir]);
-
-  const pagedHosts = useMemo(
-    () => filteredHosts.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
-    [filteredHosts, page],
+  const [stateFilter, setStateFilter] = useState<HostState | null>(
+    () => stateFromLegacyParam(searchParams.get('state')) ?? stateFromLegacyParam(searchParams.get('status')),
   );
+  const [sortKey, setSortKey] = useState<SortKey>('state');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [report, setReport] = useState<BulkReport | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const redirected = useRef(false);
 
+  // All hosts (for the chip counts) and the server-filtered list.
+  const all = useHostsV1();
+  const listQuery = useHostsV1ByState(stateFilter ? [stateFilter] : []);
+  const { data: agents } = useAgents();
+
+  const probeNames = useMemo(() => {
+    const m = new Map<number, { name: string; silent: boolean }>();
+    for (const a of (agents ?? []) as ProbeAgent[]) if (a.is_probe) m.set(a.id, { name: a.name, silent: !!a.probe?.stale });
+    return m;
+  }, [agents]);
+
+  const counts = useMemo(() => {
+    if (!all.data) return undefined;
+    const c = Object.fromEntries(HOST_STATES.map((s) => [s, 0])) as Record<HostState, number>;
+    for (const h of all.data) c[normalizeHostState(h.state)] += 1;
+    return c;
+  }, [all.data]);
+
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = (listQuery.data ?? []).filter((h) => !q || matches(h, q)).map((h) => toRow(h, probeNames));
+    const mult = sortDir === 'asc' ? 1 : -1;
+    return list.sort((a, b) => mult * compare(a, b, sortKey));
+  }, [listQuery.data, search, sortKey, sortDir, probeNames]);
+
+  useEffect(() => { setPage(0); }, [search, stateFilter, sortKey, sortDir]);
+  const paged = useMemo(() => rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [rows, page]);
+
+  // Keep the filter in the URL so it can be shared and survives reloads.
+  const changeFilter = useCallback((s: HostState | null) => {
+    setStateFilter(s);
+    const p = new URLSearchParams(searchParams.toString());
+    p.delete('status');
+    if (s) p.set('state', s); else p.delete('state');
+    const qs = p.toString();
+    router.replace(qs ? `/hosts?${qs}` : '/hosts', { scroll: false });
+  }, [router, searchParams]);
+
+  // Deep link "?q=…" with exactly one match opens that host.
   useEffect(() => {
-    if (qParam && !isLoading && filteredHosts && filteredHosts.length === 1 && !redirected.current) {
+    if (qParam && !listQuery.isLoading && rows.length === 1 && !redirected.current) {
       redirected.current = true;
-      router.replace(`/hosts/${filteredHosts[0].id}`);
+      router.replace(`/hosts/${rows[0].id}`);
     }
-  }, [qParam, isLoading, filteredHosts, router]);
+  }, [qParam, listQuery.isLoading, rows, router]);
 
-  async function handleAdd() {
-    const isHttp = hasHttpCheck(form.check_type);
-    const httpError = isHttp ? validateHttpForm(httpForm) : null;
-    if (httpError) { setAddError(httpError); return; }
-    setAddError(null);
-    setSaving(true);
-    try {
-      await post('/hosts/api/create', {
-        name: form.name,
-        hostname: form.hostname,
-        check_type: form.check_type,
-        port: form.port || undefined,
-        http_options: isHttp ? httpOptionsPayload(httpForm) : undefined,
-      });
-      qc.invalidateQueries({ queryKey: ['hosts'] });
-      setShowAdd(false);
-      setForm({ name: '', hostname: '', check_type: 'icmp', port: '' });
-      setHttpForm(DEFAULT_HTTP_FORM);
-    } catch (e) {
-      setAddError(apiErrorMessage(e, 'Could not add the host'));
-    } finally {
-      setSaving(false);
-    }
-  }
+  // Drop selected hosts that are no longer listed (filter change, deletion).
+  const visibleIds = useMemo(() => new Set(rows.map((r) => r.id)), [rows]);
+  const selectedIds = useMemo(() => [...selected].filter((id) => visibleIds.has(id)), [selected, visibleIds]);
+  const names = useMemo(() => new Map((all.data ?? []).map((h) => [h.id, h.name])), [all.data]);
 
-  const toggleSelect = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  const toggle = (id: number) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const allSelected = rows.length > 0 && selectedIds.length === rows.length;
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)));
+  const onSort = (key: SortKey) => {
+    if (key === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
   };
 
-  const toggleAll = () => {
-    if (selected.size === filteredHosts.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(filteredHosts.map((h) => h.id)));
-    }
-  };
-
-  async function bulkAction(action: 'maintenance' | 'delete') {
-    if (selected.size === 0) return;
-    const label = action === 'maintenance' ? 'toggle maintenance' : 'delete';
-    const ok = await confirm({
-      title: action === 'delete' ? 'Delete hosts' : 'Toggle maintenance',
-      description: `${label} for ${selected.size} host(s)?`,
-      confirmLabel: action === 'delete' ? 'Delete' : 'Confirm',
-      variant: action === 'delete' ? 'danger' : 'default',
-    });
-    if (!ok) return;
-    setBulkLoading(true);
-    try {
-      for (const id of Array.from(selected)) {
-        if (action === 'maintenance') {
-          await post(`/hosts/api/${id}/maintenance`);
-        } else {
-          await post(`/hosts/api/${id}/delete`);
-        }
-      }
-      setSelected(new Set());
-      qc.invalidateQueries({ queryKey: ['hosts'] });
-    } finally {
-      setBulkLoading(false);
-    }
-  }
-
-  async function bulkEdit() {
-    const updates: Record<string, unknown> = {};
-    if (bulkForm.check_type) updates.check_type = bulkForm.check_type;
-    if (bulkForm.enabled !== '') updates.enabled = bulkForm.enabled === 'true';
-    if (bulkForm.latency_threshold_ms) updates.latency_threshold_ms = Number(bulkForm.latency_threshold_ms);
-    if (Object.keys(updates).length === 0) return;
-    setBulkLoading(true);
-    try {
-      await patch('/api/v1/hosts/bulk', { ids: Array.from(selected), updates });
-      setSelected(new Set());
-      setShowBulkEdit(false);
-      setBulkForm({ check_type: '', enabled: '', latency_threshold_ms: '' });
-      qc.invalidateQueries({ queryKey: ['hosts'] });
-    } finally {
-      setBulkLoading(false);
-    }
-  }
-
-  const onlineCount = hosts?.filter((h) => h.online === true && !h.maintenance && !h.port_error).length ?? 0;
-  const offlineCount = hosts?.filter((h) => h.online === false && !h.maintenance).length ?? 0;
-  const unknownCount = hosts?.filter((h) => h.online === null && !h.maintenance).length ?? 0;
-  const errorCount = hosts?.filter((h) => h.online === true && h.port_error && !h.maintenance).length ?? 0;
-  const maintCount = hosts?.filter((h) => h.maintenance).length ?? 0;
+  const asOf = formatAsOf(listQuery.dataUpdatedAt);
+  const total = all.data?.length;
+  const filtered = !!stateFilter || !!search.trim();
 
   return (
     <div>
       <PageHeader
         title="Hosts"
-        description="Monitor network hosts and services"
+        description={
+          total === undefined
+            ? 'Every monitored host and its current state'
+            : `${total} host${total === 1 ? '' : 's'}${asOf ? ` · updated ${asOf}` : ''}`
+        }
         actions={
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-              <input
-                type="text"
-                placeholder="Search hosts..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-8 pr-3 py-1.5 text-sm bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/50"
-              />
-            </div>
-            <Button size="sm" variant={selectMode ? 'secondary' : 'ghost'} onClick={() => {
-              setSelectMode(!selectMode);
-              if (selectMode) setSelected(new Set());
-            }}>
-              <CheckSquare size={16} />
-              {selectMode ? 'Cancel' : 'Select'}
-            </Button>
+          <>
             <ExportButton
-              data={(filteredHosts ?? []).map((h) => ({
-                name: h.name, hostname: h.hostname, status: hostStatusKey(h),
-                check_type: h.check_type, source: h.source, latency_ms: h.latency_ms,
-                uptime_24h: h.uptime_h24, uptime_7d: h.uptime_d7, uptime_30d: h.uptime_d30,
+              data={rows.map((h) => ({
+                name: h.name, hostname: h.hostname, state: h.st, reason: h.state_reason ?? '',
+                observed_at: h.observed_at ?? '', check_type: h.check_type, checked_by: h.checkedBy,
+                source: h.source, latency_ms: h.latency_ms,
+                uptime_24h: h.uptime?.h24, uptime_7d: h.uptime?.d7, uptime_30d: h.uptime?.d30,
               }))}
               filename="hosts"
               columns={[
                 { key: 'name', label: 'Name' }, { key: 'hostname', label: 'Hostname' },
-                { key: 'status', label: 'Status' }, { key: 'check_type', label: 'Type' },
-                { key: 'source', label: 'Source' }, { key: 'latency_ms', label: 'Latency (ms)' },
-                { key: 'uptime_24h', label: 'Uptime 24h' }, { key: 'uptime_7d', label: 'Uptime 7d' },
-                { key: 'uptime_30d', label: 'Uptime 30d' },
+                { key: 'state', label: 'State' }, { key: 'reason', label: 'Reason' },
+                { key: 'observed_at', label: 'Observed at (UTC)' }, { key: 'check_type', label: 'Checks' },
+                { key: 'checked_by', label: 'Checked by' }, { key: 'source', label: 'Source' },
+                { key: 'latency_ms', label: 'Latency (ms)' }, { key: 'uptime_24h', label: 'Uptime 24h' },
+                { key: 'uptime_7d', label: 'Uptime 7d' }, { key: 'uptime_30d', label: 'Uptime 30d' },
               ]}
             />
-            <Button size="sm" onClick={() => setShowAdd(true)}>
-              <Plus size={16} />
-              Add Host
+            <Button onClick={() => setShowAdd(true)}>
+              <Plus size={15} aria-hidden="true" /> Add host
             </Button>
-          </div>
+          </>
         }
       />
 
-      {/* Status filter pills */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        {[
-          { key: 'all', label: `All (${hosts?.length ?? 0})` },
-          { key: 'online', label: `Online (${onlineCount})`, color: 'text-emerald-400' },
-          { key: 'offline', label: `Offline (${offlineCount})`, color: 'text-red-400' },
-          ...(unknownCount > 0 ? [{ key: 'unknown', label: `Not Observed (${unknownCount})`, color: 'text-slate-400' }] : []),
-          ...(errorCount > 0 ? [{ key: 'error', label: `Port Error (${errorCount})`, color: 'text-orange-400' }] : []),
-          { key: 'maintenance', label: `Maintenance (${maintCount})`, color: 'text-amber-400' },
-        ].map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setStatusFilter(f.key)}
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-              statusFilter === f.key
-                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                : 'bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08]'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-
-        {selectMode && selected.size > 0 && (
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-xs text-slate-400">{selected.size} selected</span>
-            <Button size="sm" variant="ghost" onClick={() => setShowBulkEdit(true)} disabled={bulkLoading}>
-              <Pencil size={14} /> Edit
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => bulkAction('maintenance')} disabled={bulkLoading}>
-              <Wrench size={14} /> Maintenance
-            </Button>
-            <Button size="sm" variant="danger" onClick={() => bulkAction('delete')} disabled={bulkLoading}>
-              <Trash2 size={14} /> Delete
-            </Button>
-          </div>
-        )}
+      <div className="mb-4 flex flex-col gap-3">
+        <div className="relative w-full min-[760px]:max-w-[360px]">
+          <Search size={14} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-3" />
+          <Input
+            type="search"
+            aria-label="Search hosts"
+            placeholder="Search name, address, reason…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8 pr-9"
+          />
+          {search && (
+            <IconButton aria-label="Clear search" size="sm" className="absolute right-1 top-1/2 -translate-y-1/2" onClick={() => setSearch('')}>
+              <X size={14} aria-hidden="true" />
+            </IconButton>
+          )}
+        </div>
+        <StateFilterChips value={stateFilter} onChange={changeFilter} counts={counts} total={total} />
       </div>
 
-      {showAdd && (
-        <GlassCard className="p-6 mb-6 border border-sky-500/20">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-base font-semibold text-slate-200">Add New Host</h3>
-            <button onClick={() => setShowAdd(false)} aria-label="Close" className="text-slate-400 hover:text-slate-200">
-              <X size={16} aria-hidden="true" />
-            </button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="ng-label">Name <span className="text-red-400">*</span></label>
-              <input type="text" placeholder="My Server" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} />
-            </div>
-            <div>
-              <label className="ng-label">Hostname / IP <span className="text-red-400">*</span></label>
-              <input type="text" placeholder="192.168.1.1 or example.com" value={form.hostname} onChange={(e) => setForm({ ...form, hostname: e.target.value })} className={inputClass} />
-            </div>
-            <div>
-              <label className="ng-label">Check Type</label>
-              <select value={form.check_type} onChange={(e) => setForm({ ...form, check_type: e.target.value })} className={selectClass}>
-                <option value="icmp">ICMP (Ping)</option>
-                <option value="http">HTTP</option>
-                <option value="https">HTTPS</option>
-                <option value="tcp">TCP</option>
-                <option value="dns">DNS</option>
-              </select>
-            </div>
-            <div>
-              <label className="ng-label">Port (optional)</label>
-              <input type="text" placeholder="443" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} className={inputClass} />
-            </div>
-          </div>
-          {hasHttpCheck(form.check_type) && (
-            <details className="mt-4 rounded-md border border-white/[0.06] p-3">
-              <summary className="cursor-pointer text-sm text-slate-300">HTTP check options</summary>
-              <div className="mt-3">
-                <HttpOptionsFields value={httpForm} onChange={setHttpForm} />
-              </div>
-            </details>
-          )}
-          {addError && <p role="alert" className="mt-3 text-sm text-red-400">{addError}</p>}
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
-            <Button size="sm" onClick={handleAdd} disabled={saving || !form.name || !form.hostname}>
-              {saving ? 'Adding...' : 'Add Host'}
-            </Button>
-          </div>
-        </GlassCard>
+      {selectedIds.length > 0 && (
+        <BulkActionsBar
+          ids={selectedIds}
+          names={names}
+          onClear={() => setSelected(new Set())}
+          onReport={setReport}
+        />
       )}
 
-      {isError && hosts && <StaleDataBanner error={error} onRetry={refetch} />}
-      <GlassCard>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06]">
-                {selectMode && (
-                  <th className="px-4 py-3 w-8">
-                    <button onClick={toggleAll} className="text-slate-500 hover:text-slate-300">
-                      {selected.size === filteredHosts.length && filteredHosts.length > 0 ? <CheckSquare size={16} /> : <Square size={16} />}
-                    </button>
-                  </th>
-                )}
-                <SortHeader label="Host" sortKey="name" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
-                <SortHeader label="Status" sortKey="status" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
-                <SortHeader label="Type" sortKey="type" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
-                <SortHeader label="Source" sortKey="source" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
-                <SortHeader label="Latency" sortKey="latency" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
-                <SortHeader label="Availability" sortKey="uptime" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading &&
-                Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i} className="border-b border-white/[0.06]">
-                    {selectMode && <td className="px-4 py-3"><Skeleton className="h-4 w-4" /></td>}
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-40" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-12" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-12" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
-                  </tr>
-                ))}
-              {pagedHosts.map((host) => {
-                const ipText = host.ip_address && host.ip_address !== host.hostname
-                  ? host.ip_address
-                  : host.hostname;
-                return (
-                  <tr
-                    key={host.id}
-                    className={`group border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors cursor-pointer ${selected.has(host.id) ? 'bg-sky-500/5' : ''}`}
-                  >
-                    {selectMode && (
-                      <td className="px-4 py-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); toggleSelect(host.id); }}
-                          aria-label={`Select ${host.name}`}
-                          aria-pressed={selected.has(host.id)}
-                          className="text-slate-500 hover:text-slate-300"
-                        >
-                          {selected.has(host.id) ? <CheckSquare size={16} className="text-sky-400" /> : <Square size={16} />}
-                        </button>
-                      </td>
-                    )}
-                    {/* Single-row layout (density pass): name + IP + copy on
-                        one line, status pill condensed, all metadata aligned
-                        in tabular form. ~28px row height vs old ~64px. */}
-                    <td className="px-4 py-2">
-                      <Link prefetch={false} href={`/hosts/${host.id}`} className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm font-medium text-slate-200 truncate">{host.name}</span>
-                        <span className="text-[11px] text-slate-500 font-mono truncate tabular-nums">{ipText}</span>
-                        <span className="opacity-0 group-hover:opacity-100 transition-opacity">
-                          <CopyButton text={host.ip_address || host.hostname} size={11} />
-                        </span>
-                      </Link>
-                    </td>
-                    <td className="px-4 py-2">
-                      <div className="flex items-center gap-2">
-                        <StatusDot
-                          status={hostStatusKey(host)}
-                          pulse={host.online === false || host.port_error}
-                          size="sm"
-                        />
-                        <span className="text-[11px] text-slate-400">
-                          {hostStatusLabel(host)}
-                        </span>
-                        {host.port_error && host.check_detail && (
-                          <span className="text-[10px] text-red-400/80">
-                            {Object.entries(host.check_detail).filter(([, ok]) => !ok).map(([k]) => {
-                              const why = host.check_errors?.[k];
-                              return why ? `${k.toUpperCase()} (${why})` : k.toUpperCase();
-                            }).join(', ')} failed
-                          </span>
-                        )}
-                        {host.maintenance && host.maintenance_window && !host.maintenance_manual && (
-                          <span className="text-[10px] text-amber-400/80" title="Maintenance window">
-                            · {host.maintenance_window.name}
-                          </span>
-                        )}
-                        {host.online === false && host.last_seen && (
-                          <span className="text-[10px] text-slate-500" title={new Date(host.last_seen).toLocaleString()}>
-                            · {timeAgo(host.last_seen)}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2">
-                      <Badge>{host.check_type}</Badge>
-                    </td>
-                    <td className="px-4 py-2">
-                      <span className="text-[11px] text-slate-500">{host.source ?? 'manual'}</span>
-                    </td>
-                    <td className="px-4 py-2 font-mono text-[11px] text-slate-300 tabular-nums">
-                      {formatLatency(host.latency_ms)}
-                    </td>
-                    <td className="px-4 py-2">
-                      <UptimeBar h24={host.uptime_h24} d7={host.uptime_d7} d30={host.uptime_d30} />
-                    </td>
-                  </tr>
-                );
-              })}
-              {!isLoading && isError && !hosts && (
-                <tr>
-                  <td colSpan={selectMode ? 7 : 6}>
-                    <QueryErrorState error={error} onRetry={refetch} title="Could not load hosts" />
-                  </td>
-                </tr>
-              )}
-              {!isLoading && !(isError && !hosts) && filteredHosts.length === 0 && (
-                <tr>
-                  <td colSpan={selectMode ? 7 : 6} className="px-4 py-12 text-center">
-                    <Server size={48} className="mx-auto mb-4 text-slate-600" />
-                    <p className="text-base font-medium text-slate-300 mb-1">
-                      {search ? 'No hosts match your search' : 'No hosts configured yet'}
-                    </p>
-                    <p className="text-sm text-slate-500 mb-4">
-                      {search ? 'Try adjusting your search terms.' : 'Add a host to start monitoring your infrastructure.'}
-                    </p>
-                    {!search && (
-                      <Button size="sm" onClick={() => setShowAdd(true)}>
-                        <Plus size={16} /> Add your first host
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+      {report && report.details.length > 0 && (
+        <div
+          role="status"
+          className={cn(
+            'mb-3 flex items-start gap-2 rounded-ctl border px-3 py-2 text-meta',
+            report.tone === 'error' ? 'border-down/30 bg-down-soft text-down' : 'border-degraded/40 bg-degraded-soft text-degraded',
+          )}
+        >
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">{report.message}</p>
+            {report.details.map((d) => <p key={d}>{d}</p>)}
+          </div>
+          <IconButton aria-label="Dismiss" size="sm" className="-my-1 text-current" onClick={() => setReport(null)}>
+            <X size={14} aria-hidden="true" />
+          </IconButton>
         </div>
-        <Pagination page={page} pageSize={PAGE_SIZE} total={filteredHosts.length} onPageChange={setPage} />
-      </GlassCard>
-      <Modal open={showBulkEdit} onClose={() => setShowBulkEdit(false)} title={`Bulk Edit (${selected.size} hosts)`}>
-        <div className="space-y-4">
-          <p className="text-xs text-slate-500">Leave fields empty to keep unchanged.</p>
-          <div>
-            <label className="ng-label">Check Type</label>
-            <select value={bulkForm.check_type} onChange={(e) => setBulkForm({ ...bulkForm, check_type: e.target.value })} className={selectClass}>
-              <option value="">— No change —</option>
-              <option value="icmp">ICMP (Ping)</option>
-              <option value="http">HTTP</option>
-              <option value="https">HTTPS</option>
-              <option value="tcp">TCP</option>
-              <option value="dns">DNS</option>
-            </select>
-          </div>
-          <div>
-            <label className="ng-label">Enabled</label>
-            <select value={bulkForm.enabled} onChange={(e) => setBulkForm({ ...bulkForm, enabled: e.target.value })} className={selectClass}>
-              <option value="">— No change —</option>
-              <option value="true">Enabled</option>
-              <option value="false">Disabled</option>
-            </select>
-          </div>
-          <div>
-            <label className="ng-label">Latency Threshold (ms)</label>
-            <input type="number" placeholder="— No change —" value={bulkForm.latency_threshold_ms} onChange={(e) => setBulkForm({ ...bulkForm, latency_threshold_ms: e.target.value })} className={inputClass} />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setShowBulkEdit(false)}>Cancel</Button>
-            <Button size="sm" onClick={bulkEdit} disabled={bulkLoading}>
-              {bulkLoading ? 'Saving...' : 'Apply Changes'}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-      {ConfirmDialogElement}
+      )}
+
+      <Card padding="none">
+        <QueryState
+          query={listQuery}
+          errorTitle="Could not load hosts"
+          loading={
+            <div className="space-y-3 p-4" aria-busy="true" aria-label="Loading hosts">
+              {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}
+            </div>
+          }
+        >
+          {(data) =>
+            data.length === 0 && !filtered ? (
+              <EmptyState
+                icon={Server}
+                title="No hosts yet"
+                description="Add a host, or connect an integration or agent to discover them."
+                action={<Button onClick={() => setShowAdd(true)}><Plus size={15} aria-hidden="true" /> Add host</Button>}
+              />
+            ) : rows.length === 0 ? (
+              <EmptyState
+                variant="no-results"
+                title={stateFilter ? 'No hosts in this state' : 'No hosts match your search'}
+                description={search ? `Nothing matches “${search}”.` : 'Pick another state or show all hosts.'}
+                action={
+                  <Button variant="secondary" onClick={() => { setSearch(''); changeFilter(null); }}>
+                    Reset filters
+                  </Button>
+                }
+              />
+            ) : (
+              <>
+                <div className="max-[759px]:hidden">
+                  <HostTable
+                    rows={paged}
+                    selected={selected}
+                    onToggle={toggle}
+                    onToggleAll={toggleAll}
+                    allSelected={allSelected}
+                    someSelected={selectedIds.length > 0}
+                    sortKey={sortKey}
+                    sortDir={sortDir}
+                    onSort={onSort}
+                    busy={listQuery.isPlaceholderData}
+                  />
+                </div>
+                <div className="min-[760px]:hidden">
+                  <div className="flex items-center justify-between border-b border-border px-4 py-2">
+                    <Checkbox label={`Select all ${rows.length}`} checked={allSelected} onChange={toggleAll} />
+                    {sortKey === 'state' && sortDir === 'asc' && <span className="text-meta text-fg-3">Worst first</span>}
+                  </div>
+                  <HostCards rows={paged} selected={selected} onToggle={toggle} busy={listQuery.isPlaceholderData} />
+                </div>
+                <Pagination page={page} pageSize={PAGE_SIZE} total={rows.length} onPageChange={setPage} />
+              </>
+            )
+          }
+        </QueryState>
+      </Card>
+
+      <HostFormModal
+        open={showAdd}
+        mode="add"
+        onClose={() => setShowAdd(false)}
+        onSaved={(id) => {
+          qc.invalidateQueries({ queryKey: ['hosts-v1'] });
+          qc.invalidateQueries({ queryKey: ['hosts'] });
+          if (id) router.push(`/hosts/${id}`);
+        }}
+      />
     </div>
   );
 }
