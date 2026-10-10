@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select as sa_select
 
 import ipaddress
-import re
 from urllib.parse import urlparse
 
 from integrations import get_registry, get_integration
@@ -32,77 +31,184 @@ from services import integration as int_svc
 from services import snapshot as snap_svc
 
 
-def _require_editor(request: Request):
-    """Return True (= blocked) if the current user is readonly."""
-    user = getattr(request.state, "current_user", None)
-    role = getattr(user, "role", "admin") or "admin"
-    if role == "readonly":
-        return True
-    return False
+def _endpoint_summary(fields, config: dict) -> dict:
+    """Non-secret endpoint values for the audit trail (never secrets)."""
+    return {
+        f.key: str(config.get(f.key) or "")
+        for f in fields
+        if f.key in ENDPOINT_FIELD_KEYS
+    }
 
 
-def _validate_host(value: str) -> str | None:
+async def _audit(db, request, action: str, target_id, target_name, details: dict):
+    from services.audit import log_action
+    details = {k: v for k, v in details.items() if v is not None}
+    try:
+        await log_action(db, request, action, "integration", target_id, target_name,
+                         details=details)
+        await db.commit()
+    except Exception as exc:  # auditing must not undo a completed change
+        log.warning("Audit log for %s failed: %s", action, exc)
+
+
+# Config keys that name the remote endpoint an integration talks to. Changing
+# one of these redirects where the stored credentials are sent.
+ENDPOINT_FIELD_KEYS = ("host", "url", "base_url", "server", "address", "endpoint")
+
+_METADATA_IPS = frozenset({
+    ipaddress.ip_address("169.254.169.254"),  # AWS / GCP / OpenStack metadata
+    ipaddress.ip_address("168.63.129.16"),    # Azure wireserver
+    ipaddress.ip_address("100.100.100.200"),  # Alibaba Cloud metadata
+    ipaddress.ip_address("fd00:ec2::254"),    # AWS IMDS over IPv6
+})
+_METADATA_HOSTS = frozenset({
+    "metadata.google.internal", "metadata", "instance-data",
+    "metadata.internal", "kubernetes.default.svc", "kubernetes.default",
+})
+# Our own compose services (docker-compose.yml service + container names).
+# Their addresses are RFC1918 like any LAN host, so only the name gives them
+# away — an integration pointed at "db" would hand Postgres the credentials
+# of whoever configured it, or let a crafted response probe internal APIs.
+_INTERNAL_HOSTS = frozenset({
+    "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback",
+    "db", "postgres", "clickhouse", "nodeglow-ch", "updater", "nodeglow-updater",
+    "nodeglow", "frontend", "nodeglow-frontend",
+})
+_ZERO_NET = ipaddress.ip_network("0.0.0.0/8")  # "this host" on Linux
+
+
+def _extract_host(value: str) -> str:
+    """Hostname (or IP literal) from a URL, host:port, [v6]:port or bare host."""
+    raw = value.strip()
+    if not raw:
+        return ""
+    try:  # bare IPv6 literal ("fe80::1") — urlparse would read it as host:port
+        return str(ipaddress.ip_address(raw.split("%", 1)[0]))
+    except ValueError:
+        pass
+    if "://" not in raw:
+        raw = "//" + raw
+    try:
+        host = urlparse(raw).hostname or ""
+    except ValueError:  # malformed [v6 literal
+        host = ""
+    return host.strip().rstrip(".").lower()
+
+
+def _blocked_ip_reason(addr) -> str | None:
+    """Why an address must not be an integration/monitoring target.
+
+    RFC1918 / ULA private ranges are deliberately allowed: Nodeglow monitors
+    LANs, so the devices it talks to live there.
+    """
+    if getattr(addr, "ipv4_mapped", None) is not None:
+        addr = addr.ipv4_mapped
+    if addr in _METADATA_IPS:
+        return "Cloud metadata endpoints are not allowed"
+    if addr.is_loopback:
+        return "Loopback addresses are not allowed"
+    if addr.is_unspecified or (addr.version == 4 and addr in _ZERO_NET):
+        return "Unspecified addresses (0.0.0.0) are not allowed"
+    if addr.is_link_local:
+        return "Link-local addresses are not allowed (cloud metadata risk)"
+    if addr.is_multicast:
+        return "Multicast addresses are not allowed"
+    return None
+
+
+def _resolve_all(host: str) -> list:
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, OSError):
+        return []
+    out = []
+    for info in infos:
+        try:
+            out.append(ipaddress.ip_address(info[4][0].split("%", 1)[0]))
+        except ValueError:
+            continue
+    return out
+
+
+def _validate_host(value: str, resolve: bool = True) -> str | None:
     """Validate a host/URL config value against SSRF.
 
     Returns an error message if blocked, None if OK.
-    Allows RFC1918 private ranges (homelab use case) but blocks
-    loopback, link-local, and cloud metadata IPs.
+    Allows RFC1918 private ranges (homelab use case) but blocks loopback,
+    link-local, 0.0.0.0, cloud metadata and our own compose services — both
+    as literals and by resolving the name (``localtest.me``, ``2130706433``
+    and friends resolve to 127.0.0.1).
+
+    A name that does not resolve is allowed: the device may simply be offline
+    or only resolvable later, and an unresolvable target reaches nothing.
+    (A name that is rebound after validation is not caught here.)
+
+    Synchronous and may block on DNS — call it via ``asyncio.to_thread`` (or
+    :func:`validate_host_async`) from request handlers.
     """
     if not value:
         return None
 
-    # Extract hostname from URL or bare host
-    host = value.strip()
-    if "://" in host:
-        parsed = urlparse(host)
-        host = parsed.hostname or ""
-    # Strip port
-    host = re.sub(r":\d+$", "", host)
-
+    host = _extract_host(str(value))
     if not host:
         return None
 
-    # Block obvious localhost aliases
-    if host.lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-        return "Loopback addresses are not allowed"
+    if host in _INTERNAL_HOSTS:
+        return "Internal service names are not allowed"
+    if host in _METADATA_HOSTS:
+        return "Cloud metadata endpoints are not allowed"
 
-    # Try to parse as IP
     try:
-        addr = ipaddress.ip_address(host)
-        if addr.is_loopback:
-            return "Loopback addresses are not allowed"
-        if addr.is_link_local:
-            return "Link-local addresses are not allowed (cloud metadata risk)"
-        # Block cloud provider metadata IPs
-        _metadata_ips = (
-            ipaddress.ip_address("169.254.169.254"),  # AWS / GCP metadata
-            ipaddress.ip_address("168.63.129.16"),     # Azure wireserver
-            ipaddress.ip_address("100.100.100.200"),   # Alibaba Cloud metadata
-        )
-        if addr in _metadata_ips:
-            return "Cloud metadata endpoints are not allowed"
+        literal = ipaddress.ip_address(host)
     except ValueError:
-        # It's a hostname — block metadata hostnames
-        _metadata_hosts = (
-            "metadata.google.internal",
-            "instance-data",
-            "metadata.internal",
-            "kubernetes.default.svc",
-        )
-        if host.lower() in _metadata_hosts:
-            return "Cloud metadata endpoints are not allowed"
+        literal = None
+    if literal is not None:
+        return _blocked_ip_reason(literal)
 
+    if resolve:
+        for addr in _resolve_all(host):
+            reason = _blocked_ip_reason(addr)
+            if reason:
+                return f"{reason} ({host} resolves to {addr})"
     return None
+
+
+async def validate_host_async(value: str) -> str | None:
+    import asyncio
+    return await asyncio.to_thread(_validate_host, value)
 
 
 def _validate_config_hosts(config_dict: dict, fields) -> str | None:
     """Validate all host/url fields in a config dict."""
     for f in fields:
-        if f.key in ("host", "url", "base_url", "server", "address"):
+        if f.key in ENDPOINT_FIELD_KEYS:
             err = _validate_host(str(config_dict.get(f.key, "")))
             if err:
                 return f"{f.label}: {err}"
     return None
+
+
+async def _validate_config_hosts_async(config_dict: dict, fields) -> str | None:
+    import asyncio
+    return await asyncio.to_thread(_validate_config_hosts, config_dict, fields)
+
+
+def _is_secret_field(field) -> bool:
+    return field.field_type == "password" or bool(getattr(field, "encrypted", False))
+
+
+def _normalise_endpoint(value) -> str:
+    return str(value or "").strip().rstrip("/").lower()
+
+
+def _endpoint_changed(fields, old: dict, new: dict) -> list[str]:
+    """Endpoint fields whose value differs between the stored and new config."""
+    return [
+        f.key for f in fields
+        if f.key in ENDPOINT_FIELD_KEYS
+        and _normalise_endpoint(old.get(f.key)) != _normalise_endpoint(new.get(f.key))
+    ]
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -208,10 +314,10 @@ async def api_create_instance(
     request: Request,
     integration_type: str,
     db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
 ):
-    """JSON API for creating an integration instance."""
-    if _require_editor(request):
-        return JSONResponse({"error": "Read-only access"}, status_code=403)
+    """JSON API for creating an integration instance. Admin only: an
+    integration holds credentials for other systems."""
     integration_cls = get_integration(integration_type)
     if not integration_cls:
         return JSONResponse({"error": "Unknown integration type"}, status_code=404)
@@ -233,12 +339,15 @@ async def api_create_instance(
                 config_dict[field.key] = field.default if field.default is not None else 0
         else:
             config_dict[field.key] = str(val).strip() if val else (str(field.default) if field.default is not None else "")
-    host_err = _validate_config_hosts(config_dict, integration_cls.config_fields)
+    host_err = await _validate_config_hosts_async(config_dict, integration_cls.config_fields)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
     cfg = await int_svc.create_config(
         db, integration_type, name, config_dict, cluster_group=cluster_group,
     )
+    await _audit(db, request, "integration.create", cfg.id, cfg.name,
+                 {"type": integration_type,
+                  **_endpoint_summary(integration_cls.config_fields, config_dict)})
     from main import invalidate_nav_cache
     invalidate_nav_cache()
     return JSONResponse({"ok": True, "id": cfg.id, "name": cfg.name})
@@ -254,10 +363,15 @@ async def api_edit_instance(
     integration_type: str,
     config_id: int,
     db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
 ):
-    """JSON API for editing an integration instance."""
-    if _require_editor(request):
-        return JSONResponse({"error": "Read-only access"}, status_code=403)
+    """JSON API for editing an integration instance. Admin only.
+
+    Secret fields left empty keep their stored value — EXCEPT when the
+    endpoint (host/url/…) changes. Then every stored secret has to be supplied
+    again, otherwise anyone allowed to edit could repoint the integration at a
+    server they control and receive the stored credentials on the next poll.
+    """
     integration_cls = get_integration(integration_type)
     if not integration_cls:
         return JSONResponse({"error": "Unknown integration type"}, status_code=404)
@@ -289,7 +403,27 @@ async def api_edit_instance(
         else:
             config_dict[field.key] = str(val).strip()
 
-    host_err = _validate_config_hosts(config_dict, integration_cls.config_fields)
+    fields = integration_cls.config_fields
+    changed_endpoints = _endpoint_changed(fields, existing_config, config_dict)
+    if changed_endpoints:
+        missing = [
+            f.key for f in fields
+            if _is_secret_field(f)
+            and existing_config.get(f.key)          # a secret is stored …
+            and not str(body.get(f.key) or "").strip()  # … and not re-supplied
+        ]
+        if missing:
+            labels = [f.label for f in fields if f.key in missing]
+            return JSONResponse({
+                "error": (
+                    "Changing the address of an integration requires entering "
+                    "its credentials again: " + ", ".join(labels)
+                ),
+                "code": "secrets_required",
+                "missing_fields": missing,
+            }, status_code=400)
+
+    host_err = await _validate_config_hosts_async(config_dict, fields)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
 
@@ -300,6 +434,16 @@ async def api_edit_instance(
         update_kwargs["cluster_group"] = (str(body.get("cluster_group") or "").strip() or None)
 
     await int_svc.update_config(db, config_id, **update_kwargs)
+    secrets_changed = [
+        f.key for f in fields
+        if _is_secret_field(f) and str(body.get(f.key) or "").strip()
+    ]
+    await _audit(db, request, "integration.update", config_id, name, {
+        "type": integration_type,
+        **_endpoint_summary(fields, config_dict),
+        "endpoint_changed": changed_endpoints or None,
+        "secrets_replaced": secrets_changed or None,
+    })
     return JSONResponse({"ok": True, "id": config_id, "name": name})
 
 
@@ -313,11 +457,16 @@ async def api_delete_instance(
     integration_type: str,
     config_id: int,
     db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_admin),
 ):
-    """JSON API for deleting an integration instance."""
-    if _require_editor(request):
-        return JSONResponse({"error": "Read-only access"}, status_code=403)
+    """JSON API for deleting an integration instance. Admin only."""
+    cfg = await int_svc.get_config(db, config_id)
+    if not cfg or cfg.type != integration_type:
+        return JSONResponse({"error": "Instance not found"}, status_code=404)
+    cfg_name = cfg.name
     await int_svc.delete_config(db, config_id)
+    await _audit(db, request, "integration.delete", config_id, cfg_name,
+                 {"type": integration_type})
     from main import invalidate_nav_cache
     invalidate_nav_cache()
     return JSONResponse({"ok": True})
