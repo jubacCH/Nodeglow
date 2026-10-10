@@ -152,15 +152,29 @@ def test_default_steps_match_documented_order():
 
 # ── Preflight ────────────────────────────────────────────────────────────────
 
-def _git_responder(overrides=None):
+def _compose_config(source="/opt/vigil/data", kind="bind"):
+    return json.dumps({"services": {"nodeglow": {"volumes": [
+        {"type": kind, "source": source, "target": "/data"}]}}})
+
+
+def _mounts(source="/opt/vigil/data", kind="bind"):
+    return json.dumps([{"Type": kind, "Source": source, "Destination": "/data"}])
+
+
+def _git_responder(overrides=None, config=None, mounts=None):
     answers = {
         ("git", "status", "--porcelain"): CmdResult(0, "", ""),
         ("git", "symbolic-ref", "-q", "HEAD"): CmdResult(0, "refs/heads/main", ""),
         ("docker", "inspect", "-f", "{{.State.Running}}", "vigil-db-1"): CmdResult(0, "true", ""),
+        ("docker", "inspect", "-f", "{{json .Mounts}}", "nodeglow"):
+            mounts or CmdResult(0, _mounts(), ""),
     }
     answers.update(overrides or {})
+    config = config or CmdResult(0, _compose_config(), "")
 
     def run_cmd(argv, timeout=60, cwd=None):
+        if argv[:2] == ["docker", "compose"] and argv[-3:] == ["config", "--format", "json"]:
+            return config
         key = tuple(argv)
         if key not in answers:
             raise AssertionError(f"unexpected command: {argv}")
@@ -227,6 +241,58 @@ def test_preflight_rejects_foreign_head(tmp_path):
     }))
     with pytest.raises(StepError, match="refs/heads/main"):
         step_preflight(ctx)
+
+
+def test_preflight_reports_the_data_mount(tmp_path):
+    detail = step_preflight(make_ctx(tmp_path, run_cmd=_git_responder()))
+    assert "/data from /opt/vigil/data" in detail
+
+
+def test_preflight_refuses_when_data_would_move(tmp_path):
+    """The production bug: a sidecar `up` bound /data to /opt/repo/data."""
+    run_cmd = _git_responder(config=CmdResult(0, _compose_config("/opt/repo/data"), ""))
+    with pytest.raises(StepError, match="/opt/repo/data.*/opt/vigil/data"):
+        step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+
+
+def test_preflight_ignores_trailing_slashes(tmp_path):
+    run_cmd = _git_responder(config=CmdResult(0, _compose_config("/opt/vigil/data/"), ""))
+    step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+
+
+def test_preflight_fails_when_compose_config_fails(tmp_path):
+    run_cmd = _git_responder(config=CmdResult(1, "", "required variable POSTGRES_PASSWORD"))
+    with pytest.raises(StepError, match="compose config failed"):
+        step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+
+
+def test_preflight_skips_comparison_for_named_volumes(tmp_path):
+    run_cmd = _git_responder(
+        config=CmdResult(0, _compose_config("data", kind="volume"), ""),
+        mounts=CmdResult(0, _mounts("/var/lib/docker/volumes/x/_data", kind="volume"), ""))
+    detail = step_preflight(make_ctx(tmp_path, run_cmd=run_cmd))
+    assert "not compared" in detail
+
+
+def test_compose_uses_host_project_directory_for_build_run_and_up(tmp_path):
+    """Build, the migration `run --rm` and `up` all resolve paths on the host."""
+    seen = []
+
+    def run_cmd(argv, timeout=60, cwd=None):
+        seen.append(argv)
+        return CmdResult(0, "", "")
+
+    ctx = make_ctx(tmp_path, run_cmd=run_cmd, project_dir="/opt/vigil",
+                   compose_file="/opt/vigil/docker-compose.yml")
+    step_build(ctx)
+    step_migrate(ctx)
+    step_restart(ctx)
+
+    assert len(seen) == 3
+    for argv in seen:
+        assert argv[:8] == ["docker", "compose", "-p", "vigil",
+                            "--project-directory", "/opt/vigil",
+                            "-f", "/opt/vigil/docker-compose.yml"]
 
 
 def test_preflight_names_db_container_when_unresolved(tmp_path):

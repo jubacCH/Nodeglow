@@ -124,6 +124,11 @@ services:
       # for the legacy stack started as project "vigil"). Set it only if that
       # fails, e.g. DB_CONTAINER=vigil-db-1.
       DB_CONTAINER: ${DB_CONTAINER:-}
+      # Host directory this stack runs from (e.g. /opt/vigil). Leave unset: it
+      # is read from the running container's compose labels. Needed so that
+      # ./data etc. resolve to the right HOST path when the updater recreates
+      # containers; the update refuses to run if /data would move.
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
       POSTGRES_USER: ${POSTGRES_USER:-nodeglow}
       POSTGRES_DB: ${POSTGRES_DB:-nodeglow}
       BACKUP_DIR: /backups

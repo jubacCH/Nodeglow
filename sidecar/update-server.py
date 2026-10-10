@@ -170,9 +170,77 @@ def _resolve_db_container(project: str) -> str:
     return ""
 
 
+WORKING_DIR_LABEL = "com.docker.compose.project.working_dir"
+
+
+def _resolve_host_project_dir() -> str:
+    """The HOST directory the stack was started from, e.g. /opt/vigil.
+
+    Order: HOST_PROJECT_DIR (explicit); the ``project.working_dir`` label of the
+    running app container; ``""`` (legacy behaviour, with a loud warning). A
+    label equal to the in-container mount path means the container itself was
+    created by an earlier sidecar run with the old, broken paths — that value is
+    not trusted, because it is exactly the bug this exists to fix.
+    """
+    explicit = os.environ.get("HOST_PROJECT_DIR", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    label = ""
+    try:
+        result = _run_cmd(
+            ["docker", "inspect", "nodeglow", "--format",
+             "{{index .Config.Labels \"" + WORKING_DIR_LABEL + "\"}}"],
+            timeout=15,
+        )
+        if result.returncode == 0:
+            label = result.stdout.strip().rstrip("/")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"could not read {WORKING_DIR_LABEL}: {exc}")
+    if label and label != REPO_PATH.rstrip("/") and label.startswith("/"):
+        return label
+    _log("WARNING: host project directory unknown"
+         + (f" (label points at the sidecar mount {label})" if label else "")
+         + " — relative bind mounts would resolve against " + REPO_PATH
+         + " ON THE HOST. Set HOST_PROJECT_DIR in .env. The preflight check "
+         "refuses the update if /data would move.")
+    return ""
+
+
+def _alias_project_dir(host_dir: str) -> str:
+    """Make ``host_dir`` resolve to the repo mount inside this container.
+
+    Compose must see the host path (so bind sources are host paths) but has to
+    read the compose file, .env and build contexts from the repo mount. A
+    symlink host_dir -> REPO_PATH provides both. Returns the directory to use,
+    or ``""`` if the alias cannot be set up (legacy behaviour; the preflight
+    data-mount check is the safety net).
+    """
+    if not host_dir:
+        return ""
+    repo_real = os.path.realpath(REPO_PATH)
+    if os.path.lexists(host_dir):
+        if os.path.realpath(host_dir) == repo_real:
+            return host_dir
+        _log(f"WARNING: {host_dir} exists inside the sidecar but is not the repo "
+             f"mount; not using it as project directory")
+        return ""
+    try:
+        parent = os.path.dirname(host_dir)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        os.symlink(REPO_PATH, host_dir)
+    except OSError as exc:
+        _log(f"WARNING: could not link {host_dir} -> {REPO_PATH}: {exc}")
+        return ""
+    _log(f"linked {host_dir} -> {REPO_PATH} so compose sees host paths")
+    return host_dir
+
+
 def build_ctx(run_id: str) -> Ctx:
     """Assemble the orchestrator context with real I/O."""
     project = _resolve_compose_project()
+    project_dir = _alias_project_dir(_resolve_host_project_dir())
+    compose_file = f"{project_dir}/docker-compose.yml" if project_dir else COMPOSE_FILE
     return Ctx(
         run_cmd=_run_cmd,
         run_dump=_run_dump,
@@ -181,7 +249,7 @@ def build_ctx(run_id: str) -> Ctx:
         path_exists=os.path.exists,
         log=_log,
         repo_path=REPO_PATH,
-        compose_file=COMPOSE_FILE,
+        compose_file=compose_file,
         compose_project=project,
         backup_dir=BACKUP_DIR,
         backup_retention=BACKUP_RETENTION,
@@ -190,6 +258,7 @@ def build_ctx(run_id: str) -> Ctx:
         db_name=DB_NAME,
         state_path=STATE_PATH,
         run_id=run_id,
+        project_dir=project_dir,
     )
 
 
@@ -408,6 +477,9 @@ if __name__ == "__main__":
     if not AUTH_TOKEN:
         print("[update-sidecar] WARNING: UPDATE_SIDECAR_TOKEN is empty — "
               "all mutating endpoints will return 401 until it is set.")
+    # Set up the host-path alias early so a misconfiguration shows in the log
+    # at start, not only when an update is attempted.
+    _alias_project_dir(_resolve_host_project_dir())
     start_backup_scheduler()
     server = HTTPServer(("0.0.0.0", port), UpdateHandler)
     print(f"[update-sidecar] listening on :{port}")

@@ -98,7 +98,7 @@ The update runs as an observable sequence and the page shows each step live:
 
 | Step | What happens | If it fails |
 |---|---|---|
-| `preflight` | Checks free disk, Docker socket, database container, clean working tree, `HEAD` on `main` | Nothing has been changed yet |
+| `preflight` | Checks free disk, Docker socket, database container, clean working tree, `HEAD` on `main`, and that `/data` would stay the same host directory | Nothing has been changed yet |
 | `backup` | `pg_dump` of the whole database, gzipped, retention 5 | Nothing has been changed yet |
 | `pull` | Fast-forwards the repo to `origin/main` | Repo updated, containers untouched — rerunning is safe |
 | `build` | Builds the new images | Old containers keep serving |
@@ -124,6 +124,47 @@ change.
 
 **`Not enough free disk space`** — under 2 GB free. The build needs room for new
 images; old ones can be reclaimed with `docker image prune`.
+
+**`Refusing to update: compose would mount X as /data, but the running container
+uses Y`** — the updater could not work out the host directory of the stack,
+and recreating the containers would have attached them to a different (empty)
+data directory. Nothing has been changed. Set `HOST_PROJECT_DIR` in `.env` to
+the directory the stack was started from (see below), then
+`docker compose up -d updater` and retry.
+
+### Updater: host paths
+
+The updater sees the repository at `/opt/repo`, but the stack runs from some
+other directory on the host (e.g. `/opt/vigil`). Compose turns relative bind
+sources such as `./data` into absolute paths *before* handing them to the
+Docker daemon, which then reads them as **host** paths. Older updater versions
+therefore recreated `nodeglow` with `/opt/repo/data` — a directory that only
+existed because Docker created it, empty — instead of the real `./data`.
+
+The updater now:
+
+1. takes the host directory from `HOST_PROJECT_DIR` if set, otherwise from the
+   `com.docker.compose.project.working_dir` label of the running `nodeglow`
+   container (written by compose when you ran `docker compose up` there);
+2. links that path to `/opt/repo` inside its own container, so compose can
+   read the compose file, `.env` and build contexts under the host path;
+3. runs every compose command (`build`, the migration `run --rm`, `up`) with
+   `--project-directory <host dir>`, so bind sources and `.env` resolve as on
+   the host;
+4. refuses the update in `preflight` if the `/data` that compose would mount
+   differs from the one the running container uses.
+
+A label that points at `/opt/repo` itself is ignored: it means the running
+container was created by an old updater with the broken paths. In that case
+set `HOST_PROJECT_DIR` explicitly, and recreate the backend once by hand from
+the installation directory (`docker compose up -d nodeglow`) so it is attached
+to the real `./data` again.
+
+**Cleaning up:** if a directory `/opt/repo` exists on the *host* and your
+installation lives elsewhere, it is a leftover of that bug (typically holding
+only an empty `data/geoip`). Check that no running container uses it —
+`docker ps -q | xargs docker inspect -f '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' | grep /opt/repo`
+must print nothing — then delete it.
 
 ### From the command line
 
@@ -440,6 +481,7 @@ Useful optional settings:
 | `BACKUP_SCHEDULE` | `02:30` | Scheduled dumps: `HH:MM` (UTC), `every 6h`, or `off` |
 | `BACKUP_RETENTION` | `5` | Dumps to keep, per kind (scheduled / pre-update) |
 | `DB_CONTAINER` | auto | Only needed if the database container cannot be resolved from the compose project (e.g. `vigil-db-1`) |
+| `HOST_PROJECT_DIR` | auto | Host directory the stack runs from; only if the updater cannot read it from the compose labels ([Updater: host paths](#updater-host-paths)) |
 | `UI_BIND` | `0.0.0.0` | Host address for the UI port 8000 |
 | `SYSLOG_BIND` | `0.0.0.0` | Host address for the syslog ports 514/udp, 1514/tcp |
 | `NODEGLOW_NO_NEW_PRIVILEGES` | `false` | `true` enables no-new-privileges for the backend; verify ICMP checks afterwards |

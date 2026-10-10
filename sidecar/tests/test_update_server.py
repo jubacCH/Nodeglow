@@ -6,6 +6,8 @@ import sys
 import threading
 import time
 
+import pytest
+
 SIDECAR_DIR = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, SIDECAR_DIR)
 
@@ -171,6 +173,97 @@ def test_build_ctx_reads_settings_from_environment(monkeypatch, tmp_path):
     assert ctx.db_user == "nodeglow"
     assert ctx.backup_retention == 7
     assert ctx.run_id == "run-1"
+
+
+# ── Host project directory (bind sources must be host paths) ─────────────────
+
+def _label_answer(server, monkeypatch, value, rc=0):
+    monkeypatch.setattr(server, "_run_cmd",
+                        lambda argv, timeout=60, cwd=None: _cmd(rc, value, ""))
+
+
+def test_host_project_dir_explicit_env_wins(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.setenv("HOST_PROJECT_DIR", "/srv/nodeglow/")
+    _label_answer(server, monkeypatch, "/opt/vigil")
+    assert server._resolve_host_project_dir() == "/srv/nodeglow"
+
+
+def test_host_project_dir_from_compose_label(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.delenv("HOST_PROJECT_DIR", raising=False)
+    _label_answer(server, monkeypatch, "/opt/vigil\n")
+    assert server._resolve_host_project_dir() == "/opt/vigil"
+
+
+def test_host_project_dir_distrusts_a_label_pointing_at_the_mount(monkeypatch, tmp_path):
+    """A container created by an old sidecar run carries the broken path."""
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.delenv("HOST_PROJECT_DIR", raising=False)
+    _label_answer(server, monkeypatch, server.REPO_PATH)
+    assert server._resolve_host_project_dir() == ""
+
+
+def test_host_project_dir_unknown(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.delenv("HOST_PROJECT_DIR", raising=False)
+    _label_answer(server, monkeypatch, "", rc=1)
+    assert server._resolve_host_project_dir() == ""
+
+
+def _symlinks_supported(tmp_path):
+    try:
+        os.symlink(tmp_path, tmp_path / "probe-link")
+    except (OSError, NotImplementedError):
+        return False
+    os.remove(tmp_path / "probe-link")
+    return True
+
+
+def test_alias_links_host_dir_to_repo(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    if not _symlinks_supported(tmp_path):
+        pytest.skip("symlinks not permitted on this system")
+    (tmp_path / "repo" / "docker-compose.yml").write_text("services: {}\n")
+    host_dir = str(tmp_path / "host" / "vigil")
+
+    assert server._alias_project_dir(host_dir) == host_dir
+    assert os.path.exists(os.path.join(host_dir, "docker-compose.yml"))
+    # Idempotent: a second call accepts the existing link.
+    assert server._alias_project_dir(host_dir) == host_dir
+
+
+def test_alias_refuses_a_foreign_directory(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    foreign = tmp_path / "elsewhere"
+    foreign.mkdir()
+    assert server._alias_project_dir(str(foreign)) == ""
+    assert server._alias_project_dir("") == ""
+
+
+def test_build_ctx_uses_host_project_dir(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_resolve_compose_project", lambda: "vigil")
+    monkeypatch.setattr(server, "_resolve_host_project_dir", lambda: "/opt/vigil")
+    monkeypatch.setattr(server, "_alias_project_dir", lambda d: d)
+
+    ctx = server.build_ctx("run-2")
+
+    assert ctx.project_dir == "/opt/vigil"
+    assert ctx.compose_file == "/opt/vigil/docker-compose.yml"
+    assert ctx.repo_path == server.REPO_PATH  # git still works on the mount
+
+
+def test_build_ctx_falls_back_to_legacy_paths(monkeypatch, tmp_path):
+    server = load_server(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_resolve_compose_project", lambda: "vigil")
+    monkeypatch.setattr(server, "_alias_project_dir", lambda d: "")
+    monkeypatch.setattr(server, "_resolve_host_project_dir", lambda: "")
+
+    ctx = server.build_ctx("run-3")
+
+    assert ctx.project_dir == ""
+    assert ctx.compose_file == server.COMPOSE_FILE
 
 
 # ── Scheduled backups ────────────────────────────────────────────────────────
