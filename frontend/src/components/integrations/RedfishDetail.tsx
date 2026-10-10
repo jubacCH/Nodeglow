@@ -1,8 +1,13 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
+import { Card, CardHeader } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { Server, Cpu, Thermometer, Fan } from 'lucide-react';
+import { StatusDot } from '@/components/ui/StatusDot';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import type { HealthState } from '@/lib/status';
+import { cn } from '@/lib/utils';
+import { KV, KVGrid, StatGrid, StatTile, TableCard, isNum } from './parts';
 
 interface RedfishTemp {
   name: string;
@@ -34,138 +39,121 @@ interface RedfishData {
   health_summary: string;
 }
 
-function StatCard({ label, value, icon }: { label: string; value: string | number; icon?: React.ReactNode }) {
-  return (
-    <GlassCard className="p-4 text-center">
-      {icon && <div className="flex justify-center mb-2">{icon}</div>}
-      <p className="text-2xl font-semibold text-slate-100">{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
-  );
+/** Redfish health: OK / Warning / Critical; anything else is no data. */
+function redfishState(status: string | null | undefined): HealthState {
+  switch (status?.toLowerCase()) {
+    case 'ok': return 'ok';
+    case 'warning': return 'warning';
+    case 'critical': return 'down';
+    default: return 'unknown';
+  }
 }
 
-function tempColor(temp: number, threshold: number | null): string {
-  if (threshold && temp >= threshold) return 'text-red-400';
-  if (temp >= 80) return 'text-red-400';
-  if (temp >= 60) return 'text-amber-400';
-  return 'text-slate-300';
+function tempClass(temp: unknown, threshold: number | null): string {
+  if (!isNum(temp)) return 'text-fg-3';
+  if (threshold && temp >= threshold) return 'text-down';
+  if (temp >= 80) return 'text-down';
+  if (temp >= 60) return 'text-warning';
+  return 'text-fg';
+}
+
+function PowerState({ state }: { state: string | null | undefined }) {
+  if (state === 'On') return <StatusPill status="ok">Power on</StatusPill>;
+  if (!state) return <StatusPill status="unknown">Power: no data</StatusPill>;
+  // Off (or transitional states) is a neutral fact, not a health state.
+  return <Badge>Power {state.toLowerCase()}</Badge>;
 }
 
 export function RedfishDetail({ data }: { data: RedfishData }) {
+  const health: HealthState = data.healthy === true ? 'ok' : data.healthy === false ? 'down' : 'unknown';
   return (
     <div className="space-y-6">
       {/* Health banner */}
-      <GlassCard className={`p-4 ${!data.healthy ? 'border-red-500/30 bg-red-500/5' : ''}`}>
-        <div className="flex items-center gap-3">
-          <Server className={`h-5 w-5 ${data.healthy ? 'text-emerald-400' : 'text-red-400'}`} />
-          <div>
-            <p className="text-sm font-medium text-slate-200">{data.hostname}</p>
-            <p className="text-xs text-slate-500">{data.manufacturer} {data.model}</p>
+      <Card padding="sm" glow={health === 'down' ? 'crit' : undefined}>
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <StatusDot status={health} size="lg" />
+          <div className="min-w-0">
+            <p className="truncate font-mono text-ui font-medium text-fg">{data.hostname || '—'}</p>
+            <p className="truncate text-meta text-fg-3">{[data.manufacturer, data.model].filter(Boolean).join(' ') || '—'}</p>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Badge variant="severity" severity={data.power_state === 'On' ? 'info' : 'warning'}>
-              {data.power_state}
-            </Badge>
-            <Badge variant="severity" severity={data.healthy ? 'info' : 'critical'}>
-              {data.health_summary}
-            </Badge>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <PowerState state={data.power_state} />
+            <StatusPill status={health}>{data.health_summary || undefined}</StatusPill>
           </div>
         </div>
-      </GlassCard>
+      </Card>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="CPUs" value={data.cpu_count} icon={<Cpu className="h-5 w-5 text-sky-400" />} />
-        <StatCard label="Memory" value={`${data.memory_gb} GB`} />
-        <StatCard label="Power" value={data.power_watts != null ? `${data.power_watts} W` : '—'} />
-        <StatCard label="Fans" value={data.fans?.length ?? 0} />
-      </div>
+      <StatGrid>
+        <StatTile label="CPUs" value={data.cpu_count} />
+        <StatTile label="Memory" value={isNum(data.memory_gb) ? data.memory_gb : null} unit="GB" />
+        <StatTile label="Power" value={isNum(data.power_watts) ? data.power_watts : null} unit="W" />
+        <StatTile label="Fans" value={data.fans ? data.fans.length : null} />
+      </StatGrid>
 
       {/* Device info */}
-      <GlassCard className="p-4">
-        <h3 className="text-sm font-medium text-slate-300 mb-3">Hardware</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-          <div><span className="text-slate-500">Manufacturer</span><p className="text-slate-300 mt-1">{data.manufacturer}</p></div>
-          <div><span className="text-slate-500">Model</span><p className="text-slate-300 mt-1">{data.model}</p></div>
-          <div><span className="text-slate-500">Serial</span><p className="text-slate-300 mt-1 font-mono">{data.serial}</p></div>
-          <div><span className="text-slate-500">BIOS</span><p className="text-slate-300 mt-1">{data.bios_version}</p></div>
-        </div>
-      </GlassCard>
+      <Card as="section">
+        <CardHeader title="Hardware" />
+        <KVGrid>
+          <KV label="Manufacturer">{data.manufacturer}</KV>
+          <KV label="Model">{data.model}</KV>
+          <KV label="Serial" mono>{data.serial}</KV>
+          <KV label="BIOS" mono>{data.bios_version}</KV>
+        </KVGrid>
+      </Card>
 
       {/* Temperatures */}
       {data.temperatures && data.temperatures.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06] flex items-center gap-2">
-            <Thermometer className="h-4 w-4 text-slate-400" />
-            <h3 className="text-sm font-medium text-slate-300">Temperatures</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Sensor</th>
-                  <th className="px-4 py-2 text-right">Reading</th>
-                  <th className="px-4 py-2 text-right">Threshold</th>
-                  <th className="px-4 py-2 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.temperatures.map((t) => (
-                  <tr key={t.name} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-slate-300">{t.name}</td>
-                    <td className={`px-4 py-2 text-right font-mono ${tempColor(t.reading_c, t.threshold_c)}`}>
-                      {t.reading_c}°C
-                    </td>
-                    <td className="px-4 py-2 text-right text-slate-500 font-mono">
-                      {t.threshold_c != null ? `${t.threshold_c}°C` : '—'}
-                    </td>
-                    <td className="px-4 py-2 text-center">
-                      <Badge variant="severity" severity={t.status === 'OK' ? 'info' : 'critical'}>
-                        {t.status}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard title="Temperatures" meta={`${data.temperatures.length}`}>
+          <Table>
+            <THead>
+              <Tr>
+                <Th>Status</Th>
+                <Th>Sensor</Th>
+                <Th numeric>Reading</Th>
+                <Th numeric>Threshold</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {data.temperatures.map((t) => (
+                <Tr key={t.name}>
+                  <Td><StatusPill size="sm" status={redfishState(t.status)}>{t.status || undefined}</StatusPill></Td>
+                  <Td>{t.name}</Td>
+                  <Td numeric className={cn('whitespace-nowrap', tempClass(t.reading_c, t.threshold_c))}>
+                    {isNum(t.reading_c) ? `${t.reading_c} °C` : '—'}
+                  </Td>
+                  <Td numeric muted className="whitespace-nowrap">
+                    {isNum(t.threshold_c) ? `${t.threshold_c} °C` : '—'}
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
 
       {/* Fans */}
       {data.fans && data.fans.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06] flex items-center gap-2">
-            <Fan className="h-4 w-4 text-slate-400" />
-            <h3 className="text-sm font-medium text-slate-300">Fans</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Fan</th>
-                  <th className="px-4 py-2 text-right">RPM</th>
-                  <th className="px-4 py-2 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.fans.map((f) => (
-                  <tr key={f.name} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2 text-slate-300">{f.name}</td>
-                    <td className="px-4 py-2 text-right text-slate-400 font-mono">
-                      {f.rpm != null ? `${f.rpm}` : '—'}
-                    </td>
-                    <td className="px-4 py-2 text-center">
-                      <Badge variant="severity" severity={f.status === 'OK' ? 'info' : 'critical'}>
-                        {f.status}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard title="Fans" meta={`${data.fans.length}`}>
+          <Table>
+            <THead>
+              <Tr>
+                <Th>Status</Th>
+                <Th>Fan</Th>
+                <Th numeric>RPM</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {data.fans.map((f) => (
+                <Tr key={f.name}>
+                  <Td><StatusPill size="sm" status={redfishState(f.status)}>{f.status || undefined}</StatusPill></Td>
+                  <Td>{f.name}</Td>
+                  <Td numeric muted>{isNum(f.rpm) ? f.rpm : '—'}</Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
     </div>
   );

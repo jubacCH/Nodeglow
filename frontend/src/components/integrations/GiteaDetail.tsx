@@ -1,8 +1,10 @@
 'use client';
 
-import { GlassCard } from '@/components/ui/GlassCard';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
 import { GitBranch, Star, GitFork, AlertCircle, Lock } from 'lucide-react';
+import { StatGrid, StatTile, TableCard, formatDate } from './parts';
 
 interface GiteaRepo {
   name: string;
@@ -25,12 +27,12 @@ interface GiteaData {
   orgs_total: number;
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
+function IconHead({ icon: Icon, label }: { icon: typeof Star; label: string }) {
   return (
-    <GlassCard className="p-4 text-center">
-      <p className="text-2xl font-semibold text-slate-100">{value}</p>
-      <p className="text-xs text-slate-400 mt-1">{label}</p>
-    </GlassCard>
+    <span className="inline-flex items-center gap-1" title={label}>
+      <Icon className="h-3 w-3" aria-hidden="true" />
+      <span className="sr-only">{label}</span>
+    </span>
   );
 }
 
@@ -38,63 +40,56 @@ export function GiteaDetail({ data }: { data: GiteaData }) {
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard label="Repositories" value={data.repos_total} />
-        <StatCard label="Public" value={data.repos_public} />
-        <StatCard label="Private" value={data.repos_private} />
-        <StatCard label="Users" value={data.users_total} />
-        <StatCard label="Organizations" value={data.orgs_total} />
-      </div>
+      <StatGrid cols={5}>
+        <StatTile label="Repositories" value={data.repos_total} />
+        <StatTile label="Public" value={data.repos_public} />
+        <StatTile label="Private" value={data.repos_private} />
+        <StatTile label="Users" value={data.users_total} />
+        <StatTile label="Organizations" value={data.orgs_total} />
+      </StatGrid>
 
       {/* Version */}
-      <GlassCard className="p-4">
-        <div className="flex items-center gap-3">
-          <GitBranch className="h-4 w-4 text-slate-400" />
-          <span className="text-sm text-slate-300">Gitea Version</span>
-          <Badge>{data.version}</Badge>
+      <Card padding="sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <GitBranch className="h-4 w-4 text-fg-3" aria-hidden="true" />
+          <span className="text-ui text-fg-2">Gitea version</span>
+          {data.version ? <Badge className="font-mono">{data.version}</Badge> : <span className="text-fg-3">—</span>}
         </div>
-      </GlassCard>
+      </Card>
 
       {/* Repos */}
       {data.repos && data.repos.length > 0 && (
-        <GlassCard className="overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/[0.06]">
-            <h3 className="text-sm font-medium text-slate-300">Repositories</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-500 border-b border-white/[0.06]">
-                  <th className="px-4 py-2 text-left">Name</th>
-                  <th className="px-4 py-2 text-left">Description</th>
-                  <th className="px-4 py-2 text-center"><Star className="h-3 w-3 inline" /></th>
-                  <th className="px-4 py-2 text-center"><GitFork className="h-3 w-3 inline" /></th>
-                  <th className="px-4 py-2 text-center"><AlertCircle className="h-3 w-3 inline" /></th>
-                  <th className="px-4 py-2 text-right">Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.repos.map((r) => (
-                  <tr key={r.full_name} className="border-b border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2">
-                      <div className="flex items-center gap-2">
-                        {r.private && <Lock className="h-3 w-3 text-amber-400" />}
-                        <span className="text-slate-200 font-mono text-xs">{r.full_name}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-2 text-slate-400 text-xs max-w-xs truncate">{r.description || '—'}</td>
-                    <td className="px-4 py-2 text-center text-slate-400">{r.stars}</td>
-                    <td className="px-4 py-2 text-center text-slate-400">{r.forks}</td>
-                    <td className="px-4 py-2 text-center text-slate-400">{r.open_issues}</td>
-                    <td className="px-4 py-2 text-right text-slate-500 text-xs">
-                      {new Date(r.updated_at).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+        <TableCard title="Repositories" meta={`${data.repos.length}`}>
+          <Table>
+            <THead>
+              <Tr>
+                <Th>Name</Th>
+                <Th>Description</Th>
+                <Th numeric><IconHead icon={Star} label="Stars" /></Th>
+                <Th numeric><IconHead icon={GitFork} label="Forks" /></Th>
+                <Th numeric><IconHead icon={AlertCircle} label="Open issues" /></Th>
+                <Th numeric>Updated</Th>
+              </Tr>
+            </THead>
+            <TBody>
+              {data.repos.map((r) => (
+                <Tr key={r.full_name}>
+                  <Td>
+                    <span className="flex items-center gap-2 whitespace-nowrap">
+                      {r.private && <Lock className="h-3 w-3 shrink-0 text-fg-3" aria-label="Private" />}
+                      <span className="font-mono text-meta">{r.full_name}</span>
+                    </span>
+                  </Td>
+                  <Td muted className="max-w-xs truncate text-meta">{r.description || '—'}</Td>
+                  <Td numeric muted>{r.stars ?? '—'}</Td>
+                  <Td numeric muted>{r.forks ?? '—'}</Td>
+                  <Td numeric muted>{r.open_issues ?? '—'}</Td>
+                  <Td numeric className="whitespace-nowrap text-meta text-fg-3">{formatDate(r.updated_at, 'date') ?? '—'}</Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </TableCard>
       )}
     </div>
   );
