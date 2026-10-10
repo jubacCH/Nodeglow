@@ -30,7 +30,8 @@ const SUGGESTIONS = [
 ];
 
 export function GlowPanel() {
-  const { isOpen, close } = useGlowStore();
+  const isOpen = useGlowStore((s) => s.isOpen);
+  const close = useGlowStore((s) => s.close);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);

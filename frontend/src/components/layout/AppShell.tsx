@@ -26,7 +26,13 @@ export function AppShell({ children }: AppShellProps) {
   const connect = useWsStore((s) => s.connect);
   const disconnect = useWsStore((s) => s.disconnect);
   const queryClient = useQueryClient();
-  const { sidebarPosition, accentColor, colorMode, density, fontSize } = useThemeStore();
+  // Individual selectors: re-render only when one of these values changes,
+  // not on every theme-store update.
+  const sidebarPosition = useThemeStore((s) => s.sidebarPosition);
+  const accentColor = useThemeStore((s) => s.accentColor);
+  const colorMode = useThemeStore((s) => s.colorMode);
+  const density = useThemeStore((s) => s.density);
+  const fontSize = useThemeStore((s) => s.fontSize);
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
@@ -126,6 +132,8 @@ export function AppShell({ children }: AppShellProps) {
           </span>
         </div>
         <div
+          // The one page transition: remount + CSS fade on navigation
+          // (globals.css, disabled under prefers-reduced-motion).
           key={pathname}
           className={cn(
             // flex-1 makes the content wrapper fill the main height even

@@ -344,6 +344,19 @@ textarea:focus-visible,
   animation: page-enter 0.2s ease-out;
 }
 
+/* Respect the OS "reduce motion" setting: no entrance/pulse/shimmer
+   animations and near-instant transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Glow pulse animation */
 @keyframes glow-pulse {
   0%, 100% { box-shadow: 0 0 4px 1px currentColor; }

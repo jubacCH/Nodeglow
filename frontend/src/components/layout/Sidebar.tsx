@@ -91,10 +91,13 @@ const allSearchItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { sidebarCollapsed, colorMode, toggleColorMode } = useThemeStore();
+  const sidebarCollapsed = useThemeStore((s) => s.sidebarCollapsed);
+  const colorMode = useThemeStore((s) => s.colorMode);
+  const toggleColorMode = useThemeStore((s) => s.toggleColorMode);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
-  const { isOpen: glowOpen, toggle: toggleGlow } = useGlowStore();
+  const glowOpen = useGlowStore((s) => s.isOpen);
+  const toggleGlow = useGlowStore((s) => s.toggle);
   const [intOpen, setIntOpen] = useState(() => pathname.startsWith('/integration'));
   const [search, setSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
