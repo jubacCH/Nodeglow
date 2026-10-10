@@ -80,7 +80,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   `@fontsource-variable`): the frontend build and the UI need no access to
   Google Fonts, which also makes air-gapped builds possible.
 - Dependency majors: lucide-react 1, framer-motion 14, vitest 5,
-  @types/node 22, clickhouse-connect 1.10.
+  @types/node 22. clickhouse-connect stays on 0.8 (1.x needs the aiohttp
+  extra for its async client and is not yet tested against a real ClickHouse).
 
 ### Removed
 
