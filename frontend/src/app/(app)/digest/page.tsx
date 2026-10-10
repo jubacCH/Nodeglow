@@ -10,7 +10,7 @@ import { get } from '@/lib/api';
 import { useEffect, useMemo } from 'react';
 import type { Digest } from '@/types';
 import type { EChartsOption } from 'echarts';
-import { AlertTriangle, Server, FileText, Plug, HardDrive, ShieldAlert, Clock } from 'lucide-react';
+import { AlertTriangle, Server, FileText, Plug, HardDrive, ShieldAlert, Clock, type LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 
 export default function DigestPage() {
@@ -257,7 +257,7 @@ function SummaryCard({
   color,
   loading,
 }: {
-  icon: React.ElementType;
+  icon: LucideIcon;
   label: string;
   value?: number | string;
   color: string;

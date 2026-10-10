@@ -17,12 +17,13 @@ import {
   Bot, Scan, Radio, ShieldCheck, KeyRound, ChevronDown,
   Settings, Users, Activity, BookOpen, Search, LogOut, Plus,
   ClipboardList, Sun, Moon, Network, Shield, Sparkles, ArrowUpDown,
+  type LucideIcon,
 } from 'lucide-react';
 
 interface NavItem {
   label: string;
   href: string;
-  icon: React.ElementType;
+  icon: LucideIcon;
   iconColor?: string;
   /** Tailwind bg-* class matching iconColor, used for the active-state
    *  left accent bar. Must be a static class string so Tailwind JIT
