@@ -110,6 +110,114 @@ async def test_ping_job_reports_failures_as_rows(icmp_only_hosts):
     assert rows[2]["latency_ms"] is None
 
 
+async def test_ping_job_loads_host_rows_in_bulk(icmp_only_hosts):
+    """No per-host db.get() round trip when writing port_error / detail."""
+    import scheduler
+
+    factory = _session_factory(icmp_only_hosts)
+    sessions = []
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def recording_factory():
+        async with factory() as s:
+            sessions.append(s)
+            yield s
+
+    async def fake_check_host(host):
+        return True, False, 1.0, {"icmp": True}
+
+    with patch.object(scheduler, "AsyncSessionLocal", recording_factory), \
+         patch("utils.ping.check_host", new=fake_check_host), \
+         patch("services.clickhouse_client.insert_ping_checks", new=AsyncMock()), \
+         patch("services.clickhouse_client.get_latest_ping_per_host",
+               new=AsyncMock(return_value={})):
+        await scheduler.run_ping_checks()
+
+    from models.ping import PingHost
+    host_gets = [c for s in sessions for c in s.get.await_args_list if c.args[0] is PingHost]
+    assert host_gets == []
+
+
+async def test_agent_hosts_are_resolved_in_one_query():
+    import scheduler
+    from datetime import datetime
+
+    hosts = [FakePingHost(1, "vm-a", source="agent"), FakePingHost(2, "VM-B", source="agent")]
+    agent_rows = [("vm-a", datetime.utcnow()), ("vm-b", None)]
+
+    def make_session():
+        session = AsyncMock()
+        host_result = MagicMock()
+        host_result.scalars.return_value.all.return_value = hosts
+        agent_result = MagicMock()
+        agent_result.all.return_value = agent_rows
+        session.execute = AsyncMock(side_effect=lambda stmt, *a, **k: (
+            agent_result if "agents" in str(stmt) else host_result))
+        session.commit = AsyncMock()
+        session.get = AsyncMock(return_value=None)
+        return session
+
+    from contextlib import asynccontextmanager
+
+    created = []
+
+    @asynccontextmanager
+    async def factory():
+        s = make_session()
+        created.append(s)
+        yield s
+
+    insert_mock = AsyncMock()
+    with patch.object(scheduler, "AsyncSessionLocal", factory), \
+         patch("services.clickhouse_client.insert_ping_checks", new=insert_mock), \
+         patch("services.clickhouse_client.get_latest_ping_per_host",
+               new=AsyncMock(return_value={})):
+        await scheduler.run_ping_checks()
+
+    # the agent session resolves every agent-sourced host with one execute
+    agent_sessions = [s for s in created if any("agents" in str(c.args[0]) for c in s.execute.await_args_list)]
+    assert len(agent_sessions) == 1 and agent_sessions[0].execute.await_count == 1
+    rows = {r["host_id"]: r for r in insert_mock.await_args_list[0].args[0]}
+    assert rows[1]["success"] is True
+    assert rows[2]["success"] is False
+
+
+async def test_http_checks_share_one_client_per_verify_mode():
+    from utils import ping
+
+    await ping.close_http_clients()
+    a = ping._http_client(True)
+    b = ping._http_client(True)
+    c = ping._http_client(False)
+    assert a is b
+    assert a is not c
+    await ping.close_http_clients()
+    assert ping._http_client(True) is not a  # closed clients are replaced
+    await ping.close_http_clients()
+
+
+async def test_check_http_uses_the_shared_client():
+    import httpx
+
+    from utils import ping
+
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(204)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with patch.object(ping, "_http_client", return_value=client):
+        ok, latency = await ping.check_http("http://example.test/health", verify_ssl=False)
+    await client.aclose()
+
+    assert ok is True and latency is not None
+    assert seen == ["http://example.test/health"]
+
+
 async def test_port_error_clears_when_service_check_is_removed():
     """Unmonitoring the last service check must let the port error go.
 

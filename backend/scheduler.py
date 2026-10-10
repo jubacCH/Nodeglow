@@ -25,7 +25,14 @@ logger = logging.getLogger(__name__)
 # name resolved from outside returns the site's WAN address or a CDN edge, and
 # the check would then measure a different machine entirely.
 AUTHORITATIVE_ADDRESS_SOURCES = frozenset({"proxmox", "unifi"})
-scheduler = AsyncIOScheduler()
+# APScheduler's defaults are hostile to a busy single event loop: a run that
+# starts more than 1 s late (misfire_grace_time=1) is silently skipped, and
+# without coalescing a backlog of missed runs fires back to back. One instance
+# per job, missed runs collapsed into one, and a minute of grace. Daily/weekly
+# cron jobs get an hour of grace where they are registered.
+JOB_DEFAULTS = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 60}
+CRON_MISFIRE_GRACE_SECONDS = 3600
+scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS)
 
 # ── Scheduler leadership (multi-worker / HA safety) ──────────────────────────
 # Without a leader lock every uvicorn worker / replica would start its own
@@ -81,12 +88,235 @@ async def _leadership_loop():
 # standby for cluster X". They are not real errors.
 _STANDBY_MARKER = "[standby:duplicate-of-primary]"
 
+# Collections used to run strictly one after another, with no timeout: one
+# hanging API (or a 60 s speedtest) held up every other integration. They now
+# run concurrently, bounded by a semaphore, and each collect() is cut off after
+# a timeout. Speedtests legitimately take minutes.
+INTEGRATION_CONCURRENCY = max(1, int(os.environ.get("NODEGLOW_INTEGRATION_CONCURRENCY", "8")))
+INTEGRATION_COLLECT_TIMEOUT = float(os.environ.get("NODEGLOW_INTEGRATION_TIMEOUT", "60"))
+_TYPE_COLLECT_TIMEOUTS = {
+    "speedtest": float(os.environ.get("NODEGLOW_SPEEDTEST_TIMEOUT", "180")),
+}
+
+# Config ids whose collection is still running — possibly from an earlier
+# cycle, when a slow collector outlived that cycle's wait budget. They are
+# skipped until it finishes, so a slow target is never polled twice at once.
+_inflight_cfgs: set[int] = set()
+_background_units: set[asyncio.Task] = set()
+# Created per event loop: asyncio primitives bind to the loop they first wait
+# on, and the test suite runs every test on a fresh loop.
+_loop_primitives: dict[int, tuple[asyncio.Semaphore, asyncio.Lock]] = {}
+
+
+def _primitives() -> tuple[asyncio.Semaphore, asyncio.Lock]:
+    key = id(asyncio.get_running_loop())
+    prims = _loop_primitives.get(key)
+    if prims is None:
+        _loop_primitives.clear()  # at most one live loop in production
+        prims = (asyncio.Semaphore(INTEGRATION_CONCURRENCY), asyncio.Lock())
+        _loop_primitives[key] = prims
+    return prims
+
+
+def _collect_semaphore() -> asyncio.Semaphore:
+    return _primitives()[0]
+
+
+def _snapshot_write_lock() -> asyncio.Lock:
+    # Writes stay serial: they are cheap, some (on_snapshot auto-import)
+    # touch shared host rows, and cluster-group ownership is decided in order.
+    return _primitives()[1]
+
+
+def collect_timeout_for(integration_cls, integration_type: str) -> float:
+    """Timeout for one collect(): class attribute, per-type default, global."""
+    explicit = getattr(integration_cls, "collect_timeout_seconds", None)
+    if isinstance(explicit, (int, float)) and not isinstance(explicit, bool) and explicit > 0:
+        return float(explicit)
+    return _TYPE_COLLECT_TIMEOUTS.get(integration_type, INTEGRATION_COLLECT_TIMEOUT)
+
+
+class _DueConfig:
+    __slots__ = ("cfg_id", "name", "cluster_group", "config")
+
+    def __init__(self, cfg_id: int, name: str, cluster_group: str | None, config: dict):
+        self.cfg_id = cfg_id
+        self.name = name
+        self.cluster_group = cluster_group
+        self.config = config
+
+
+async def _collect_one(integration_type: str, integration_cls, due: _DueConfig):
+    """Run one collect() under the semaphore and timeout.
+
+    Returns (instance, result, exception); never raises.
+    """
+    from integrations._base import CollectorResult
+    from services.tracing import tracer
+
+    timeout = collect_timeout_for(integration_cls, integration_type)
+    async with _collect_semaphore():
+        with tracer.start_as_current_span("integration.collect") as span:
+            span.set_attribute("integration.type", integration_type)
+            span.set_attribute("integration.config_id", due.cfg_id)
+            span.set_attribute("integration.config_name", due.name)
+            instance = None
+            try:
+                instance = integration_cls(config=due.config)
+                result = await asyncio.wait_for(instance.collect(), timeout=timeout)
+                return instance, result, None
+            except asyncio.TimeoutError:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", "TimeoutError")
+                return instance, CollectorResult(
+                    success=False, error=f"collect timed out after {timeout:.0f}s",
+                ), None
+            except Exception as exc:
+                span.set_attribute("error", True)
+                span.set_attribute("error.type", type(exc).__name__)
+                return instance, None, exc
+
+
+async def _apply_result(
+    db, integration_type: str, due: _DueConfig, instance, result, exc,
+    cluster_owners: set[tuple[str, str]],
+) -> None:
+    """Persist one collection: snapshot, cluster-group dedupe, bandwidth, hooks."""
+    cfg = await db.get(IntegrationConfig, due.cfg_id)
+    if cfg is None:
+        return  # deleted while collecting
+    try:
+        if exc is not None:
+            raise exc
+        if result.success:
+            # Auto-populate cluster_group from cluster_name for
+            # Proxmox integrations on first successful poll.
+            if (
+                integration_type == "proxmox"
+                and not cfg.cluster_group
+                and isinstance(result.data, dict)
+                and result.data.get("cluster_name")
+            ):
+                cfg.cluster_group = str(result.data["cluster_name"])
+                logger.info(
+                    "Auto-grouped %s/%s under cluster_group=%s",
+                    integration_type, cfg.name, cfg.cluster_group,
+                )
+
+            # Determine primary vs standby for this cluster_group.
+            group_key = (
+                (integration_type, cfg.cluster_group)
+                if cfg.cluster_group else None
+            )
+            is_standby = group_key is not None and group_key in cluster_owners
+
+            if is_standby:
+                # Standby: write a health-only snapshot so the health check
+                # passes but skip data, bandwidth, hooks, and alerts.
+                await snap_svc.save(
+                    db, integration_type, cfg.id,
+                    ok=True, error=_STANDBY_MARKER,
+                )
+                logger.debug(
+                    "Standby skip [%s/%s] — primary already wrote group=%s",
+                    integration_type, cfg.name, cfg.cluster_group,
+                )
+                return
+
+            # Primary: write everything.
+            if group_key is not None:
+                cluster_owners.add(group_key)
+
+            await snap_svc.save(
+                db, integration_type, cfg.id,
+                ok=True, data=result.data,
+            )
+            # Extract bandwidth data from supported integration types
+            try:
+                from services.bandwidth import (
+                    extract_proxmox_bandwidth,
+                    extract_unifi_bandwidth,
+                )
+                if integration_type == "proxmox":
+                    await extract_proxmox_bandwidth(
+                        cfg.id, result.data, source_name=cfg.name,
+                    )
+                elif integration_type == "unifi":
+                    await extract_unifi_bandwidth(
+                        cfg.id, result.data, source_name=cfg.name,
+                    )
+            except Exception as bw_exc:
+                logger.warning(
+                    "Bandwidth extraction failed [%s/%s]: %s",
+                    integration_type, cfg.name, bw_exc,
+                )
+            # Run post-snapshot hook (e.g., auto-import hosts)
+            try:
+                await instance.on_snapshot(result.data, due.config, db)
+            except Exception as hook_exc:
+                logger.warning(
+                    "on_snapshot hook failed [%s/%s]: %s",
+                    integration_type, cfg.name, hook_exc,
+                )
+        else:
+            await snap_svc.save(
+                db, integration_type, cfg.id,
+                ok=False, error=result.error,
+            )
+    except Exception as exc2:
+        logger.error(
+            "Integration collect [%s/%s]: %s",
+            integration_type, cfg.name, exc2,
+        )
+        await snap_svc.save(
+            db, integration_type, cfg.id,
+            ok=False, error=str(exc2),
+        )
+
+
+async def _run_unit(
+    integration_type: str, integration_cls, members: list[_DueConfig],
+    cluster_owners: set[tuple[str, str]],
+) -> None:
+    """Collect a set of configs concurrently, then write them in id order.
+
+    A unit is either one config or all due members of one cluster group, so
+    "first successful member in id order is primary" still holds — including
+    failover when the first member fails.
+    """
+    try:
+        results = await asyncio.gather(*(
+            _collect_one(integration_type, integration_cls, m) for m in members
+        ))
+        async with _snapshot_write_lock():
+            async with AsyncSessionLocal() as db:
+                for m, (instance, result, exc) in zip(members, results):
+                    await _apply_result(
+                        db, integration_type, m, instance, result, exc, cluster_owners,
+                    )
+                await db.commit()
+    except Exception:
+        logger.error(
+            "Integration unit [%s: %s] failed", integration_type,
+            ", ".join(m.name for m in members), exc_info=True,
+        )
+    finally:
+        for m in members:
+            _inflight_cfgs.discard(m.cfg_id)
+
 
 @instrument_job("integration_checks")
 async def run_integration_checks():
     """
     Generic collector loop: for each registered integration, fetch all configs
     and run collect(). Stores results as Snapshots.
+
+    Collection runs concurrently (NODEGLOW_INTEGRATION_CONCURRENCY, default 8)
+    with a per-collect timeout (NODEGLOW_INTEGRATION_TIMEOUT, default 60 s;
+    speedtest NODEGLOW_SPEEDTEST_TIMEOUT, default 180 s, or a class attribute
+    ``collect_timeout_seconds``). The job waits for this cycle's collections up
+    to a budget below its own interval; anything slower keeps running in the
+    background and its configs are skipped until it is done.
 
     Cluster grouping (Phase 8): when multiple integrations share the same
     `cluster_group`, only the FIRST one to successfully poll this cycle writes
@@ -109,10 +339,10 @@ async def run_integration_checks():
         integration_interval = int(await get_setting(db, "proxmox_interval", "60"))
 
     async with AsyncSessionLocal() as db:
-        # Pull only the IDs in id-order, then re-fetch each cfg fresh inside
-        # the per-type loop. This avoids the stale-ORM-object trap where
-        # cfg.cluster_group mutations would not be tracked by a different
-        # session and silently fail to persist.
+        # Pull only the IDs in id-order, then re-fetch each cfg fresh. This
+        # avoids the stale-ORM-object trap where cfg.cluster_group mutations
+        # would not be tracked by a different session and silently fail to
+        # persist.
         id_rows = (await db.execute(
             select(IntegrationConfig.id, IntegrationConfig.type)
             .where(IntegrationConfig.enabled == True)
@@ -126,150 +356,76 @@ async def run_integration_checks():
     for cfg_id, cfg_type in id_rows:
         by_type.setdefault(cfg_type, []).append(cfg_id)
 
-    from services.tracing import tracer
-
-    # Tracks which (type, cluster_group) tuples have already been written this
-    # cycle. First successful poll wins; subsequent members of the same group
-    # are demoted to standby.
-    cluster_owners: set[tuple[str, str]] = set()
-
-    for integration_type, cfg_ids in by_type.items():
-        integration_cls = registry.get(integration_type)
-        if not integration_cls:
-            continue
-
-        async with AsyncSessionLocal() as db:
+    # Phase 1 — serial and cheap: decide which configs are due.
+    units: list[tuple[str, type, list[_DueConfig]]] = []
+    async with AsyncSessionLocal() as db:
+        for integration_type, cfg_ids in by_type.items():
+            integration_cls = registry.get(integration_type)
+            if not integration_cls:
+                continue
+            groups: dict[str, list[_DueConfig]] = {}
             for cfg_id in cfg_ids:
+                if cfg_id in _inflight_cfgs:
+                    continue
                 cfg = await db.get(IntegrationConfig, cfg_id)
                 if cfg is None or not cfg.enabled:
                     continue
-                with tracer.start_as_current_span("integration.collect") as _span:
-                    _span.set_attribute("integration.type", integration_type)
-                    _span.set_attribute("integration.config_id", cfg.id)
-                    _span.set_attribute("integration.config_name", cfg.name)
-                    try:
-                        try:
-                            config_dict = int_svc.decrypt_config(cfg.config_json)
-                        except Exception as dec_exc:
-                            logger.error(
-                                "Failed to decrypt config [%s/%s]: %s",
-                                integration_type, cfg.name, dec_exc,
-                            )
-                            await snap_svc.save(
-                                db, integration_type, cfg.id,
-                                ok=False, error=f"Decryption failed: {dec_exc}",
-                            )
-                            _span.set_attribute("error", True)
-                            continue
-                        instance = integration_cls(config=config_dict)
-                        # Respect this integration's own cadence. Sharing one
-                        # interval across all of them meant a speedtest — which
-                        # saturates the uplink for 30-60 s — was polled as often
-                        # as a cheap API call, so runs overlapped permanently.
-                        interval = effective_interval(
-                            integration_cls, config_dict, integration_interval
-                        )
-                        last_run = await snap_svc.last_timestamp(
-                            db, integration_type, cfg.id
-                        )
-                        if not is_due(last_run, datetime.utcnow(), interval):
-                            continue
+                try:
+                    config_dict = int_svc.decrypt_config(cfg.config_json)
+                except Exception as dec_exc:
+                    logger.error(
+                        "Failed to decrypt config [%s/%s]: %s",
+                        integration_type, cfg.name, dec_exc,
+                    )
+                    await snap_svc.save(
+                        db, integration_type, cfg.id,
+                        ok=False, error=f"Decryption failed: {dec_exc}",
+                    )
+                    continue
+                # Respect this integration's own cadence. Sharing one interval
+                # across all of them meant a speedtest — which saturates the
+                # uplink for 30-60 s — was polled as often as a cheap API call,
+                # so runs overlapped permanently.
+                interval = effective_interval(integration_cls, config_dict, integration_interval)
+                last_run = await snap_svc.last_timestamp(db, integration_type, cfg.id)
+                if not is_due(last_run, datetime.utcnow(), interval):
+                    continue
+                due = _DueConfig(cfg.id, cfg.name, cfg.cluster_group, config_dict)
+                if cfg.cluster_group:
+                    groups.setdefault(cfg.cluster_group, []).append(due)
+                else:
+                    units.append((integration_type, integration_cls, [due]))
+            for members in groups.values():
+                units.append((integration_type, integration_cls, members))
+        await db.commit()
 
-                        result = await instance.collect()
+    if not units:
+        return
 
-                        if result.success:
-                            # Auto-populate cluster_group from cluster_name for
-                            # Proxmox integrations on first successful poll.
-                            if (
-                                integration_type == "proxmox"
-                                and not cfg.cluster_group
-                                and isinstance(result.data, dict)
-                                and result.data.get("cluster_name")
-                            ):
-                                cfg.cluster_group = str(result.data["cluster_name"])
-                                logger.info(
-                                    "Auto-grouped %s/%s under cluster_group=%s",
-                                    integration_type, cfg.name, cfg.cluster_group,
-                                )
+    # Phase 2 — collect concurrently, write serially per unit.
+    cluster_owners: set[tuple[str, str]] = set()
+    tasks = []
+    for integration_type, integration_cls, members in units:
+        for m in members:
+            _inflight_cfgs.add(m.cfg_id)
+        task = asyncio.create_task(
+            _run_unit(integration_type, integration_cls, members, cluster_owners)
+        )
+        _background_units.add(task)
+        task.add_done_callback(_background_units.discard)
+        tasks.append(task)
 
-                            # Determine primary vs standby for this cluster_group.
-                            group_key = (
-                                (integration_type, cfg.cluster_group)
-                                if cfg.cluster_group else None
-                            )
-                            is_standby = group_key is not None and group_key in cluster_owners
-
-                            if is_standby:
-                                # Standby: write a health-only snapshot so the
-                                # health check passes but skip data, bandwidth,
-                                # hooks, and alerts.
-                                _span.set_attribute("integration.standby", True)
-                                await snap_svc.save(
-                                    db, integration_type, cfg.id,
-                                    ok=True, error=_STANDBY_MARKER,
-                                )
-                                logger.debug(
-                                    "Standby skip [%s/%s] — primary already wrote group=%s",
-                                    integration_type, cfg.name, cfg.cluster_group,
-                                )
-                            else:
-                                # Primary: write everything.
-                                if group_key is not None:
-                                    cluster_owners.add(group_key)
-                                    _span.set_attribute("integration.cluster_group", cfg.cluster_group)
-
-                                await snap_svc.save(
-                                    db, integration_type, cfg.id,
-                                    ok=True, data=result.data,
-                                )
-                                # Extract bandwidth data from supported integration types
-                                try:
-                                    from services.bandwidth import (
-                                        extract_proxmox_bandwidth,
-                                        extract_unifi_bandwidth,
-                                    )
-                                    if integration_type == "proxmox":
-                                        await extract_proxmox_bandwidth(
-                                            cfg.id, result.data, source_name=cfg.name,
-                                        )
-                                    elif integration_type == "unifi":
-                                        await extract_unifi_bandwidth(
-                                            cfg.id, result.data, source_name=cfg.name,
-                                        )
-                                except Exception as bw_exc:
-                                    logger.warning(
-                                        "Bandwidth extraction failed [%s/%s]: %s",
-                                        integration_type, cfg.name, bw_exc,
-                                    )
-                                # Run post-snapshot hook (e.g., auto-import hosts)
-                                try:
-                                    await instance.on_snapshot(result.data, config_dict, db)
-                                except Exception as hook_exc:
-                                    logger.warning(
-                                        "on_snapshot hook failed [%s/%s]: %s",
-                                        integration_type, cfg.name, hook_exc,
-                                    )
-                        else:
-                            await snap_svc.save(
-                                db, integration_type, cfg.id,
-                                ok=False, error=result.error,
-                            )
-                    except Exception as exc:
-                        logger.error(
-                            "Integration collect [%s/%s]: %s",
-                            integration_type, cfg.name, exc,
-                        )
-                        _span.set_attribute("error", True)
-                        _span.set_attribute("error.type", type(exc).__name__)
-                        await snap_svc.save(
-                            db, integration_type, cfg.id,
-                            ok=False, error=str(exc),
-                        )
-            await db.commit()
+    budget = max(10.0, integration_interval * 0.8)
+    _done, pending = await asyncio.wait(tasks, timeout=budget)
+    if pending:
+        logger.info(
+            "Integration check: %d collection(s) still running after %.0fs; "
+            "they continue in the background", len(pending), budget,
+        )
 
     logger.debug(
-        "Integration check done for %d type(s), %d config(s), %d active cluster groups",
-        len(by_type), len(id_rows), len(cluster_owners),
+        "Integration check done for %d type(s), %d config(s), %d unit(s), %d active cluster groups",
+        len(by_type), len(id_rows), len(units), len(cluster_owners),
     )
 
 
@@ -302,6 +458,16 @@ def reset_port_error_state(host_id: int) -> None:
     """
     _port_fail_streak.pop(host_id, None)
     _port_pass_streak.pop(host_id, None)
+
+
+async def _broadcast_ping_updates(updates: list[tuple]) -> None:
+    """Send (host_id, name, online, latency_ms) updates to WebSocket clients."""
+    from services.websocket import broadcast_ping_update
+    for host_id, name, online, latency in updates:
+        try:
+            await broadcast_ping_update(host_id, name, online, latency)
+        except Exception:
+            logger.debug("WebSocket ping broadcast failed", exc_info=True)
 
 
 @instrument_job("ping_checks")
@@ -353,27 +519,33 @@ async def run_ping_checks():
         from models.agent import Agent
         from sqlalchemy import func as sa_func
         agent_ping_rows: list[dict] = []
+        # One query for every agent-sourced host instead of one per host.
+        # Matching is by name (PingHost.name == Agent.hostname, case-insensitive);
+        # if several agents share a hostname the most recently seen one counts.
+        names = {h.name.lower() for h in agent_hosts}
+        last_seen_by_name: dict[str, datetime] = {}
         async with AsyncSessionLocal() as db:
-            for host in agent_hosts:
-                # Find matching agent by name (PingHost.name == Agent.hostname)
-                agent_r = await db.execute(
-                    select(Agent).where(sa_func.lower(Agent.hostname) == host.name.lower())
-                )
-                agent = agent_r.scalar_one_or_none()
-                success = False
-                if agent and agent.last_seen:
-                    success = (datetime.utcnow() - agent.last_seen).total_seconds() < 120
-                ts_now = datetime.utcnow()
-                latency_val = 0 if success else None
-                agent_ping_rows.append({
-                    "timestamp": ts_now,
-                    "host_id": host.id,
-                    "host_name": host.name,
-                    "success": success,
-                    "latency_ms": latency_val,
-                })
-                from services.websocket import broadcast_ping_update
-                _asyncio.create_task(broadcast_ping_update(host.id, host.name, success, 0 if success else None))
+            for hostname, last_seen in (await db.execute(
+                select(Agent.hostname, Agent.last_seen)
+                .where(sa_func.lower(Agent.hostname).in_(names))
+            )).all():
+                key = (hostname or "").lower()
+                if last_seen and (key not in last_seen_by_name or last_seen > last_seen_by_name[key]):
+                    last_seen_by_name[key] = last_seen
+        ts_now = datetime.utcnow()
+        agent_updates = []
+        for host in agent_hosts:
+            last_seen = last_seen_by_name.get(host.name.lower())
+            success = bool(last_seen) and (ts_now - last_seen).total_seconds() < 120
+            agent_ping_rows.append({
+                "timestamp": ts_now,
+                "host_id": host.id,
+                "host_name": host.name,
+                "success": success,
+                "latency_ms": 0 if success else None,
+            })
+            agent_updates.append((host.id, host.name, success, 0 if success else None))
+        _asyncio.create_task(_broadcast_ping_updates(agent_updates))
 
         try:
             await insert_ping_checks(agent_ping_rows)
@@ -411,7 +583,16 @@ async def run_ping_checks():
     went_offline: list[str] = []
     came_online: list[str] = []
     icmp_rows: list[dict] = []
+    ws_updates: list[tuple] = []
     async with AsyncSessionLocal() as db:
+        # All host rows in one query; the ORM then flushes only the rows whose
+        # port_error / check_detail actually changed, batched. This used to be
+        # one db.get() round trip per host per cycle.
+        host_rows = {
+            h.id: h for h in (await db.execute(
+                select(PingHost).where(PingHost.id.in_([r[0].id for r in results]))
+            )).scalars().all()
+        } if results else {}
         for host, online, port_error, latency, detail in results:
             icmp_rows.append({
                 "timestamp": now,
@@ -428,7 +609,7 @@ async def run_ping_checks():
             # engine. Only count cycles where ICMP succeeded and a non-ICMP
             # check actually ran — otherwise we can't tell anything about
             # service health and must not adjust the streaks.
-            host_obj = await db.get(PingHost, host.id)
+            host_obj = host_rows.get(host.id)
             if host_obj:
                 has_service_check = any(k != "icmp" for k in (detail or {}).keys())
                 if not has_service_check:
@@ -458,9 +639,7 @@ async def run_ping_checks():
                 host_obj.port_error = latched
                 host_obj.check_detail = _json.dumps(detail) if detail else None
 
-            # Broadcast live update via WebSocket
-            from services.websocket import broadcast_ping_update
-            _asyncio.create_task(broadcast_ping_update(host.id, host.name, online, latency))
+            ws_updates.append((host.id, host.name, online, latency))
 
             # Track state changes for grace-period notification
             if not online:
@@ -477,6 +656,11 @@ async def run_ping_checks():
                     came_online.append(host.name)
 
         await db.commit()
+
+    # Broadcast live updates via WebSocket — one task for the whole cycle
+    # rather than one per host.
+    if ws_updates:
+        _asyncio.create_task(_broadcast_ping_updates(ws_updates))
 
     # ClickHouse is the authoritative store for ping check time-series.
     if icmp_rows:
@@ -567,6 +751,7 @@ async def cleanup_old_results():
         int_ret = int(await get_setting(db, "integration_retention_days", "7"))
         ev_ret = int(await get_setting(db, "incident_event_retention_days", "30"))
         tpl_ret = int(await get_setting(db, "template_retention_days", "90"))
+        tpl_single_ret = int(await get_setting(db, "template_singleton_retention_days", "7"))
 
     async with AsyncSessionLocal() as db:
         await snap_svc.cleanup_all(db, int_ret)
@@ -580,9 +765,14 @@ async def cleanup_old_results():
         ev_deleted = await cleanup_incident_events(db, ev_ret)
         # Log templates are never overwritten, only added to — without a
         # retention pass the table grows for the lifetime of the installation.
-        from services.log_intelligence import cleanup_log_templates
-        tpl_deleted = await cleanup_log_templates(db, tpl_ret)
+        from services.log_intelligence import cleanup_log_templates, load_template_cache
+        tpl_deleted = await cleanup_log_templates(db, tpl_ret, tpl_single_ret)
         await db.commit()
+        if tpl_deleted:
+            # The in-memory hash -> id cache still lists the deleted rows. A
+            # template seen again would count as known, its counts would go
+            # to an UPDATE matching nothing, and it would never be re-created.
+            await load_template_cache(db)
 
     logger.info(
         "Cleanup done (integrations: %dd, incident events: %dd/%d pruned, "
@@ -1271,6 +1461,11 @@ async def start_scheduler():
     async with AsyncSessionLocal() as db:
         ping_interval = int(await get_setting(db, "ping_interval", "60"))
         integration_interval = int(await get_setting(db, "proxmox_interval", "60"))
+        # Read here, inside the session: these used to be read further down
+        # through `db` after its context had already closed.
+        digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
+        digest_hour = int(await get_setting(db, "digest_hour", "9"))
+        ai_summary_hour = int(await get_setting(db, "daily_ai_summary_hour", "8"))
 
     scheduler.add_job(run_ping_checks, "interval", seconds=ping_interval,
                       id="ping_checks", replace_existing=True)
@@ -1281,7 +1476,8 @@ async def start_scheduler():
     scheduler.add_job(update_ssl_expiry, "interval", hours=6,
                       id="ssl_expiry", replace_existing=True)
     scheduler.add_job(cleanup_old_results, "cron", hour=3, minute=0,
-                      id="cleanup", replace_existing=True)
+                      id="cleanup", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
     scheduler.add_job(run_log_intelligence, "interval", seconds=30,
                       id="log_intelligence", replace_existing=True)
     # Fleet-wide passes scan every template; keep them off the 30s tick.
@@ -1321,9 +1517,11 @@ async def start_scheduler():
     scheduler.add_job(run_backup_compliance, "interval", hours=1,
                       id="backup_compliance", replace_existing=True)
     scheduler.add_job(cleanup_legacy_api_keys, "cron", hour=3, minute=30,
-                      id="legacy_api_key_cleanup", replace_existing=True)
+                      id="legacy_api_key_cleanup", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
-                      id="ch_cleanup", replace_existing=True)
+                      id="ch_cleanup", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     # DNS resolution + host dedup (every 30 minutes)
     scheduler.add_job(resolve_host_dns, "interval", minutes=30,
@@ -1332,20 +1530,20 @@ async def start_scheduler():
     # GeoIP database update (Tuesdays at 03:00 — MaxMind updates weekly on Tuesdays)
     scheduler.add_job(update_geoip, "cron",
                       day_of_week="tue", hour=3, minute=0,
-                      id="geoip_update", replace_existing=True)
+                      id="geoip_update", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     # Weekly digest email (default: Monday 9:00, configurable)
-    digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
-    digest_hour = int(await get_setting(db, "digest_hour", "9"))
     scheduler.add_job(run_weekly_digest, "cron",
                       day_of_week=digest_day, hour=digest_hour, minute=0,
-                      id="weekly_digest", replace_existing=True)
+                      id="weekly_digest", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     # Daily AI summary (default: 08:00, configurable)
-    ai_summary_hour = int(await get_setting(db, "daily_ai_summary_hour", "8"))
     scheduler.add_job(run_daily_ai_summary, "cron",
                       hour=ai_summary_hour, minute=0,
-                      id="daily_ai_summary", replace_existing=True)
+                      id="daily_ai_summary", replace_existing=True,
+                      misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
     if getattr(config, "REDIS_URL", ""):
         # HA mode: start paused; the leadership loop resumes jobs once this

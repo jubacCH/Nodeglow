@@ -87,23 +87,51 @@ async def test_get_latest_ping_per_host_argmax_and_keys(fake_query):
 
     result = await ch.get_latest_ping_per_host([1, 2, 3])
 
-    assert len(fake_query.calls) == 1
-    sql = fake_query.last_sql.lower()
+    # First the bounded query; then one unbounded lookup for the single host
+    # (3) that had no row inside the window.
+    assert len(fake_query.calls) == 2
+    sql, params = fake_query.calls[0]
+    sql = sql.lower()
     assert "from ping_checks" in sql
     assert "argmax" in sql
     assert "group by host_id" in sql
-    assert fake_query.last_params == {"hids": [1, 2, 3]}
+    assert "timestamp >= now() - tointervalhour" in sql
+    assert params == {"hids": [1, 2, 3], "lb": ch.PING_LOOKBACK_HOURS}
+
+    fallback_sql, fallback_params = fake_query.calls[1]
+    assert "tointervalhour" not in fallback_sql.lower()
+    assert fallback_params == {"hids": [3]}
 
     assert set(result.keys()) == {1, 2}
     assert result[1]["host_name"] == "router-01"
     assert result[2]["success"] == 0
 
 
+async def test_get_latest_ping_per_host_no_fallback_when_all_found(fake_query):
+    fake_query.returns([
+        {"host_id": 1, "_ts": datetime(2026, 4, 10, 12, 0), "success": 1,
+         "latency_ms": 1.0, "host_name": "a"},
+    ])
+    await ch.get_latest_ping_per_host([1])
+    assert len(fake_query.calls) == 1
+
+
 async def test_get_latest_ping_per_host_no_filter(fake_query):
     fake_query.returns([])
     await ch.get_latest_ping_per_host()
     sql = fake_query.last_sql.lower()
-    assert "where" not in sql  # global query, no host_id filter
+    assert "host_id in" not in sql  # global query, no host_id filter
+    # ...but still bounded in time, so it never scans the 30-day table.
+    assert "timestamp >= now() - tointervalhour" in sql
+    assert len(fake_query.calls) == 1
+
+
+async def test_get_latest_ping_per_host_unbounded_on_request(fake_query):
+    fake_query.returns([])
+    await ch.get_latest_ping_per_host([4], lookback_hours=None)
+    assert "where host_id in" in " ".join(fake_query.last_sql.lower().split())
+    assert "tointervalhour" not in fake_query.last_sql.lower()
+    assert len(fake_query.calls) == 1
 
 
 async def test_get_ping_uptime_aggregation(fake_query):
@@ -150,7 +178,15 @@ async def test_get_offline_hosts_since_returns_only_all_failed(fake_query):
     sql = fake_query.last_sql.lower()
     assert "grouparray" in sql
     assert "arraysum" in sql
-    assert fake_query.last_params == {"hids": [1, 5, 9], "n": 3}
+    # Newest checks are chosen by sorting, not by an ORDER BY subquery whose
+    # order aggregation does not have to preserve.
+    assert "arrayreversesort" in sql
+    assert "order by" not in sql
+    # Bounded read: the last N checks are always inside the window.
+    assert "timestamp >= now() - tointervalhour" in sql
+    assert fake_query.last_params == {
+        "hids": [1, 5, 9], "n": 3, "lb": ch.PING_LOOKBACK_HOURS,
+    }
 
 
 async def test_get_ping_status_transitions(fake_query):
@@ -353,3 +389,116 @@ async def test_get_previous_bandwidth_sample_returns_first(fake_query):
         "sid": "1",
         "iface": "eth0",
     }
+
+
+# ── schema migrations ───────────────────────────────────────────────────────
+
+
+async def test_migrations_drop_unused_aggregate_and_fix_syslog_ttl(monkeypatch):
+    issued: list[str] = []
+
+    class FakeClient:
+        async def command(self, ddl):
+            issued.append(" ".join(ddl.split()))
+
+    monkeypatch.setattr(ch, "_schemas_applied", False)
+    await ch._ensure_schemas(FakeClient())
+
+    drop_mv = issued.index("DROP VIEW IF EXISTS syslog_aggregated_mv")
+    drop_tbl = issued.index("DROP TABLE IF EXISTS syslog_aggregated")
+    # The view must go before its target table, or inserts would fail in between.
+    assert drop_mv < drop_tbl
+    assert "ALTER TABLE syslog_messages MODIFY SETTING ttl_only_drop_parts = 0" in issued
+
+
+def test_init_sql_has_no_aggregate_view_and_row_level_ttl_setting():
+    from pathlib import Path
+
+    sql = (Path(__file__).resolve().parents[3] / "clickhouse" / "init.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS syslog_aggregated" not in sql
+    assert "CREATE MATERIALIZED VIEW" not in sql
+    syslog_ddl = sql.split("CREATE TABLE IF NOT EXISTS syslog_messages")[1].split(";")[0]
+    assert "ttl_only_drop_parts = 0" in syslog_ddl
+
+
+def test_clickhouse_compression_defaults_to_lz4():
+    assert ch.CLICKHOUSE_COMPRESSION == "lz4"
+
+
+# ── syslog time windows ─────────────────────────────────────────────────────
+
+
+def test_received_since_clause_keeps_received_at_and_adds_prune_bound():
+    from datetime import timedelta
+
+    since = datetime(2026, 4, 10, 12, 0)
+    sql, params = ch.received_since_clause(since, skew_hours=6)
+
+    assert "received_at >= {since:DateTime64(3)}" in sql
+    # The pruning predicate is on the partition / sort-key column.
+    assert "timestamp >= {since_prune:DateTime64(3)}" in sql
+    assert params == {"since": since, "since_prune": since - timedelta(hours=6)}
+
+
+def test_where_clauses_prunes_on_timestamp():
+    since = datetime(2026, 4, 10, 12, 0)
+    where, params = ch._where_clauses(since, q="error")
+
+    assert "received_at >= {since:DateTime64(3)}" in where
+    assert "timestamp >= {since_prune:DateTime64(3)}" in where
+    assert params["since"] == since
+    assert params["since_prune"] < since
+    # Free-text search keeps substring semantics.
+    assert "positionCaseInsensitive(message, {q0:String}) > 0" in where
+
+
+async def test_get_syslog_events_for_host_prunes_on_timestamp(fake_query):
+    since = datetime(2026, 4, 10, 0, 0)
+    await ch.get_syslog_events_for_host(
+        host_id=1, host_name="", host_source_ip="", since=since,
+    )
+    sql = fake_query.last_sql
+    assert "received_at >= {since:DateTime64(3)}" in sql
+    assert "timestamp >= {since_prune:DateTime64(3)}" in sql
+    assert fake_query.last_params["since_prune"] < since
+
+
+async def test_count_syslog_by_host_is_one_grouped_query(fake_query):
+    fake_query.returns([{"host_id": 3, "cnt": 7}, {"host_id": None, "cnt": 1}])
+    since = datetime(2026, 4, 10, 12, 0)
+    result = await ch.count_syslog_by_host([3, 4], since, max_severity=3)
+
+    assert len(fake_query.calls) == 1
+    sql = fake_query.last_sql.lower()
+    assert "group by host_id" in sql
+    assert "severity <= {max_sev:int8}" in sql
+    assert fake_query.last_params == {"hids": [3, 4], "t": since, "max_sev": 3}
+    assert result == {3: 7}
+
+
+async def test_count_syslog_by_host_short_circuits(fake_query):
+    assert await ch.count_syslog_by_host([], datetime(2026, 4, 10)) == {}
+    assert fake_query.calls == []
+
+
+async def test_count_syslog_received_by_source(fake_query):
+    fake_query.returns([{"source_ip": "10.0.0.1", "cnt": 42}])
+    since = datetime(2026, 4, 10, 12, 0)
+    result = await ch.count_syslog_received_by_source(since, ["10.0.0.1", "10.0.0.2"])
+
+    sql = fake_query.last_sql
+    assert "received_at >= {since:DateTime64(3)}" in sql
+    assert "timestamp >= {since_prune:DateTime64(3)}" in sql
+    assert "source_ip IN ({ips:Array(String)})" in sql
+    assert "GROUP BY source_ip" in sql
+    assert result == {"10.0.0.1": 42}
+    # An explicitly empty filter means "nobody", not "everybody".
+    assert await ch.count_syslog_received_by_source(since, []) == {}
+    assert len(fake_query.calls) == 1
+
+
+async def test_count_syslog_received_by_host(fake_query):
+    fake_query.returns([{"host_id": 9, "cnt": 5}])
+    result = await ch.count_syslog_received_by_host(datetime(2026, 4, 10), [9])
+    assert "host_id IN ({hids:Array(Int32)})" in fake_query.last_sql
+    assert result == {9: 5}
