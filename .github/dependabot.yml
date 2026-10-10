@@ -1,0 +1,51 @@
+version: 2
+
+# Weekly, grouped: one PR per ecosystem and week for minor/patch bumps, so the
+# queue stays reviewable. Major bumps still arrive one per dependency, because
+# each needs its own look (Next.js 14 -> 16, vitest 2 -> 5, ...).
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /backend
+      - /frontend
+      - /sidecar
+    schedule:
+      interval: weekly
+    groups:
+      docker-base-images:
+        patterns: ["*"]
