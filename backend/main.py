@@ -33,6 +33,7 @@ from routers import (
     digest as digest_router,
     bandwidth as bandwidth_router,
     backups as backups_router,
+    maintenance as maintenance_router,
 )
 
 
@@ -509,3 +510,4 @@ app.include_router(rules_router.router)
 app.include_router(digest_router.router)
 app.include_router(bandwidth_router.router)
 app.include_router(backups_router.router)
+app.include_router(maintenance_router.router)

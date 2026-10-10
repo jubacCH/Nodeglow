@@ -26,6 +26,7 @@ from models.ping import PingHost
 from services import clickhouse_client as _ch
 from services.clickhouse_client import query as ch_query
 from services.clickhouse_client import query_scalar as ch_scalar
+from services.maintenance import without_maintenance
 from models.integration import IntegrationConfig
 from models.incident import Incident, IncidentEvent
 from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
@@ -173,9 +174,9 @@ async def _get_offline_hosts(db, min_failures: int = 3) -> list[PingHost]:
     from services.clickhouse_client import get_offline_hosts_since
 
     hosts_q = await db.execute(
-        select(PingHost).where(PingHost.enabled == True, PingHost.maintenance == False)
+        select(PingHost).where(PingHost.enabled == True)
     )
-    hosts = hosts_q.scalars().all()
+    hosts = await without_maintenance(db, list(hosts_q.scalars().all()))
     if not hosts:
         return []
 
@@ -412,11 +413,10 @@ async def _rule_port_error(db, min_cycles: int = 2):
     results = await db.execute(
         select(PingHost).where(
             PingHost.enabled == True,
-            PingHost.maintenance == False,
             PingHost.port_error == True,
         )
     )
-    hosts = results.scalars().all()
+    hosts = await without_maintenance(db, list(results.scalars().all()))
     if not hosts:
         return
 
@@ -430,7 +430,14 @@ async def _rule_port_error(db, min_cycles: int = 2):
             except Exception:
                 pass
 
+        reasons: dict = {}
+        if getattr(host, "check_errors", None):
+            try:
+                reasons = {k.upper(): v for k, v in json.loads(host.check_errors).items()}
+            except Exception:
+                reasons = {}
         failed_label = ", ".join(failed_checks) if failed_checks else "service check"
+        why = "; ".join(f"{k}: {reasons[k]}" for k in failed_checks if reasons.get(k))
         if not _track_rule_hit("port_error", [host.id], min_cycles):
             continue
         await _find_or_create_incident(
@@ -440,7 +447,11 @@ async def _rule_port_error(db, min_cycles: int = 2):
             severity="warning",
             host_ids=[host.id],
             event_type="port_error",
-            summary=f"{host.name} ({host.hostname}) is online but {failed_label} is unreachable",
+            summary=(
+                f"{host.name} ({host.hostname}) is online but {failed_label} failed ({why})"
+                if why else
+                f"{host.name} ({host.hostname}) is online but {failed_label} is unreachable"
+            ),
         )
 
 

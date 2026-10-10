@@ -39,6 +39,7 @@ from models.discovered_port import DiscoveredPort
 from models.audit import AuditLog
 from models.ai_usage import AiUsageLog
 from models.backup import BackupJob, BackupHistory
+from models.maintenance import MaintenanceWindow
 
 
 async def init_db():
@@ -73,5 +74,6 @@ __all__ = [
     "AuditLog",
     "AiUsageLog",
     "BackupJob", "BackupHistory",
+    "MaintenanceWindow",
     "init_db",
 ]

@@ -12,7 +12,9 @@ import { QueryErrorState, StaleDataBanner } from '@/components/ui/QueryState';
 import { useHosts } from '@/hooks/queries/useHosts';
 import { useConfirm } from '@/hooks/useConfirm';
 import { formatLatency, uptimeColor, timeAgo } from '@/lib/utils';
-import { post, patch } from '@/lib/api';
+import { post, patch, apiErrorMessage } from '@/lib/api';
+import { HttpOptionsFields } from '@/components/hosts/HttpOptionsFields';
+import { DEFAULT_HTTP_FORM, hasHttpCheck, httpOptionsPayload, validateHttpForm } from '@/lib/httpOptions';
 import { ExportButton } from '@/components/ui/ExportButton';
 import { Plus, Search, X, ArrowUpDown, ArrowUp, ArrowDown, Wrench, Trash2, CheckSquare, Square, Server, Pencil } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
@@ -125,6 +127,8 @@ function HostsPageInner() {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: '', hostname: '', check_type: 'icmp', port: '' });
+  const [httpForm, setHttpForm] = useState(DEFAULT_HTTP_FORM);
+  const [addError, setAddError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [selectMode, setSelectMode] = useState(false);
@@ -205,6 +209,10 @@ function HostsPageInner() {
   }, [qParam, isLoading, filteredHosts, router]);
 
   async function handleAdd() {
+    const isHttp = hasHttpCheck(form.check_type);
+    const httpError = isHttp ? validateHttpForm(httpForm) : null;
+    if (httpError) { setAddError(httpError); return; }
+    setAddError(null);
     setSaving(true);
     try {
       await post('/hosts/api/create', {
@@ -212,10 +220,14 @@ function HostsPageInner() {
         hostname: form.hostname,
         check_type: form.check_type,
         port: form.port || undefined,
+        http_options: isHttp ? httpOptionsPayload(httpForm) : undefined,
       });
       qc.invalidateQueries({ queryKey: ['hosts'] });
       setShowAdd(false);
       setForm({ name: '', hostname: '', check_type: 'icmp', port: '' });
+      setHttpForm(DEFAULT_HTTP_FORM);
+    } catch (e) {
+      setAddError(apiErrorMessage(e, 'Could not add the host'));
     } finally {
       setSaving(false);
     }
@@ -405,6 +417,15 @@ function HostsPageInner() {
               <input type="text" placeholder="443" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} className={inputClass} />
             </div>
           </div>
+          {hasHttpCheck(form.check_type) && (
+            <details className="mt-4 rounded-md border border-white/[0.06] p-3">
+              <summary className="cursor-pointer text-sm text-slate-300">HTTP check options</summary>
+              <div className="mt-3">
+                <HttpOptionsFields value={httpForm} onChange={setHttpForm} />
+              </div>
+            </details>
+          )}
+          {addError && <p role="alert" className="mt-3 text-sm text-red-400">{addError}</p>}
           <div className="flex justify-end gap-2 mt-4">
             <Button variant="ghost" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
             <Button size="sm" onClick={handleAdd} disabled={saving || !form.name || !form.hostname}>
@@ -493,7 +514,15 @@ function HostsPageInner() {
                         </span>
                         {host.port_error && host.check_detail && (
                           <span className="text-[10px] text-red-400/80">
-                            {Object.entries(host.check_detail).filter(([, ok]) => !ok).map(([k]) => k.toUpperCase()).join(', ')} failed
+                            {Object.entries(host.check_detail).filter(([, ok]) => !ok).map(([k]) => {
+                              const why = host.check_errors?.[k];
+                              return why ? `${k.toUpperCase()} (${why})` : k.toUpperCase();
+                            }).join(', ')} failed
+                          </span>
+                        )}
+                        {host.maintenance && host.maintenance_window && !host.maintenance_manual && (
+                          <span className="text-[10px] text-amber-400/80" title="Maintenance window">
+                            · {host.maintenance_window.name}
                           </span>
                         )}
                         {host.online === false && host.last_seen && (

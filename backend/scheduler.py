@@ -493,10 +493,14 @@ async def run_ping_checks():
                 h.maintenance_until = None
         await db.commit()
 
+        # Manual flag or an active maintenance window — one rule everywhere.
+        from services.maintenance import maintenance_ids
+        in_maintenance = await maintenance_ids(db, hosts, now) if hosts else set()
+
     if not hosts:
         return
 
-    active_hosts = [h for h in hosts if not h.maintenance]
+    active_hosts = [h for h in hosts if h.id not in in_maintenance]
     if not active_hosts:
         return
 
@@ -570,8 +574,12 @@ async def run_ping_checks():
 
     async def _check_one(host):
         async with sem:
-            online, port_error, latency, detail = await check_host(host)
+            res = await check_host(host)
+            online, port_error, latency, detail = res
+            errors_by_host[host.id] = getattr(res, "errors", None) or {}
             return host, online, port_error, latency, detail
+
+    errors_by_host: dict[int, dict] = {}
 
     results = await _asyncio.gather(*[_check_one(h) for h in active_hosts])
 
@@ -638,6 +646,8 @@ async def run_ping_checks():
                         latched = False
                 host_obj.port_error = latched
                 host_obj.check_detail = _json.dumps(detail) if detail else None
+                errs = errors_by_host.get(host.id)
+                host_obj.check_errors = _json.dumps(errs, sort_keys=True) if errs else None
 
             ws_updates.append((host.id, host.name, online, latency))
 
