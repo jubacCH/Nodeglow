@@ -160,12 +160,12 @@ cat > "$stage/VERIFY.md" <<EOF
 Nodeglow $VERSION, offline bundle for $PLATFORM ($EDITION edition).
 
 1. **Before transfer** (on a machine with internet access), check the bundle
-   against the release's signed checksum list. Download SHA256SUMS,
-   SHA256SUMS.sig and SHA256SUMS.pem from
+   against the release's signed checksum list. Download SHA256SUMS and
+   SHA256SUMS.sigstore.json from
    https://github.com/jubacCH/Nodeglow/releases/tag/v$VERSION and run:
 
        cosign verify-blob \\
-         --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \\
+         --bundle SHA256SUMS.sigstore.json \\
          --certificate-identity-regexp '$CERT_IDENTITY_RE' \\
          --certificate-oidc-issuer '$OIDC_ISSUER' \\
          SHA256SUMS
@@ -175,8 +175,9 @@ Nodeglow $VERSION, offline bundle for $PLATFORM ($EDITION edition).
    listed there; compare the SHA-256 the script printed instead.
 
 2. **On the target**, install.sh checks every file in the bundle against the
-   SHA256SUMS inside it, and — if you put the release's SHA256SUMS, .sig and
-   .pem next to the bundle and cosign is installed — the signature as well:
+   SHA256SUMS inside it, and — if you put the release's SHA256SUMS and
+   SHA256SUMS.sigstore.json next to the bundle and cosign is installed — the
+   signature as well:
 
        sh install.sh --offline $name.tar.gz
 

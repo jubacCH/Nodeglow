@@ -269,18 +269,18 @@ can_verify() {
 }
 
 verify_sums_signature() {
-    # verify_sums_signature DIR — DIR holds SHA256SUMS(.sig|.pem)
+    # verify_sums_signature DIR — DIR holds SHA256SUMS and SHA256SUMS.sigstore.json
     if ! can_verify; then
         warn "cosign not installed: release signature NOT verified (checksums still are)"
         return 0
     fi
-    if [ ! -f "$1/SHA256SUMS.sig" ] || [ ! -f "$1/SHA256SUMS.pem" ]; then
-        [ "$VERIFY" = require ] && die "SHA256SUMS.sig / SHA256SUMS.pem not found next to SHA256SUMS"
+    if [ ! -f "$1/SHA256SUMS.sigstore.json" ]; then
+        [ "$VERIFY" = require ] && die "SHA256SUMS.sigstore.json not found next to SHA256SUMS"
         warn "no signature files next to SHA256SUMS: signature NOT verified"
         return 0
     fi
     cosign verify-blob \
-        --certificate "$1/SHA256SUMS.pem" --signature "$1/SHA256SUMS.sig" \
+        --bundle "$1/SHA256SUMS.sigstore.json" \
         --certificate-identity-regexp "$CERT_IDENTITY_RE" \
         --certificate-oidc-issuer "$OIDC_ISSUER" \
         "$1/SHA256SUMS" >/dev/null 2>&1 \
@@ -309,8 +309,7 @@ obtain_online() {
     mkdir -p "$WORK_DIR/dl"
     fetch "$base/$archive" "$WORK_DIR/dl/$archive" || die "release v$VERSION not found ($base)"
     fetch "$base/SHA256SUMS" "$WORK_DIR/dl/SHA256SUMS" || die "SHA256SUMS missing in release v$VERSION"
-    fetch "$base/SHA256SUMS.sig" "$WORK_DIR/dl/SHA256SUMS.sig" 2>/dev/null || rm -f "$WORK_DIR/dl/SHA256SUMS.sig"
-    fetch "$base/SHA256SUMS.pem" "$WORK_DIR/dl/SHA256SUMS.pem" 2>/dev/null || rm -f "$WORK_DIR/dl/SHA256SUMS.pem"
+    fetch "$base/SHA256SUMS.sigstore.json" "$WORK_DIR/dl/SHA256SUMS.sigstore.json" 2>/dev/null         || rm -f "$WORK_DIR/dl/SHA256SUMS.sigstore.json"
     verify_sums_signature "$WORK_DIR/dl"
     check_sum "$WORK_DIR/dl/SHA256SUMS" "$WORK_DIR/dl" "$archive"
     ok "checksum of $archive"
@@ -330,7 +329,7 @@ obtain_offline() {
         check_sum "$bundle_dir/SHA256SUMS" "$bundle_dir" "$bundle_name"
         ok "bundle checksum matches the release's SHA256SUMS"
     elif [ "$VERIFY" = require ]; then
-        die "--require-signature: put the release's SHA256SUMS, .sig and .pem next to the bundle"
+        die "--require-signature: put the release's SHA256SUMS and SHA256SUMS.sigstore.json next to the bundle"
     else
         warn "no release SHA256SUMS next to the bundle: verify it before transfer (docs/INSTALL.md)"
     fi

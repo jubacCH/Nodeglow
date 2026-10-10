@@ -142,14 +142,14 @@ them (`--require-signature` makes that mandatory).
 [Verifying signatures](#release-files-installsh-archives-bundle):
 
 ```sh
-cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/jubacCH/Nodeglow/\.github/workflows/release\.yml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 ```
 
-**2. Transfer** the bundle, and ideally `SHA256SUMS`, `SHA256SUMS.sig` and
-`SHA256SUMS.pem` with it, to the target.
+**2. Transfer** the bundle, and ideally `SHA256SUMS` and
+`SHA256SUMS.sigstore.json` with it, to the target.
 
 **3. Install:**
 
@@ -316,12 +316,12 @@ docker buildx imagetools inspect ghcr.io/jubacch/nodeglow-backend:1.2.0 --format
 
 ### Release files (install.sh, archives, bundle)
 
-All release assets are listed in `SHA256SUMS`, which is signed
-(`SHA256SUMS.sig`, certificate `SHA256SUMS.pem`, and the same as a Sigstore
-bundle in `SHA256SUMS.sigstore.json`):
+All release assets are listed in `SHA256SUMS`, which is signed; signature and
+certificate are in the Sigstore bundle `SHA256SUMS.sigstore.json` (cosign 3,
+or cosign 2.4+ with `--new-bundle-format`):
 
 ```sh
-cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/jubacCH/Nodeglow/\.github/workflows/release\.yml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
