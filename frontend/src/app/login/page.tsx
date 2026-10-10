@@ -3,6 +3,8 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
+import { Field, Input } from '@/components/ui/Field';
+import { Lockup } from '@/components/ui/NodeglowMark';
 import { useAuthStore } from '@/stores/auth';
 import { safeNextPath } from '@/lib/redirect';
 
@@ -54,57 +56,47 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
-      {/* Ambient orbs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-sky-500/10 rounded-full blur-[128px] animate-pulse" />
-      <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-violet-500/10 rounded-full blur-[128px] animate-pulse delay-1000" />
-
-      <div className="relative z-10 w-full max-w-sm mx-4">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="Nodeglow" className="w-72 mx-auto mb-4" />
-          <p className="text-sm text-slate-500 mt-1">Infrastructure Monitoring</p>
+    <main className="flex min-h-screen items-center justify-center bg-bg px-4">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 flex flex-col items-center gap-2 text-center">
+          <Lockup size={40} wordmarkClassName="text-[26px]" />
+          <p className="text-ui text-fg-2">Infrastructure monitoring</p>
         </div>
 
-        {/* Login form */}
-        <form onSubmit={handleSubmit} className="glass-elevated p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4 rounded-ng-lg border border-border bg-surface p-6" aria-label="Sign in">
           {error && (
-            <div className="px-3 py-2 rounded-md bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+            <div role="alert" className="rounded-ctl border border-down/30 bg-down-soft px-3 py-2 text-ui text-down">
               {error}
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Username</label>
-            <input
+          <Field label="Username">
+            <Input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="ng-input"
               autoComplete="username"
+              // eslint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
               required
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Password</label>
-            <input
+          <Field label="Password">
+            <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="ng-input"
               autoComplete="current-password"
               required
             />
-          </div>
+          </Field>
 
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign in'}
+          <Button type="submit" className="w-full" loading={loading}>
+            {loading ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>
       </div>
-    </div>
+    </main>
   );
 }
