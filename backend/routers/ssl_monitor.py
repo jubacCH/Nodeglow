@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import PingHost, get_db
@@ -21,12 +21,16 @@ async def _get_integration_certs(db: AsyncSession) -> list[dict]:
     """Pull SSL certificates from integration snapshots (NPM, Cloudflare, etc.)."""
     certs: list[dict] = []
 
-    # Get latest successful snapshot per integration type that may have certs
-    result = await db.execute(
-        select(Snapshot)
-        .where(Snapshot.ok == True, Snapshot.entity_type.in_(["npm", "cloudflare"]))
-        .order_by(Snapshot.timestamp.desc())
+    # Latest successful snapshot per integration that may have certs. Selecting
+    # only max(id) per entity keeps this to one row each: loading every
+    # snapshot of the retention window cost ~400 ms per dashboard request.
+    latest = (
+        select(func.max(Snapshot.id).label("max_id"))
+        .where(Snapshot.ok == True, Snapshot.entity_type.in_(["npm", "cloudflare"]))  # noqa: E712
+        .group_by(Snapshot.entity_type, Snapshot.entity_id)
+        .subquery()
     )
+    result = await db.execute(select(Snapshot).join(latest, Snapshot.id == latest.c.max_id))
     snapshots = result.scalars().all()
 
     # Deduplicate: keep only latest per (entity_type, entity_id)
