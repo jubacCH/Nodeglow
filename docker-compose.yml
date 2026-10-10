@@ -130,7 +130,7 @@ services:
       # Dumps kept per kind (pre-update and scheduled are counted separately).
       BACKUP_RETENTION: ${BACKUP_RETENTION:-5}
       # Scheduled Postgres dumps: "HH:MM" daily (UTC), "every 6h", or "off".
-      # Empty = daily at 03:30 UTC. The dumps hold the database only, never
+      # Empty = daily at 02:30 UTC. The dumps hold the database only, never
       # SECRET_KEY: escrow that separately (docs/OPERATIONS.md).
       BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-}
     expose:

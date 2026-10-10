@@ -44,7 +44,7 @@ BACKUP_PREFIX = "pre-update-"
 SCHEDULED_PREFIX = "scheduled-"
 BACKUP_SUFFIX = ".dump.gz"
 BACKUP_KINDS = {"pre-update": BACKUP_PREFIX, "scheduled": SCHEDULED_PREFIX}
-DEFAULT_BACKUP_SCHEDULE = "03:30"
+DEFAULT_BACKUP_SCHEDULE = "02:30"
 
 BUILD_SERVICES = ["nodeglow", "frontend"]
 BUILD_TIMEOUT = 1800
@@ -367,7 +367,7 @@ def parse_schedule(spec: str | None):
     * ``"HH:MM"`` — daily at that time (container clock, UTC by default)
     * ``"every 6h"`` / ``"every 90m"`` — fixed interval, at least 15 minutes
     * ``"off"`` (or ``none`` / ``0``) — disabled
-    * unset or empty — the default, daily at 03:30
+    * unset or empty — the default, daily at 02:30
 
     Returns ``None`` (disabled), ``("daily", hour, minute)`` or
     ``("interval", seconds)``. Raises ``ValueError`` on anything else.

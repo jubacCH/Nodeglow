@@ -55,7 +55,7 @@ DUMP_CHUNK = 1 << 20
 AUTH_TOKEN = os.environ.get("UPDATE_SIDECAR_TOKEN", "").strip()
 
 # Scheduled Postgres dumps: "HH:MM" daily (container clock, UTC), "every 6h",
-# or "off". Unset means daily at 03:30. Retention is BACKUP_RETENTION, counted
+# or "off". Unset means daily at 02:30. Retention is BACKUP_RETENTION, counted
 # separately from the pre-update dumps.
 BACKUP_SCHEDULE = os.environ.get("BACKUP_SCHEDULE", "")
 
@@ -290,7 +290,7 @@ def start_backup_scheduler(spec: str = BACKUP_SCHEDULE, stop: threading.Event | 
     thread = threading.Thread(target=_backup_loop, args=(schedule, stop or threading.Event()),
                               name="backup-scheduler", daemon=True)
     thread.start()
-    _log(f"scheduled backups enabled ({spec or 'default 03:30'}), "
+    _log(f"scheduled backups enabled ({spec or 'default 02:30'}), "
          f"keeping {BACKUP_RETENTION}")
     return thread
 

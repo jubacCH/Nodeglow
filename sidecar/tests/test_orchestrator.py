@@ -559,8 +559,8 @@ def test_retention_is_counted_per_kind(tmp_path):
 
 
 @pytest.mark.parametrize("spec,expected", [
-    (None, ("daily", 3, 30)),
-    ("", ("daily", 3, 30)),
+    (None, ("daily", 2, 30)),
+    ("", ("daily", 2, 30)),
     ("02:15", ("daily", 2, 15)),
     ("every 6h", ("interval", 21600)),
     ("Every 90m", ("interval", 5400)),
