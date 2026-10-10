@@ -11,6 +11,7 @@ import {
   useNavCounts, useSystemSummary, useHostSearch, useCachedOfflineCount,
 } from '@/hooks/queries/useDashboard';
 import { useIntegrations } from '@/hooks/queries/useIntegrations';
+import { useAiStatus } from '@/hooks/queries/useAiStatus';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import {
   LayoutDashboard, Server, AlertTriangle, Bell, FileText,
@@ -99,6 +100,8 @@ export function Sidebar() {
   const logout = useAuthStore((s) => s.logout);
   const glowOpen = useGlowStore((s) => s.isOpen);
   const toggleGlow = useGlowStore((s) => s.toggle);
+  const { data: aiStatus } = useAiStatus(!!user);
+  const glowOff = aiStatus ? !aiStatus.available : false;
   const [intOpen, setIntOpen] = useState(() => pathname.startsWith('/integration'));
   const [search, setSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -469,6 +472,7 @@ export function Sidebar() {
           <button
             onClick={toggleGlow}
             aria-pressed={glowOpen}
+            title={glowOff ? 'AI features are off (Settings → AI)' : undefined}
             className={cn(
               'flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors',
               glowOpen
@@ -478,6 +482,11 @@ export function Sidebar() {
           >
             <Sparkles size={18} className={glowOpen ? 'text-violet-400' : 'text-violet-400/60'} />
             <span>Glow</span>
+            {glowOff && (
+              <span className="ml-auto text-[10px] uppercase tracking-wide" style={{ color: 'var(--ng-text-muted)' }}>
+                off
+              </span>
+            )}
           </button>
         </div>
       )}

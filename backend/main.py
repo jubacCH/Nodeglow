@@ -46,6 +46,13 @@ async def lifespan(app: FastAPI):
     await init_db()
     from models import init_db as init_new_db
     await init_new_db()
+    # AI became opt-in: installations that already had a Claude key keep AI on (once).
+    try:
+        from services.ai_config import migrate_ai_opt_in
+        await migrate_ai_opt_in()
+    except Exception:
+        import logging as _logging
+        _logging.getLogger("nodeglow.ai").exception("AI opt-in upgrade check failed")
     await start_scheduler()
     os.environ["NODEGLOW_START_TIME"] = str(time.time())
     from services.syslog import start_syslog_server, stop_syslog_server

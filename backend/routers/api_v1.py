@@ -1557,6 +1557,13 @@ async def regenerate_postmortem(
     if incident.status != "resolved":
         raise HTTPException(400, "Postmortem can only be generated for resolved incidents")
 
+    from services.ai_config import load_ai_config
+    ai_cfg = await load_ai_config(db)
+    if not ai_cfg.enabled:
+        return _ai_unavailable("ai_disabled")
+    if not ai_cfg.configured:
+        return _ai_unavailable("ai_not_configured")
+
     try:
         from services.postmortem import generate_postmortem
         asyncio.create_task(generate_postmortem(incident.id))
@@ -2177,6 +2184,7 @@ async def glow_chat(
 ):
     """Stream an AI copilot response as SSE events."""
     from services.ai_client import stream_completion
+    from services.ai_config import AIError, load_ai_config
     from services.ai_context import gather_infrastructure_context
 
     body = await request.json()
@@ -2185,6 +2193,13 @@ async def glow_chat(
 
     if not user_message:
         raise HTTPException(400, "message is required")
+
+    # Opt-in + provider check before gathering any context.
+    ai_cfg = await load_ai_config(db)
+    if not ai_cfg.enabled:
+        return _ai_unavailable("ai_disabled")
+    if not ai_cfg.configured:
+        return _ai_unavailable("ai_not_configured")
 
     # Gather live infrastructure context
     try:
@@ -2206,26 +2221,39 @@ async def glow_chat(
 
     async def event_stream():
         try:
-            async for delta in stream_completion(system_prompt, messages):
+            async for delta in stream_completion(system_prompt, messages, config=ai_cfg):
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
-        except RuntimeError as e:
-            if "not configured" in str(e):
-                yield f"data: {json.dumps({'error': 'Claude API key not configured. Go to Settings > AI to add your key.', 'done': True})}\n\n"
-            else:
-                _glow_log.exception("Glow stream error")
-                yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
-        except Exception as e:
+        except AIError as e:
+            _glow_log.warning("Glow request failed: %s", e)
+            yield f"data: {json.dumps({'error': str(e), 'code': e.code, 'done': True})}\n\n"
+        except Exception:
             _glow_log.exception("Glow stream error")
             yield f"data: {json.dumps({'error': 'An unexpected error occurred.', 'done': True})}\n\n"
 
-    # Check API key availability before starting the stream
-    from services.ai_client import _get_api_key
-    api_key = await _get_api_key()
-    if not api_key:
-        return JSONResponse(
-            {"error": "Claude API key not configured. Go to Settings > AI to add your key."},
-            status_code=503,
-        )
-
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _ai_unavailable(code: str) -> JSONResponse:
+    """Uniform answer of every AI endpoint when AI is off or not set up."""
+    from services.ai_config import AI_DISABLED_MESSAGE, AI_NOT_CONFIGURED_MESSAGE
+    message = AI_DISABLED_MESSAGE if code == "ai_disabled" else AI_NOT_CONFIGURED_MESSAGE
+    return JSONResponse({"error": message, "code": code}, status_code=409)
+
+
+@router.get("/ai/status", summary="Whether AI features are enabled")
+async def ai_status(
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+):
+    """For the UI: show or hide AI features. No secrets, no endpoint URLs."""
+    from services.ai_config import load_ai_config
+    cfg = await load_ai_config(db)
+    return {
+        "enabled": cfg.enabled,
+        "configured": cfg.configured,
+        "available": cfg.enabled and cfg.configured,
+        "provider": cfg.provider,
+        "provider_label": cfg.provider_label,
+        "redaction": cfg.redact,
+    }
