@@ -1,0 +1,12 @@
+{
+  "topic": "nodeglow-alerts",
+  "title": "🔴 Incident: Core switch down",
+  "message": "3 hosts unreachable",
+  "priority": 5,
+  "tags": [
+    "rotating_light",
+    "critical",
+    "nodeglow"
+  ],
+  "click": "https://nodeglow.example.ch/incidents/42"
+}

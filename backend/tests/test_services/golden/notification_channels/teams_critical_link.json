@@ -1,0 +1,59 @@
+{
+  "type": "message",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "contentUrl": null,
+      "content": {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "msteams": {
+          "width": "Full"
+        },
+        "body": [
+          {
+            "type": "Container",
+            "style": "attention",
+            "bleed": true,
+            "items": [
+              {
+                "type": "TextBlock",
+                "text": "🔴 CRITICAL",
+                "weight": "Bolder",
+                "size": "Small",
+                "color": "Attention"
+              }
+            ]
+          },
+          {
+            "type": "TextBlock",
+            "text": "🔴 Incident: Core switch down",
+            "weight": "Bolder",
+            "size": "Medium",
+            "wrap": true
+          },
+          {
+            "type": "TextBlock",
+            "text": "3 hosts unreachable\n\nsince 12:00",
+            "wrap": true
+          },
+          {
+            "type": "TextBlock",
+            "text": "Nodeglow",
+            "isSubtle": true,
+            "size": "Small",
+            "spacing": "Medium"
+          }
+        ],
+        "actions": [
+          {
+            "type": "Action.OpenUrl",
+            "title": "Open in Nodeglow",
+            "url": "https://nodeglow.example.ch/incidents/42"
+          }
+        ]
+      }
+    }
+  ]
+}

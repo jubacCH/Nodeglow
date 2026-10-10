@@ -1,5 +1,8 @@
 """Notification senders for Nodeglow – Telegram, Discord, Webhook, Email.
 
+Microsoft Teams, Slack and ntfy live in ``notification_channels.py``; the
+dispatcher below pulls their send coroutines in from there.
+
 Features:
   - Multi-channel delivery (fire-and-forget, non-blocking)
   - Rate limiting / cooldown to prevent alert fatigue
@@ -221,8 +224,13 @@ def _severity_passes(incident_severity: str, min_severity: str) -> bool:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def notify(title: str, message: str, severity: str = "critical",
-                 channels: list[str] | None = None) -> None:
-    """Send notification to configured channels. If channels is given, only send to those."""
+                 channels: list[str] | None = None,
+                 link_path: str | None = None) -> None:
+    """Send notification to configured channels. If channels is given, only send to those.
+
+    ``link_path`` (e.g. ``/incidents/42``) becomes a link in channels that
+    support one, when the ``public_url`` setting is set.
+    """
     # Rate limit check
     if _is_rate_limited(title):
         logger.debug("Notification rate-limited: %s", title)
@@ -252,6 +260,9 @@ async def notify(title: str, message: str, severity: str = "critical",
         min_sev_webhook  = await get_setting(db, "notify_webhook_min_severity", "all")
         min_sev_email    = await get_setting(db, "notify_email_min_severity", "all")
 
+        from notification_channels import load_config as _load_extra_channels
+        extra_cfg = await _load_extra_channels(db, get_setting, decrypt_value)
+
     channels_list = []  # (name, coroutine) pairs
     color = {"critical": 0xe74c3c, "warning": 0xf39c12, "info": 0x2ecc71}.get(severity, 0x2ecc71)
 
@@ -274,11 +285,19 @@ async def notify(title: str, message: str, severity: str = "critical",
             f"[Nodeglow] {title}", f"{title}\n{message}", html_body,
         )))
 
+    from notification_channels import build_sends as _extra_channel_sends
+    channels_list.extend(_extra_channel_sends(
+        extra_cfg, title, message, severity, link_path=link_path, channels=channels,
+    ))
+
     if not channels_list:
         return
 
     # Filter to requested channels if specified
     if channels:
+        for name, coro in channels_list:
+            if name not in channels:
+                coro.close()  # never awaited: avoid "coroutine was never awaited"
         channels_list = [(name, coro) for name, coro in channels_list if name in channels]
     if not channels_list:
         return

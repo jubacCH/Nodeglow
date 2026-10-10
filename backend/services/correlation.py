@@ -148,6 +148,7 @@ async def _find_or_create_incident(
             f"🔴 Incident: {title}",
             summary,
             severity=severity,
+            link_path=f"/incidents/{incident.id}",
         )
     except Exception as exc:
         log.warning("Failed to send incident notification: %s", exc)
@@ -832,6 +833,7 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
                         f"✅ Resolved: {incident.title}",
                         "Auto-resolved: error rate returned to normal",
                         severity="info",
+                        link_path=f"/incidents/{incident.id}",
                     )
                 except Exception as exc:
                     log.warning("Failed to send resolve notification: %s", exc)
@@ -910,6 +912,7 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
                     f"✅ Resolved: {incident.title}",
                     "Auto-resolved: affected hosts are back online",
                     severity="info",
+                    link_path=f"/incidents/{incident.id}",
                 )
             except Exception as exc:
                 log.warning("Failed to send resolve notification: %s", exc)
