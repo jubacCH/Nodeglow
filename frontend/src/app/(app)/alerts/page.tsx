@@ -17,6 +17,8 @@ import { useSearchParams } from 'next/navigation';
 import { Wrench, Clock, ShieldCheck, Bell, Search } from 'lucide-react';
 import { timeAgo } from '@/lib/utils';
 import { useConfirm } from '@/hooks/useConfirm';
+import { MaintenanceWindowsPanel } from '@/components/maintenance/MaintenanceWindowsPanel';
+import type { MaintenanceWindowRef } from '@/types';
 
 interface MaintenanceHost {
   id: number;
@@ -24,6 +26,8 @@ interface MaintenanceHost {
   hostname: string;
   source: string;
   maintenance: boolean;
+  maintenance_manual?: boolean;
+  maintenance_window?: MaintenanceWindowRef | null;
   maintenance_until?: string | null;
 }
 
@@ -280,6 +284,8 @@ function AlertsPageInner() {
         );
       })()}
 
+      {activeTab === 'maintenance' && <MaintenanceWindowsPanel />}
+
       {activeTab === 'maintenance' && (
         <QueryState
           query={maintQuery}
@@ -297,8 +303,8 @@ function AlertsPageInner() {
             <GlassCard>
               <EmptyState
                 icon={Wrench}
-                title="No maintenance windows"
-                description="Hosts in maintenance mode will appear here."
+                title="No hosts in maintenance"
+                description="Hosts in maintenance — set by hand or by an active window — appear here."
               />
             </GlassCard>
           }
@@ -315,21 +321,30 @@ function AlertsPageInner() {
                       </Link>
                       <p className="text-xs text-slate-500 font-mono">{h.hostname}</p>
                     </div>
-                    {h.maintenance_until && (
+                    {h.maintenance_manual !== false && h.maintenance_until && (
                       <span className="flex items-center gap-1 text-xs text-slate-400">
                         <Clock className="h-3 w-3" />
                         Until {new Date(h.maintenance_until).toLocaleString()}
                       </span>
                     )}
+                    {h.maintenance_window && (
+                      <span className="flex items-center gap-1 text-xs text-amber-300/80">
+                        <Clock className="h-3 w-3" />
+                        {h.maintenance_window.name}
+                        {h.maintenance_window.ends_at && <> · until {new Date(h.maintenance_window.ends_at).toLocaleString()}</>}
+                      </span>
+                    )}
                     <Badge>{h.source}</Badge>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeMaintenance(h.id)}
-                      className="text-xs text-amber-400 hover:text-amber-300"
-                    >
-                      Remove
-                    </Button>
+                    {h.maintenance_manual !== false && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeMaintenance(h.id)}
+                        className="text-xs text-amber-400 hover:text-amber-300"
+                      >
+                        Remove
+                      </Button>
+                    )}
                   </div>
                 </GlassCard>
               ))}

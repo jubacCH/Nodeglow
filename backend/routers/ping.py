@@ -87,6 +87,15 @@ def _heatmap_30d(results_30d: list) -> list[dict]:
     return result
 
 
+def _json_or_none(raw: str | None):
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
 def _uptime_pct(results: list) -> float:
     if not results:
         return 0.0
@@ -124,6 +133,10 @@ async def api_status(db: AsyncSession = Depends(get_db)):
         )
         last_seen_by_host = {int(r["host_id"]): r["last_ok"] for r in rows if r.get("last_ok")}
 
+    from services.maintenance import api_fields, load_windows
+    now = datetime.utcnow()
+    windows = await load_windows(db)
+
     out = []
     for host in hosts:
         lr = latest_by_host.get(host.id)
@@ -133,7 +146,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
             "hostname": host.hostname,
             "ip_address": getattr(host, "ip_address", None),
             "check_type": host.check_type or "icmp",
-            "maintenance": host.maintenance or False,
+            **api_fields(host, now, windows),
             "enabled": host.enabled,
             "source": host.source or "manual",
             "source_detail": host.source_detail,
@@ -141,6 +154,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
             "latency_ms": lr.get("latency_ms") if lr else None,
             "port_error": host.port_error or False,
             "check_detail": json.loads(host.check_detail) if host.check_detail else None,
+            "check_errors": _json_or_none(host.check_errors),
             "uptime_h24": up_24h.get(host.id, {}).get("uptime_pct"),
             "uptime_d7":  up_7d.get(host.id, {}).get("uptime_pct"),
             "uptime_d30": up_30d.get(host.id, {}).get("uptime_pct"),
@@ -158,8 +172,10 @@ async def test_ping(host_id: int, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
     if not host:
         return {"success": False, "error": "Host not found"}
-    ok, port_error, latency, detail = await check_host(host)
-    return {"success": ok, "port_error": port_error, "latency_ms": latency, "check_detail": detail}
+    res = await check_host(host)
+    ok, port_error, latency, detail = res
+    return {"success": ok, "port_error": port_error, "latency_ms": latency, "check_detail": detail,
+            "check_errors": getattr(res, "errors", None) or None}
 
 
 
@@ -185,9 +201,12 @@ async def ping_check_now(host_id: int, db: AsyncSession = Depends(get_db)):
         latency = 0 if success else None
     else:
         import json as _json
-        success, port_err, latency, detail = await check_host(host)
+        res = await check_host(host)
+        success, port_err, latency, detail = res
         host.port_error = port_err
         host.check_detail = _json.dumps(detail) if detail else None
+        errs = getattr(res, "errors", None)
+        host.check_errors = _json.dumps(errs, sort_keys=True) if errs else None
 
     if host.source != "agent":
         await db.commit()  # persist port_error / check_detail
@@ -250,11 +269,17 @@ async def api_create_host(request: Request, db: AsyncSession = Depends(get_db)):
     host_err = await validate_host_async(hostname)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
+    from utils import http_options as http_opts
+    try:
+        clean_http = await http_opts.normalize_checked(body.get("http_options"))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     host = PingHost(
         name=name,
         hostname=hostname,
         check_type=check_type,
         port=int(port_str) if port_str else None,
+        http_options=http_opts.dump(clean_http),
     )
     db.add(host)
     await db.commit()
@@ -491,6 +516,7 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         host.check_type = ",".join(sorted(existing_types)) or "icmp"
         host.port_error = False
         host.check_detail = None
+        host.check_errors = None
         dp.status = "new"
         _reset_port_streaks(host.id)
         await log_action(db, request, "host.unmonitor.port", "host", host.id,
@@ -518,6 +544,7 @@ async def update_discovered_port(host_id: int, port_id: int, request: Request,
         host.check_type = ",".join(sorted(existing_types)) or "icmp"
         host.port_error = False
         host.check_detail = None
+        host.check_errors = None
         dp.ssl_status = "new"
         _reset_port_streaks(host.id)
         await log_action(db, request, "host.unmonitor.ssl", "host", host.id,

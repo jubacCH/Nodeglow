@@ -521,9 +521,11 @@ async def _probe_assignments(probe_id: int) -> list[dict]:
             select(PingHost).where(
                 PingHost.probe_id == probe_id,
                 PingHost.enabled == True,  # noqa: E712
-                PingHost.maintenance == False,  # noqa: E712
             )
         )).scalars().all()
+        # Manual flag or an active maintenance window.
+        from services.maintenance import without_maintenance
+        hosts = await without_maintenance(db, list(hosts))
 
     return [{
         "host_id": h.id,
