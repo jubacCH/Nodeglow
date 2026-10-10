@@ -369,6 +369,7 @@ export default function SettingsPage() {
   const [ldapSaving, setLdapSaving] = useState(false);
   const [ldapTesting, setLdapTesting] = useState(false);
   const [ldapTestResult, setLdapTestResult] = useState<{ ok: boolean; error?: string; users_found?: number } | null>(null);
+  const [ldapWarnings, setLdapWarnings] = useState<string[]>([]);
 
   /* ---- API keys state ---- */
   const [createKeyModal, setCreateKeyModal] = useState(false);
@@ -1955,8 +1956,13 @@ export default function SettingsPage() {
                           fd.append('ldap_use_ssl', ldapUseSsl ? '1' : '0');
                           fd.append('ldap_start_tls', ldapStartTls ? '1' : '0');
                           fd.append('ldap_tls_verify', ldapTlsVerify ? '1' : '0');
-                          await api('/settings/ldap/save', { method: 'POST', body: fd });
-                          toast.show('LDAP settings saved', 'success');
+                          const saved = await api<{ ok: boolean; warnings?: string[] }>('/settings/ldap/save', { method: 'POST', body: fd });
+                          const warnings = saved?.warnings ?? [];
+                          setLdapWarnings(warnings);
+                          toast.show(
+                            warnings.length ? 'LDAP settings saved — connection is unencrypted' : 'LDAP settings saved',
+                            warnings.length ? 'warning' : 'success',
+                          );
                           qc.invalidateQueries({ queryKey: ['settings'] });
                         } catch {
                           toast.show('Failed to save LDAP settings', 'error');
@@ -1989,7 +1995,8 @@ export default function SettingsPage() {
                           fd.append('ldap_use_ssl', ldapUseSsl ? '1' : '0');
                           fd.append('ldap_start_tls', ldapStartTls ? '1' : '0');
                           fd.append('ldap_tls_verify', ldapTlsVerify ? '1' : '0');
-                          await api('/settings/ldap/save', { method: 'POST', body: fd });
+                          const saved = await api<{ ok: boolean; warnings?: string[] }>('/settings/ldap/save', { method: 'POST', body: fd });
+                          setLdapWarnings(saved?.warnings ?? []);
                           const res = await post<{ ok: boolean; error?: string; users_found?: number }>('/settings/ldap/test', {});
                           setLdapTestResult(res);
                         } catch {
@@ -2002,6 +2009,18 @@ export default function SettingsPage() {
                       {ldapTesting ? 'Testing...' : 'Test Connection'}
                     </Button>
                   </div>
+
+                  {/* Transport warnings from the last save */}
+                  {ldapWarnings.length > 0 && (
+                    <div className="p-3 rounded-lg text-sm bg-amber-500/10 border border-amber-500/20 text-amber-300 space-y-1">
+                      {ldapWarnings.map((w) => (
+                        <div key={w} className="flex items-start gap-2">
+                          <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                          <span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Test result */}
                   {ldapTestResult && (

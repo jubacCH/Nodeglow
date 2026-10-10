@@ -1,4 +1,6 @@
 """LDAP authentication settings — save config, test connection."""
+import logging
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,7 @@ from services.audit import log_action
 
 from ._helpers import require_admin
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -58,7 +61,31 @@ async def save_ldap_settings(
 
     await log_action(db, request, "settings.update", "setting", target_name="ldap")
     await db.commit()
-    return JSONResponse({"ok": True})
+
+    warnings = ldap_transport_warnings(
+        server=ldap_server.strip(),
+        use_ssl=ldap_use_ssl in ("1", "true"),
+        start_tls=ldap_start_tls in ("1", "true"),
+    )
+    for w in warnings:
+        logger.warning("LDAP settings saved with an insecure transport: %s", w)
+    body: dict = {"ok": True}
+    if warnings:
+        body["warnings"] = warnings
+    return JSONResponse(body)
+
+
+def ldap_transport_warnings(server: str, use_ssl: bool, start_tls: bool) -> list[str]:
+    """Warnings about an LDAP transport that sends bind passwords in clear."""
+    if not server:
+        return []
+    if use_ssl or start_tls or server.lower().startswith("ldaps://"):
+        return []
+    return [
+        "LDAP connection is unencrypted (ldap:// without LDAPS or StartTLS): "
+        "the service account password and every user's login password are "
+        "sent in plaintext. Enable LDAPS or StartTLS."
+    ]
 
 
 @router.post("/ldap/test")
