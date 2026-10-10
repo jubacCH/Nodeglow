@@ -303,6 +303,7 @@ async def tasks_api():
 
 
 _MUTATING_METHODS = ("POST", "PUT", "DELETE", "PATCH")
+SESSION_COOKIE = "nodeglow_session"
 
 # Paths that skip the middleware's auth entirely. Each one authenticates by
 # other means (agent/install tokens, the login itself) or is a probe.
@@ -341,10 +342,17 @@ async def inject_globals(request: Request, call_next):
     # victim's cookie gains nothing when the cookie is ignored.
     has_api_key = bool(request.headers.get("X-API-Key"))
 
-    # CSRF protection for state-changing methods
-    # Skip for: API-key-authenticated requests, /api/v1/ (has own API key auth layer).
-    # Header-only — query-string keys are rejected by the auth layer anyway.
-    if is_mutating and not has_api_key and not is_api_v1:
+    # CSRF protection for state-changing methods. Skipped only for requests
+    # authenticated by X-API-Key (header-only — query-string keys are rejected
+    # by the auth layer anyway). /api/v1/ is no exception: the frontend calls
+    # it with the session cookie, and SameSite=Strict must not be the only
+    # thing standing between a forged request and an admin session. A /api/v1
+    # request without a session cookie carries no ambient authority, so it is
+    # left to the auth layer (401) instead of failing CSRF.
+    csrf_required = is_mutating and not has_api_key and (
+        not is_api_v1 or SESSION_COOKIE in request.cookies
+    )
+    if csrf_required:
         content_type = request.headers.get("content-type", "")
         form_data = None
         if "form" in content_type:

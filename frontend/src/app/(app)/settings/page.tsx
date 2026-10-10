@@ -2166,14 +2166,8 @@ export default function SettingsPage() {
                 try {
                   const text = await file.text();
                   const data = JSON.parse(text);
-                  const res = await fetch('/api/v1/backup/restore', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify(data),
-                  });
-                  if (!res.ok) throw new Error('Restore failed');
-                  const result = await res.json();
+                  // Through api(): it sends the CSRF token the backend requires.
+                  const result = await post<{ total_rows: number }>('/api/v1/backup/restore', data);
                   toast.show(`Restored ${result.total_rows} rows successfully`, 'success');
                   qc.invalidateQueries({ queryKey: ['backup-info'] });
                 } catch {
