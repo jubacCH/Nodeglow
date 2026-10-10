@@ -1,16 +1,24 @@
 'use client';
 
-import { PageHeader } from '@/components/layout/PageHeader';
-import { GlassCard } from '@/components/ui/GlassCard';
-import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, post } from '@/lib/api';
-import { ShieldCheck, RefreshCw, ChevronDown, ChevronUp, Lock, Key, FileText, Globe } from 'lucide-react';
-import { ExportButton } from '@/components/ui/ExportButton';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileText, Globe, Key, Lock, RefreshCw, ShieldCheck } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Card } from '@/components/ui/Card';
+import { Button, buttonClasses } from '@/components/ui/Button';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { BigNumber } from '@/components/ui/BigNumber';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Tag } from '@/components/ui/Tag';
+import { SidePanel, PanelSection } from '@/components/ui/SidePanel';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { QueryState, QueryErrorState, formatAsOf } from '@/components/ui/QueryState';
+import { TableContainer, Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
+import { ExportButton } from '@/components/ui/ExportButton';
+import { get, post, apiErrorMessage } from '@/lib/api';
+import type { HealthState } from '@/lib/status';
+import { useToastStore } from '@/stores/toast';
 
 interface SslCert {
   id: number | null;
@@ -48,59 +56,82 @@ interface SslDetail {
   port?: number;
 }
 
-function expiryBadge(days: number | null): { severity: 'critical' | 'warning' | 'info'; label: string } {
-  if (days === null) return { severity: 'warning', label: 'Unknown' };
-  if (days <= 7) return { severity: 'critical', label: `${days}d` };
-  if (days <= 30) return { severity: 'warning', label: `${days}d` };
-  return { severity: 'info', label: `${days}d` };
+/** Expiry thresholds: ≤ 7 days (or expired) is down, ≤ 30 days a warning. */
+function expiryState(c: Pick<SslCert, 'days' | 'enabled'>): { status: HealthState | 'disabled'; label: string } {
+  if (c.enabled === false) return { status: 'disabled', label: 'Paused' };
+  if (c.days === null || c.days === undefined) return { status: 'unknown', label: 'No data' };
+  if (c.days < 0) return { status: 'down', label: 'Expired' };
+  if (c.days <= 7) return { status: 'down', label: '≤ 7 days' };
+  if (c.days <= 30) return { status: 'warning', label: '≤ 30 days' };
+  return { status: 'ok', label: 'Valid' };
 }
 
-function expiryColor(days: number | null): string {
-  if (days === null) return 'text-slate-500';
-  if (days <= 7) return 'text-red-400';
-  if (days <= 30) return 'text-amber-400';
-  return 'text-emerald-400';
+function daysText(days: number | null) {
+  if (days === null) return '—';
+  if (days < 0) return `${Math.abs(days)} d ago`;
+  return `${days} d`;
 }
+
+type SortDir = 'asc' | 'desc';
 
 export default function SslPage() {
-  useEffect(() => { document.title = 'SSL | Nodeglow'; }, []);
+  useEffect(() => { document.title = 'Certificates | Nodeglow'; }, []);
   const qc = useQueryClient();
+  const toast = useToastStore((s) => s.show);
   const [refreshing, setRefreshing] = useState(false);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const { data, isLoading } = useQuery({
+  const [selected, setSelected] = useState<SslCert | null>(null);
+  const [sort, setSort] = useState<SortDir>('asc');
+  const query = useQuery({
     queryKey: ['ssl-certs'],
     queryFn: () => get<SslData>('/api/ssl/certs'),
   });
+  const { data } = query;
 
-  const certs = data?.certs ?? [];
-  const expiringSoon = data?.expiring_soon ?? 0;
+  const certs = useMemo(() => data?.certs ?? [], [data]);
+  // Most urgent first; certificates without data at the end either way.
+  const sorted = useMemo(() => {
+    const dir = sort === 'asc' ? 1 : -1;
+    return [...certs].sort((a, b) => {
+      if (a.days === null && b.days === null) return a.name.localeCompare(b.name);
+      if (a.days === null) return 1;
+      if (b.days === null) return -1;
+      return (a.days - b.days) * dir;
+    });
+  }, [certs, sort]);
+
+  const counts = useMemo(() => {
+    const c = { critical: 0, warning: 0, ok: 0, unknown: 0 };
+    for (const cert of certs) {
+      const s = expiryState(cert).status;
+      if (s === 'down') c.critical += 1;
+      else if (s === 'warning') c.warning += 1;
+      else if (s === 'ok') c.ok += 1;
+      else c.unknown += 1;
+    }
+    return c;
+  }, [certs]);
 
   async function refreshAll() {
     setRefreshing(true);
     try {
       await post('/api/ssl/refresh-all');
       qc.invalidateQueries({ queryKey: ['ssl-certs'] });
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Failed to refresh certificates'), 'error');
     } finally {
       setRefreshing(false);
     }
   }
 
-  function toggle(id: number) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const asOf = formatAsOf(query.dataUpdatedAt);
 
   return (
     <div>
       <PageHeader
-        title="SSL Certificates"
-        description="Certificate expiry monitoring"
+        title="Certificates"
+        description={`TLS certificate expiry for HTTPS hosts and integrations${asOf ? ` · checked ${asOf}` : ''}`}
         actions={
-          <div className="flex items-center gap-2">
+          <>
             {certs.length > 0 && (
               <ExportButton
                 data={certs.map(c => ({ name: c.name, hostname: c.hostname, days_until_expiry: c.days }))}
@@ -112,152 +143,136 @@ export default function SslPage() {
                 ]}
               />
             )}
-            <Button variant="ghost" size="sm" onClick={refreshAll} disabled={refreshing}>
-              <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-              {refreshing ? 'Refreshing...' : 'Refresh All'}
+            <Button variant="secondary" size="sm" onClick={refreshAll} loading={refreshing}>
+              {!refreshing && <RefreshCw size={14} aria-hidden="true" />}
+              {refreshing ? 'Refreshing…' : 'Refresh all'}
             </Button>
-          </div>
+          </>
         }
       />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-        <GlassCard className="p-4 text-center">
-          <p className="text-2xl font-semibold text-slate-100">{certs.length}</p>
-          <p className="text-xs text-slate-400 mt-1">HTTPS Hosts</p>
-        </GlassCard>
-        <GlassCard className="p-4 text-center">
-          <p className={`text-2xl font-semibold ${expiringSoon > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-            {expiringSoon}
-          </p>
-          <p className="text-xs text-slate-400 mt-1">Expiring Soon (&le;30d)</p>
-        </GlassCard>
-        <GlassCard className="p-4 text-center">
-          <p className="text-2xl font-semibold text-emerald-400">
-            {certs.filter(c => c.days !== null && c.days > 30).length}
-          </p>
-          <p className="text-xs text-slate-400 mt-1">Healthy</p>
-        </GlassCard>
+      <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+        <Card padding="sm">
+          <BigNumber size="sm" value={data ? counts.critical : undefined} state={counts.critical ? 'down' : undefined} label="Expired or ≤ 7 days" />
+        </Card>
+        <Card padding="sm">
+          <BigNumber size="sm" value={data ? counts.warning : undefined} state={counts.warning ? 'warning' : undefined} label="Expiring ≤ 30 days" />
+        </Card>
+        <Card padding="sm">
+          <BigNumber size="sm" value={data ? counts.ok : undefined} label="Valid > 30 days" />
+        </Card>
+        <Card padding="sm">
+          <BigNumber size="sm" value={data ? counts.unknown : undefined} label="No data or paused" />
+        </Card>
       </div>
 
-      <GlassCard>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06]">
-                <th className="w-8 px-2 py-3" />
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Host</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Hostname</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase">Source</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase">Expiry</th>
-                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 uppercase">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading &&
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i} className="border-b border-white/[0.06]">
-                    <td className="px-2 py-3" />
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-32" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-40" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-16 ml-auto" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-5 w-20 mx-auto" /></td>
-                  </tr>
-                ))}
-              {certs.map((c, idx) => {
-                const badge = expiryBadge(c.days);
-                const isHost = c.source === 'host' && c.id != null;
-                const isExpanded = isHost && expanded.has(c.id!);
-                const uniqueKey = isHost ? `host-${c.id}` : `int-${idx}`;
-                return (
-                  <>
-                    <tr
-                      key={uniqueKey}
-                      className={`border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors ${isHost ? 'cursor-pointer' : ''}`}
-                      onClick={isHost ? () => toggle(c.id!) : undefined}
-                    >
-                      <td className="px-2 py-3 text-slate-500">
-                        {isHost ? (isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : null}
-                      </td>
-                      <td className="px-4 py-3">
-                        {isHost ? (
-                          <Link
-                            prefetch={false} href={`/hosts/${c.id}`}
-                            className="flex items-center gap-2 text-slate-200 hover:text-sky-400"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ShieldCheck size={14} className={expiryColor(c.days)} />
-                            {c.name}
-                          </Link>
-                        ) : (
-                          <span className="flex items-center gap-2 text-slate-200">
-                            <ShieldCheck size={14} className={expiryColor(c.days)} />
-                            {c.name}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{c.hostname}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          {c.source === 'host' ? (
-                            <span className="text-xs text-slate-500">HTTPS Host</span>
+      <Card padding="none">
+        <QueryState
+          query={{ ...query, data: data ? sorted : undefined }}
+          errorTitle="Could not load certificates"
+          loading={
+            <div className="space-y-3 p-5" aria-busy="true" aria-label="Loading certificates">
+              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-7 w-full" />)}
+            </div>
+          }
+          empty={
+            <EmptyState
+              icon={ShieldCheck}
+              title="No certificates monitored"
+              description="Add an HTTPS check to a host, or connect an integration that reports certificates."
+              action={<Link href="/hosts" className={buttonClasses({ variant: 'secondary', size: 'sm' })}>Go to hosts</Link>}
+            />
+          }
+        >
+          {(rows) => (
+            <TableContainer>
+              <Table className="min-w-[720px]">
+                <THead>
+                  <Tr>
+                    <Th>Status</Th>
+                    <Th>Name</Th>
+                    <Th>Hostname</Th>
+                    <Th>Source</Th>
+                    <Th numeric sort={sort} onSort={() => setSort((s) => (s === 'asc' ? 'desc' : 'asc'))}>Expires in</Th>
+                  </Tr>
+                </THead>
+                <TBody>
+                  {rows.map((c, idx) => {
+                    const st = expiryState(c);
+                    const isHost = c.source === 'host' && c.id != null;
+                    return (
+                      <Tr key={isHost ? `host-${c.id}` : `int-${idx}`} selected={selected === c}>
+                        <Td><StatusPill status={st.status}>{st.label}</StatusPill></Td>
+                        <Td className="max-w-[260px]">
+                          {isHost ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelected(c)}
+                              className="block max-w-full truncate text-left font-medium text-fg hover:text-accent"
+                              aria-label={`Certificate details for ${c.name}`}
+                            >
+                              {c.name}
+                            </button>
                           ) : (
-                            <>
-                              <span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] font-medium text-slate-300">
-                                {c.source_label || c.source || ''}
-                              </span>
-                              {c.provider && (
-                                <span className="text-[10px] text-slate-500">{c.provider}</span>
-                              )}
-                            </>
+                            <span className="block truncate text-fg">{c.name}</span>
                           )}
-                        </div>
-                      </td>
-                      <td className={`px-4 py-3 text-right font-mono ${expiryColor(c.days)}`}>
-                        {c.days !== null ? c.days : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <Badge variant="severity" severity={badge.severity}>
-                          {badge.label}
-                        </Badge>
-                      </td>
-                    </tr>
-                    {isExpanded && (
-                      <tr key={`detail-${c.id}`} className="border-b border-white/[0.06]">
-                        <td colSpan={6} className="p-0">
-                          <CertDetail hostId={c.id!} />
-                        </td>
-                      </tr>
-                    )}
-                  </>
-                );
-              })}
-              {!isLoading && certs.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
-                    No HTTPS hosts configured
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </GlassCard>
+                        </Td>
+                        <Td className="max-w-[260px] truncate font-mono text-meta text-fg-2">{c.hostname}</Td>
+                        <Td>
+                          {c.source === 'host' ? (
+                            <span className="text-meta text-fg-2">HTTPS host</span>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <Tag>{c.source_label || c.source || 'Integration'}</Tag>
+                              {c.provider && <span className="text-meta text-fg-3">{c.provider}</span>}
+                            </div>
+                          )}
+                        </Td>
+                        <Td numeric className={st.status === 'down' ? 'text-down' : st.status === 'warning' ? 'text-warning' : c.days === null ? 'text-fg-3' : undefined}>
+                          {daysText(c.days)}
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableContainer>
+          )}
+        </QueryState>
+      </Card>
+
+      <SidePanel
+        open={selected !== null}
+        onClose={() => setSelected(null)}
+        title={selected?.name ?? 'Certificate'}
+        ariaLabel={`Certificate ${selected?.name ?? ''}`}
+        icon={<ShieldCheck size={18} className="text-fg-2" aria-hidden="true" />}
+        meta={selected ? <span className="font-mono">{selected.hostname}</span> : undefined}
+        footer={
+          selected?.id != null ? (
+            <Link prefetch={false} href={`/hosts/${selected.id}`} className={buttonClasses({ variant: 'secondary' })}>
+              Open host
+            </Link>
+          ) : undefined
+        }
+      >
+        {selected?.id != null && <CertDetail hostId={selected.id} />}
+      </SidePanel>
     </div>
   );
 }
 
 function CertDetail({ hostId }: { hostId: number }) {
-  const { data, isLoading } = useQuery<SslDetail>({
+  const query = useQuery<SslDetail>({
     queryKey: ['ssl-detail', hostId],
     queryFn: () => get(`/api/ssl/detail/${hostId}`),
     staleTime: 5 * 60_000,
   });
+  const { data, isLoading } = query;
 
   if (isLoading) {
     return (
-      <div className="px-6 py-4 bg-white/[0.02] space-y-2">
+      <div className="space-y-2" aria-busy="true" aria-label="Loading certificate">
         <Skeleton className="h-4 w-64" />
         <Skeleton className="h-4 w-48" />
         <Skeleton className="h-4 w-56" />
@@ -265,123 +280,104 @@ function CertDetail({ hostId }: { hostId: number }) {
     );
   }
 
+  if (query.isError) {
+    return <QueryErrorState compact error={query.error} onRetry={query.refetch} title="Could not load certificate details" />;
+  }
+
   if (!data || !data.ok) {
     return (
-      <div className="px-6 py-4 bg-white/[0.02]">
-        <p className="text-sm text-red-400">
-          Failed to fetch certificate details{data?.error ? `: ${data.error}` : ''}
-        </p>
-      </div>
+      <p role="alert" className="rounded-ctl border border-down/30 bg-down-soft px-3 py-2 text-ui text-down">
+        Failed to fetch certificate details{data?.error ? `: ${data.error}` : ''}
+      </p>
     );
   }
 
+  const st = data.days != null ? expiryState({ days: data.days, enabled: true }) : null;
+
   return (
-    <div className="px-6 py-4 bg-white/[0.02]">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
-        {/* Subject */}
-        <div>
-          <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Globe size={12} /> Subject
-          </h4>
-          <div className="space-y-1">
-            <DetailRow label="Common Name" value={data.subject_cn} mono />
-            {data.subject_o && <DetailRow label="Organization" value={data.subject_o} />}
-            {data.subject && data.subject !== data.subject_cn && (
-              <DetailRow label="Full" value={data.subject} small />
-            )}
-          </div>
+    <div className="space-y-5">
+      {st && (
+        <div className="flex items-center gap-2">
+          <StatusPill status={st.status}>{st.label}</StatusPill>
+          <span className="text-ui text-fg-2">{data.days != null && data.days >= 0 ? `${data.days} days remaining` : 'Certificate has expired'}</span>
         </div>
+      )}
 
-        {/* Issuer */}
-        <div>
-          <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Lock size={12} /> Issuer
-          </h4>
-          <div className="space-y-1">
-            <DetailRow label="Common Name" value={data.issuer_cn} mono />
-            {data.issuer_o && <DetailRow label="Organization" value={data.issuer_o} />}
-            {data.issuer && data.issuer !== data.issuer_cn && (
-              <DetailRow label="Full" value={data.issuer} small />
-            )}
-          </div>
-        </div>
+      <PanelSection title={<span className="inline-flex items-center gap-1.5"><Globe size={13} aria-hidden="true" /> Subject</span>}>
+        <dl className="space-y-1.5">
+          <DetailRow label="Common name" value={data.subject_cn} mono />
+          {data.subject_o && <DetailRow label="Organization" value={data.subject_o} />}
+          {data.subject && data.subject !== data.subject_cn && <DetailRow label="Full" value={data.subject} small />}
+        </dl>
+      </PanelSection>
 
-        {/* Validity */}
-        <div>
-          <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <FileText size={12} /> Validity
-          </h4>
-          <div className="space-y-1">
-            <DetailRow label="Not Before" value={data.issued_date} />
-            <DetailRow label="Not After" value={data.expiry_date} highlight={data.days != null && data.days <= 30} />
-            {data.days != null && (
-              <DetailRow
-                label="Remaining"
-                value={`${data.days} days`}
-                highlight={data.days <= 30}
-              />
-            )}
-          </div>
-        </div>
+      <PanelSection title={<span className="inline-flex items-center gap-1.5"><Lock size={13} aria-hidden="true" /> Issuer</span>}>
+        <dl className="space-y-1.5">
+          <DetailRow label="Common name" value={data.issuer_cn} mono />
+          {data.issuer_o && <DetailRow label="Organization" value={data.issuer_o} />}
+          {data.issuer && data.issuer !== data.issuer_cn && <DetailRow label="Full" value={data.issuer} small />}
+        </dl>
+      </PanelSection>
 
-        {/* Technical */}
-        <div>
-          <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Key size={12} /> Technical
-          </h4>
-          <div className="space-y-1">
-            {data.signature_algorithm && <DetailRow label="Signature" value={data.signature_algorithm} />}
-            {data.key_size && <DetailRow label="Key Size" value={`${data.key_size} bit`} />}
-            {data.port && <DetailRow label="Port" value={String(data.port)} />}
-            {data.serial && <DetailRow label="Serial" value={data.serial} mono small />}
-            {data.fingerprint && <DetailRow label="Fingerprint" value={data.fingerprint} mono small />}
-          </div>
-        </div>
-      </div>
+      <PanelSection title={<span className="inline-flex items-center gap-1.5"><FileText size={13} aria-hidden="true" /> Validity</span>}>
+        <dl className="space-y-1.5">
+          <DetailRow label="Not before" value={data.issued_date} />
+          <DetailRow
+            label="Not after"
+            value={data.expiry_date}
+            tone={st?.status === 'down' ? 'down' : st?.status === 'warning' ? 'warning' : undefined}
+          />
+        </dl>
+      </PanelSection>
 
-      {/* SANs */}
+      <PanelSection title={<span className="inline-flex items-center gap-1.5"><Key size={13} aria-hidden="true" /> Technical</span>}>
+        <dl className="space-y-1.5">
+          {data.signature_algorithm && <DetailRow label="Signature" value={data.signature_algorithm} />}
+          {data.key_size && <DetailRow label="Key size" value={`${data.key_size} bit`} />}
+          {data.port && <DetailRow label="Port" value={String(data.port)} />}
+          {data.serial && <DetailRow label="Serial" value={data.serial} mono small />}
+          {data.fingerprint && <DetailRow label="Fingerprint" value={data.fingerprint} mono small />}
+        </dl>
+      </PanelSection>
+
       {data.sans && data.sans.length > 0 && (
-        <div className="mt-4">
-          <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Globe size={12} /> Subject Alternative Names ({data.sans.length})
-          </h4>
-          <div className="flex flex-wrap gap-1.5">
+        <PanelSection title={`Subject alternative names (${data.sans.length})`}>
+          <ul className="flex flex-wrap gap-1.5">
             {data.sans.map((san, i) => (
-              <span key={i} className="px-2 py-0.5 rounded-md bg-white/[0.04] text-xs font-mono text-slate-300 border border-white/[0.06]">
+              <li key={i} className="rounded-chip border border-border bg-surface-2 px-2 py-0.5 font-mono text-meta text-fg">
                 {san}
-              </span>
+              </li>
             ))}
-          </div>
-        </div>
+          </ul>
+        </PanelSection>
       )}
     </div>
   );
 }
 
 function DetailRow({
-  label,
-  value,
-  mono,
-  small,
-  highlight,
+  label, value, mono, small, tone,
 }: {
   label: string;
   value?: string | null;
   mono?: boolean;
   small?: boolean;
-  highlight?: boolean;
-}) {
+  tone?: 'down' | 'warning';
+}): ReactNode {
   if (!value) return null;
   return (
-    <div className="flex items-start gap-2">
-      <span className="text-[10px] text-slate-500 uppercase w-24 shrink-0 pt-0.5">{label}</span>
-      <span
-        className={`text-xs break-all ${
-          highlight ? 'text-amber-400' : 'text-slate-300'
-        } ${mono ? 'font-mono' : ''} ${small ? 'text-[11px] text-slate-400' : ''}`}
+    <div className="flex items-start gap-3">
+      <dt className="w-28 shrink-0 text-meta text-fg-3">{label}</dt>
+      <dd
+        className={[
+          'min-w-0 break-all',
+          small ? 'text-meta' : 'text-ui',
+          tone === 'down' ? 'text-down' : tone === 'warning' ? 'text-warning' : small ? 'text-fg-2' : 'text-fg',
+          mono ? 'font-mono' : '',
+        ].join(' ')}
       >
         {value}
-      </span>
+      </dd>
     </div>
   );
 }
