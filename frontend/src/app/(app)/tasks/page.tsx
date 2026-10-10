@@ -226,7 +226,7 @@ export default function TasksPage() {
                 {newPorts.map((p) => (
                   <tr key={`port-${p.id}`} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
                     <td className="px-4 py-3">
-                      <Link href={`/hosts/${p.host_id}`} className="flex items-center gap-1.5 text-slate-200 hover:text-sky-400 transition-colors">
+                      <Link prefetch={false} href={`/hosts/${p.host_id}`} className="flex items-center gap-1.5 text-slate-200 hover:text-sky-400 transition-colors">
                         {p.host_name}
                         <ExternalLink size={11} className="text-slate-500" />
                       </Link>
@@ -338,7 +338,7 @@ export default function TasksPage() {
                 {newSsl.map((s) => (
                   <tr key={`ssl-${s.id}`} className="border-b border-white/[0.06] hover:bg-white/[0.06] transition-colors">
                     <td className="px-4 py-3">
-                      <Link href={`/hosts/${s.host_id}`} className="flex items-center gap-1.5 text-slate-200 hover:text-sky-400 transition-colors">
+                      <Link prefetch={false} href={`/hosts/${s.host_id}`} className="flex items-center gap-1.5 text-slate-200 hover:text-sky-400 transition-colors">
                         {s.host_name}
                         <ExternalLink size={11} className="text-slate-500" />
                       </Link>
@@ -422,7 +422,7 @@ export default function TasksPage() {
                 {resolvedPorts.map((p) => (
                   <tr key={`rp-${p.id}`} className="border-b border-white/[0.06]">
                     <td className="px-4 py-3">
-                      <Link href={`/hosts/${p.host_id}`} className="text-xs text-slate-400 hover:text-sky-400 transition-colors">
+                      <Link prefetch={false} href={`/hosts/${p.host_id}`} className="text-xs text-slate-400 hover:text-sky-400 transition-colors">
                         {p.host_name}
                       </Link>
                     </td>
@@ -435,7 +435,7 @@ export default function TasksPage() {
                 {resolvedSsl.map((s) => (
                   <tr key={`rs-${s.id}`} className="border-b border-white/[0.06]">
                     <td className="px-4 py-3">
-                      <Link href={`/hosts/${s.host_id}`} className="text-xs text-slate-400 hover:text-sky-400 transition-colors">
+                      <Link prefetch={false} href={`/hosts/${s.host_id}`} className="text-xs text-slate-400 hover:text-sky-400 transition-colors">
                         {s.host_name}
                       </Link>
                     </td>

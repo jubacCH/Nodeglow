@@ -120,7 +120,7 @@ export default function DigestPage() {
               {data.hosts.worst.map((h) => (
                 <Link
                   key={h.id}
-                  href={`/hosts/${h.id}`}
+                  prefetch={false} href={`/hosts/${h.id}`}
                   className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-white/[0.04] transition-colors"
                 >
                   <span className="text-sm text-slate-200 flex-1 truncate">{h.name}</span>

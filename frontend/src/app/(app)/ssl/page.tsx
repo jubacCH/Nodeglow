@@ -183,7 +183,7 @@ export default function SslPage() {
                       <td className="px-4 py-3">
                         {isHost ? (
                           <Link
-                            href={`/hosts/${c.id}`}
+                            prefetch={false} href={`/hosts/${c.id}`}
                             className="flex items-center gap-2 text-slate-200 hover:text-sky-400"
                             onClick={(e) => e.stopPropagation()}
                           >

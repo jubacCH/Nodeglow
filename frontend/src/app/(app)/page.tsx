@@ -252,7 +252,7 @@ export default function DashboardPage() {
               {data?.host_stats?.slice(0, 20).map((h) => (
                 <Link
                   key={h.host.id}
-                  href={`/hosts/${h.host.id}`}
+                  prefetch={false} href={`/hosts/${h.host.id}`}
                   className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                 >
                   <StatusDot status={h.host.maintenance ? 'maintenance' : h.online === null ? 'unknown' : h.online === false ? 'offline' : h.host.port_error ? 'error' : 'online'} />
@@ -364,7 +364,7 @@ export default function DashboardPage() {
                 return (
                   <Link
                     key={h.host_id}
-                    href={`/hosts/${h.host_id}`}
+                    prefetch={false} href={`/hosts/${h.host_id}`}
                     className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-white/[0.04] transition-colors relative overflow-hidden"
                   >
                     <div className={`absolute inset-0 ${barColor}`} style={{ width: `${pct}%` }} />
@@ -391,7 +391,7 @@ export default function DashboardPage() {
                 return (
                   <Link
                     key={h.id}
-                    href={`/hosts/${h.id}`}
+                    prefetch={false} href={`/hosts/${h.id}`}
                     className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                   >
                     <span className="text-xs text-slate-500 w-4 text-right">{i + 1}</span>
@@ -615,7 +615,7 @@ export default function DashboardPage() {
                 return cert.host_id ? (
                   <Link
                     key={`host-${cert.host_id}`}
-                    href={`/hosts/${cert.host_id}`}
+                    prefetch={false} href={`/hosts/${cert.host_id}`}
                     className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors"
                   >
                     {inner}
