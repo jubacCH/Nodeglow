@@ -39,7 +39,17 @@ _limiter = RateLimiter()
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extract client IP from the direct connection (ignore X-Forwarded-For to prevent spoofing)."""
+    """The client's IP as uvicorn resolved it.
+
+    Never read X-Forwarded-For here: uvicorn runs with ``--proxy-headers`` and
+    rewrites ``request.client`` from that header only when the direct peer is
+    in ``FORWARDED_ALLOW_IPS`` (the frontend proxy, see backend/Dockerfile).
+    Parsing the header ourselves would trust it from anyone.
+
+    Before that was configured every request appeared to come from the
+    frontend container, so these per-IP limits were in effect global: one
+    noisy client throttled everybody.
+    """
     return request.client.host if request.client else "unknown"
 
 
