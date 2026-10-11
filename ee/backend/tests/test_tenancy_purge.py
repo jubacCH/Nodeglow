@@ -1,6 +1,6 @@
 """Purge of a deleted tenant (owner decision 6): every PostgreSQL row of it
 (all tenant-owned tables, children first), its memberships and the users of
-only this tenant, its ClickHouse rows; resumable, audited, crypto-shred hook.
+only this tenant, its ClickHouse rows; resumable, audited, crypto-shred of its data keys first.
 
 Seed: the isolation suite's — one row of every tenant-owned table in tenant
 A (1) and B (2). B is purged; A must be byte-for-byte unchanged. Runs on
@@ -10,8 +10,6 @@ PostgreSQL mode.
 from __future__ import annotations
 
 import re
-import sys
-import types
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -143,7 +141,7 @@ async def test_purge_removes_every_row_of_the_tenant_and_nothing_else(env):
         with system_scope("test", audit=False):
             [row] = (await s.execute(select(AuditLog).where(AuditLog.action == "tenant.purged"))).scalars().all()
     assert row.tenant_id is None and row.target_id == B
-    assert report["users_deleted"] == 1 and report["crypto_shred"] == "unavailable"
+    assert report["users_deleted"] == 1 and report["crypto_shred"] == "destroyed"
     assert all(report["postgres"][t.name] >= 1 for t in tenant_tables())
     # ClickHouse: one scoped count and one DELETE per tenant table, for B.
     assert fake.deleted == {(t, B) for t in ch.TENANT_TABLES}
@@ -195,25 +193,98 @@ async def test_purge_resumes_after_a_failure(env):
     assert await _count_tenant_rows(sf, B) == {}
 
 
-async def test_crypto_shred_hook_runs_first(env, monkeypatch):
+async def _secrets(sf, tid: int) -> list[str]:
+    """B's stored (encrypted) integration configs and credentials."""
+    from models.credential import Credential
+    from models.integration import IntegrationConfig
+
+    async with sf() as s:
+        with system_scope("test: secrets", audit=False):
+            cfgs = (await s.execute(select(IntegrationConfig.config_json)
+                                    .where(IntegrationConfig.tenant_id == tid))).scalars().all()
+            creds = (await s.execute(select(Credential.data_json)
+                                     .where(Credential.tenant_id == tid))).scalars().all()
+    return [v for v in (*cfgs, *creds) if v]
+
+
+async def _decrypt(sf, tid: int, stored: str) -> str:
+    from services import tenant_keys
+
+    async with sf() as s:
+        with system_scope("test: decrypt", audit=False):
+            return await tenant_keys.decrypt_secret(s, stored, tenant_id=tid)
+
+
+async def test_purge_crypto_shreds_the_tenant_key_first(env, monkeypatch):
+    """The purge destroys B's data keys (services.tenant_keys, the real
+    one) before any row is deleted: B's secrets — also as copied into a
+    backup before the purge — no longer decrypt; A's still do."""
+    from models.tenant import TenantKey
     from nodeglow_ee.tenancy import purge
+    from services import tenant_keys
 
     _client, sf, _ = env
-    calls = []
+    b_secrets, a_secrets = await _secrets(sf, B), await _secrets(sf, A)
+    assert b_secrets and a_secrets
+    assert all(v.startswith("v2:") for v in b_secrets + a_secrets)
+    for v in b_secrets:
+        await _decrypt(sf, B, v)                      # readable before
+    a_plain = [await _decrypt(sf, A, v) for v in a_secrets]
 
-    async def destroy_tenant_key(db, tenant_id):
-        calls.append((tenant_id, len(await _count_tenant_rows(sf, tenant_id))))
+    real_destroy = tenant_keys.destroy_tenant_key
+    seen = []
 
-    module = types.ModuleType("services.tenant_keys")
-    module.destroy_tenant_key = destroy_tenant_key
-    monkeypatch.setitem(sys.modules, "services.tenant_keys", module)
-    import services
+    async def spy(db, tenant_id):
+        rows_before = len(await _count_tenant_rows(sf, tenant_id))
+        n = await real_destroy(db, tenant_id)
+        seen.append((tenant_id, rows_before, n))
+        return n
 
-    monkeypatch.setattr(services, "tenant_keys", module, raising=False)
-    with clickhouse(PurgeClickHouse()):
-        report = await purge.purge_tenant(B)
-    assert calls == [(B, len(tenant_tables()))]  # before any row was deleted
+    monkeypatch.setattr(tenant_keys, "destroy_tenant_key", spy)
+
+    shredded = {}
+
+    async def purge_clickhouse(tenant_id):
+        # Runs right after the shred, before PostgreSQL is touched: B's key
+        # rows are tombstones and its secrets fail closed.
+        async with sf() as s:
+            with system_scope("test: keys", audit=False):
+                keys = (await s.execute(select(TenantKey).where(TenantKey.tenant_id == B))).scalars().all()
+        shredded["keys"] = [(k.wrapped_dek, k.destroyed_at is not None) for k in keys]
+        tenant_keys.clear_cache()
+        for v in b_secrets:
+            with pytest.raises(tenant_keys.TenantKeyDestroyed):
+                await _decrypt(sf, B, v)
+        shredded["checked"] = True
+        return {}
+
+    monkeypatch.setattr(purge, "purge_clickhouse", purge_clickhouse)
+    report = await purge.purge_tenant(B)
+
+    assert seen == [(B, len(tenant_tables()), 1)]   # B's one seeded key, before any delete
     assert report["crypto_shred"] == "destroyed"
+    assert shredded["checked"] and shredded["keys"] and all(
+        w is None and d for w, d in shredded["keys"])
+    assert await _count_tenant_rows(sf, B) == {}    # key tombstones purged with the rest
+    tenant_keys.clear_cache()
+    assert [await _decrypt(sf, A, v) for v in a_secrets] == a_plain
+
+
+async def test_a_failing_crypto_shred_stops_the_purge(env, monkeypatch):
+    from nodeglow_ee.tenancy import purge
+    from services import tenant_keys
+
+    _client, sf, _ = env
+
+    async def broken(db, tenant_id):
+        raise tenant_keys.TenantKeyUnavailable("KEK not available")
+
+    monkeypatch.setattr(tenant_keys, "destroy_tenant_key", broken)
+    with clickhouse(PurgeClickHouse()) as fake:
+        with pytest.raises(tenant_keys.TenantKeyUnavailable):
+            await purge.purge_tenant(B)
+    assert not fake.deleted
+    assert len(await _count_tenant_rows(sf, B)) == len(tenant_tables())
 
 
 async def test_the_scheduled_job_purges_due_tenants_only(env):

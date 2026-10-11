@@ -411,7 +411,9 @@ and a `pg_dump` contains the wrapped keys.
   as they are.
 - **Going back to an older version after the new one has started** needs
   the downgrade first, while the new version still runs:
-  `docker compose exec nodeglow python -m alembic downgrade 044`. It puts every
+  `docker compose exec nodeglow python -m alembic downgrade 044` (back to
+  2.0.x; this also undoes 047 and 045: the probe syslog relay settings,
+  support grants and tenant lifecycle columns are dropped). It puts every
   credential back under `SECRET_KEY`. Switching `NODEGLOW_VERSION` back alone
   leaves the credentials under tenant keys, which the old version cannot
   read (integrations fail, notifications do not go out). Restoring the
@@ -426,8 +428,8 @@ and a `pg_dump` contains the wrapped keys.
   `upgrade` moves remaining old-format values, `rotate --tenant N` gives a
   tenant a new data key and re-encrypts its secrets (the old key stays
   readable as "retired").
-- Deleting a tenant (ee) destroys its data keys: its credentials are then
-  unreadable in the database, replicas and every dump or export taken
+- Purging a deleted tenant (ee, after its 30 days) destroys its data keys
+  first, before any row is deleted: its credentials are then unreadable in the database, replicas and every dump or export taken
   afterwards, even with `SECRET_KEY` (crypto-shred). A dump or JSON export
   taken **before** the deletion contains the wrapped keys along with the
   data, so it stays readable with `SECRET_KEY` until it is deleted: keep
@@ -807,7 +809,8 @@ many exist (suspended and deleting ones count, purged ones do not).
   agent and install token of it; nothing is deleted. **Deleting** suspends
   the tenant for 30 days (cancellable), then a background job purges every
   PostgreSQL and ClickHouse row of it, its memberships and the users who
-  belong to no other tenant (audit entry `tenant.purged`). The default
+  belong to no other tenant (audit entry `tenant.purged`). The purge
+  destroys the tenant's data keys first ([Tenant keys](#tenant-keys-envelope-encryption)). The default
   tenant (id 1) cannot be suspended or deleted.
 - **Plans** (Standard 30 / Professional 90 / Enterprise 365 days) cap every
   retention setting of a tenant; its admins choose within the plan. A plan

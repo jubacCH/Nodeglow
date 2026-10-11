@@ -278,7 +278,7 @@ jobs:
           NODEGLOW_PG_TEST_URL: postgresql://nodeglow:nodeglow@localhost:5432/postgres
           SECRET_KEY: ci-secret-key
           DATA_DIR: ${{ runner.temp }}/nodeglow-data
-        run: python -m pytest -q -rs tests/test_migrations_tenancy_pg.py tests/test_pg_rls.py
+        run: python -m pytest -q -rs tests/test_migrations_tenancy_pg.py tests/test_pg_rls.py tests/test_tenant_keys_pg.py
 
       - name: entrypoint runs migrations and honours SKIP_MIGRATIONS
         working-directory: backend

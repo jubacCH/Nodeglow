@@ -317,6 +317,11 @@ async def create_tenant(db, request, body: dict) -> Tenant:
         from models.settings import set_setting
 
         await set_setting(db, "site_name", name, commit=False)
+        # Its data key right away (owner decision 7); the first secret
+        # written for the tenant would otherwise create it lazily.
+        from services import tenant_keys
+
+        await tenant_keys.create_tenant_key(db, tenant.id)
     await _audit(db, request, "tenant.create", tenant, {
         "slug": slug, "plan": plan.key, "provider_id": provider_id, "admin": admin.username,
     })

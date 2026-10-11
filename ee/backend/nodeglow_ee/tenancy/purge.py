@@ -7,10 +7,11 @@ so an interrupted purge resumes from the top on the next run
 (``tenants.purge_started_at`` / ``purge_state`` record the progress):
 
 1. **Crypto-shred** — ``services.tenant_keys.destroy_tenant_key(db,
-   tenant_id)`` when the core provides it (per-tenant envelope encryption,
-   owner decision 7, another track): the tenant's secrets become unreadable
-   at once, also in backups taken before the purge. Skipped (and recorded)
-   when the module or function does not exist.
+   tenant_id)`` (per-tenant envelope encryption, owner decision 7): every
+   wrapped data key of the tenant is deleted, so its secrets become
+   unreadable at once in the database and in every dump taken afterwards
+   (a dump from before the purge carries the wrapped keys). A failure
+   stops the purge before anything is deleted (the next run retries).
 2. **ClickHouse** — per tenant table a lightweight ``DELETE … WHERE
    tenant_id = <t>`` (only when a count finds rows), on the main connection
    in the tenant's scope; also the step-B leftovers (``<t>__pre_tenant``)
@@ -30,7 +31,6 @@ so an interrupted purge resumes from the top on the next run
 """
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 from datetime import datetime
@@ -81,17 +81,14 @@ async def _save_state(tenant_id: int, state: dict) -> None:
 
 
 async def _crypto_shred(db, tenant_id: int) -> str:
-    try:
-        from services import tenant_keys  # core, per-tenant envelope encryption (other track)
-    except ImportError:
-        return "unavailable"
-    destroy = getattr(tenant_keys, "destroy_tenant_key", None)
-    if destroy is None:
-        return "unavailable"
-    result = destroy(db, tenant_id)
-    if inspect.isawaitable(result):
-        await result
+    """Destroy the tenant's data keys (owner decision 7). Fails the purge
+    when it fails: nothing is deleted while the secrets could still be
+    read from a backup taken before the purge."""
+    from services import tenant_keys  # core, per-tenant envelope encryption
+
+    destroyed = await tenant_keys.destroy_tenant_key(db, tenant_id)
     await db.commit()
+    log.warning("Purge of tenant %s: %d data key(s) destroyed", tenant_id, destroyed)
     return "destroyed"
 
 

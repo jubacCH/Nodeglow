@@ -13,7 +13,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - Enterprise multi-tenancy (licence feature `multi_tenancy`, `max_tenants`):
   operators create, suspend, resume and delete tenants under Administration →
   Tenants (deletion = 30 days suspended, then every PostgreSQL and ClickHouse
-  row of the tenant is purged), assign retention plans (30 / 90 / 365 days),
+  row of the tenant is purged, its data keys destroyed first), assign
+  retention plans (30 / 90 / 365 days),
   and see licence usage. The second tenant needs the ClickHouse tenant
   rebuild and PostgreSQL row-level security (or
   `NODEGLOW_TENANTS_WITHOUT_RLS=1`). Migration 045.
