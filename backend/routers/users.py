@@ -315,7 +315,7 @@ async def delete_user(
         return RedirectResponse(url="/users?error=self_delete", status_code=303)
     user, role = await _member(db, request, user_id)
     if not user:
-        return RedirectResponse(url="/users", status_code=303)
+        return JSONResponse({"error": "User not found"}, status_code=404)
     if await _is_last_admin(db, request, role):
         return RedirectResponse(url="/users?error=last_admin", status_code=303)
     await _remove_from_tenant(db, request, user)

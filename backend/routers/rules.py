@@ -112,7 +112,8 @@ async def delete_rule(
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_editor),
 ):
-    await rules_svc.delete_rule(db, rule_id)
+    if not await rules_svc.delete_rule(db, rule_id):
+        return JSONResponse({"error": "Rule not found"}, status_code=404)
     await log_action(db, request, "rule.delete", "rule", rule_id)
     await db.commit()
     return JSONResponse({"ok": True})
@@ -127,7 +128,7 @@ async def edit_rule(
 ):
     rule = await rules_svc.get_rule(db, rule_id)
     if not rule:
-        return RedirectResponse(url="/rules", status_code=303)
+        return JSONResponse({"error": "Rule not found"}, status_code=404)
 
     form = await request.form()
     rule.name = str(form.get("name", "")).strip() or rule.name
