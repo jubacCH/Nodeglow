@@ -29,6 +29,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   the default tenant; a background job rebuilds each table once so the tenant
   leads its sort key (needs free disk of about twice the table's size; the
   old copy is kept for 24 h).
+- Frontend build tooling moved to Tailwind CSS 4 (CSS-first `@theme` in
+  `frontend/src/app/globals.css` instead of `tailwind.config.ts`, PostCSS via
+  `@tailwindcss/postcss`). The UI looks the same (pixel-compared in dark and
+  light at desktop and phone width). This clears the remaining `npm audit`
+  findings of the dev toolchain (braces, micromatch, postcss-selector-parser
+  via Tailwind 3; braces via `@next/eslint-plugin-next`'s fast-glob, now
+  overridden with tinyglobby), and CI now fails on high findings in build
+  tooling too.
 - If you override `DATABASE_URL` (e.g. in docker-compose.override.yml) **and**
   enable a separate app user, also set `DATABASE_OWNER_URL`; otherwise the
   migrations would target the bundled `db`. The backend logs an error when

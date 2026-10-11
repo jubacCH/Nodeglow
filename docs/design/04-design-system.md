@@ -5,7 +5,7 @@
 | **Stand** | 10.10.2026 |
 | **Grundlage** | Konzept E3 „Nodeglow“ ([`directions/concept-e3.md`](directions/concept-e3.md), Prototyp [`prototypes/concept-e3/index.html`](prototypes/concept-e3/index.html)), IA aus [`02-information-architecture.md`](02-information-architecture.md) |
 | **Akzent** | nur **Glow Violet** (`#7C6CFF` dunkel / `#5B4BE0` hell), als Token umgesetzt; der Akzent-Umschalter des Prototyps entfällt |
-| **Code** | `frontend/design-tokens/tokens.json` → `src/styles/tokens.gen.{css,ts}`, `tailwind.config.ts`, `src/components/ui/*`, `src/components/layout/*`, `src/lib/{theme,status,navigation,chart-theme}.ts` |
+| **Code** | `frontend/design-tokens/tokens.json` → `src/styles/tokens.gen.{css,ts}`, `src/app/globals.css` (Tailwind-4-`@theme`), `src/components/ui/*`, `src/components/layout/*`, `src/lib/{theme,status,navigation,chart-theme}.ts` |
 
 Dieses Dokument ist die Arbeitsgrundlage für alle Agents, die in Phase F Seiten migrieren oder das neue Dashboard bauen. Kurzfassung: **Nur semantische Klassen (`bg-surface`, `text-fg-2`, `text-down` …), nur Komponenten aus `components/ui`, keine Hex-Werte, kein `slate-*`.**
 
@@ -177,6 +177,30 @@ Bewusste Ausnahmen: `st-unknown` als Grafik liegt unter 3:1 („kein Licht = kei
 
 `text-ok` und `bg-ok` lösen bewusst auf **verschiedene** Tokens auf (`st-ok-text` bzw. `st-ok`), damit Text immer AA erfüllt. `cn()` (tailwind-merge) kennt die Schriftgrössen, Schatten und Radien.
 
+### 3.1a Wo die Klassen definiert sind (Tailwind CSS 4)
+
+Seit der Migration auf Tailwind 4 (11.10.2026) gibt es **keine `tailwind.config.ts` mehr**. Alles steht CSS-first in `src/app/globals.css`:
+
+| Was | Wo in `globals.css` |
+|---|---|
+| Farben, Schriftgrössen, Schriften, Radien, Schatten, Abstände (`rail`, `topbar`, `tabbar`, `gutter`), `max-w-content`, z-Index-Stufen, `ease-ng`, `animate-breathe` | `@theme inline { … }` — je eine Zeile `--color-surface: var(--ng-surface);`, `--text-micro: …` + `--text-micro--line-height`, `--radius-card`, `--shadow-glow-crit`, `--z-index-topbar` … |
+| Text-Varianten (`text-ok` → `st-ok-text`, `text-accent` → `accent-text`) | `--text-color-*` im selben Block (Tailwind 4 liest für `text-*` zuerst `--text-color-*`, dann `--color-*`) |
+| `.ng-input`, `.ng-label` | `@layer utilities` vor den Utilities (siehe „Kaskade“) |
+| Globale Regeln (Fokusring, Glow, `.ng-hatch`, `.num`, Tabellen, Scrollbars, Motion, cmdk) | `@layer utilities` nach den Utilities |
+| Tailwind-3-Parität (Rahmenfarbe ohne Farbklasse, Button-Cursor, `td`/`th`-Padding, Placeholder-Farbe) | erster `@layer base`-Block |
+
+Regeln:
+
+- **Neue Token-Klasse:** Token in `design-tokens/tokens.json` anlegen, dann eine Zeile im `@theme inline`-Block. `build-tokens.mjs` erzeugt nur `--ng-*`-Variablen und weiss nichts von Tailwind.
+- **`inline` ist Pflicht.** Damit zeigt `bg-surface` direkt auf `var(--ng-surface)`. Ohne `inline` würde Tailwind `--color-surface` einmal auf `:root` auflösen, und Unterbäume mit eigenem `data-theme` (Tooltip, Toast) bekämen die falsche Farbe.
+- **Opazität** (`bg-down/20`) erzeugt Tailwind selbst mit `color-mix(in oklab, …)`; kein `<alpha-value>` mehr nötig.
+- **Nur die semantische Palette existiert:** `--color-*: initial` schaltet die Tailwind-Standardfarben ab; `slate-*`, `red-500` usw. erzeugen kein CSS. `transparent` und `current` bleiben.
+- **Varianten:** `dark:`/`light:` folgen `data-theme` auf `<html>` (`@custom-variant`; `prefers-color-scheme` löst schon das Theme-Script in `lib/theme.ts` auf). `hover:` greift wie in Tailwind 3 auch auf Touch-Geräten (in v4 sonst nur bei `@media (hover: hover)`).
+- **Kaskade:** Tailwind 3 hatte keine echten Cascade Layers; Komponenten, Utilities und die freien Regeln aus `globals.css` konkurrierten über Spezifität (z. B. schlägt `.ng-input:focus-visible { outline: none }` den globalen Fokusring). In Tailwind 4 gewinnt eine spätere Layer immer und Unlayered-CSS schlägt jede Layer. Deshalb importiert `globals.css` `tailwindcss/theme.css` und `preflight.css` einzeln und legt Komponenten, `@tailwind utilities` und die globalen Regeln in dieser Reihenfolge in **eine** Layer `utilities`. Neue freie Regeln gehören in den letzten Block, nicht unlayered ans Dateiende.
+- **Klassen-Scan:** Tailwind 4 findet Klassen automatisch, beschränkt auf `src/` (`source('../')`), ohne `src/styles` (Token-Dateien).
+- **Umbenennungen v3 → v4**, falls alter Code nachgezogen wird: `shadow-sm` → `shadow-xs`, `shadow` → `shadow-sm`, `rounded-sm` → `rounded-xs`, `rounded` → `rounded-sm`, `blur` → `blur-sm`, `outline-none` → `outline-hidden`, `ring` → `ring-3`, `!h-4` → `h-4!`, `bg-[--x]` → `bg-(--x)`, `break-words` → `wrap-break-word`. `space-y-*`/`divide-y` setzen den Abstand jetzt unten am Kind statt oben (`:not(:last-child)`), mit Spezifität 0.
+- **Placeholder:** Die Komponenten zeigen Placeholder in `input`/`textarea` in Grau `rgb(156 163 175)` (Tailwind-3-Preflight, spezifischer als die `::placeholder`-Regel mit `--ng-text-3`). Die Parität-Regel hält das bei; wer `--ng-text-3` will (im Light Mode besserer Kontrast), löscht sie bewusst als sichtbare Änderung.
+
 ### 3.2 Migrationstabelle `slate-*` / Hartcodes → semantisch
 
 Die Migration ist abgeschlossen (Stand 10.10.2026); die Tabelle bleibt als Referenz, falls alter Code (Branches, Snippets) nachgezogen werden muss.
@@ -216,7 +240,7 @@ Die Migration ist abgeschlossen (Stand 10.10.2026); die Tabelle bleibt als Refer
 | eigene Tab-Leisten (`useState<Tab>`) | `Tabs` + `TabPanel` (Panels) oder `NavTabs` (URLs) |
 | `<label>` + `<input className="ng-input">` ohne `htmlFor` | `<Field label><Input/></Field>` |
 
-Übergangsschicht — **erledigt (10.10.2026)**: Die „Legacy bridge“ am Ende von `globals.css` (Light-Mode-Abbildung der `slate`/`white/x`-Klassen), die Alias-Tokens in `tokens.json → alias` (`--ng-text-primary`, `--ng-card-bg`, `--ng-glass-*` …), der Export `ngColors`, die Hilfsklassen `.glass-card`, `.glass-elevated`, `.nav-active`, `.accent-text`, `.accent-bg`, `.stat-card-hover` und die Komponente `GlassCard` sind gelöscht. `slate-*`, `white/x`, Hex-Werte und die alten Variablennamen funktionieren damit nicht mehr (im Light Mode sähen sie falsch aus) — nur noch die semantischen Klassen verwenden.
+Übergangsschicht — **erledigt (10.10.2026)**: Die „Legacy bridge“ am Ende von `globals.css` (Light-Mode-Abbildung der `slate`/`white/x`-Klassen), die Alias-Tokens in `tokens.json → alias` (`--ng-text-primary`, `--ng-card-bg`, `--ng-glass-*` …), der Export `ngColors`, die Hilfsklassen `.glass-card`, `.glass-elevated`, `.nav-active`, `.accent-text`, `.accent-bg`, `.stat-card-hover` und die Komponente `GlassCard` sind gelöscht. `slate-*`, `white/x`, Hex-Werte und die alten Variablennamen funktionieren damit nicht mehr — seit Tailwind 4 erzeugen die Standardfarben gar kein CSS mehr (siehe 3.1a). Nur noch die semantischen Klassen verwenden.
 
 ---
 
