@@ -1,6 +1,7 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10 — phases 1–4 implemented 2026-10-11 (see "Implementation status")
+Status: design · 2026-10-10 — phases 1–4 implemented 2026-10-11, phases 5 and 8 on
+2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -786,10 +787,10 @@ is user-visible until phase 7.
 | 2 ✅ | Tenant context: middleware resolution, `system_scope()`, session filter fail-closed; every router passes in single-tenant mode | core | L |
 | 3 ✅ | Settings split + registry; `main.py` caches keyed; per-user dashboard layout | core | M |
 | 4 ✅ | Auth binding: memberships replace `users.role`, API keys/install tokens/agents bound, audit fields, WebSocket/SSE scoping, notifications per tenant, in-process state table above | core | L |
-| 5 | Scheduler: per-tenant analysis loops, fair-share queue for data-plane jobs, per-tenant metrics | core | M |
+| 5 ✅ | Scheduler: per-tenant analysis loops, fair-share queue for data-plane jobs, per-tenant metrics | core | M |
 | 6 | ClickHouse: step A + helper filtering + row policies + two users; step B rebuild job | core | M + M |
 | 7 | Postgres RLS + role split; CI job on Postgres asserting policies | core | M |
-| 8 | Tenant-isolation test suite (built from phase 2 on, gating from phase 4) | core | M |
+| 8 ✅ | Tenant-isolation test suite (built from phase 2 on, gating from phase 4) | core | M |
 | 9 | `ee/` skeleton, licence verification, tenant lifecycle incl. purge, tenant switcher | ee | L |
 | 10 | Probe syslog relay (agent) + `/api/agent/logs` per-entry source + site-scoped resolution | core (agent + backend) | M + S |
 | 11 | MSP portal: cross-tenant overview, incident board, provider roles and keys, provider channels | ee | L |
@@ -976,8 +977,8 @@ become operator-only, or rely on RLS.
 
 | Where | Statement | Tables | Today | Phase 7 / before tenant #2 |
 |---|---|---|---|---|
-| `routers/system.py` `system_status` | 11 × `text()`: counts and sizes | `ping_hosts`, `integration_configs`, `snapshots` (incl. `LATERAL` latest per config, oldest snapshot), `incidents` (4 counts), `alert_rules`, `log_templates`, `host_baselines`, `precursor_patterns`; plus `settings`, `pg_class`/`pg_namespace`, legacy `ping_results` | installation-wide counts | installation health → operator-only, or tenant predicate per count; RLS makes the counts per tenant |
-| `services/backup.py` `export_backup` / `get_backup_info` | `SELECT * FROM <t>`, `SELECT COUNT(*)` over `EXPORT_TABLES` | the 17 tenant-owned tables of `EXPORT_TABLES` | whole database | operator-only in multi-tenant mode; tenants use the per-tenant export (phase 12) |
+| `routers/system.py` `system_status` | 11 × `text()`: counts and sizes | `ping_hosts`, `integration_configs`, `snapshots` (incl. `LATERAL` latest per config, oldest snapshot), `incidents` (4 counts), `alert_rules`, `log_templates`, `host_baselines`, `precursor_patterns`; plus `settings`, `pg_class`/`pg_namespace`, legacy `ping_results` | since phase 8 every count of a tenant-owned table and the "SSL expiring" list carry `tenant_id = :t` (the list showed other tenants' host names); sizes, `reltuples` and the legacy `ping_results` stay installation numbers | RLS as the net |
+| `services/backup.py` `export_backup` / `get_backup_info` | `SELECT * FROM <t>`, `SELECT COUNT(*)` over `EXPORT_TABLES` | the 17 tenant-owned tables of `EXPORT_TABLES` | whole database; the routes are operator-only since phase 8 (`require_operator`) | tenants use the per-tenant export (phase 12) |
 | `services/backup.py` `import_backup` | `TRUNCATE … CASCADE`, `INSERT INTO <t>`, `setval`, `session_replication_role` | same | replaces every tenant's data | operator-only; must not run as `nodeglow_app` (needs RLS bypass anyway) |
 | `services/log_intelligence.py` `_write_template_batch` | Core `UPDATE log_templates` (`LogTemplate.__table__`, executemany) | `log_templates` | tenant predicate added explicitly | covered |
 | `services/log_intelligence.py` `_write_template_batch`, `_upsert_baselines` | ORM-enabled `INSERT … ON CONFLICT` | `log_templates`, `host_baselines` | `tenant_id` put into the rows explicitly, conflict target includes it; refused without context | covered |
@@ -1043,7 +1044,8 @@ Deviations / not done:
   and "capped at installation/plan" (`*_retention_days`) are not modelled:
   there is one tenant and no plan. The global jobs run at the **fastest
   tenant's** interval and the digest cron at the **first tenant's**
-  schedule (scheduler start); per-tenant cadence is phase 5.
+  schedule (scheduler start); per-tenant cadence is phase 5. *(Done in
+  phase 5, see there.)*
 - `claude_api_key` has no per-tenant override (ee).
 - New users get the default dashboard layout; before the split a new user
   saw the installation's shared layout.
@@ -1152,15 +1154,201 @@ covers 042/043 up and down.
 Performance: one more query per authenticated request (the user's
 memberships joined with `tenants`); unchanged statement counts otherwise.
 
-### Open items for phases 5–8
+### Phase 5 — scheduler (done)
 
-- **Phase 5 (scheduler):** the daily AI summary fires at every tenant's
-  hour and relies on its 20 h duplicate protection; per-tenant cadence (`ping_interval`,
-  `proxmox_interval`, digest day/hour, daily AI summary hour) instead of
-  "fastest / first tenant"; installation floors and retention caps; the
-  fair-share queue and the global data-plane pass; a `tenant` label on job
-  metrics; subnet-scan auto-added hosts still land in the tenant's default
-  site, not the schedule's.
+Code in `services/tenant_jobs.py` (`per_tenant_job` moved there and is
+re-exported by `services.tenancy`), `scheduler.py`, `services/metrics.py`;
+no migration.
+
+- **Analysis jobs** (`per_tenant_job`: correlation, log intelligence and
+  analytics, alert rules, backup compliance, cleanup, self-check, disk
+  predictions, digest, disk-space incident, the ee daily summary): one
+  tenant after another, each in its own `tenant_scope` and its own
+  sessions; the start tenant rotates per run; one tenant's exception is
+  logged with its id, the loop continues, the first error is re-raised
+  for the job's metrics. **Time budget** per iteration
+  (`NODEGLOW_TENANT_JOB_BUDGET`, 300 s): an iteration that outlives it is
+  left running in the background, the loop moves on, and that tenant is
+  skipped (counted, logged) until it has finished — a stuck tenant no
+  longer holds the job (`max_instances=1`) for everybody.
+- **Data-plane jobs** (`fleet_job`: ping, integrations, SNMP, SSL expiry,
+  DNS, port discovery, the MonitoringSource runners incl. subnet scans):
+  one pass per tick that runs the due tenants **concurrently**
+  (`NODEGLOW_FLEET_PARALLEL_TENANTS`, 8), each iteration in its tenant
+  scope, budget 80 % of the tick (stragglers continue in the background,
+  logged at INFO — expected for a slow tenant).
+- **Per-tenant cadence.** `ping_interval` / `proxmox_interval` are per
+  tenant: the job ticks at the fastest tenant's interval
+  (`job_tick`, re-derived by `reschedule_cadence_jobs()` whenever a tenant
+  saves its intervals), and a tenant runs when *its* interval has elapsed
+  (`TenantCadence`, half a tick of tolerance for jitter). The tenants'
+  intervals are read in one query per tick (multi-tenant only).
+- **Floors and caps** (installation keys in the registry):
+  `ping_interval_min` / `proxmox_interval_min` (default 10 s — the old
+  hard-coded minimum of the settings form) bound the tenant's interval in
+  the form, the jobs and the tick; `<retention key>_max` (empty = no cap)
+  caps the six retention keys in the form and in `cleanup_old_results`
+  (`retention_days`; "0 = keep forever" becomes the cap).
+- **Fair share.** `FairShareLimiter` replaces the integration collect
+  semaphore (`NODEGLOW_INTEGRATION_CONCURRENCY`) and the ping semaphore
+  (50): one limiter shared by every tenant's pass; free slots go
+  round-robin to the tenants that are waiting, optionally capped per
+  tenant (`NODEGLOW_TENANT_CONCURRENCY_CAP`, default none). Measured in
+  steps: 40 items of A submitted before 4 of B on 4 slots — FIFO finishes
+  B after 11 steps, fair share after 3; total throughput unchanged.
+- **Tenant-local schedules.** The weekly digest and the ee daily AI
+  summary tick hourly and fire for a tenant when its own slot
+  (`digest_day`/`digest_hour`, `daily_ai_summary_hour`, in its
+  `timezone`) is less than an hour old — the old cron's misfire grace —
+  and nothing was sent since (`digest_last_sent`, new tenant state key;
+  the daily summary keeps its 20 h duplicate protection). Saving the hour
+  no longer reschedules anything (the daily-summary hour needed a restart
+  before).
+- **Per-tenant job metrics.** `nodeglow_tenant_job_runs_total{job,tenant,status}`,
+  `nodeglow_tenant_job_last_duration_seconds{job,tenant}`,
+  `nodeglow_tenant_job_last_success_timestamp{job,tenant}`; the tenant
+  label is bounded (`NODEGLOW_TENANT_METRIC_LABELS`, 100 distinct ids,
+  then `other`); the job name comes from `instrument_job`. In-process
+  counters per (job, tenant) (runs, failures, last duration/success/error,
+  over budget, skipped, in flight) in `/api/system/status`: `tenant_jobs`
+  for the tenant's admins, `tenant_jobs_by_tenant` (counters only, no
+  error texts — they can name hosts) for operators.
+- Subnet-scan auto-added hosts land in the schedule's site.
+- Fixed on the way: the settings form rescheduled a job id that does not
+  exist (`proxmox_checks`), so a changed `proxmox_interval` took effect
+  only after a restart, and it set the global ping tick to the saving
+  tenant's value.
+
+**Single tenant.** Every path degenerates to the plain call: no task, no
+budget, no cadence query, FIFO slots. `tests/test_tenant_scheduling.py`
+pins it: the function runs in the caller's task in tenant 1's scope, the
+cadence settings are never read, the recorded duration equals the
+function's own (fake clock), and the fair limiter needs exactly the steps
+of a plain semaphore (17 items on 4 slots: 5 steps both). Cleanup reads
+four more installation settings per day (the caps); the digest reads its
+settings once an hour instead of firing once a week.
+
+Deviations:
+
+- The spec's "one global pass in `system_scope` with per-item tenant
+  context" became a pass of concurrent per-tenant iterations (each in its
+  scope) plus fair share at the item level (the shared limiters) — the
+  same scheduling effect, while stamping and filtering stay per tenant.
+- A budget does not cancel: cancelling mid-write is worse than letting
+  the iteration finish in the background.
+- The per-tenant cap is an environment setting, not derived from a plan
+  (no plans in core; ee can set it once plans exist).
+- The `tenant` label is on new per-tenant metrics, not on the existing
+  `nodeglow_scheduler_job_*` series (that would multiply a histogram by
+  the tenant count).
+- Timezone: an install whose tenant `timezone` differs from the server's
+  zone now gets its digest at the configured hour *in the tenant's zone*
+  (default `UTC` = the container's zone: unchanged).
+
+Open:
+
+- The self-check still judges jobs by their installation-level
+  `last_success`; naming the stuck tenant from `tenant_jobs.stats` is not
+  done.
+- No UI/API for the floors and caps (installation keys only; ee plans).
+- `ping_retention_days` / `proxmox_retention_days` still have no effect on
+  ClickHouse (fixed TTLs, see "Retention per tenant"); the cap only bounds
+  the stored value.
+- Per-tenant AI fairness and syslog buckets remain phase 14.
+
+### Phase 8 — tenant-isolation suite (done)
+
+Gating, enumerating tests (no migration):
+
+- `tests/test_routers/test_tenant_isolation.py` walks `app.routes` (190
+  HTTP routes, the WebSocket separately). Seed: tenants A (1) and B (2),
+  one row of **every tenant-owned table** each (`SEEDS` must equal
+  `tenant_tables()`), every B row carrying `CANARY-B-<table>`, plus a user
+  per tenant. As A's user (real session cookie) and with A's API key:
+  - a route with path parameters called with B's ids → **404**; a
+    validation/licence answer (400/402/422) is accepted only when it is
+    identical to the answer for an id that exists in no tenant (no
+    existence oracle);
+  - after every mutating call B's rows are compared column by column —
+    unchanged;
+  - no response contains `CANARY-B`;
+  - `X-Nodeglow-Tenant: 2` (A's user is no member of B; also with A's key)
+    → 404 on every tenant route, streams included;
+  - a control test shows B's own user its canaries on the main lists.
+  Unknown path parameters, a table without seed and stale allowlist
+  entries fail the suite. Classified: `INSTALLATION_ROUTES` (backup,
+  backup info, restore, the four MIB-catalogue writes — each with a
+  reason, and a test that a non-operator tenant admin gets 403),
+  `TENANTLESS_ROUTES` (health, metrics, login/logout/me/tenant switch,
+  setup, agent and installer token routes), `STREAM_ROUTES` (the SSE live
+  tail), `CONTENT_KEYED_ROUTES` (root-cause / reverse-cause: a template
+  hash is content, the same template can exist in both tenants).
+  `/ws/live` and `/syslog/stream` are driven over raw ASGI: a foreign
+  `?tenant=` is closed with 4404; A's socket and tail receive A's events
+  and nothing of B's.
+- ClickHouse: a recording fake client (behind `get_client`) checks that
+  every ClickHouse call made while serving A is scoped to A
+  (`ch_call_is_scoped`). The 24 routes that are not yet are
+  `PHASE6_CH_ROUTES`, each an `xfail(strict=True, reason="phase 6")`; a
+  route with an unscoped query that is not on the list fails.
+- `tests/test_tenant_job_isolation.py`: every per-tenant job (16; the ee
+  daily summary in `ee/backend/tests/test_daily_summary_isolation.py`)
+  runs with data in both tenants and triggers that make it act (a firing
+  alert rule, hosts down, a Proxmox cluster called `pve` in both, a
+  failed backup, a full disk, a due digest, an AI provider). Afterwards
+  every row mentioning a tenant's canary belongs to that tenant, every
+  message to a tenant's own channel and every AI prompt (postmortems,
+  daily summary) mentions nothing of the other, and the job logged no
+  ERROR; positive checks that alert rules, host-down, same-named
+  clusters, the disk incident and the digest act in both tenants. The
+  network is blocked (`httpx` transport, sockets). ClickHouse calls:
+  `PHASE6_CH_JOBS` (7) strict xfail "phase 6".
+- `tests/test_tenant_fail_closed.py`: every tenant-owned model raises on
+  read and on write without a tenant, every tenant settings key raises
+  without a tenant; ClickHouse without a tenant: strict xfail "phase 6".
+- Kept: `test_tenant_isolation_smoke.py`, `test_tenant_auth_binding.py`,
+  `test_tenant_inprocess_state.py` (one test per row of the in-process
+  state table), `test_tenancy*.py`.
+
+Found and fixed by the walk:
+
+- **Backups crossed tenants**: full backup, backup info and restore were
+  `require_admin` — any tenant's admin could download (or replace) every
+  tenant's data. Now `require_operator` (core: the default tenant's admin,
+  by session or admin key — single-tenant access unchanged).
+- `/api/system/status` listed other tenants' hosts under "SSL expiring"
+  (raw SQL); its raw counts are now tenant-scoped too.
+- The global MIB catalogue could be changed by any tenant's editor;
+  operator-only once there is more than one tenant.
+- Twelve routes answered another tenant's id with a redirect, 200 or
+  `{"ok": true}` (nothing was changed — the filter held); they answer 404.
+  `rule.delete` no longer writes an audit row for a rule that is not there.
+- Not a tenancy bug, but found by the job walk (WARNING logs): port
+  discovery shared one session between its five concurrent scans, so two
+  hosts finishing together failed with "This transaction is closed"; each
+  scan now has its own session.
+
+Deviations / limits:
+
+- Pre-lookup 400/402/422 instead of 404 (see above); routes keyed by
+  content hashes are not expected to 404.
+- Mutating routes without path parameters get `{}` unless listed in
+  `_bodies` (bulk host update, SNMP config, maintenance window, rule test
+  and create, host create with B's parent): a route whose *body* names
+  another tenant's row and is not listed is walked only for "no canary,
+  B unchanged". On PostgreSQL the composite foreign keys refuse such
+  references regardless.
+- The walk runs on SQLite: layer 1 and the explicit predicates; RLS is
+  phase 7's CI job.
+- API-key mode walks the routes that accept a key (`/api/v1`, `/api/v2`);
+  the others answer 401/302 to a key and are skipped.
+
+Tests: 1643 passed, 8 skipped, 33 xfailed (with ee); 1563 passed, 8
+skipped, 32 xfailed (`NODEGLOW_DISABLE_EE=1`). The isolation files add
+about 45 s to the suite on SQLite.
+
+### Open items for phases 6–7 (and later)
+
 - **Phase 6 (ClickHouse):** the tables have no `tenant_id` yet. Messages
   carry their tenant in-process (`syslog.TENANT_KEY`) — stamp it into the
   row once the column exists. Until then every ClickHouse read is
@@ -1174,10 +1362,23 @@ memberships joined with `tenants`); unchanged statement counts otherwise.
   `system_scope` write audit does not see raw SQL (backup import,
   `text()` counts) — those stay operator-only. Backups now also export the
   tenancy tables of every tenant (installation-level, operator-only).
-- **Phase 8 (isolation suite):** the route walker (every route with B's
-  ids → 404, every response without B's canary, with session, API key and
-  header) is still the smoke subset plus targeted tests; job isolation per
-  analysis job.
+- **Phase 6 — the suite's targets:** the ClickHouse targets are strict
+  xfails (reason `"phase 6"`): `PHASE6_CH_ROUTES` in
+  `tests/test_routers/test_tenant_isolation.py` (24 routes),
+  `PHASE6_CH_JOBS` in `tests/test_tenant_job_isolation.py` (7 jobs), the
+  ee daily summary (`ee/backend/tests/test_daily_summary_isolation.py`)
+  and the fail-closed `query()` test in `tests/test_tenant_fail_closed.py`.
+  A fixed route or job XPASSes and fails the run — remove its entry. The
+  mechanism is encoded once, in `ch_call_is_scoped` (custom setting
+  `SQL_nodeglow_tenant`, or a `tenant_id` predicate with a `tenant*`
+  parameter; inserts need a `tenant_id` column; `system.*` is
+  installation-level); adjust it there if phase 6 differs. The fake
+  client replaces `clickhouse_client.get_client`, so whatever the helpers
+  add reaches it.
+- **Phase 7 — from phase 8:** `system_status` now names the tenant in
+  its raw counts (table above); the backup routes are operator-only. The isolation walk
+  runs on SQLite, i.e. without RLS — it tests layer 1 and the explicit
+  predicates; the Postgres CI job remains the place for layer 2.
 - Still true from phase 2: work spawned with `asyncio.create_task` inherits
   the context; a task started in `system_scope` that writes must set its
   tenant itself (notifications and WebSocket broadcasts now take the
