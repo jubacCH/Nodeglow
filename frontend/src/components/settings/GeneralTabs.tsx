@@ -101,7 +101,7 @@ export function MonitoringTab({ form, set, status, onSave, onDiscard }: GeneralT
 
       <SettingsSection id="retention" title="Data retention" description="Older data is pruned nightly.">
         <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField label="Ping history (days)" value={form.pingRetention} onChange={(v) => set('pingRetention', v)} min={1} max={365} />
+          <NumberField label="Ping history (days)" value={form.pingRetention} onChange={(v) => set('pingRetention', v)} min={1} max={30} />
           <NumberField label="Integration snapshots (days)" value={form.integrationRetention} onChange={(v) => set('integrationRetention', v)} min={1} max={90} />
           <NumberField label="Proxmox history (days)" value={form.proxmoxRetention} onChange={(v) => set('proxmoxRetention', v)} min={1} max={90} />
           <NumberField

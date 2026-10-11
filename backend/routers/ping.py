@@ -127,7 +127,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
     if host_ids:
         rows = await ch_query(
             "SELECT host_id, max(timestamp) AS last_ok "
-            "FROM ping_checks WHERE success = 1 AND host_id IN ({hids:Array(UInt32)}) "
+            "FROM ping_checks WHERE tenant_id = {nodeglow_tenant:UInt32} AND success = 1 AND host_id IN ({hids:Array(UInt32)}) "
             "GROUP BY host_id",
             {"hids": host_ids},
         )
@@ -223,6 +223,7 @@ async def ping_check_now(host_id: int, db: AsyncSession = Depends(get_db)):
     from services.clickhouse_client import insert_ping_checks
     try:
         await insert_ping_checks([{
+            "tenant_id": host.tenant_id,
             "timestamp": datetime.utcnow(),
             "host_id": host.id,
             "host_name": host.name,

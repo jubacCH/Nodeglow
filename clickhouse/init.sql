@@ -1,7 +1,17 @@
 CREATE DATABASE IF NOT EXISTS nodeglow;
 
+-- Every table carries tenant_id and leads its sort key with it (multi-tenancy
+-- phase 6). No DEFAULT: every insert path stamps the tenant of the producing
+-- host / agent / source; a row without one lands in tenant 0, which no tenant
+-- reads. Installs created before phase 6 get the column through the app's
+-- startup migrations (step A, DEFAULT 1) and the sort-key prefix through the
+-- background rebuild (step B, services/clickhouse_rebuild.py).
 CREATE TABLE IF NOT EXISTS syslog_messages
 (
+    tenant_id       UInt32,
+    -- source_ip alone is ambiguous inside a tenant with several sites,
+    -- 0 = not attributed to a site.
+    site_id         UInt32 DEFAULT 0,
     timestamp       DateTime64(3, 'UTC') NOT NULL,
     received_at     DateTime64(3, 'UTC') NOT NULL DEFAULT now64(),
     source_ip       LowCardinality(String) NOT NULL,
@@ -22,7 +32,7 @@ CREATE TABLE IF NOT EXISTS syslog_messages
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (severity, source_ip, timestamp)
+ORDER BY (tenant_id, severity, source_ip, timestamp)
 TTL
     toDateTime(timestamp) + INTERVAL 1  DAY  WHERE severity = 7  AND noise_score >= 80,
     toDateTime(timestamp) + INTERVAL 2  DAY  WHERE severity = 7,
@@ -58,6 +68,7 @@ SETTINGS
 -- host_name is denormalized so dashboard queries don't need to JOIN Postgres.
 CREATE TABLE IF NOT EXISTS ping_checks
 (
+    tenant_id   UInt32,
     timestamp   DateTime64(3, 'UTC') NOT NULL,
     host_id     UInt32 NOT NULL,
     host_name   LowCardinality(String) DEFAULT '',
@@ -68,7 +79,7 @@ CREATE TABLE IF NOT EXISTS ping_checks
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
-ORDER BY (host_id, timestamp)
+ORDER BY (tenant_id, host_id, timestamp)
 TTL toDateTime(timestamp) + INTERVAL 30 DAY
 SETTINGS
     index_granularity = 8192,
@@ -82,6 +93,7 @@ SETTINGS
 -- agent_name is denormalized so dashboard queries don't need to JOIN Postgres.
 CREATE TABLE IF NOT EXISTS agent_metrics
 (
+    tenant_id     UInt32,
     timestamp     DateTime64(3, 'UTC') NOT NULL,
     agent_id      UInt32 NOT NULL,
     agent_name    LowCardinality(String) DEFAULT '',
@@ -100,7 +112,7 @@ CREATE TABLE IF NOT EXISTS agent_metrics
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
-ORDER BY (agent_id, timestamp)
+ORDER BY (tenant_id, agent_id, timestamp)
 TTL toDateTime(timestamp) + INTERVAL 7 DAY
 SETTINGS
     index_granularity = 8192,
@@ -113,6 +125,7 @@ SETTINGS
 -- source_name denormalizes the agent/integration display name.
 CREATE TABLE IF NOT EXISTS bandwidth_metrics
 (
+    tenant_id       UInt32,
     timestamp       DateTime64(3, 'UTC') NOT NULL,
     source_type     LowCardinality(String) NOT NULL,   -- agent | proxmox | unifi
     source_id       String NOT NULL,                   -- agent_id, config_id, device_mac
@@ -125,7 +138,7 @@ CREATE TABLE IF NOT EXISTS bandwidth_metrics
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
-ORDER BY (source_type, source_id, interface_name, timestamp)
+ORDER BY (tenant_id, source_type, source_id, interface_name, timestamp)
 TTL toDateTime(timestamp) + INTERVAL 7 DAY
 SETTINGS
     index_granularity = 8192,

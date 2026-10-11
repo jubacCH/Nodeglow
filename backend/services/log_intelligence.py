@@ -758,7 +758,7 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
                    toUnixTimestamp(toStartOfHour(received_at)) AS hour_ts,
                    count() AS cnt
             FROM syslog_messages
-            WHERE {since_sql}
+            WHERE {ch.TENANT_FILTER} AND {since_sql}
               AND received_at < {{end:DateTime64(3)}}
             GROUP BY source_ip, hour_ts""",
         params,
@@ -1029,7 +1029,7 @@ async def _fetch_precursor_messages(
             limit_by = "toStartOfMinute(timestamp)" if fleet else "host_id, toStartOfMinute(timestamp)"
             rows = await ch_query(
                 f"""SELECT host_id, message, timestamp FROM syslog_messages
-                    WHERE severity <= 4
+                    WHERE tenant_id = {{nodeglow_tenant:UInt32}} AND severity <= 4
                       AND ({' OR '.join(ranges)})
                     LIMIT {per_minute} BY {limit_by}""",
                 params,
@@ -1214,7 +1214,7 @@ async def learn_precursors(db: AsyncSession):
     # 1. Host-down events from ClickHouse
     down_rows = await ch_query(
         "SELECT host_id, timestamp FROM ping_checks "
-        "WHERE success = 0 AND timestamp >= {since:DateTime64(3)} "
+        "WHERE tenant_id = {nodeglow_tenant:UInt32} AND success = 0 AND timestamp >= {since:DateTime64(3)} "
         "ORDER BY timestamp",
         {"since": lookback},
     )
@@ -1378,7 +1378,7 @@ async def compute_severity_trends(db: AsyncSession):
                       count() AS cnt,
                       avg(severity) AS avg_sev
                FROM syslog_messages
-               WHERE timestamp >= now() - INTERVAL 48 HOUR
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 48 HOUR
                  AND template_hash != ''
                GROUP BY template_hash, h
            )
@@ -1450,7 +1450,7 @@ async def compute_template_diversity(db: AsyncSession):
                   countDistinct(template_hash) AS diversity,
                   countDistinctIf(template_hash, severity <= 3) AS error_diversity
            FROM syslog_messages
-           WHERE timestamp >= now() - INTERVAL 1 HOUR
+           WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 1 HOUR
              AND template_hash != ''
            GROUP BY source_ip""",
     )
@@ -1518,7 +1518,7 @@ async def detect_fleet_patterns(db: AsyncSession) -> list[dict]:
                   countDistinct(source_ip) AS host_count,
                   groupArray(DISTINCT source_ip) AS hosts
            FROM syslog_messages
-           WHERE timestamp >= now() - INTERVAL 10 MINUTE
+           WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 10 MINUTE
              AND severity <= 4
              AND template_hash != ''
            GROUP BY template_hash
@@ -1575,7 +1575,7 @@ async def detect_fleet_patterns(db: AsyncSession) -> list[dict]:
             baseline_count = await ch_query(
                 """SELECT countDistinct(source_ip) AS cnt
                    FROM syslog_messages
-                   WHERE template_hash = {th:String}
+                   WHERE tenant_id = {nodeglow_tenant:UInt32} AND template_hash = {th:String}
                      AND timestamp >= now() - INTERVAL 25 HOUR
                      AND timestamp <= now() - INTERVAL 24 HOUR
                      AND severity <= 4""",
@@ -1648,7 +1648,7 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
         rows = await ch.query(
             """SELECT source_ip, uniqExact(template_hash) AS diversity
                FROM syslog_messages
-               WHERE timestamp >= now() - INTERVAL 1 HOUR
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 1 HOUR
                  AND source_ip IN ({ips:Array(String)})
                  AND template_hash != ''
                GROUP BY source_ip""",
@@ -1676,7 +1676,7 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
     sev_rows = await ch.query(
         """SELECT template_hash, min(severity) AS min_sev, count() AS cnt
            FROM syslog_messages
-           WHERE timestamp >= now() - INTERVAL 2 HOUR
+           WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 2 HOUR
              AND severity <= 3
              AND template_hash != ''
            GROUP BY template_hash

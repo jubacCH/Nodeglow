@@ -210,14 +210,21 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         syslog_count = 0
         try:
             from services.clickhouse_client import query as ch_query, query_scalar as ch_scalar
-            result_count = int(await ch_scalar("SELECT count() FROM ping_checks") or 0)
+            # The request's tenant's rows (installation totals are not a
+            # tenant's business).
+            result_count = int(await ch_scalar(
+                "SELECT count() FROM ping_checks WHERE tenant_id = {nodeglow_tenant:UInt32}"
+            ) or 0)
             ts_rows = await ch_query(
-                "SELECT min(timestamp) AS oldest, max(timestamp) AS newest FROM ping_checks"
+                "SELECT min(timestamp) AS oldest, max(timestamp) AS newest FROM ping_checks "
+                "WHERE tenant_id = {nodeglow_tenant:UInt32}"
             )
             if ts_rows:
                 oldest_ping = ts_rows[0].get("oldest")
                 newest_ping = ts_rows[0].get("newest")
-            syslog_count = int(await ch_scalar("SELECT count() FROM syslog_messages") or 0)
+            syslog_count = int(await ch_scalar(
+                "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32}"
+            ) or 0)
         except Exception:
             pass
 
@@ -356,7 +363,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         from services.clickhouse_client import query_scalar as ch_scalar, received_since_clause
         since_sql, since_params = received_since_clause(now - timedelta(minutes=10))
         syslog_rate = int(await ch_scalar(
-            f"SELECT count() FROM syslog_messages WHERE {since_sql}",
+            f"SELECT count() FROM syslog_messages WHERE tenant_id = {{nodeglow_tenant:UInt32}} AND {since_sql}",
             since_params,
         ) or 0)
         syslog_status["msg_per_min"] = round(syslog_rate / 10, 1)
@@ -428,19 +435,23 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "snap_age": _format_age(oldest_snap) if oldest_snap else "—",
             "syslog_age": "—",
         }
-        # Syslog age from ClickHouse
-        try:
-            from services.clickhouse_client import query_scalar as ch_scalar
-            # Part metadata instead of min(received_at): that scanned the whole table.
-            oldest_syslog = await ch_scalar(
-                "SELECT min(min_time) FROM system.parts "
-                "WHERE database = currentDatabase() AND table = 'syslog_messages' "
-                "AND active AND min_time > toDateTime(0)"
-            )
-            if oldest_syslog:
-                retention_info["syslog_age"] = _format_age(oldest_syslog)
-        except Exception:
-            pass
+        # Syslog age from ClickHouse part metadata (min(received_at) scanned
+        # the whole table). Parts are shared by every tenant, so this is
+        # installation metadata: operators only.
+        if _is_admin:
+            try:
+                from services.clickhouse_client import query_scalar as ch_scalar
+                from services.tenancy import system_scope
+                with system_scope("system status: syslog age from part metadata"):
+                    oldest_syslog = await ch_scalar(
+                        "SELECT min(min_time) FROM system.parts "
+                        "WHERE database = currentDatabase() AND table = 'syslog_messages' "
+                        "AND active AND min_time > toDateTime(0)"
+                    )
+                if oldest_syslog:
+                    retention_info["syslog_age"] = _format_age(oldest_syslog)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -545,6 +556,15 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    # ── ClickHouse tenancy rebuild (step B), installation-level ──────────
+    ch_rebuild = None
+    if _is_admin:
+        try:
+            from services import clickhouse_rebuild
+            ch_rebuild = await asyncio.wait_for(clickhouse_rebuild.status(), timeout=5)
+        except Exception:
+            pass
+
     # ── Await thread pool results ────────────────────────────────────────
     sysinfo = await sysinfo_fut
     log_lines = await logs_fut if logs_fut is not None else []
@@ -568,6 +588,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "alert_rules": alert_rule_stats,
             "maintenance": maintenance_stats,
             "log_intelligence": log_intelligence,
+            "clickhouse_tenant_rebuild": ch_rebuild,
         },
         "disk_forecast": disk_forecast,
         "dashboard_perf": _get_dashboard_perf(),
