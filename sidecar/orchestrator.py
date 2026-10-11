@@ -563,15 +563,23 @@ def step_migrate(ctx: Ctx) -> str:
     the previous step, so the schema is current before the live containers are
     replaced. Ports are not published for ``run`` containers, so the syslog
     listeners are not disturbed.
+
+    ``migrate.py`` (not bare ``alembic upgrade head``): it connects as the
+    schema owner (``DATABASE_OWNER_URL``, falling back to ``DATABASE_URL``
+    — the compose file passes both), and after the revisions it brings the
+    row-level-security setup in line (app role, grants, policies,
+    ``NODEGLOW_RLS``). ``SKIP_MIGRATIONS=1`` keeps the image's entrypoint from
+    running the same thing a second time first.
     """
     result = _compose(
-        ctx, "run", "--rm", "--no-deps", "nodeglow",
-        "alembic", "-c", "alembic.ini", "upgrade", "head",
+        ctx, "run", "--rm", "--no-deps", "-e", "SKIP_MIGRATIONS=1", "nodeglow",
+        "python", "migrate.py",
         timeout=MIGRATE_TIMEOUT,
     )
     if result.returncode != 0:
-        raise StepError(f"alembic upgrade failed: {result.stderr[-MAX_ERROR_CHARS:]}")
-    lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+        raise StepError(f"migration failed: {result.stderr[-MAX_ERROR_CHARS:]}")
+    # migrate.py and alembic log to stderr; the last line says where it ended.
+    lines = [ln.strip() for ln in (result.stdout + "\n" + result.stderr).splitlines() if ln.strip()]
     return lines[-1][-200:] if lines else "schema at head"
 
 

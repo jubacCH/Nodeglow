@@ -74,7 +74,16 @@ services:
     volumes:
       - ./data:/data
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nodeglow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-nodeglow}
+      # Two database users (row-level security, docs/OPERATIONS.md): the app
+      # runs as POSTGRES_APP_USER (no table ownership, subject to RLS), the
+      # migrations as POSTGRES_USER, which owns the schema. Without
+      # POSTGRES_APP_USER (every install before 2026-10) both URLs are the
+      # same user, exactly as before.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-${POSTGRES_USER:-nodeglow}}:${POSTGRES_APP_PASSWORD:-${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}}@db:5432/${POSTGRES_DB:-nodeglow}
+      DATABASE_OWNER_URL: postgresql+asyncpg://${POSTGRES_USER:-nodeglow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-nodeglow}
+      # PostgreSQL row-level security as the second tenant-isolation layer.
+      # off (default for existing installs) | on (install.sh, new installs).
+      NODEGLOW_RLS: ${NODEGLOW_RLS:-off}
       CLICKHOUSE_URL: http://nodeglow:${CLICKHOUSE_PASSWORD:-${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}}@clickhouse:8123/nodeglow
       DATA_DIR: /data
       SKIP_MIGRATIONS: ${SKIP_MIGRATIONS:-}

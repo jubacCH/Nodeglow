@@ -494,19 +494,21 @@ def test_build_failure_is_reported(tmp_path):
         step_build(ctx)
 
 
-def test_migrate_runs_alembic_in_throwaway_container(tmp_path):
+def test_migrate_runs_migrate_py_in_throwaway_container(tmp_path):
     seen = {}
 
     def run_cmd(argv, timeout=60, cwd=None):
         seen["argv"] = argv
-        return CmdResult(0, "INFO  [alembic] Running upgrade 031 -> 032, add x", "")
+        return CmdResult(0, "", "INFO  [alembic] Running upgrade 031 -> 032, add x\n")
 
     ctx = make_ctx(tmp_path, run_cmd=run_cmd)
     detail = step_migrate(ctx)
 
+    # migrate.py runs as the schema owner and sets up row-level security;
+    # SKIP_MIGRATIONS keeps the entrypoint from doing it twice.
     assert seen["argv"] == ["docker", "compose", "-p", "vigil", "-f", ctx.compose_file,
-                            "run", "--rm", "--no-deps", "nodeglow",
-                            "alembic", "-c", "alembic.ini", "upgrade", "head"]
+                            "run", "--rm", "--no-deps", "-e", "SKIP_MIGRATIONS=1", "nodeglow",
+                            "python", "migrate.py"]
     assert "031 -> 032" in detail
 
 
