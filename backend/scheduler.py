@@ -16,6 +16,7 @@ from models.integration import IntegrationConfig
 from services import integration as int_svc
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
+from services.tenancy import per_tenant_job, system_job
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,7 @@ async def _run_unit(
 
 
 @instrument_job("integration_checks")
+@per_tenant_job
 async def run_integration_checks():
     """
     Generic collector loop: for each registered integration, fetch all configs
@@ -431,6 +433,7 @@ async def _broadcast_ping_updates(updates: list[tuple]) -> None:
 
 
 @instrument_job("ping_checks")
+@per_tenant_job
 async def run_ping_checks():
     """Ping all enabled hosts concurrently and store results."""
     import asyncio as _asyncio
@@ -675,6 +678,7 @@ async def run_ping_checks():
 
 
 @instrument_job("ssl_expiry")
+@per_tenant_job
 async def update_ssl_expiry():
     """Update ssl_expiry_days for all HTTPS hosts."""
     from utils.ping import get_ssl_expiry_days
@@ -709,6 +713,7 @@ async def update_ssl_expiry():
 
 
 @instrument_job("cleanup_old_results")
+@per_tenant_job
 async def cleanup_old_results():
     """Delete old integration snapshots and SNMP results from Postgres.
 
@@ -837,6 +842,7 @@ def compute_disk_forecast(history: list[dict], total_gb: float) -> dict | None:
 
 
 @instrument_job("disk_predictions")
+@per_tenant_job
 async def refresh_disk_predictions():
     """Recompute disk-full predictions (integrations + agent disks) into the
     in-process cache that the dashboards read. Reads days of history, which is
@@ -851,9 +857,6 @@ async def refresh_disk_predictions():
 async def check_disk_space():
     """Monitor disk usage and create incidents when thresholds are exceeded."""
     import shutil
-    from hashlib import sha256
-
-    from models.incident import Incident, IncidentEvent
 
     try:
         usage = shutil.disk_usage("/")
@@ -866,8 +869,17 @@ async def check_disk_space():
     used_gb = round(usage.used / (1024 ** 3), 2)
     total_gb = round(usage.total / (1024 ** 3), 2)
 
-    # Record sample for trend analysis
+    # Record sample for trend analysis (installation-level, in settings)
     await _record_disk_sample(used_gb, total_gb)
+    await _disk_space_incident(used_pct, free_gb)
+
+
+@per_tenant_job
+async def _disk_space_incident(used_pct: float, free_gb: float) -> None:
+    """Raise, update or resolve the disk-space incident (per tenant)."""
+    from hashlib import sha256
+
+    from models.incident import Incident, IncidentEvent
 
     if used_pct < DISK_WARNING_PCT:
         # All clear — auto-resolve any existing disk incident
@@ -939,6 +951,7 @@ async def check_disk_space():
 
 
 @instrument_job("clickhouse_log_cleanup")
+@system_job("ClickHouse system-table maintenance (installation)")
 async def cleanup_clickhouse_logs():
     """Truncate ClickHouse system log tables if they exceed size thresholds."""
     try:
@@ -965,6 +978,7 @@ async def cleanup_clickhouse_logs():
 
 
 @instrument_job("correlation")
+@per_tenant_job
 async def run_correlation():
     """Run the correlation engine."""
     from services.correlation import run_correlation as _run
@@ -972,6 +986,7 @@ async def run_correlation():
 
 
 @instrument_job("log_intelligence")
+@per_tenant_job
 async def run_log_intelligence():
     """Run the fast log intelligence pass (template flush, host baselines)."""
     from services.log_intelligence import run_intelligence
@@ -979,6 +994,7 @@ async def run_log_intelligence():
 
 
 @instrument_job("log_analytics")
+@per_tenant_job
 async def run_log_analytics():
     """Run the fleet-wide log analysis (precursors, noise scores, trends)."""
     from services.log_intelligence import run_analytics
@@ -986,6 +1002,7 @@ async def run_log_analytics():
 
 
 @instrument_job("self_check")
+@per_tenant_job
 async def run_self_check_job():
     """Check that Nodeglow itself is still collecting data and running its jobs."""
     import os
@@ -999,6 +1016,7 @@ async def run_self_check_job():
 
 
 @instrument_job("snmp_polls")
+@per_tenant_job
 async def run_snmp_polls():
     """Run due SNMP polls."""
     from routers.snmp import run_snmp_polls as _run
@@ -1006,12 +1024,14 @@ async def run_snmp_polls():
 
 
 @instrument_job("port_discovery")
+@per_tenant_job
 async def run_port_discovery():
     """Discover open ports and SSL certs on monitored hosts."""
     from services.port_discovery import run_port_discovery as _run
     await _run()
 
 
+@per_tenant_job
 async def run_weekly_digest():
     """Build and send weekly digest email."""
     from database import get_setting, decrypt_value
@@ -1057,6 +1077,7 @@ async def run_weekly_digest():
         logger.error("Weekly digest email failed: %s", exc)
 
 
+@system_job("GeoIP database update (installation)")
 async def update_geoip():
     """Weekly GeoIP database update (if enabled and license key is set)."""
     from database import get_setting, decrypt_value
@@ -1089,6 +1110,7 @@ async def update_geoip():
 
 
 @instrument_job("dns_resolution")
+@per_tenant_job
 async def resolve_host_dns():
     """Resolve DNS for hosts: rDNS for IP-only hosts, forward DNS for hostname-only hosts.
     Also merges duplicate scanner hosts into existing Proxmox/UniFi/agent hosts."""
@@ -1193,6 +1215,7 @@ async def resolve_host_dns():
 
 
 @instrument_job("alert_rules")
+@per_tenant_job
 async def run_alert_rules():
     """Evaluate all user-defined alert rules."""
     from services.rules import evaluate_rules
@@ -1203,6 +1226,7 @@ async def run_alert_rules():
 
 
 @instrument_job("legacy_api_key_cleanup")
+@system_job("disable stale legacy API keys of every tenant")
 async def cleanup_legacy_api_keys():
     """Disable API keys that still use legacy (plain SHA256) hashing and have
     not been touched in 30 days. The `hash_algo` column is set to 'hmac' both
@@ -1231,13 +1255,19 @@ async def cleanup_legacy_api_keys():
             .where(ApiKey.id.in_([k.id for k in stale]))
             .values(enabled=False)
         )
-        db.add(AuditLog(
-            username="system",
-            action="api_key.legacy_auto_disabled",
-            target_type="api_key",
-            target_name=", ".join(names)[:256],
-            details=f"Auto-disabled {len(stale)} legacy-hash key(s) unused for 30+ days",
-        ))
+        # Runs across tenants; each tenant's audit log records its own keys.
+        by_tenant: dict[int, list[str]] = {}
+        for k in stale:
+            by_tenant.setdefault(k.tenant_id, []).append(k.name)
+        for tenant_id, tenant_names in by_tenant.items():
+            db.add(AuditLog(
+                tenant_id=tenant_id,
+                username="system",
+                action="api_key.legacy_auto_disabled",
+                target_type="api_key",
+                target_name=", ".join(tenant_names)[:256],
+                details=f"Auto-disabled {len(tenant_names)} legacy-hash key(s) unused for 30+ days",
+            ))
         await db.commit()
     logger.warning(
         "Disabled %d legacy-algo API key(s) untouched for 30+ days: %s",
@@ -1246,6 +1276,7 @@ async def cleanup_legacy_api_keys():
 
 
 @instrument_job("backup_compliance")
+@per_tenant_job
 async def run_backup_compliance():
     """Check all backup jobs for compliance (overdue/failed) and log issues."""
     from services.backup_monitor import check_backup_compliance
