@@ -375,13 +375,15 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Notification channel config ──────────────────────────────────────
     notification_info = {}
     try:
-        settings = {}
-        s_rows = (await db.execute(text(
-            "SELECT key, value FROM settings WHERE key LIKE 'alert_%' OR key LIKE 'smtp_%' OR key LIKE 'telegram_%' OR key LIKE 'discord_%'"
-            " OR key LIKE 'teams_%' OR key LIKE 'slack_%' OR key LIKE 'ntfy_%'"
-        ))).all()
-        for s in s_rows:
-            settings[s.key] = s.value
+        # The request's tenant's channels, through the registry (raw SQL on
+        # `settings` saw none of them after the settings split).
+        from models.settings import get_setting
+        settings = {
+            k: await get_setting(db, k, "")
+            for k in ("telegram_bot_token", "telegram_chat_id", "discord_webhook_url",
+                      "smtp_host", "smtp_to", "teams_enabled", "teams_webhook_url",
+                      "slack_enabled", "slack_webhook_url", "ntfy_enabled", "ntfy_topic")
+        }
 
         notification_info = {
             "telegram": bool(settings.get("telegram_bot_token") and settings.get("telegram_chat_id")),

@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from statistics import median
@@ -61,7 +62,9 @@ def _epoch(dt: datetime) -> float:
 
 AVAILABILITY_TTL = 300.0
 SYSLOG_TTL = 60.0
-_ttl_cache: dict = {}
+# Bounded LRU (keys per tenant and name; see topology._topology_cache).
+TTL_CACHE_MAX = 2048
+_ttl_cache: "OrderedDict" = OrderedDict()
 
 
 async def _cached(db, name: str, ttl: float, fn):
@@ -77,9 +80,10 @@ async def _cached(db, name: str, ttl: float, fn):
         return hit[2]
     value = await fn()
     if bind is not None:
-        if len(_ttl_cache) > 32:
-            _ttl_cache.clear()
         _ttl_cache[key] = (bind, now, value)
+        _ttl_cache.move_to_end(key)
+        while len(_ttl_cache) > TTL_CACHE_MAX:
+            _ttl_cache.popitem(last=False)
     return value
 
 

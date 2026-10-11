@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -169,7 +170,10 @@ async def build_topology(
 TOPOLOGY_CACHE_TTL = 60.0
 # (id(bind), tenant) -> (bind, monotonic ts, topology, provenance, gateways). The bind is
 # held so its id cannot be reused by another engine while the entry exists.
-_topology_cache: dict[tuple[int, int], tuple] = {}
+# A bounded LRU, not "clear when full": with a key per tenant, clearing at a
+# handful of entries made every tenant beyond that rebuild on every request.
+TOPOLOGY_CACHE_MAX = 512
+_topology_cache: "OrderedDict[tuple[int, int], tuple]" = OrderedDict()
 
 
 async def cached_topology(db: AsyncSession, ttl: float = TOPOLOGY_CACHE_TTL):
@@ -193,9 +197,10 @@ async def cached_topology(db: AsyncSession, ttl: float = TOPOLOGY_CACHE_TTL):
     gateways: set[int] = set()
     topo = await build_topology(db, provenance, gateways)
     if bind is not None:
-        if len(_topology_cache) > 8:
-            _topology_cache.clear()
         _topology_cache[key] = (bind, now, topo, provenance, gateways)
+        _topology_cache.move_to_end(key)
+        while len(_topology_cache) > TOPOLOGY_CACHE_MAX:
+            _topology_cache.popitem(last=False)
     return topo, provenance, gateways
 
 

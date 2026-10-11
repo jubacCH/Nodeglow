@@ -522,14 +522,32 @@ async def ws_live(websocket: WebSocket):
         return
 
     from services.websocket import register, unregister
+    import asyncio as _asyncio
+
+    async def _revalidate():
+        # A revoked membership, a changed role, a tenant switch or a logout
+        # ends the stream: the next connect resolves afresh.
+        while True:
+            await _asyncio.sleep(_tenancy.STREAM_REVALIDATE_SECONDS)
+            now = await _tenancy.revalidate_access(websocket, access.tenant_id)
+            if now is None or now.role != access.role:
+                unregister(websocket)
+                try:
+                    await websocket.close(code=4403, reason="Access changed")
+                except Exception:
+                    pass
+                return
+
     with _tenancy.tenant_scope(access.tenant_id):
         await register(websocket, role=access.role, tenant_id=access.tenant_id)
+        watcher = _asyncio.create_task(_revalidate())
         try:
             while True:
                 await websocket.receive_text()
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
+            watcher.cancel()
             unregister(websocket)
 
 
