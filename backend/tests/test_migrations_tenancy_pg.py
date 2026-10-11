@@ -1,4 +1,4 @@
-"""Tenancy migrations (039–041) against a real PostgreSQL.
+"""Tenancy migrations (039–043) against a real PostgreSQL.
 
 The migration chain cannot run on SQLite (revision 022 uses a PostgreSQL
 regex), so these tests need a server: set ``NODEGLOW_PG_TEST_URL`` to an
@@ -13,7 +13,13 @@ Covered:
   deleting a probe clears only ``probe_id`` (``SET NULL (probe_id)``);
 * downgrade back to 038 restores the old shape with the data intact;
 * a fresh install built from the models (``migrate.py``) has the default
-  tenant rows and agrees with the migration chain (``alembic check``).
+  tenant rows and agrees with the migration chain (``alembic check``);
+* 042 (settings split): tenant keys move to tenant 1 with their encrypted
+  flag, installation keys stay, the dashboard layout becomes every user's;
+  the downgrade puts them back;
+* 043 (auth binding): memberships for users created after 039, admins
+  become operators, audit rows get their tenant's provider, sessions gain
+  ``active_tenant_id``; the downgrade refreshes ``users.role``.
 """
 from __future__ import annotations
 
@@ -91,6 +97,10 @@ def q(dsn: str, sql: str, *params):
 
 SEED_038 = """
 INSERT INTO settings (key, value, encrypted) VALUES ('site_name', 'ACME Monitoring', false);
+INSERT INTO settings (key, value, encrypted) VALUES ('notify_enabled', '1', false),
+  ('smtp_password', 'gAAAAA-ciphertext', true), ('syslog_port', '5514', false),
+  ('dashboard_layout', '[{"id": "hosts", "x": 0, "y": 0, "w": 12, "h": 4}]', false),
+  ('_lockout:admin', '[]', false);
 INSERT INTO users (id, username, password_hash, role, auth_source, created_at)
   VALUES (1, 'admin', 'x', 'admin', 'local', now()), (2, 'viewer', 'x', 'readonly', 'local', now()),
          (3, 'legacy', 'x', NULL, 'local', now());
@@ -172,6 +182,63 @@ def test_upgrade_from_038_with_data(pg_db):
     assert q(pg_db, "SELECT count(*) FROM discovered_ports")[0][0] == 0
     assert q(pg_db, "SELECT count(*) FROM snmp_host_configs")[0][0] == 0
 
+    _alembic(pg_db, "check")
+
+
+def test_settings_split_and_auth_binding(pg_db):
+    _alembic(pg_db, "upgrade", "038")
+    _seed(pg_db)
+    _alembic(pg_db, "upgrade", "041")
+    # A user created between 039 and 043 (setup wizard, users API, LDAP) got
+    # no membership; neither did a session row know its tenant.
+    q(pg_db, "INSERT INTO users (id, username, password_hash, role, auth_source, created_at) "
+             "VALUES (4, 'late', 'x', 'editor', 'ldap', now())")
+    q(pg_db, "INSERT INTO sessions (token, user_id, expires_at) VALUES ('t1', 1, now() + interval '1 day')")
+    _alembic(pg_db, "upgrade", "head")
+
+    # 042: tenant keys moved (encrypted flag kept), installation keys stayed.
+    ts = {r[0]: (r[1], r[2]) for r in q(pg_db, "SELECT key, value, encrypted FROM tenant_settings "
+                                             "WHERE tenant_id = 1")}
+    assert ts["site_name"] == ("ACME Monitoring", False)
+    assert ts["notify_enabled"] == ("1", False)
+    assert ts["smtp_password"] == ("gAAAAA-ciphertext", True)
+    remaining = {r[0] for r in q(pg_db, "SELECT key FROM settings")}
+    assert {"syslog_port", "_lockout:admin"} <= remaining
+    assert not remaining & {"site_name", "notify_enabled", "smtp_password", "dashboard_layout"}
+    # The layout is now every user's (user 1 already had a preferences row).
+    layouts = q(pg_db, "SELECT user_id, dashboard_layout FROM user_preferences ORDER BY user_id")
+    assert [r[0] for r in layouts] == [1, 2, 3, 4]
+    assert all('"hosts"' in (r[1] or "") for r in layouts)
+
+    # 043: memberships for everybody, admins are operators, audit provider.
+    members = q(pg_db, "SELECT user_id, role FROM tenant_memberships ORDER BY user_id")
+    assert [tuple(r) for r in members] == [(1, "admin"), (2, "readonly"), (3, "admin"), (4, "editor")]
+    ops = q(pg_db, "SELECT id FROM users WHERE is_operator ORDER BY id")
+    assert [r[0] for r in ops] == [1, 3]
+    assert q(pg_db, "SELECT active_tenant_id FROM sessions")[0][0] is None
+    assert [tuple(r) for r in q(pg_db, "SELECT tenant_id, provider_id, acting_via FROM audit_logs")] \
+        == [(1, 1, None)]
+    # A session pointing at a tenant that goes away loses only the pointer.
+    q(pg_db, "INSERT INTO tenants (provider_id, name, slug, status, created_at) "
+             "VALUES (1, 'B', 'b', 'active', now())")
+    q(pg_db, "UPDATE sessions SET active_tenant_id = 2")
+    q(pg_db, "DELETE FROM tenants WHERE id = 2")
+    assert q(pg_db, "SELECT active_tenant_id FROM sessions")[0][0] is None
+    _alembic(pg_db, "check")
+
+    # Downgrade: the settings come back, users.role reflects the memberships.
+    q(pg_db, "UPDATE tenant_memberships SET role = 'readonly' WHERE user_id = 3")
+    _alembic(pg_db, "downgrade", "041")
+    back = {r[0]: (r[1], r[2]) for r in q(pg_db, "SELECT key, value, encrypted FROM settings")}
+    assert back["site_name"] == ("ACME Monitoring", False)
+    assert back["smtp_password"] == ("gAAAAA-ciphertext", True)
+    assert '"hosts"' in back["dashboard_layout"][0]
+    assert q(pg_db, "SELECT count(*) FROM tenant_settings")[0][0] == 0
+    assert q(pg_db, "SELECT role FROM users WHERE id = 3")[0][0] == "readonly"
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name IN ('users', 'sessions', 'audit_logs', 'user_preferences')")}
+    assert not cols & {"is_operator", "active_tenant_id", "provider_id", "acting_via", "dashboard_layout"}
+    _alembic(pg_db, "upgrade", "head")
     _alembic(pg_db, "check")
 
 

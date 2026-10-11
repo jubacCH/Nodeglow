@@ -136,3 +136,6 @@ def downgrade() -> None:
                 {"k": LAYOUT_KEY, "v": layout},
             )
         op.drop_column("user_preferences", "dashboard_layout")
+        # Rows that only existed for the layout carry nothing else now (a
+        # missing row means "nothing recorded", which is what they say).
+        bind.execute(sa.text("DELETE FROM user_preferences WHERE dashboard_seen_at IS NULL"))

@@ -85,6 +85,14 @@ async def make_client(fake_user=_AUTH_DISABLED):
     async with session_factory() as seed_db:
         await put_settings(seed_db, setup_complete="true", site_name="NODEGLOW",
                            timezone="UTC", syslog_port="1514")
+        # The role comes from the membership (phase 4): the fake user is a
+        # member of tenant 1 with the role it claims.
+        fake = FakeUser() if fake_user is _AUTH_DISABLED else fake_user
+        if fake is not None and getattr(fake, "id", None) is not None:
+            from models.tenant import TenantMembership
+            seed_db.add(TenantMembership(user_id=fake.id, tenant_id=1,
+                                         role=getattr(fake, "role", None) or "admin"))
+            await seed_db.commit()
 
     @asynccontextmanager
     async def fake_session():

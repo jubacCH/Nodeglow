@@ -435,14 +435,16 @@ async def inject_globals(request: Request, call_next):
             response = await call_next(request)
             return response
         request.state.current_user = user
-        # The tenant this request acts for (core: always tenant 1; ee resolves
-        # it from header / session / membership). Not a member → 404, so a
-        # tenant id cannot be probed for existence.
-        tenant_id = await _tenancy.backend().resolve_request_tenant(request, user)
-        if tenant_id is None:
+        # The tenant this request acts for and the user's role in it, from
+        # the memberships (header, else the session's active tenant, else the
+        # only membership). No access → 404, so a tenant id cannot be probed
+        # for existence.
+        access = await _tenancy.backend().resolve_access(request, user)
+        if access is None:
             return _JSON({"error": "Not found"}, status_code=404)
-        request.state.tenant_id = tenant_id
-        role = _tenancy.backend().effective_role(user, tenant_id)
+        request.state.tenant_id = access.tenant_id
+        request.state.tenant_role = role = access.role
+        request.state.acting_via = access.via
         if is_mutating:
             if path.startswith("/api/users") and role != "admin":
                 return _JSON({"error": "Admin access required"}, status_code=403)
@@ -501,42 +503,27 @@ async def inject_globals(request: Request, call_next):
 async def ws_live(websocket: WebSocket):
     # Authenticate via session cookie before accepting
     from database import AsyncSessionLocal as _ASL
-    from models.settings import Session as _Sess, User as _User, _hash_token as _ht, _hash_token_legacy as _ht_legacy
-    from sqlalchemy import select as _sel
-    from datetime import datetime as _dt
-    token = websocket.cookies.get("nodeglow_session")
-    if not token:
+    from database import get_current_user as _get_user
+    if not websocket.cookies.get("nodeglow_session"):
         await websocket.close(code=4401, reason="Unauthorized")
         return
     async with _ASL() as _db:
-        session = (await _db.execute(
-            _sel(_Sess).where(_Sess.token == _ht(token), _Sess.expires_at > _dt.utcnow())
-        )).scalar_one_or_none()
-        if not session:
-            # Fall back to legacy plain SHA256
-            session = (await _db.execute(
-                _sel(_Sess).where(_Sess.token == _ht_legacy(token), _Sess.expires_at > _dt.utcnow())
-            )).scalar_one_or_none()
-            if session:
-                # Migrate legacy hash to HMAC
-                session.token = _ht(token)
-                await _db.commit()
-        if not session:
-            await websocket.close(code=4401, reason="Unauthorized")
-            return
-        user = (await _db.execute(_sel(_User).where(_User.id == session.user_id))).scalar_one_or_none()
+        user = await _get_user(websocket, _db)
+    if user is None:
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
 
-    # Same resolution as HTTP requests. The hub still broadcasts to every
-    # client; scoping events per tenant is the auth-binding phase (4).
-    tenant_id = await _tenancy.backend().resolve_request_tenant(websocket, user)
-    if tenant_id is None:
+    # Same resolution as HTTP requests: the tenant comes from ?tenant= (the
+    # handshake cannot carry the header), else the session's active tenant,
+    # else the only membership — and must be one of the user's.
+    access = await _tenancy.backend().resolve_access(websocket, user)
+    if access is None:
         await websocket.close(code=4404, reason="Not found")
         return
-    role = _tenancy.backend().effective_role(user, tenant_id)
 
     from services.websocket import register, unregister
-    with _tenancy.tenant_scope(tenant_id):
-        await register(websocket, role=role)
+    with _tenancy.tenant_scope(access.tenant_id):
+        await register(websocket, role=access.role, tenant_id=access.tenant_id)
         try:
             while True:
                 await websocket.receive_text()

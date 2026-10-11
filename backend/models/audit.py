@@ -1,7 +1,7 @@
 """Audit log model — tracks user actions for accountability."""
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 
 from models.base import Base
 from models.tenant import TenantScoped
@@ -21,3 +21,10 @@ class AuditLog(TenantScoped, Base):
     target_name = Column(String(256), nullable=True)
     details     = Column(Text, nullable=True)            # JSON
     ip_address  = Column(String(45), nullable=True)
+    # The provider of the tenant (or of a provider-level action); NULL for
+    # installation-level entries.
+    provider_id = Column(Integer, ForeignKey("providers.id", name="fk_audit_logs_provider"),
+                         nullable=True)
+    # How the actor had access: membership | provider_role | operator |
+    # api_key | agent | system (see services.audit).
+    acting_via  = Column(String(16), nullable=True)

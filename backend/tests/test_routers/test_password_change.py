@@ -33,6 +33,9 @@ async def _seed(sf):
         db.add(User(id=1, username="admin", password_hash=_hash("Old-Passw0rd!"), role="admin"))
         db.add(User(id=2, username="bob", password_hash=_hash("Bob-Passw0rd!"), role="editor"))
         db.add(User(id=3, username="viewer", password_hash=_hash("View-Passw0rd!"), role="readonly"))
+        from models.tenant import TenantMembership
+        for uid, role in ((1, "admin"), (2, "editor"), (3, "readonly")):
+            await db.merge(TenantMembership(user_id=uid, tenant_id=1, role=role))
         await db.commit()
 
 

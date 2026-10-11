@@ -75,6 +75,9 @@ class TenantContext:
     tenant_id: int | None
     system: bool = False
     reason: str = ""
+    # System scopes audit their writes (see _audit_system_write); only the
+    # bootstrap of the default tenant opts out.
+    audit: bool = True
 
 
 _current: contextvars.ContextVar[TenantContext | None] = contextvars.ContextVar(
@@ -141,16 +144,18 @@ def tenant_scope(tenant_id: int) -> Iterator[TenantContext]:
 
 
 @contextmanager
-def system_scope(reason: str) -> Iterator[TenantContext]:
+def system_scope(reason: str, *, audit: bool = True) -> Iterator[TenantContext]:
     """Run the enclosed code across tenants. ``reason`` is mandatory.
 
     Reads are not filtered; new tenant-owned rows must carry ``tenant_id``.
-    Keep these blocks small — the typical shape is "find the row, then
-    continue in ``tenant_scope(row.tenant_id)``".
+    Writes to tenant-owned rows are audited (``system_scope.write``, one
+    entry per tenant and scope); ``audit=False`` is for the bootstrap of the
+    default tenant only. Keep these blocks small — the typical shape is
+    "find the row, then continue in ``tenant_scope(row.tenant_id)``".
     """
     if not reason or not reason.strip():
         raise ValueError("system_scope() needs a reason")
-    ctx = TenantContext(tenant_id=None, system=True, reason=reason)
+    ctx = TenantContext(tenant_id=None, system=True, reason=reason, audit=audit)
     token = _current.set(ctx)
     log.debug("system scope entered: %s", reason)
     try:
@@ -184,26 +189,135 @@ def bind_session(session: Any, tenant_id: int) -> Any:
 
 # ── Tenancy backend (extension point) ────────────────────────────────────────
 
-class SingleTenancy:
-    """The core backend: exactly one tenant (id 1), one site (id 1).
+TENANT_HEADER = "x-nodeglow-tenant"
+# Query parameter carrying the tenant on WebSocket connects (browsers cannot
+# set headers on a WebSocket handshake).
+TENANT_QUERY_PARAM = "tenant"
 
-    Every authenticated request belongs to tenant 1; every job iterates over
-    tenant 1. ``ee`` replaces it via ``extensions.registry.set_tenancy_backend``
-    with one that resolves the tenant from the header / session / membership.
+ACTING_VIA_MEMBERSHIP = "membership"
+ACTING_VIA_PROVIDER = "provider_role"
+ACTING_VIA_OPERATOR = "operator"
+ACTING_VIA_API_KEY = "api_key"
+ACTING_VIA_AGENT = "agent"
+ACTING_VIA_SYSTEM = "system"
+
+
+@dataclass(frozen=True, slots=True)
+class TenantAccess:
+    """A user's access to one tenant: the tenant, the effective role, and how
+    the access was granted (``membership`` in the core; ``provider_role`` or
+    ``operator`` from an ee backend)."""
+
+    tenant_id: int
+    role: str
+    via: str = ACTING_VIA_MEMBERSHIP
+
+
+_INVALID = -1  # a requested tenant that cannot be parsed matches no membership
+
+
+def requested_tenant(request: Any) -> int | None:
+    """The tenant the client asks for explicitly: the ``X-Nodeglow-Tenant``
+    header (any request) or the ``tenant`` query parameter (WebSocket
+    connects only). None if it asks for none; an unparsable value yields an
+    id no membership has."""
+    raw = None
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        raw = headers.get(TENANT_HEADER)
+    if raw is None and getattr(request, "scope", {}).get("type") == "websocket":
+        raw = request.query_params.get(TENANT_QUERY_PARAM)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _INVALID
+    return value if value > 0 else _INVALID
+
+
+async def _user_memberships(request: Any, user: Any) -> dict[int, str]:
+    """The user's active memberships, loaded once per request."""
+    state = getattr(request, "state", None)
+    cache_key = ("memberships", getattr(user, "id", None))
+    cached = getattr(state, "_tenancy_memberships", None) if state is not None else None
+    if cached is not None and cached[0] == cache_key:
+        return cached[1]
+    from models import base as _base
+    from services.memberships import memberships_for
+
+    async with _base.AsyncSessionLocal() as db:
+        found = await memberships_for(db, user.id)
+    if state is not None:
+        try:
+            state._tenancy_memberships = (cache_key, found)
+        except AttributeError:  # pragma: no cover — a state object without attributes
+            pass
+    return found
+
+
+class SingleTenancy:
+    """The core backend: memberships decide, and there is one tenant (id 1)
+    and one site (id 1).
+
+    Resolution for an authenticated request (spec "Selecting the tenant"):
+    an explicit ``X-Nodeglow-Tenant`` header (WebSocket: ``?tenant=``) wins,
+    else the session's ``active_tenant_id``, else the user's only
+    membership. The resolved tenant must be one of the user's (active)
+    memberships, otherwise there is no tenant — the middleware answers 404,
+    so a tenant id cannot be probed for existence. The role is the
+    membership's. ``ee`` replaces this backend via
+    ``extensions.registry.set_tenancy_backend`` (provider roles, several
+    tenants, operator access).
     """
 
+    async def resolve_access(self, request: Any, user: Any) -> TenantAccess | None:
+        if user is None or getattr(user, "id", None) is None:
+            return None
+        memberships = await _user_memberships(request, user)
+        tenant_id = requested_tenant(request)
+        if tenant_id is None:
+            tenant_id = getattr(getattr(request, "state", None), "session_active_tenant_id", None)
+        if tenant_id is None:
+            if len(memberships) != 1:
+                return None  # no membership, or several and none chosen
+            tenant_id = next(iter(memberships))
+        role = memberships.get(tenant_id)
+        if role is None:
+            return None
+        return TenantAccess(tenant_id=tenant_id, role=role)
+
     async def resolve_request_tenant(self, request: Any, user: Any) -> int | None:
-        return DEFAULT_TENANT_ID if user is not None else None
+        access = await self.resolve_access(request, user)
+        return access.tenant_id if access else None
 
     async def list_tenants_for(self, user: Any) -> list[int]:
-        return [DEFAULT_TENANT_ID] if user is not None else []
+        if user is None or getattr(user, "id", None) is None:
+            return []
+        from models import base as _base
+        from services.memberships import memberships_for
+
+        async with _base.AsyncSessionLocal() as db:
+            return sorted(await memberships_for(db, user.id))
 
     async def active_tenant_ids(self) -> list[int]:
         return [DEFAULT_TENANT_ID]
 
-    def effective_role(self, user: Any, tenant_id: int) -> str:
-        # users.role stays the source of truth until the auth binding (phase 4).
-        return getattr(user, "role", None) or "admin"
+    async def effective_role(self, user: Any, tenant_id: int) -> str | None:
+        """The user's role in that tenant, None without access."""
+        if user is None or getattr(user, "id", None) is None:
+            return None
+        from models import base as _base
+        from services.memberships import memberships_for
+
+        async with _base.AsyncSessionLocal() as db:
+            return (await memberships_for(db, user.id)).get(tenant_id)
+
+    def is_operator(self, user: Any, role: str | None = None) -> bool:
+        """Installation operator. In the core the admin of the one tenant
+        administers the installation too (``role`` is the user's role in the
+        request's tenant), so this is never narrower than before the split."""
+        return bool(getattr(user, "is_operator", False)) or role == "admin"
 
     def can_create_tenant(self) -> bool:
         return False
@@ -222,19 +336,51 @@ def backend():
     return extensions.registry.tenancy_backend or _SINGLE
 
 
+async def tenant_is_active(db: Any, tenant_id: int | None) -> bool:
+    """Whether the tenant exists and is active. Credentials of a suspended
+    (or deleting) tenant — API keys, agent and install tokens — stop working."""
+    if tenant_id is None:
+        return False
+    from models.tenant import Tenant
+
+    tenant = await db.get(Tenant, tenant_id)
+    return tenant is not None and tenant.status == "active"
+
+
+def request_role(request: Any) -> str | None:
+    """The role of the request's user in the request's tenant (set by the
+    middleware from the membership). None when the request has no tenant
+    access — callers treat that as "no role", never as admin."""
+    return getattr(getattr(request, "state", None), "tenant_role", None)
+
+
+def request_is_admin(request: Any) -> bool:
+    return request_role(request) == "admin"
+
+
+def request_is_operator(request: Any) -> bool:
+    """Whether the request's user may change installation-level settings."""
+    state = getattr(request, "state", None)
+    user = getattr(state, "current_user", None)
+    if user is None:
+        return False
+    return backend().is_operator(user, request_role(request))
+
+
 @asynccontextmanager
-async def user_tenant_scope(request: Any, user: Any) -> AsyncIterator[int]:
+async def user_tenant_scope(request: Any, user: Any) -> AsyncIterator[TenantAccess]:
     """Tenant scope for a route that authenticates the user itself.
 
     The middleware skips ``/api/auth/`` (login, logout), so those routes
     resolve the tenant once they know who the user is — the same way the
-    middleware would.
+    middleware would. Raises :class:`TenantContextError` when the user has
+    no access to any tenant.
     """
-    tenant_id = await backend().resolve_request_tenant(request, user)
-    if tenant_id is None:
+    access = await backend().resolve_access(request, user)
+    if access is None:
         raise TenantContextError("user has no tenant")
-    with tenant_scope(tenant_id):
-        yield tenant_id
+    with tenant_scope(access.tenant_id):
+        yield access
 
 
 # ── Job helpers ──────────────────────────────────────────────────────────────
@@ -330,6 +476,42 @@ def _touched_tenant_tables(statement) -> list[str]:
     return sorted({t.name for t in found if t in tables})
 
 
+# ── Audit of writes in system scope ──────────────────────────────────────────
+#
+# Every system_scope() that writes tenant-owned rows leaves an audit entry
+# (spec "Audit": "every system_scope() entry is audited"): one per affected
+# tenant per scope and session, action ``system_scope.write``, with the
+# scope's reason and the tables written. Reads in system scope (token
+# lookups, listing tenants) are not audited — they happen on every agent
+# request and would drown the log. Raw SQL is not seen here (phase 7).
+
+SYSTEM_WRITE_ACTION = "system_scope.write"
+_AUDITED_KEY = "nodeglow_system_audited"
+
+
+def _audit_system_write(session: Session, ctx: TenantContext, tables: set[str],
+                        tenant_ids: set[int | None]) -> None:
+    import json
+    from datetime import datetime
+
+    from models.audit import AuditLog
+
+    if not ctx.audit:
+        return
+    audited: set = session.info.setdefault(_AUDITED_KEY, set())
+    for tid in sorted(tenant_ids, key=lambda t: (t is None, t or 0)):
+        key = (id(ctx), ctx.reason, tid)
+        if key in audited:
+            continue
+        audited.add(key)
+        session.add(AuditLog(
+            timestamp=datetime.utcnow(), tenant_id=tid, acting_via="system",
+            action=SYSTEM_WRITE_ACTION, target_type="system_scope",
+            target_name=ctx.reason[:256],
+            details=json.dumps({"reason": ctx.reason, "tables": sorted(tables)}),
+        ))
+
+
 def _on_orm_execute(state) -> None:
     if not state.is_orm_statement:
         return  # text() / Core: out of scope for this layer (RLS, phase 7)
@@ -339,6 +521,11 @@ def _on_orm_execute(state) -> None:
         return
     ctx = _effective_context(state.session)
     if ctx is not None and ctx.system:
+        if not state.is_select:
+            names = [n for n in _touched_tenant_tables(state.statement) if n != "audit_logs"]
+            if names:
+                # Bulk statements name no rows: the entry is installation-level.
+                _audit_system_write(state.session, ctx, set(names), {None})
         return
     if state.is_insert:
         # ORM-enabled insert(Model).values(...) bypasses before_flush; the
@@ -368,8 +555,30 @@ def _on_orm_execute(state) -> None:
     )
 
 
+def _system_writes(session: Session) -> tuple[set[str], set[int | None]]:
+    """Tenant-owned tables and tenants a system-scope flush writes to."""
+    from models.audit import AuditLog
+
+    tables: set[str] = set()
+    tenants: set[int | None] = set()
+    for obj in list(session.new) + list(session.deleted):
+        if isinstance(obj, TenantScoped) and not isinstance(obj, AuditLog):
+            tables.add(type(obj).__tablename__)
+            tenants.add(obj.tenant_id)
+    for obj in session.dirty:
+        if isinstance(obj, TenantScoped) and not isinstance(obj, AuditLog) \
+                and session.is_modified(obj, include_collections=False):
+            tables.add(type(obj).__tablename__)
+            tenants.add(obj.tenant_id)
+    return tables, tenants
+
+
 def _before_flush(session: Session, flush_context, instances) -> None:
     ctx = _effective_context(session)
+    if ctx is not None and ctx.system:
+        tables, tenants = _system_writes(session)
+        if tables:
+            _audit_system_write(session, ctx, tables, tenants)
     for obj in session.new:
         if not isinstance(obj, TenantScoped):
             continue

@@ -215,8 +215,14 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
     # tenant's settings in ``settings``: they belong to the importing tenant.
     from models.settings import adopt_legacy_tenant_settings
 
-    moved = await adopt_legacy_tenant_settings(db, tenancy.session_tenant_id(db))
-    if moved:
+    tenant_id = tenancy.session_tenant_id(db)
+    moved = await adopt_legacy_tenant_settings(db, tenant_id)
+    # ...and no memberships (before 039, or users added before 043): without
+    # one nobody could sign in after the restore.
+    from services.memberships import backfill_memberships
+
+    granted = await backfill_memberships(db, tenant_id)
+    if moved or granted:
         await db.commit()
 
     result = {"imported": imported, "total_rows": sum(imported.values())}

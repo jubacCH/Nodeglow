@@ -148,7 +148,7 @@ async def setting_row(db, key: str, tenant_id: int = 1):
     from services.tenancy import system_scope
 
     model, pk = _setting_model(key, tenant_id)
-    with system_scope("test: read a raw settings row"):
+    with system_scope("test: read a raw settings row", audit=False):
         return await db.get(model, pk)
 
 
@@ -156,7 +156,7 @@ async def put_settings(db, tenant_id: int = 1, **values) -> None:
     """Store raw values (no encryption) where the registry puts each key; commits."""
     from services.tenancy import system_scope
 
-    with system_scope("test: seed settings"):
+    with system_scope("test: seed settings", audit=False):
         for key, value in values.items():
             model, pk = _setting_model(key, tenant_id)
             row = await db.get(model, pk)

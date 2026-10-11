@@ -69,8 +69,9 @@ async def test_backups_listed_for_admin(client):
     assert resp.json()["backups"][0]["name"] == "pre-update-x.dump.gz"
 
 
-async def test_backups_require_admin(client):
-    with patch("database.get_current_user", new_callable=AsyncMock, return_value=Viewer()):
+async def test_backups_require_admin():
+    from tests.test_routers.conftest import make_client
+    async with make_client(fake_user=Viewer()) as (client, _sf):
         resp = await client.get("/api/update/backups")
     assert resp.status_code == 403
 
@@ -94,7 +95,8 @@ async def test_apply_passes_through_conflict(client):
     assert "already active" in resp.json()["error"]
 
 
-async def test_apply_requires_admin(client):
-    with patch("database.get_current_user", new_callable=AsyncMock, return_value=Viewer()):
+async def test_apply_requires_admin():
+    from tests.test_routers.conftest import make_client
+    async with make_client(fake_user=Viewer()) as (client, _sf):
         resp = await client.post("/api/update/apply")
     assert resp.status_code == 403

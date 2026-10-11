@@ -104,8 +104,9 @@ async def check_for_updates(request: Request):
 @rate_limit(max_requests=2, window_seconds=300)
 async def apply_update(request: Request):
     """Apply update via the sidecar (which has Docker socket access)."""
-    user = getattr(request.state, "current_user", None)
-    if not user or getattr(user, "role", "admin") != "admin":
+    # Updating the installation is the operator's (core: the tenant admin).
+    from services.tenancy import request_is_operator
+    if not request_is_operator(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
 
     try:
@@ -160,8 +161,9 @@ async def update_status(request: Request):
 @rate_limit(max_requests=20, window_seconds=60)
 async def list_update_backups(request: Request):
     """Pre-update database dumps kept by the sidecar (admin only)."""
-    user = getattr(request.state, "current_user", None)
-    if not user or getattr(user, "role", "admin") != "admin":
+    # Updating the installation is the operator's (core: the tenant admin).
+    from services.tenancy import request_is_operator
+    if not request_is_operator(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
 
     try:
