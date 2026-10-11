@@ -310,6 +310,49 @@ async def test_syslog_insert_carries_tenant_and_site(ch):
     assert rows == [{"tenant_id": A, "site_id": 7}]
 
 
+# ── Purge of a deleted tenant (ee, phase 9) ───────────────────────────────────
+
+
+async def test_purge_deletes_every_row_of_one_tenant_and_nothing_else(ch):
+    """The ee purge: a lightweight DELETE per tenant table, confined to the
+    tenant; another tenant's rows (same host ids) stay. Tenant ids are unique
+    to this run — the tables are shared with the other live tests."""
+    purge = pytest.importorskip("nodeglow_ee.tenancy.purge")
+    gone, kept = random.randint(10**6, 2 * 10**6), random.randint(2 * 10**6, 3 * 10**6)
+    host = random.randint(10**8, 2 * 10**8)
+    now = datetime.utcnow()
+    for tid in (gone, kept):
+        await ch.insert_ping_checks([{"tenant_id": tid, "timestamp": now - timedelta(minutes=i),
+                                      "host_id": host, "success": True} for i in range(3)])
+        await ch.insert_agent_metrics([{"tenant_id": tid, "timestamp": now, "agent_id": host,
+                                        "agent_name": f"t{tid}", "cpu_pct": 1.0}])
+        await ch.insert_bandwidth_metrics([{"tenant_id": tid, "timestamp": now, "source_type": "unifi",
+                                            "source_id": f"mac-{host}", "interface_name": "p1",
+                                            "rx_rate_bps": 1}])
+        await ch.insert_batch([{"tenant_id": tid, "timestamp": now, "received_at": now,
+                                "source_ip": "10.0.0.1", "message": f"purge-{tid}", "severity": 3}])
+
+    async def counts(tid):
+        out = {}
+        with tenant_scope(tid):
+            for table in ch.TENANT_TABLES:
+                out[table] = await ch.query_scalar(
+                    f"SELECT count() FROM {table} WHERE {ch.TENANT_FILTER}")
+        return out
+
+    assert await counts(gone) == {"ping_checks": 3, "agent_metrics": 1, "bandwidth_metrics": 1,
+                                  "syslog_messages": 1}
+    before_kept = await counts(kept)
+    report = await purge.purge_clickhouse(gone)
+    assert {t: report[t] for t in ch.TENANT_TABLES} == {
+        "ping_checks": 3, "agent_metrics": 1, "bandwidth_metrics": 1, "syslog_messages": 1}
+    assert set((await counts(gone)).values()) == {0}
+    assert await counts(kept) == before_kept
+    # Idempotent: a resumed purge finds nothing and deletes nothing.
+    assert {t: v for t, v in (await purge.purge_clickhouse(gone)).items()
+            if t in ch.TENANT_TABLES} == {t: 0 for t in ch.TENANT_TABLES}
+
+
 # ── Row policy (restricted user) ──────────────────────────────────────────────
 
 

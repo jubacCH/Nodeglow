@@ -392,7 +392,10 @@ async def get_current_user_api(request: Request, db: AsyncSession = Depends(get_
     # one), with its name — the user's own tenants only.
     tenants = await _tenant_list(db, await tenancy.backend().list_access_for(user))
     return {
-        "user": {"id": user.id, "username": user.username, "role": access.role},
+        "user": {"id": user.id, "username": user.username, "role": access.role,
+                 # Installation operator (e.g. the ee Tenants page); in the
+                 # core: the admin of the default tenant.
+                 "is_operator": tenancy.backend().is_operator(user, access.role, access.tenant_id)},
         "tenant": {"id": access.tenant_id, "via": access.via},
         "tenants": tenants,
     }
