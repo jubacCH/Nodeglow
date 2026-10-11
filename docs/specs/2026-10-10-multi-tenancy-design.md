@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10 — phases 1–8 implemented 2026-10-11 (see "Implementation status")
+Status: design · 2026-10-10 — phases 1–8 implemented 2026-10-11; per-tenant envelope keys (owner decision 7, revision 046) implemented 2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -54,7 +54,9 @@ Owner decisions this design builds on (2026-10-10):
   first.
 - **Billing.** Plan limits are modelled (quotas), invoicing is not.
 - **Per-tenant encryption keys.** Listed as an option for later (crypto-shred on
-  tenant deletion); one `SECRET_KEY` remains.
+  tenant deletion); one `SECRET_KEY` remains. *(Superseded by owner decision 7:
+  envelope encryption per tenant, implemented in revision 046 — see
+  "Implementation status".)*
 
 ## Tenant model
 
@@ -1718,6 +1720,121 @@ Tests (integration branch): 1734 passed, 27 skipped, no xfail (with ee);
 1652 passed, 28 skipped (`NODEGLOW_DISABLE_EE=1`); PostgreSQL module 36
 passed. The isolation files add about 50 s to the suite on SQLite.
 
+### Per-tenant envelope keys — owner decision 7 (done)
+
+Revision `046` (chained after 044; phase 9 may take 045 — renumber at merge);
+code in `services/tenant_keys.py`, `models/tenant.py` (`TenantKey`),
+`models/base.py` (`installation_key_material`).
+
+- **Keys.** Every tenant has a data key (DEK, 32 random bytes, a Fernet
+  key). It is stored only wrapped, in `tenant_keys` (`tenant_id`, `key_id`,
+  `kek_id`, `wrapped_dek`, `created_at`, `retired_at`, `destroyed_at`; PK
+  `(tenant_id, key_id)`), by the installation's key-encryption key: `kek_id`
+  `sk1` = HKDF-SHA256 with its own label over the PBKDF2-stretched
+  `SECRET_KEY` (the same 480k-round derivation as the installation Fernet
+  key, run once per process; a different key). A KMS-held KEK later is a new
+  `kek_id`. The wrapped plaintext is bound to its tenant and key id
+  (`ngdek1:<tenant>:<key_id>:` + DEK): a wrapped key copied into another
+  tenant's row does not unwrap there.
+- **What uses it.** Every tenant secret: `integration_configs.config_json`,
+  `credentials.data_json`, `tenant_settings` rows flagged `encrypted` and the
+  keys the registry declares `secret` (channel secrets, `smtp_password`,
+  `phpipam_password` — `settings_registry.secret_tenant_keys()`).
+  Installation secrets in `settings` keep the installation key
+  (`encrypt_value`), as does a tenant's `smtp_password` fallback to the
+  installation relay.
+- **Format.** `v2:<key_id>:<Fernet token>`; anything else is a value from
+  before 046 (installation key, read transparently) or legacy plaintext of
+  the channel secrets (passes through `reveal`, as before). A `v2` value that
+  does not decrypt always raises (`TenantKeyDestroyed`,
+  `TenantKeyUnavailable`) — never handed out as plaintext, also not by
+  `notification_channels.reveal` or `channel_secrets.reveal`.
+- **API.** `tenant_cipher(db, tenant_id=None, write=False)` (sync
+  `encrypt`/`decrypt`/`reveal` for decrypt callbacks), `get_dek`,
+  `encrypt_secret` / `decrypt_secret` / `reveal_secret`,
+  `create_tenant_key` (for ee's tenant creation), `rotate_tenant_key`,
+  `destroy_tenant_key`, `reencrypt_legacy`, `upgrade_legacy_secrets`
+  (startup), `scan`. The tenant must agree with the context
+  (`tenancy.tenant_access`, the rule `get_setting` already had — moved there);
+  keys are read through the tenant filter and RLS like any tenant table.
+  `encrypt_config`/`decrypt_config` and `encrypt_credential`/
+  `decrypt_credential` became async and take the session (and the row, whose
+  tenant decides).
+- **Caching.** The key rows are read once per transaction (`Session.info`,
+  dropped at commit/rollback — another process's destroy or rotation is seen
+  by the next transaction); unwrapped DEKs are cached per process, keyed by
+  tenant, key id and the wrapped value. A key is created lazily on the first
+  encrypt of a tenant (in the caller's transaction) — reads never create one.
+- **Rotate** makes a new active key, re-encrypts every secret of the tenant
+  (also values under the installation key and plaintext secret settings) and
+  retires the previous keys; retired keys stay readable, so a value written
+  concurrently with the old key is not lost. Not committed by itself.
+- **Destroy** (for the phase-9 purge) first moves values still under the
+  installation key to the tenant key, then deletes every wrapped DEK
+  (`wrapped_dek = NULL`, `destroyed_at` — the row stays as a tombstone so the
+  error says "destroyed", not "unknown key"). Afterwards every decrypt of the
+  tenant's secrets raises `TenantKeyDestroyed`, nothing can be encrypted or
+  rotated for it, and `get_setting` of an encrypted key raises.
+- **046** creates `tenant_keys` (policy + RLS state like `tenant_settings`;
+  `migrate.py` re-applies from the live classification), a key for tenant 1
+  and for every tenant with secrets, and re-encrypts in place every value
+  under the installation key (guarded `UPDATE … WHERE value = :old`). `v2`
+  values are skipped (idempotent; the whole chain is one transaction, so an
+  interrupted run leaves nothing half-done); values that do not decrypt
+  (another `SECRET_KEY`, plaintext) are left exactly as they are and logged
+  with a count. Plaintext secret settings are left for the startup pass. The
+  downgrade re-encrypts every readable `v2` value under the installation key
+  and drops the table.
+- **Startup** (`main.py`): `upgrade_legacy_secrets` moves values still under
+  the installation key — e.g. written by the old backend while the update's
+  migrate step ran — and the plaintext channel secrets of old installs
+  (`encrypt_plaintext_channel_secrets` now encrypts with the tenant key).
+- **Backups.** `tenant_keys` is not exported. The export decrypts every
+  tenant secret and carries it as `{"$nodeglow_secret": "plain", "value": …}`
+  (`_meta.tenant_secrets = "plaintext"`, version 1.1) — only ever inside the
+  passphrase envelope, which the route requires. The restore encrypts each
+  under the key of the tenant its row lands in (created as needed), and then
+  moves old-format values (a pre-046 backup) to the tenant key. A restore
+  into an installation with another `SECRET_KEY` therefore keeps the tenant
+  secrets; installation secrets still need the original key (warning).
+- **CLI.** `python -m services.tenant_keys verify` (owner connection, system
+  scope, read-only): keys per tenant and state, counts per column and format
+  (`v2:<key_id>`, `legacy`, `plaintext`, `undecryptable`, failing `v2`),
+  decrypt failures; exit 1 when any. Also `upgrade [--tenant N]` and
+  `rotate --tenant N`.
+
+Tests: `tests/test_tenant_keys.py` (wrap/unwrap and its binding, KEK ≠
+installation key, formats, fail closed, per-tenant cache, a tenant context
+cannot reach another tenant's key, B's ciphertext and even B's wrapped key
+copied into A give A nothing, rotation incl. rollback, destroy incl. the next
+transaction of another session, settings layer, startup pass, scan without
+secrets, export opens / restore seals, 046's data step on SQLite: idempotent,
+reversible, frozen key list = registry), `tests/test_tenant_keys_pg.py`
+(PostgreSQL: an install at 044 with RLS on and two users, secrets in every
+secret-bearing table — Discord webhook, SMTP, Teams, integration tokens, SNMP
+community, plaintext Telegram token of an old install, a value under a previous
+key, installation secrets; after 046 everything reads the same through the
+app's paths as `nodeglow_app` with RLS on, `tenant_keys` is under RLS, re-run
+changes nothing, `alembic check`, `verify` counts without secrets, downgrade
+back under the installation key, upgrade again; backup export → restore into
+an install with a different `SECRET_KEY`). The isolation walk seeds a
+`tenant_keys` row per tenant (key id with the canary) and encrypts the seeded
+configs and credentials under it.
+
+Deviations / limits:
+
+- The KEK is derived from `SECRET_KEY`; changing `SECRET_KEY` still makes
+  everything unreadable (no KEK rotation yet — the `kek_id` column is there
+  for it, and for a KMS).
+- A value that was unreadable before 046 (written under another
+  `SECRET_KEY`) stays under no tenant key, so destroying the tenant's key does
+  not shred it — the purge deletes the rows anyway. `verify` lists them.
+- Retired keys are never removed by rotation; only `destroy_tenant_key`
+  removes keys. A "rotate and drop the old key" for a suspected key leak is
+  a follow-up.
+- Other processes may hold an unwrapped DEK until their current
+  transaction ends (≈ request); destroy is immediate for new transactions.
+
 ### Open items (after phases 5–8)
 
 - **Phase 6 (ClickHouse):** done (see above). Left: ee's tenant creation
@@ -1734,6 +1851,13 @@ passed. The isolation files add about 50 s to the suite on SQLite.
   otherwise). Log analytics and the self-check still have no required
   effect in the job tests (they need ClickHouse series the fake does not
   serve).
+- **Tenant keys (046) → phase 9:** ee's tenant creation calls
+  `tenant_keys.create_tenant_key(db, tenant_id)` after flushing the tenant
+  (otherwise the first secret creates it lazily); the purge calls
+  `destroy_tenant_key(db, tenant_id)` in system scope **before** deleting the
+  rows and commits it (a later failure of the purge then still leaves the
+  data shredded). Per-tenant export/import (phase 12) can reuse
+  `open_for_export` / `seal_for_restore`.
 - Still true from phase 2: work spawned with `asyncio.create_task` inherits
   the context; a task started in `system_scope` that writes must set its
   tenant itself (notifications and WebSocket broadcasts now take the

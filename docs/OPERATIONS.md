@@ -391,11 +391,45 @@ escrowed `SECRET_KEY` — without it the file cannot be restored. Restore with
 Unencrypted exports from older versions are still accepted, but only with
 `"allow_unencrypted": true` in the body.
 
+### Tenant keys (envelope encryption)
+
+Since revision 046 the credentials of a tenant (integration configs, SNMP /
+WinRM / SSH credentials, notification channel secrets, SMTP and phpIPAM
+passwords) are encrypted with that **tenant's own data key**. The data keys
+are random, stored only wrapped (encrypted) by a key derived from
+`SECRET_KEY` in the table `tenant_keys`. Installation secrets (LDAP bind
+password, AI provider keys, licence, GeoIP key) keep the `SECRET_KEY`
+directly. Nothing changes for escrow: `SECRET_KEY` still opens everything,
+and a `pg_dump` contains the wrapped keys.
+
+- The upgrade to 046 moves every existing credential to the tenant key in
+  place; the backend's start moves anything written in the old format later
+  (for example by the old backend while an update ran). Values that do not
+  decrypt with the current `SECRET_KEY` are left exactly as they are.
+- Check the state at any time (read-only, prints counts, never a secret;
+  exit code 1 when something does not decrypt):
+
+  ```bash
+  docker compose exec nodeglow python -m services.tenant_keys verify
+  ```
+
+  `upgrade` moves remaining old-format values, `rotate --tenant N` gives a
+  tenant a new data key and re-encrypts its secrets (the old key stays
+  readable as "retired").
+- Deleting a tenant (ee) destroys its data keys: its credentials are then
+  unreadable everywhere — database, replicas, dumps — even with `SECRET_KEY`
+  (crypto-shred).
+- The JSON export carries tenant credentials in plaintext **inside** the
+  passphrase-encrypted file and the restore encrypts them under the target's
+  tenant key, so they survive a restore into an installation with a
+  different `SECRET_KEY` (installation secrets do not; the restore warns).
+
 ### Changing it
 
-There is no re-encryption tooling. Setting a different `SECRET_KEY` makes all
-existing credentials unreadable; they then have to be entered again. Treat the
-key as permanent for the life of the installation.
+There is no re-encryption tooling for `SECRET_KEY` itself. Setting a different
+`SECRET_KEY` makes all existing credentials unreadable (the wrapped tenant keys
+included); they then have to be entered again. Treat the key as permanent for
+the life of the installation.
 
 ### Recovering after losing the host
 
