@@ -293,17 +293,22 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Integration health (LATERAL join) ────────────────────────────────
     integration_summary = []
     try:
+        # Raw SQL: the tenant predicate is explicit — it is also the leading
+        # column of ix_snap_type_entity_ts since 041, so the LATERAL lookup
+        # uses the index again.
+        from services.tenancy import current_tenant_id
         rows = (await db.execute(text("""
             SELECT c.type, c.name, s.ok, s.timestamp AS ts, s.error
             FROM integration_configs c
             LEFT JOIN LATERAL (
                 SELECT ok, timestamp, error FROM snapshots
-                WHERE entity_type = c.type AND entity_id = c.id
+                WHERE tenant_id = c.tenant_id
+                  AND entity_type = c.type AND entity_id = c.id
                 ORDER BY timestamp DESC LIMIT 1
             ) s ON true
-            WHERE c.enabled = true
+            WHERE c.enabled = true AND c.tenant_id = :tenant_id
             ORDER BY c.type, c.name
-        """))).all()
+        """), {"tenant_id": current_tenant_id()})).all()
         for r in rows:
             integration_summary.append({
                 "type": r.type,

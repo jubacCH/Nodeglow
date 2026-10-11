@@ -294,6 +294,42 @@ def test_restoring_a_pre_042_backup_takes_its_settings_and_roles(pg_db):
     assert [r[0] for r in q(pg_db, "SELECT id FROM users WHERE is_operator ORDER BY id")] == [1]
 
 
+def test_restoring_a_current_backup_keeps_its_memberships(pg_db):
+    """TRUNCATE users CASCADE wipes memberships and preferences; a current
+    backup brings them back as they were (the membership role wins over
+    users.role), and a user without one gets one."""
+    import json
+
+    _run(["migrate.py"], pg_db)
+    backup = {
+        "_meta": {"format": "nodeglow-backup", "version": "1.0"},
+        "tables": {
+            "settings": [{"key": "syslog_port", "value": "1514", "encrypted": False}],
+            "users": [{"id": 1, "username": "root", "password_hash": "x", "role": "admin",
+                       "auth_source": "local", "is_operator": True},
+                      {"id": 2, "username": "ed", "password_hash": "x", "role": "admin",
+                       "auth_source": "local", "is_operator": False},
+                      {"id": 3, "username": "new", "password_hash": "x", "role": "readonly",
+                       "auth_source": "local", "is_operator": False}],
+            "tenant_memberships": [
+                {"user_id": 1, "tenant_id": 1, "role": "admin", "created_at": None},
+                {"user_id": 2, "tenant_id": 1, "role": "editor", "created_at": None}],
+            "tenant_settings": [{"tenant_id": 1, "key": "site_name", "value": "Backup", "encrypted": False}],
+            "user_preferences": [{"user_id": 2, "tenant_id": 1, "dashboard_layout": "[]"}],
+        },
+    }
+    # As an export writes them: timestamps are ISO strings.
+    for m in backup["tables"]["tenant_memberships"]:
+        m["created_at"] = "2026-10-01T12:00:00"
+    for u in backup["tables"]["users"]:
+        u["created_at"] = "2026-01-01T00:00:00.123456"
+    _run(["-c", RESTORE_SCRIPT, json.dumps(backup)], pg_db)
+    members = q(pg_db, "SELECT user_id, role FROM tenant_memberships ORDER BY user_id")
+    assert [tuple(r) for r in members] == [(1, "admin"), (2, "editor"), (3, "readonly")]
+    assert q(pg_db, "SELECT count(*) FROM user_preferences")[0][0] == 1
+    assert q(pg_db, "SELECT value FROM tenant_settings WHERE key = 'site_name'")[0][0] == "Backup"
+
+
 def test_downgrade_to_038_keeps_data(pg_db):
     _alembic(pg_db, "upgrade", "038")
     _seed(pg_db)

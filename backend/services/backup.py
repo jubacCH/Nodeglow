@@ -141,13 +141,22 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
 
         # Get valid column names for each table from the DB schema
         _valid_columns: dict[str, set[str]] = {}
+        # Timestamp columns: the export writes them as ISO strings, and
+        # asyncpg refuses a str for a TIMESTAMP parameter of raw SQL.
+        _time_columns: dict[str, dict[str, type]] = {}
         conn = await db.connection()
+        from sqlalchemy import Date, DateTime
         for t in EXPORT_TABLES:
             try:
                 col_info = await conn.run_sync(lambda sc, tn=t: inspect(sc).get_columns(tn))
                 _valid_columns[t] = {c["name"] for c in col_info}
+                _time_columns[t] = {
+                    c["name"]: (DateTime if isinstance(c["type"], DateTime) else Date)
+                    for c in col_info if isinstance(c["type"], (DateTime, Date))
+                }
             except Exception:
                 _valid_columns[t] = set()
+                _time_columns[t] = {}
 
         # Insert in forward order (parents first)
         for table_name in EXPORT_TABLES:
@@ -183,9 +192,13 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
             placeholders = ", ".join(f":{c}" for c in cols)
             col_names = ", ".join(f'"{c}"' for c in cols)
 
+            time_cols = _time_columns.get(table_name, {})
             for row in rows:
                 # Only include validated columns
                 safe_row = {c: row.get(c) for c in cols}
+                for c, kind in time_cols.items():
+                    if isinstance(safe_row.get(c), str):
+                        safe_row[c] = _parse_time(safe_row[c], kind)
                 safe_row.update(defaults)
                 await db.execute(
                     text(f"INSERT INTO {_safe_table(table_name)} ({col_names}) VALUES ({placeholders})"),
@@ -368,6 +381,20 @@ def _key_fingerprint() -> str | None:
     except Exception:  # never let bookkeeping break a backup or restore
         logger.debug("could not compute the key fingerprint", exc_info=True)
         return None
+
+
+def _parse_time(value: str, kind):
+    """ISO string from an export back to datetime/date (naive UTC, as stored)."""
+    from datetime import date
+    from sqlalchemy import DateTime
+
+    try:
+        if kind is DateTime:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return value
 
 
 def _serialize(value):

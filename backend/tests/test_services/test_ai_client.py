@@ -195,9 +195,17 @@ async def test_check_connection_works_before_opt_in():
 # ── upgrade compatibility ────────────────────────────────────────────────────
 
 def _factory(db):
+    """Sessions WITHOUT a tenant binding, like the app's at startup: the
+    upgrade must bring its own scope (a bound test session hid that it had
+    none and every real start rolled the marker back)."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    plain = async_sessionmaker(db.bind, expire_on_commit=False)
+
     @asynccontextmanager
     async def factory():
-        yield db
+        async with plain() as s:
+            yield s
     return factory
 
 
