@@ -199,15 +199,20 @@ async def run_port_discovery():
         if not hosts:
             return
 
-        # Scan hosts with concurrency limit (5 hosts at a time)
-        sem = asyncio.Semaphore(5)
+    # Scan hosts with concurrency limit (5 hosts at a time). Each scan has
+    # its own session: one AsyncSession shared by concurrent tasks broke as
+    # soon as two scans committed at once ("This transaction is closed").
+    sem = asyncio.Semaphore(5)
 
-        async def _scan(host):
-            async with sem:
-                try:
-                    await discover_ports_for_host(db, host)
-                except Exception as exc:
-                    logger.warning("Port discovery failed for %s: %s", host.name, exc)
+    async def _scan(host_id: int, name: str):
+        async with sem:
+            try:
+                async with AsyncSessionLocal() as sdb:
+                    host = await sdb.get(PingHost, host_id)
+                    if host is not None:
+                        await discover_ports_for_host(sdb, host)
+            except Exception as exc:
+                logger.warning("Port discovery failed for %s: %s", name, exc)
 
-        await asyncio.gather(*[_scan(h) for h in hosts])
-        logger.info("Port discovery completed for %d hosts", len(hosts))
+    await asyncio.gather(*[_scan(h.id, h.name) for h in hosts])
+    logger.info("Port discovery completed for %d hosts", len(hosts))
