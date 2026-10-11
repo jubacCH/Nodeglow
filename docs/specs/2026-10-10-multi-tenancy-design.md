@@ -1181,8 +1181,9 @@ no migration.
   tenant: the job ticks at the fastest tenant's interval
   (`job_tick`, re-derived by `reschedule_cadence_jobs()` whenever a tenant
   saves its intervals), and a tenant runs when *its* interval has elapsed
-  (`TenantCadence`, half a tick of tolerance for jitter). The tenants'
-  intervals are read in one query per tick (multi-tenant only).
+  (`TenantCadence`; 2 s of jitter tolerance, an interval between two
+  ticks rounds up — 90 s at a 60 s tick runs every 120 s, never faster).
+  The tenants' intervals are read in one query per tick (multi-tenant only).
 - **Floors and caps** (installation keys in the registry):
   `ping_interval_min` / `proxmox_interval_min` (default 10 s — the old
   hard-coded minimum of the settings form) bound the tenant's interval in
@@ -1196,12 +1197,16 @@ no migration.
   tenant (`NODEGLOW_TENANT_CONCURRENCY_CAP`, default none). Measured in
   steps: 40 items of A submitted before 4 of B on 4 slots — FIFO finishes
   B after 11 steps, fair share after 3; total throughput unchanged.
-- **Tenant-local schedules.** The weekly digest and the ee daily AI
+- **Per-tenant schedules.** The weekly digest and the ee daily AI
   summary tick hourly and fire for a tenant when its own slot
-  (`digest_day`/`digest_hour`, `daily_ai_summary_hour`, in its
-  `timezone`) is less than an hour old — the old cron's misfire grace —
-  and nothing was sent since (`digest_last_sent`, new tenant state key;
-  the daily summary keeps its 20 h duplicate protection). Saving the hour
+  (`digest_day`/`digest_hour`, `daily_ai_summary_hour` — **UTC**, as the
+  settings UI says and as the old crons ran in the container's zone; not
+  the tenant's `timezone`) is less than an hour old — the old cron's
+  misfire grace — and nothing was sent since (`digest_last_sent`, new
+  tenant state key; the daily summary keeps its 20 h duplicate
+  protection). The hourly tick fires at the same full hour as the old
+  cron, so deploy day neither skips nor repeats a send (a restart after
+  the old 09:00 cron: the 10:00 tick is past the grace). Saving the hour
   no longer reschedules anything (the daily-summary hour needed a restart
   before).
 - **Per-tenant job metrics.** `nodeglow_tenant_job_runs_total{job,tenant,status}`,
@@ -1241,9 +1246,10 @@ Deviations:
 - The `tenant` label is on new per-tenant metrics, not on the existing
   `nodeglow_scheduler_job_*` series (that would multiply a histogram by
   the tenant count).
-- Timezone: an install whose tenant `timezone` differs from the server's
-  zone now gets its digest at the configured hour *in the tenant's zone*
-  (default `UTC` = the container's zone: unchanged).
+- The digest and daily-summary hours stay UTC (a first version read them
+  in the tenant's `timezone`; production has `Europe/Zurich` and the UI
+  says UTC — review finding, reverted). Tenant-local hours would need a
+  data migration of the stored hours and new labels.
 
 Open:
 
@@ -1265,12 +1271,21 @@ Gating, enumerating tests (no migration):
   one row of **every tenant-owned table** each (`SEEDS` must equal
   `tenant_tables()`), every B row carrying `CANARY-B-<table>`, plus a user
   per tenant. As A's user (real session cookie) and with A's API key:
-  - a route with path parameters called with B's ids → **404**; a
-    validation/licence answer (400/402/422) is accepted only when it is
-    identical to the answer for an id that exists in no tenant (no
-    existence oracle);
+  - a route with path parameters called with B's ids → **404**, with a
+    valid body (JSON or form data, `_bodies`) so the handler reaches its
+    lookup; a pre-lookup answer (400/402/422) only for routes listed in
+    `PRE_LOOKUP_ROUTES` (the licence-gated postmortem) and only when
+    identical to the answer for an id that exists in no tenant;
   - after every mutating call B's rows are compared column by column —
-    unchanged;
+    unchanged — including B's users, memberships and sessions;
+  - after every mutating call no row of A references a row of B
+    (`_foreign_refs`: parent, probe, site, credential, host, rule source,
+    template, job, schedule, incident, snapshot entity, maintenance host
+    lists); `test_a_cannot_reference_b_objects` sends A's own rows bodies
+    naming B's rows (16 calls);
+  - a second walk with an active ee licence and a fake AI provider runs
+    the licence-gated routes (Glow chat, postmortem, test summary) for
+    real; no prompt built for A mentions B;
   - no response contains `CANARY-B`;
   - `X-Nodeglow-Tenant: 2` (A's user is no member of B; also with A's key)
     → 404 on every tenant route, streams included;
@@ -1330,14 +1345,21 @@ Found and fixed by the walk:
 
 Deviations / limits:
 
-- Pre-lookup 400/402/422 instead of 404 (see above); routes keyed by
-  content hashes are not expected to 404.
-- Mutating routes without path parameters get `{}` unless listed in
-  `_bodies` (bulk host update, SNMP config, maintenance window, rule test
-  and create, host create with B's parent): a route whose *body* names
-  another tenant's row and is not listed is walked only for "no canary,
-  B unchanged". On PostgreSQL the composite foreign keys refuse such
-  references regardless.
+- Routes keyed by content hashes are not expected to 404.
+- Mutating routes without path parameters and without a `_bodies` entry
+  get `{}`; the reference check after every call still catches a write
+  of A pointing at B.
+- Review round (2026-10-11): the walk found two real cross-tenant
+  references once bodies were sent as forms — a host's parent and an
+  alert rule's source could name another tenant's row (also SNMP
+  credentials); `edit_ping_host`, `/rules/add`, `/rules/{id}/edit` and the
+  SNMP config routes now validate them inside the tenant; the user
+  role/password and host edit form routes answer 404 for another tenant's
+  id.
+- Job tests require an effect in *both* tenants (a row changed, a message
+  sent, a prompt built, or the tenant named in the job's report), except
+  the three jobs that act only on ClickHouse data. In-memory SQLite is one
+  shared connection, so data-plane passes run one tenant at a time there.
 - The walk runs on SQLite: layer 1 and the explicit predicates; RLS is
   phase 7's CI job.
 - API-key mode walks the routes that accept a key (`/api/v1`, `/api/v2`);

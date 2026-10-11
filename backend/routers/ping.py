@@ -307,20 +307,28 @@ async def edit_ping_host(
     parent_id: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
+    from urllib.parse import quote
+
     from routers.integrations import validate_host_async
+    host = await db.get(PingHost, host_id)
+    if not host:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
     host_err = await validate_host_async(hostname.strip())
     if host_err:
-        from urllib.parse import quote
         return RedirectResponse(url=f"/hosts/{host_id}?tab=info&error={quote(host_err)}", status_code=303)
-    host = await db.get(PingHost, host_id)
-    if host:
-        host.name = name.strip()
-        host.hostname = hostname.strip()
-        host.check_type = ",".join(t.strip() for t in check_types if t.strip()) or "icmp"
-        host.port = int(port) if port.strip() else None
-        host.latency_threshold_ms = float(latency_threshold_ms) if latency_threshold_ms.strip() else None
-        host.parent_id = int(parent_id) if parent_id.strip() else None
-        await db.commit()
+    new_parent = int(parent_id) if parent_id.strip() else None
+    # The parent must be another host of this tenant (the lookup is
+    # tenant-filtered): an id of another tenant's host is refused, not stored.
+    if new_parent is not None and (new_parent == host_id or await db.get(PingHost, new_parent) is None):
+        return RedirectResponse(url=f"/hosts/{host_id}?tab=info&error={quote('Unknown parent host')}",
+                                status_code=303)
+    host.name = name.strip()
+    host.hostname = hostname.strip()
+    host.check_type = ",".join(t.strip() for t in check_types if t.strip()) or "icmp"
+    host.port = int(port) if port.strip() else None
+    host.latency_threshold_ms = float(latency_threshold_ms) if latency_threshold_ms.strip() else None
+    host.parent_id = new_parent
+    await db.commit()
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info&saved=1", status_code=303)
 
 

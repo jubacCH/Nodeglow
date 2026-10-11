@@ -52,6 +52,28 @@ async def rules_list(
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
+
+async def _source_id(db: AsyncSession, source_type: str, raw) -> int | None:
+    """The rule's source, which must be a host (ping) or an integration of
+    this tenant — the lookups are tenant-filtered, so another tenant's id is
+    refused instead of stored. None: every source of the type."""
+    if raw in (None, ""):
+        return None
+    try:
+        sid = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("source_id must be a number") from None
+    if source_type == "ping":
+        from models.ping import PingHost
+        found = await db.get(PingHost, sid)
+    else:
+        from models.integration import IntegrationConfig
+        found = await db.get(IntegrationConfig, sid)
+    if found is None:
+        raise ValueError("unknown source_id")
+    return sid
+
+
 @router.post("/rules/add")
 async def add_rule(
     request: Request,
@@ -66,11 +88,15 @@ async def add_rule(
         ch_val = str(form.get("notify_channels", ""))
         channels = [c.strip() for c in ch_val.split(",") if c.strip()] if ch_val else []
     notify_channels = ",".join(channels) if channels else None
+    try:
+        source_id = await _source_id(db, str(form.get("source_type", "")), form.get("source_id"))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
     rule = AlertRule(
         name=str(form.get("name", "")).strip() or "Unnamed Rule",
         source_type=str(form.get("source_type", "")),
-        source_id=int(form["source_id"]) if form.get("source_id") else None,
+        source_id=source_id,
         field_path=str(form.get("field_path", "")),
         operator=str(form.get("operator", "gt")),
         threshold=str(form.get("threshold", "")) or None,
@@ -131,9 +157,14 @@ async def edit_rule(
         return JSONResponse({"error": "Rule not found"}, status_code=404)
 
     form = await request.form()
+    source_type = str(form.get("source_type", "")) or rule.source_type
+    try:
+        source_id = await _source_id(db, source_type, form.get("source_id"))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     rule.name = str(form.get("name", "")).strip() or rule.name
-    rule.source_type = str(form.get("source_type", "")) or rule.source_type
-    rule.source_id = int(form["source_id"]) if form.get("source_id") else None
+    rule.source_type = source_type
+    rule.source_id = source_id
     rule.field_path = str(form.get("field_path", "")) or rule.field_path
     rule.operator = str(form.get("operator", "")) or rule.operator
     rule.threshold = str(form.get("threshold", "")) or None

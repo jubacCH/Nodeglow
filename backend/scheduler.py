@@ -1140,7 +1140,13 @@ async def run_weekly_digest(*, force: bool = False):
 
 
 async def _digest_slot_due(db) -> bool:
-    """Whether the current tenant's weekly digest slot fires now."""
+    """Whether the current tenant's weekly digest slot fires now.
+
+    ``digest_day`` / ``digest_hour`` are **UTC** — the settings UI says so,
+    and the old weekly cron ran in the container's zone, UTC. The hourly
+    tick fires at the same full hour the old cron did, so the deploy day
+    neither skips nor repeats a digest.
+    """
     from database import get_setting
 
     try:
@@ -1148,7 +1154,7 @@ async def _digest_slot_due(db) -> bool:
         hour = max(0, min(23, int(await get_setting(db, "digest_hour", "9"))))
     except (TypeError, ValueError):
         day, hour = 0, 9
-    zone = tenant_jobs.tenant_zone(await get_setting(db, "timezone", "UTC"))
+    zone = tenant_jobs.tenant_zone("UTC")
     raw = await get_setting(db, "digest_last_sent", "")
     try:
         last_sent = datetime.fromisoformat(raw) if raw else None

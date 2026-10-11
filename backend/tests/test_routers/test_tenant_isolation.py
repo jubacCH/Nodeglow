@@ -198,14 +198,68 @@ def test_every_tenant_owned_table_is_seeded():
 
 
 async def _tenant_rows(sf, tid: int) -> dict[str, list]:
-    """Every tenant-owned row of ``tid``, all columns — to prove "unchanged"."""
+    """Every tenant-owned row of ``tid``, all columns — to prove "unchanged" —
+    plus the tenant's users (global table: its members' rows), memberships
+    and their sessions."""
     out: dict[str, list] = {}
     async with sf() as s:
         with system_scope("test: snapshot a tenant", audit=False):
             for t in sorted(tenant_tables(), key=lambda t: t.name):
                 rows = (await s.execute(select(t).where(t.c.tenant_id == tid))).all()
                 out[t.name] = sorted((tuple(map(repr, r)) for r in rows))
+            members = select(TenantMembership.user_id).where(TenantMembership.tenant_id == tid)
+            for name, stmt in (
+                ("tenant_memberships", select(TenantMembership.__table__).where(
+                    TenantMembership.tenant_id == tid)),
+                ("users", select(User.__table__).where(User.id.in_(members))),
+                ("sessions", select(Session.__table__).where(Session.user_id.in_(members))),
+            ):
+                out[name] = sorted(tuple(map(repr, r)) for r in (await s.execute(stmt)).all())
     return out
+
+
+# Columns of tenant-owned rows that point at a row of another table
+# (including the soft references without a foreign key).
+REF_TARGETS = {
+    "parent_id": "ping_hosts", "probe_id": "agents", "site_id": "sites",
+    "credential_id": "credentials", "host_id": "ping_hosts", "host_ids": "ping_hosts",
+    "source_config_id": "integration_configs", "template_id": "log_templates",
+    "job_id": "backup_jobs", "schedule_id": "subnet_scan_schedules",
+    "incident_id": "incidents", "entity_id": "integration_configs",
+}
+
+
+def _ref_target(table: str, column: str, row) -> str | None:
+    if table == "alert_rules" and column == "source_id":
+        return "ping_hosts" if row["source_type"] == "ping" else "integration_configs"
+    return REF_TARGETS.get(column)
+
+
+async def _foreign_refs(sf, tid: int = A) -> list[str]:
+    """Rows of ``tid`` that reference a row of another tenant."""
+    bad: list[str] = []
+    async with sf() as s:
+        with system_scope("test: references of a tenant", audit=False):
+            owner: dict[str, dict] = {}
+            for t in tenant_tables():
+                if "id" in t.c:
+                    owner[t.name] = dict((await s.execute(select(t.c.id, t.c.tenant_id))).all())
+            for t in sorted(tenant_tables(), key=lambda t: t.name):
+                cols = [c.name for c in t.c if c.name in REF_TARGETS or
+                        (t.name == "alert_rules" and c.name == "source_id")]
+                if not cols:
+                    continue
+                for row in (await s.execute(select(t).where(t.c.tenant_id == tid))).mappings():
+                    for col in cols:
+                        target, v = _ref_target(t.name, col, row), row[col]
+                        if v is None or target is None:
+                            continue
+                        ids = {int(x) for x in re.findall(r"\d+", v)} if isinstance(v, str) else {v}
+                        foreign = {i for i in ids if owner.get(target, {}).get(i, tid) != tid}
+                        if foreign:
+                            bad.append(f"{t.name}.{col}={v!r} -> {target} of another tenant "
+                                       f"(row {row.get('id')})")
+    return bad
 
 
 # ── Route classification ─────────────────────────────────────────────────────
@@ -304,13 +358,17 @@ STREAM_ROUTES = {
     ("GET", "/syslog/stream"): "SSE live tail; fan-out per tenant",
 }
 
-# Routes whose request body names objects: payloads that point at B's rows.
-# Every other mutating route without path parameters gets ``{}``.
+class Form(dict):
+    """A request body sent as form data (HTML-form routes)."""
+
+
+# Request bodies: valid payloads, so a route reaches its row lookup instead
+# of failing validation first; those without path parameters point at B's
+# rows. Every other mutating route gets ``{}``.
 def _bodies(ids: dict[str, int]) -> dict[tuple[str, str], Any]:
     b_host, b_cfg = ids["ping_hosts"], ids["integration_configs"]
     return {
-        ("PATCH", "/api/v1/hosts/bulk"): {"ids": [b_host], "host_ids": [b_host],
-                                          "enabled": False, "maintenance": True},
+        ("PATCH", "/api/v1/hosts/bulk"): {"ids": [b_host], "updates": {"enabled": False}},
         ("POST", "/api/snmp/hosts"): {"host_id": b_host, "credential_id": ids["credentials"],
                                       "oids": []},
         ("POST", "/api/v1/maintenance-windows"): {"name": "w", "kind": "once", "host_ids": [b_host],
@@ -318,13 +376,58 @@ def _bodies(ids: dict[str, int]) -> dict[tuple[str, str], Any]:
                                                   "ends_at": "2026-10-12T00:00:00"},
         ("POST", "/api/rules/test"): {"source_type": "proxmox", "source_id": b_cfg,
                                       "field_path": "cpu", "operator": "gt", "threshold": "1"},
-        ("POST", "/rules/add"): {"name": "r", "source_type": "proxmox", "source_id": b_cfg,
-                                 "field_path": "cpu", "operator": "gt", "threshold": "1"},
-        ("POST", "/api/v1/hosts"): {"name": "n", "hostname": "10.1.1.1", "parent_id": b_host},
+        ("POST", "/rules/add"): Form(name="r", source_type="proxmox", source_id=str(b_cfg),
+                                     field_path="cpu", operator="gt", threshold="1"),
         ("POST", "/api/subnet-scanner/add-hosts"): {"ips": ["10.0.0.1"]},
         ("POST", "/api/v2/me/seen"): {},
+        # Routes with path parameters (called with B's ids).
         ("POST", "/api/snmp/hosts/{config_id}/test-oids"): {"oids": ["1.3.6.1.2.1.1.1.0"]},
+        ("POST", "/hosts/{host_id}/edit"): Form(name="n", hostname="10.1.1.1", check_types="icmp"),
+        ("POST", "/users/{user_id}/role"): Form(role="readonly"),
+        ("POST", "/users/{user_id}/password"): Form(password="Corr3ct-Horse-Battery!"),
+        ("POST", "/rules/{rule_id}/edit"): Form(name="r", source_type="proxmox", field_path="cpu"),
+        ("POST", "/api/v1/incidents/{incident_id}/feedback"): {"verdict": "noise"},
+        ("PATCH", "/syslog/api/templates/{template_hash}/tags"): {"tags": "x"},
+        ("POST", "/api/v1/glow/chat"): {"message": "what is down?"},
     }
+
+
+# Writes into A's own rows whose body names one of B's rows: refused or
+# ignored, never stored (checked by _foreign_refs after each call).
+def _cross_ref_calls() -> list[tuple[str, str, Any]]:
+    a, b = BASE[A], BASE[B]
+    return [
+        ("POST", f"/hosts/{a}/edit", Form(name="n", hostname="10.0.0.1", parent_id=str(b))),
+        ("POST", "/rules/add", Form(name="x", source_type="proxmox", source_id=str(b),
+                                    field_path="cpu", operator="gt", threshold="1")),
+        ("POST", "/rules/add", Form(name="y", source_type="ping", source_id=str(b),
+                                    field_path="online", operator="eq", threshold="false")),
+        ("POST", f"/rules/{a}/edit", Form(name="x", source_type="proxmox", source_id=str(b))),
+        ("POST", "/api/snmp/hosts", {"host_id": a, "credential_id": b}),
+        ("POST", "/api/snmp/hosts", {"host_id": b}),
+        ("PATCH", f"/api/snmp/hosts/{a}", {"credential_id": b}),
+        ("PATCH", f"/api/v1/hosts/{a}", {"probe_id": b}),
+        ("PATCH", "/api/v1/hosts/bulk", {"ids": [a, b], "updates": {"probe_id": b}}),
+        ("POST", "/api/v1/maintenance-windows", {"name": "w", "kind": "once", "host_ids": [a, b],
+                                                 "starts_at": "2026-10-11T00:00:00",
+                                                 "ends_at": "2026-10-12T00:00:00"}),
+        ("PATCH", f"/api/v1/maintenance-windows/{a}", {"host_ids": [b]}),
+        ("POST", "/api/agents/install-tokens", {"note": "t", "site_id": b}),
+        ("POST", "/api/subnet-scanner/schedules", {"name": "s", "cidr": "10.5.0.0/30", "site_id": b}),
+        ("PATCH", f"/api/subnet-scanner/schedules/{a}", {"site_id": b}),
+        ("POST", f"/api/backups/{a}/settings", {"source_config_id": b}),
+        ("POST", "/api/v1/hosts", {"name": "c", "hostname": "10.1.1.2", "parent_id": b,
+                                   "probe_id": b}),
+    ]
+
+
+# Routes with path parameters that answer before any lookup on purpose.
+# Accepted only when identical to the answer for an id that exists nowhere.
+PRE_LOOKUP_ROUTES = {
+    # Licence check first (ee): 402 without a licence — the licensed walk
+    # (test_walk_with_an_active_licence) reaches their lookup.
+    ("POST", "/api/v1/incidents/{incident_id}/postmortem"): "licence-gated (ee)",
+}
 
 
 def _http_routes(app):
@@ -530,7 +633,8 @@ async def env():
                 patch("ssl.get_server_certificate", side_effect=OSError("no network in tests")), \
                 patch("socket.gethostbyaddr", side_effect=OSError("no network in tests")), \
                 patch("socket.gethostbyname", side_effect=OSError("no network in tests")), \
-                patch("routers.update._sidecar_post", side_effect=RuntimeError("no sidecar")),                 patch("httpx.AsyncHTTPTransport.handle_async_request",
+                patch("routers.update._sidecar_post", side_effect=RuntimeError("no sidecar")), \
+                patch("httpx.AsyncHTTPTransport.handle_async_request",
                       side_effect=RuntimeError("network blocked in tests")):
             yield e
     shared_state.reset()
@@ -556,7 +660,10 @@ async def _call(client, method, url, *, auth: dict, body=None):
         client.cookies.set(k, v)
     kwargs = {"headers": headers, "follow_redirects": False}
     if method in MUTATING:
-        kwargs["json"] = body if body is not None else {}
+        if isinstance(body, Form):
+            kwargs["data"] = dict(body)
+        else:
+            kwargs["json"] = body if body is not None else {}
     return await client.request(method, url, **kwargs)
 
 
@@ -577,8 +684,10 @@ def _walkable(app):
         yield method, path
 
 
-async def _walk(e: Env, auth: dict, *, accept_unauthenticated: bool) -> tuple[list[str], int]:
-    """Every walkable route, as A: B's ids → 404, B unchanged, no canary."""
+async def _walk(e: Env, auth: dict, *, accept_unauthenticated: bool,
+                licensed: bool = False) -> tuple[list[str], int]:
+    """Every walkable route, as A: B's ids → 404, B unchanged, no canary,
+    A's rows reference nothing of B's."""
     from main import app
 
     failures: list[str] = []
@@ -586,6 +695,7 @@ async def _walk(e: Env, auth: dict, *, accept_unauthenticated: bool) -> tuple[li
     ids_b = _ids_of(B)
     bodies = _bodies(ids_b)
     before = await _tenant_rows(e.sf, B)
+    assert not await _foreign_refs(e.sf), "the seed itself crosses tenants"
     for method, path in _walkable(app):
         has_params = bool([n for n in _params(path) if n not in LITERAL_PARAMS])
         url = _concrete(path, ids_b) if _params(path) else path
@@ -608,12 +718,15 @@ async def _walk(e: Env, auth: dict, *, accept_unauthenticated: bool) -> tuple[li
         if has_params and resp.status_code != 404 and not allowed \
                 and (method, path) not in CONTENT_KEYED_ROUTES:
             same = False
-            if resp.status_code in PRE_LOOKUP_STATUSES:
+            if resp.status_code in PRE_LOOKUP_STATUSES and (method, path) in PRE_LOOKUP_ROUTES \
+                    and not licensed:
                 missing = await _call(e.client, method, _concrete(path, _missing_ids()), auth=auth,
                                       body=bodies.get((method, path)))
                 same = (missing.status_code, missing.text) == (resp.status_code, resp.text)
             if not same:
-                failures.append(f"{method} {url} -> {resp.status_code}, expected 404 for B's id")
+                failures.append(f"{method} {url} -> {resp.status_code}, expected 404 for B's id"
+                                + (f": {resp.text[:120]}" if resp.status_code in PRE_LOOKUP_STATUSES
+                                   else ""))
         if resp.status_code >= 500 and resp.status_code != 503:  # 503: no update sidecar
             failures.append(f"{method} {url} -> {resp.status_code}: {resp.text[:200]}")
         if method in MUTATING:
@@ -622,6 +735,8 @@ async def _walk(e: Env, auth: dict, *, accept_unauthenticated: bool) -> tuple[li
                 changed = [t for t in after if after[t] != before[t]]
                 failures.append(f"{method} {url} changed tenant B's rows in {changed}")
                 before = after
+            for ref in await _foreign_refs(e.sf):
+                failures.append(f"{method} {url} left A referencing B: {ref}")
     return failures, checked
 
 
@@ -645,6 +760,110 @@ async def test_walk_with_an_api_key_of_a(env):
     failures, checked = await _walk(env, _key_auth(env), accept_unauthenticated=True)
     assert checked > 40, f"only {checked} routes accepted the API key"
     assert not failures, "tenant isolation failures (API key of A):\n  " + "\n  ".join(failures)
+
+
+async def test_a_cannot_reference_b_objects(env):
+    """Writes to A's own rows that name B's rows in the body are refused or
+    ignored — A never ends up pointing at B (on PostgreSQL the composite
+    foreign keys would refuse it with a 500; here the routes must)."""
+    failures = []
+    before = await _tenant_rows(env.sf, B)
+    for method, url, body in _cross_ref_calls():
+        resp = await _call(env.client, method, url, auth=_session_auth(env), body=body)
+        if resp.status_code >= 500:
+            failures.append(f"{method} {url} -> {resp.status_code}")
+        if CANARY in resp.text:
+            failures.append(f"{method} {url} leaks {CANARY}")
+        for ref in await _foreign_refs(env.sf):
+            failures.append(f"{method} {url} {body!r}: {ref}")
+        if await _foreign_refs(env.sf):
+            break
+    assert await _tenant_rows(env.sf, B) == before
+    assert not failures, "A stored references to B's rows:\n  " + "\n  ".join(failures)
+
+
+async def test_the_reference_check_sees_a_cross_tenant_reference(env):
+    """Self-test of _foreign_refs: one A row pointing at B is reported."""
+    from models import AlertRule, PingHost
+
+    assert not await _foreign_refs(env.sf)
+    async with env.sf() as s:
+        (await s.get(PingHost, BASE[A])).parent_id = BASE[B]
+        s.add(AlertRule(name="x", source_type="ping", source_id=BASE[B], field_path="f",
+                        operator="gt"))
+        await s.commit()
+    found = await _foreign_refs(env.sf)
+    assert any("ping_hosts.parent_id" in f for f in found)
+    assert any("alert_rules.source_id" in f for f in found)
+
+
+@pytest.fixture
+def licensed_ai():
+    """An active ee licence and a fake AI provider recording every prompt."""
+    nodeglow_ee = pytest.importorskip("nodeglow_ee")  # noqa: F841
+    from nodeglow_ee import license_runtime
+    from services import ai_client
+
+    prompts: list[str] = []
+
+    async def completion(system_prompt=None, user_message=None, *a, **kw):
+        prompts.append(f"{system_prompt}\n{user_message}\n{kw.get('history', '')}")
+        return ("answer", {"input_tokens": 1, "output_tokens": 1}) if kw.get("return_usage") \
+            else "answer"
+
+    import sys as _sys
+
+    real = ai_client.generate_completion
+    patches = [patch.object(license_runtime, "is_active", _async_return(True)),
+               patch.object(license_runtime, "blocked", _async_return(None)),
+               patch.object(ai_client, "generate_completion", completion)]
+    for name in ("nodeglow_ee.ai.postmortem", "nodeglow_ee.ai.glow", "nodeglow_ee.ai.daily_summary"):
+        try:
+            __import__(name)
+        except ImportError:
+            continue
+    for mod in list(_sys.modules.values()):
+        if mod is not None and getattr(mod, "generate_completion", None) is real \
+                and mod is not ai_client:
+            patches.append(patch.object(mod, "generate_completion", completion))
+    for p in patches:
+        p.start()
+    try:
+        yield prompts
+    finally:
+        for p in reversed(patches):
+            p.stop()
+
+
+async def test_walk_with_an_active_licence(env, licensed_ai, monkeypatch):
+    """The ee routes behind the licence (Glow chat, postmortem, test summary)
+    run for real: B's ids → 404, and no AI prompt built for A carries B."""
+    from tests.conftest import put_settings
+    from database import encrypt_value
+
+    async with env.sf() as s:
+        await put_settings(s, tenant_id=A, ai_enabled="1")
+        await put_settings(s, claude_api_key=encrypt_value("sk-test"))
+    failures, checked = await _walk(env, _session_auth(env), accept_unauthenticated=False,
+                                    licensed=True)
+    assert not failures, "tenant isolation failures (licensed):\n  " + "\n  ".join(failures)
+    # Glow for A, with A's own incident: the context is A's alone.
+    resp = await _call(env.client, "POST", "/api/v1/glow/chat", auth=_session_auth(env),
+                       body={"message": "what happened to my hosts and incidents?"})
+    assert resp.status_code == 200, resp.text[:300]
+    from models import Incident
+    async with env.sf() as s:
+        (await s.get(Incident, BASE[A])).status = "resolved"
+        await s.commit()
+    resp = await _call(env.client, "POST", f"/api/v1/incidents/{BASE[A]}/postmortem",
+                       auth=_session_auth(env))
+    assert resp.status_code in (200, 202), resp.text[:300]
+    for _ in range(20):
+        import asyncio
+        await asyncio.sleep(0.01)
+    assert licensed_ai, "no AI prompt was built — the licensed routes did not run"
+    leaked = [p[:200] for p in licensed_ai if CANARY in p]
+    assert not leaked, f"AI prompts for A mention B: {leaked}"
 
 
 async def test_foreign_tenant_header_is_not_found_everywhere(env):
@@ -875,6 +1094,9 @@ async def test_clickhouse_reads_are_scoped_or_listed_for_phase_6(env):
 # Mutating routes that read ClickHouse for their answer.
 _READ_LIKE_MUTATIONS: set[tuple[str, str]] = {
     ("POST", "/api/rules/test"),
+    ("POST", "/api/v1/glow/chat"),
+    ("POST", "/api/v1/incidents/{incident_id}/postmortem"),
+    ("POST", "/settings/ai/test-summary"),
 }
 
 

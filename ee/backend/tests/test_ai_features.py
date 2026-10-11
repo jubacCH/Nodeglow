@@ -65,11 +65,12 @@ async def test_daily_summary_hook_schedules_the_job():
 
 @pytest.mark.parametrize("tz, utc_hour, expected", [
     ("UTC", 6, True), ("UTC", 7, False),
-    ("Europe/Zurich", 4, True),   # 06:00 CEST (UTC+2) in October
-    ("Europe/Zurich", 6, False),
+    # The hour is UTC whatever the tenant's time zone (UI: "Send at (UTC)"),
+    # exactly when the old daily cron fired — production: Zurich, hour 6.
+    ("Europe/Zurich", 6, True),
+    ("Europe/Zurich", 4, False),
 ])
-async def test_daily_summary_fires_at_the_tenants_hour_in_its_zone(db, tz, utc_hour, expected,
-                                                                   monkeypatch):
+async def test_daily_summary_fires_at_its_utc_hour(db, tz, utc_hour, expected, monkeypatch):
     from datetime import datetime as real_dt
 
     from models.tenant import TenantSetting
