@@ -83,9 +83,9 @@ jobs:
           new=$(POSTGRES_APP_USER=nodeglow_app POSTGRES_APP_PASSWORD=app \
             docker compose -f docker-compose.yml config)
           echo "$old" | grep -F 'DATABASE_URL: postgresql+asyncpg://nodeglow:ci@db:5432/nodeglow'
-          echo "$old" | grep -F 'DATABASE_OWNER_URL: postgresql+asyncpg://nodeglow:ci@db:5432/nodeglow'
+          echo "$old" | grep -F 'NODEGLOW_COMPOSE_OWNER_URL: postgresql+asyncpg://nodeglow:ci@db:5432/nodeglow'
           echo "$new" | grep -F 'DATABASE_URL: postgresql+asyncpg://nodeglow_app:app@db:5432/nodeglow'
-          echo "$new" | grep -F 'DATABASE_OWNER_URL: postgresql+asyncpg://nodeglow:ci@db:5432/nodeglow'
+          echo "$new" | grep -F 'POSTGRES_APP_USER: nodeglow_app'
 
       # The release compose file (image mode) must render as well, for both
       # editions, and both files must define the same services.

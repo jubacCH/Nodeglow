@@ -694,3 +694,90 @@ def test_router_tests_against_postgres_with_rls(pg_db):
         NODEGLOW_TEST_PG_APP_URL=_app_dsn(pg_db),
     )
     assert " passed" in proc.stdout and " failed" not in proc.stdout, proc.stdout[-3000:]
+
+
+RESTORE_TWO_USERS_SCRIPT = r"""
+import asyncio, json, secrets
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
+
+from httpx import ASGITransport, AsyncClient
+
+from models import AsyncSessionLocal, engine
+from models.api_key import ApiKey
+from routers.api_v1 import _hash_key
+from services.tenancy import tenant_scope
+
+async def main():
+    raw = "ng_" + secrets.token_hex(16)
+    with tenant_scope(1):
+        async with AsyncSessionLocal() as db:
+            # last_used now: the auth path writes nothing and does not commit,
+            # so its transaction (locks on api_keys/tenants) stays open.
+            db.add(ApiKey(name="ops", key_hash=_hash_key(raw), prefix=raw[:8], role="admin",
+                          enabled=True, hash_algo="hmac", last_used=datetime.utcnow()))
+            await db.commit()
+    with patch("main.start_scheduler", new_callable=AsyncMock), patch("main.stop_scheduler"):
+        from main import app
+        headers = {"X-API-Key": raw}
+        out = []
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            r = await c.post("/api/v1/backup", json={"passphrase": "p" * 16}, headers=headers)
+            assert r.status_code == 200, r.text
+            envelope = r.json()
+            for _ in range(2):
+                r = await asyncio.wait_for(c.post(
+                    "/api/v1/backup/restore", json={"backup": envelope, "passphrase": "p" * 16},
+                    headers=headers), timeout=90)
+                out.append([r.status_code, r.json().get("total_rows")])
+    await engine.dispose()
+    print(json.dumps(out))
+
+asyncio.run(main())
+"""
+
+
+def test_api_key_restore_twice_with_two_users_and_rls(pg_db):
+    """The restore's raw part runs on the owner connection. The request's
+    own transaction (API-key lookup) must not block it: it hung forever on
+    TRUNCATE api_keys before the request session was committed first."""
+    import json
+
+    env = _rls_env(pg_db)
+    _run(["migrate.py"], pg_db, **env)
+    _seed_two_tenants(pg_db)
+    q(pg_db, "INSERT INTO settings (key, value, encrypted) VALUES ('setup_complete', 'true', false)")
+    proc = _run(["-c", RESTORE_TWO_USERS_SCRIPT], pg_db, **env)
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert [status for status, _ in out] == [200, 200], out
+    assert all(rows and rows > 0 for _, rows in out)
+    # The key and tenant B's host survived both restores (whole database).
+    assert q(pg_db, "SELECT count(*) FROM api_keys")[0][0] == 1
+    assert q(pg_db, "SELECT count(*) FROM ping_hosts WHERE name = 'CANARY-B'")[0][0] == 1
+
+
+def test_update_step_never_switches_rls_on(pg_db):
+    """The updater migrates while the old backend (maybe still NODEGLOW_RLS
+    off) keeps serving: its migrate step must not enable RLS — the new
+    backend's own start does. Keeping it on where it already is, is fine."""
+    env = _rls_env(pg_db)
+    _run(["migrate.py"], pg_db, **_rls_env(pg_db, flag="off"))
+    _run(["migrate.py"], pg_db, NODEGLOW_RLS_DEFER_ENABLE="1", **env)
+    assert set(_rls_flags(pg_db).values()) == {(False, False)}
+    _run(["migrate.py"], pg_db, **env)  # the new backend's entrypoint
+    _assert_rls_everywhere(pg_db)
+    _run(["migrate.py"], pg_db, NODEGLOW_RLS_DEFER_ENABLE="1", **env)
+    _assert_rls_everywhere(pg_db)
+
+
+def test_app_role_cannot_create_objects_in_public(pg_db):
+    """PostgreSQL < 15 (or upgraded clusters) grant CREATE on public to
+    PUBLIC; the setup takes it away so the app role cannot plant objects
+    the owner would resolve."""
+    q(pg_db, "GRANT CREATE ON SCHEMA public TO PUBLIC")
+    _run(["migrate.py"], pg_db, **_rls_env(pg_db))
+    assert q(pg_db, "SELECT has_schema_privilege($1, 'public', 'CREATE')", APP_ROLE)[0][0] is False
+    with pytest.raises(Exception, match="permission denied"):
+        q_app(pg_db, "CREATE TABLE public.planted (x int)")
+    # The owner still can (later migrations create tables).
+    q(pg_db, "CREATE TABLE public.owner_made (x int)")

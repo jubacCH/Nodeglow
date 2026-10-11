@@ -470,9 +470,16 @@ Do it in two steps, so a problem is easy to place. Take a backup first
    docker compose exec db psql -U nodeglow -c "SELECT relname, relforcerowsecurity FROM pg_class WHERE relrowsecurity"
    ```
 
-**Back out** at any point: `NODEGLOW_RLS=off` and restart (RLS is switched
-off again, the policies stay and do nothing); to return to one user remove
-`POSTGRES_APP_USER` / `POSTGRES_APP_PASSWORD` as well.
+**Back out** at any point: set `NODEGLOW_RLS=off` in `.env` and run
+`docker compose up -d nodeglow` (RLS is switched off again, the policies stay
+and do nothing); to return to one user remove `POSTGRES_APP_USER` /
+`POSTGRES_APP_PASSWORD` as well. A plain `docker compose restart` keeps the
+container's old environment and changes nothing.
+
+Apply changes to these variables with `docker compose up -d nodeglow`. An
+update started from the UI does not switch RLS **on** in its migrate step
+(the old backend is still serving then); the new backend switches it on when
+it starts.
 
 Turning RLS on while the app still connects as `POSTGRES_USER` protects
 nothing in the Compose stack: that user is a superuser, and superusers bypass
@@ -824,7 +831,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | Variable | Service | Default | Purpose |
 |---|---|---|---|
 | `REDIS_URL` | `nodeglow` | unset | Shared rate-limit state across processes; with an enterprise license also scheduler leader election (HA) |
-| `DATABASE_URL`, `DATABASE_OWNER_URL` (alias `MIGRATION_DATABASE_URL`) | `nodeglow` | built from `POSTGRES_*` | The app's and the schema owner's connection. The compose files set both; only for running the backend outside them. Without `DATABASE_OWNER_URL` the migrations use `DATABASE_URL` |
+| `DATABASE_URL`, `DATABASE_OWNER_URL` (alias `MIGRATION_DATABASE_URL`) | `nodeglow` | built from `POSTGRES_*` | The app's and the schema owner's connection. Compose builds `DATABASE_URL`; the owner is `POSTGRES_USER` on the bundled `db` only when `POSTGRES_APP_USER` is set, otherwise `DATABASE_URL`. **If you point `DATABASE_URL` at another server and use two users, set `DATABASE_OWNER_URL` too** — the backend logs an error when the two name different databases |
 | `SECURE_COOKIES` | `nodeglow` | auto | `1` always marks session cookies `Secure` (otherwise only when the request or `X-Forwarded-Proto` is HTTPS) |
 | `CORS_ORIGINS` | `nodeglow` | unset | Comma list of origins allowed to call the API cross-origin; not needed for the bundled UI |
 | `DEBUG` | `nodeglow` | unset | `1` serves the OpenAPI docs at `/api/docs` — never in production |

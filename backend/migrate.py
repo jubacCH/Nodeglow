@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 logging.basicConfig(level=logging.INFO, format="[migrate] %(message)s")
@@ -115,11 +116,20 @@ async def _setup_row_level_security() -> None:
             return
         tables = sorted(t.name for t in tenant_tables())
         login = pg_rls.app_login()
+        # Set by the updater's migrate step (sidecar): the old backend keeps
+        # serving until the restart, so RLS is not switched on from here.
+        defer = config._flag(os.getenv("NODEGLOW_RLS_DEFER_ENABLE"))
+
+        def _apply(c):
+            enabled = pg_rls.enable_now(c, tables, flag=config.RLS_ENABLED, defer=defer)
+            if config.RLS_ENABLED and not enabled:
+                log.info("NODEGLOW_RLS=on: row-level security is switched on when the new "
+                         "backend starts, not by the update's migrate step")
+            return pg_rls.apply(c, tables, enabled=enabled, login=login)
+
         try:
             async with engine.begin() as conn:
-                report = await conn.run_sync(
-                    lambda c: pg_rls.apply(c, tables, enabled=config.RLS_ENABLED, login=login)
-                )
+                report = await conn.run_sync(_apply)
         except Exception as exc:
             if config.RLS_ENABLED:
                 raise

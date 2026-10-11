@@ -21,11 +21,41 @@ if not DATABASE_URL:
 # restore use it; the application itself runs on DATABASE_URL. Unset (every
 # install before phase 7 of multi-tenancy): the same connection as the app —
 # one user that owns and runs everything, exactly as before.
-DATABASE_OWNER_URL = (
-    os.getenv("DATABASE_OWNER_URL", "").strip()
-    or os.getenv("MIGRATION_DATABASE_URL", "").strip()
-    or DATABASE_URL
-)
+def resolve_owner_url(env, app_url: str) -> str:
+    """The owner connection: ``DATABASE_OWNER_URL`` / ``MIGRATION_DATABASE_URL``
+    if set; else the compose stack's owner URL (``NODEGLOW_COMPOSE_OWNER_URL``)
+    but only when the app runs as its own user (``POSTGRES_APP_USER``); else
+    the app's URL. So an install that points only ``DATABASE_URL`` at another
+    server (docker-compose.override.yml) keeps migrating that server."""
+    explicit = (env.get("DATABASE_OWNER_URL") or "").strip() \
+        or (env.get("MIGRATION_DATABASE_URL") or "").strip()
+    if explicit:
+        return explicit
+    if (env.get("POSTGRES_APP_USER") or "").strip():
+        compose = (env.get("NODEGLOW_COMPOSE_OWNER_URL") or "").strip()
+        if compose:
+            return compose
+    return app_url
+
+
+def same_database(url_a: str, url_b: str) -> bool:
+    """Whether two URLs name the same server and database (users may differ)."""
+    try:
+        from sqlalchemy.engine import make_url
+
+        a, b = make_url(url_a), make_url(url_b)
+    except Exception:  # noqa: BLE001 — unparsable: let the engine complain
+        return True
+    return (a.host, a.port or 5432, a.database) == (b.host, b.port or 5432, b.database)
+
+
+DATABASE_OWNER_URL = resolve_owner_url(os.environ, DATABASE_URL)
+if not same_database(DATABASE_OWNER_URL, DATABASE_URL):
+    log.error(
+        "DATABASE_OWNER_URL and DATABASE_URL point to different databases: the migrations "
+        "would run on one and the app on the other. Set both to the same server/database "
+        "(docs/OPERATIONS.md, 'Row-level security')."
+    )
 
 
 def _flag(value: str | None) -> bool:
