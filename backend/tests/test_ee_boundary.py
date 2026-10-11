@@ -165,7 +165,7 @@ async def test_features_endpoint_needs_a_login():
 def registered_scheduler(monkeypatch):
     import scheduler as sched
 
-    async def fake_get_setting(_db, key, default=None):
+    async def fake_get_setting(_db, key, default=None, **_kw):
         return default
 
     monkeypatch.setattr("database.get_setting", fake_get_setting, raising=False)

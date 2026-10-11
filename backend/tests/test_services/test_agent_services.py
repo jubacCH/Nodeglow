@@ -119,8 +119,8 @@ async def test_running_again_resolves_and_notifies(db):
 
 
 async def test_threshold_comes_from_settings(db):
-    from models.settings import Setting
-    db.add(Setting(key=svc.FAIL_REPORTS_SETTING, value="1"))
+    from models.tenant import TenantSetting
+    db.add(TenantSetting(key=svc.FAIL_REPORTS_SETTING, value="1"))
     agent = await _agent(db)
     await _feed(db, agent, _report(("nginx", "stopped")))
     assert len(await _open_incidents(db)) == 1

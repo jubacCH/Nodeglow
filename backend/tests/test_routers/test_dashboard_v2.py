@@ -235,11 +235,11 @@ async def test_summary_matches_dashboard_counts():
 
 
 async def test_availability_target_setting():
-    from models.settings import Setting
+    from models.tenant import TenantSetting
 
     async with make_client() as (client, sf):
         async with sf() as db:
-            db.add(Setting(key="availability_target", value="99.99"))
+            db.add(TenantSetting(key="availability_target", value="99.99"))
             from models.ping import PingHost
             db.add(PingHost(name="a", hostname="10.0.0.1"))
             await db.commit()

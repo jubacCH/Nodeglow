@@ -118,7 +118,7 @@ async def test_core_scheduler_hands_over_to_the_coordinator(monkeypatch):
     reg.set_scheduler_coordinator(Coord())
     monkeypatch.setattr(sched.extensions, "registry", reg)
 
-    async def fake_get_setting(_db, key, default=None):
+    async def fake_get_setting(_db, key, default=None, **_kw):
         return default
 
     monkeypatch.setattr("database.get_setting", fake_get_setting, raising=False)

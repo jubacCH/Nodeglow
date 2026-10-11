@@ -4,20 +4,15 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import notification_channels as nc
-from database import Setting, encrypt_value
+from database import encrypt_value
 from models.incident import Incident
 from tests.test_routers.conftest import make_client
 
 
 async def _set(sf, **values):
+    from tests.conftest import put_settings
     async with sf() as db:
-        for k, v in values.items():
-            row = await db.get(Setting, k)
-            if row:
-                row.value = v
-            else:
-                db.add(Setting(key=k, value=v))
-        await db.commit()
+        await put_settings(db, **values)
 
 
 def _factory(db):
@@ -57,7 +52,7 @@ async def test_daily_summary_hook_schedules_the_job(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from nodeglow_ee.ai import daily_summary
 
-    async def fake_get_setting(_db, key, default=None):
+    async def fake_get_setting(_db, key, default=None, **_kw):
         return "7" if key == "daily_ai_summary_hour" else default
 
     monkeypatch.setattr("database.get_setting", fake_get_setting)

@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 EXPORT_TABLES: list[str] = [
     "settings",
     "users",
+    "tenant_memberships",
+    "tenant_settings",
+    "user_preferences",
     "ping_hosts",
     "ping_results",
     "integration_configs",
@@ -207,6 +210,14 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
         await db.commit()
     finally:
         await db.execute(text("SET session_replication_role = 'origin'"))
+
+    # A backup from before the settings split (revision 042) carries the
+    # tenant's settings in ``settings``: they belong to the importing tenant.
+    from models.settings import adopt_legacy_tenant_settings
+
+    moved = await adopt_legacy_tenant_settings(db, tenancy.session_tenant_id(db))
+    if moved:
+        await db.commit()
 
     result = {"imported": imported, "total_rows": sum(imported.values())}
     if key_warning:

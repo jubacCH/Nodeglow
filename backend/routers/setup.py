@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db, is_setup_complete, set_setting
+from models.tenant import DEFAULT_TENANT_ID
 from utils.password import hash_password
 
 router = APIRouter(prefix="/setup")
@@ -45,11 +46,13 @@ async def complete_setup(
         pw_hash = hash_password(password)
         db.add(User(username=username.strip() or "admin", password_hash=pw_hash, role="admin"))
 
-    await set_setting(db, "site_name", site_name.strip() or "NODEGLOW")
-    await set_setting(db, "ping_interval", "60")
+    # The wizard sets up the installation and its first (core: only) tenant.
+    tenant_id = DEFAULT_TENANT_ID
+    await set_setting(db, "site_name", site_name.strip() or "NODEGLOW", tenant_id=tenant_id)
+    await set_setting(db, "ping_interval", "60", tenant_id=tenant_id)
     # Secure-by-default for new installs: only accept syslog from registered hosts.
     # Operators can opt out on the settings page.
-    await set_setting(db, "syslog_allowlist_only", "1")
+    await set_setting(db, "syslog_allowlist_only", "1", tenant_id=tenant_id)
     # Set setup_complete last — only after user creation
     await set_setting(db, "setup_complete", "true")
     await db.commit()
