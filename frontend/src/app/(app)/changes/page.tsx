@@ -201,7 +201,7 @@ function ChangesView() {
           <>
             {groups.map((g) => (
               <div key={g.day}>
-                <h2 className="sticky top-[60px] z-[1] border-b border-border bg-surface px-5 py-2 text-meta font-medium text-fg-2 max-[759px]:px-4">{g.day}</h2>
+                <h2 className="sticky top-[60px] z-1 border-b border-border bg-surface px-5 py-2 text-meta font-medium text-fg-2 max-[759px]:px-4">{g.day}</h2>
                 <ul>{g.items.map((it, i) => <ChangeRow key={`${it.type}-${it.object.id}-${it.at}-${i}`} item={it} />)}</ul>
               </div>
             ))}

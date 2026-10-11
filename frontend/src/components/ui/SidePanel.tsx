@@ -61,7 +61,7 @@ export function SidePanel({
             aria-label={ariaLabel}
             tabIndex={-1}
             className={cn(
-              'absolute inset-y-0 right-0 flex w-full flex-col border-l border-border bg-surface shadow-overlay outline-none',
+              'absolute inset-y-0 right-0 flex w-full flex-col border-l border-border bg-surface shadow-overlay outline-hidden',
               width === 'md' ? 'max-w-[460px]' : 'max-w-[640px]',
             )}
             initial={{ x: '100%' }}
@@ -72,7 +72,7 @@ export function SidePanel({
             <header className="flex items-start gap-3 border-b border-border px-5 pb-4 pt-[18px]">
               {icon && <div className="shrink-0">{icon}</div>}
               <div className="min-w-0 flex-1">
-                <h2 id={titleId} className="break-words font-display text-[1.2143rem] font-semibold leading-[1.3] tracking-[-0.025em] text-fg">
+                <h2 id={titleId} className="wrap-break-word font-display text-[1.2143rem] font-semibold leading-[1.3] tracking-tight text-fg">
                   {title}
                 </h2>
                 {meta && <div className="mt-[3px] text-meta text-fg-2">{meta}</div>}

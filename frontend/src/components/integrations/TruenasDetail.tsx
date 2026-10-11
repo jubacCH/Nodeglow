@@ -165,7 +165,7 @@ export function TruenasDetail({ data }: { data: TruenasData }) {
               <li key={i} className="flex min-w-0 items-start gap-3 text-ui">
                 <Badge tone={alertTone(a.level)} className="shrink-0">{a.level || '—'}</Badge>
                 <div className="min-w-0 flex-1">
-                  <p className="break-words text-fg">{a.message}</p>
+                  <p className="wrap-break-word text-fg">{a.message}</p>
                   <p className="mt-0.5 text-meta text-fg-3">{a.date}</p>
                 </div>
               </li>

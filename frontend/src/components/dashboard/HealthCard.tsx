@@ -56,7 +56,7 @@ export function HealthCard({ health, incidents, loading, error, countsError, cla
             <HealthRing
               segments={segments}
               size={184}
-              className="max-[1439px]:!h-[168px] max-[1439px]:!w-[168px] max-[759px]:self-center"
+              className="max-[1439px]:h-[168px]! max-[1439px]:w-[168px]! max-[759px]:self-center"
               center={
                 <>
                   <span className="num font-display text-num-lg font-medium leading-[1.05] tracking-[-0.045em] text-fg">{monitored}</span>

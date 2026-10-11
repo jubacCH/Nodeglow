@@ -82,7 +82,7 @@ export function AppShell({ children }: AppShellProps) {
           id="main"
           tabIndex={-1}
           className={cn(
-            'min-w-0 overflow-x-clip outline-none',
+            'min-w-0 overflow-x-clip outline-hidden',
             density === 'compact' ? 'px-4 pb-10 pt-5' : 'px-gutter pb-12 pt-7',
             'max-[759px]:px-4 max-[759px]:pb-[90px] max-[759px]:pt-5',
           )}
@@ -92,7 +92,7 @@ export function AppShell({ children }: AppShellProps) {
               <SubNav />
             </Suspense>
             {/* One page transition: remount + CSS fade (off with reduced motion). */}
-            <div key={pathname} className={cn('animate-page-enter', density === 'compact' && 'text-sm [&_*]:leading-tight')}>
+            <div key={pathname} className={cn('animate-page-enter', density === 'compact' && 'text-sm **:leading-tight')}>
               {children}
             </div>
           </div>

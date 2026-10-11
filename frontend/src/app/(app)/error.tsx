@@ -30,7 +30,7 @@ export default function AppError({
           Something went wrong while rendering it. You can try again, or go back to the dashboard.
         </p>
         {error.message && (
-          <p className="max-w-full break-words font-mono text-micro text-fg-3">
+          <p className="max-w-full wrap-break-word font-mono text-micro text-fg-3">
             {error.message}
             {error.digest ? ` (${error.digest})` : ''}
           </p>

@@ -31,7 +31,7 @@ function Legend() {
   return (
     <ul className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3 text-meta text-fg-3" aria-label="Legend">
       <li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-[18px] border-t-2 border-line" />Uplink</li>
-      <li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-[18px] border-t-2 border-down [filter:var(--ng-wire-glow)]" />Affected branch · glows</li>
+      <li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-[18px] border-t-2 border-down filter-(--ng-wire-glow)" />Affected branch · glows</li>
       <li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="w-[18px] border-t-2 border-dashed border-unknown" />No data · no light = no data</li>
       <li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-maint" />Maintenance</li>
       <li className="ml-auto max-sm:ml-0">Links from parent assignments (manual, UniFi, Proxmox)</li>
@@ -152,7 +152,7 @@ export default function TopologyPage() {
               ) : view === 'tree' ? (
                 <TopologyTree trees={shown.trees} orphans={shown.orphans} />
               ) : (
-                <div className="-mx-[20px] border-y border-border max-[759px]:-mx-[16px]">
+                <div className="mx-[-20px] border-y border-border max-[759px]:mx-[-16px]">
                   <TopologyMap trees={shown.trees} orphans={shown.orphans} />
                 </div>
               )}

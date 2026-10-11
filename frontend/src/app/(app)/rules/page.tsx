@@ -178,8 +178,8 @@ export default function RulesPage() {
                   <Card padding="sm">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className={rule.enabled ? 'font-medium text-fg [overflow-wrap:anywhere]' : 'font-medium text-fg-2 [overflow-wrap:anywhere]'}>{rule.name}</p>
-                        <p className="font-mono text-meta text-fg-3 [overflow-wrap:anywhere]">{conditionLabel(rule)}</p>
+                        <p className={rule.enabled ? 'font-medium text-fg wrap-anywhere' : 'font-medium text-fg-2 wrap-anywhere'}>{rule.name}</p>
+                        <p className="font-mono text-meta text-fg-3 wrap-anywhere">{conditionLabel(rule)}</p>
                       </div>
                       <SeverityBadge severity={rule.severity} />
                     </div>
