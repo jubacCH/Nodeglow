@@ -128,6 +128,48 @@ async def test_a_plain_agent_cannot_relay_for_other_devices(caplog):
     assert any("relay_not_a_probe" in r.getMessage() for r in caplog.records)
 
 
+async def test_a_probe_whose_relay_is_off_relays_nothing(caplog):
+    caplog.set_level("WARNING")
+    async with _env() as (client, sf, captured):
+        async with sf() as s:
+            with system_scope("test: relay off", audit=False):
+                probe = await s.get(Agent, 10)
+                probe.syslog_relay_enabled = False
+                await s.commit()
+        resp = await _relay([{"raw": "<13>Oct 11 10:00:00 gw sshd: spoofed",
+                              "source_ip": "192.168.1.1"}], client=client)
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "count": 0, "dropped": 1}
+        assert captured == []
+        # Its own logs still go through.
+        resp = await _relay([{"message": "probe log"}], client=client)
+        assert resp.json()["count"] == 1
+    assert any("relay_disabled" in r.getMessage() and r.levelname == "WARNING"
+               for r in caplog.records)
+
+
+async def test_an_ip_keyed_host_still_gets_its_agents_logs():
+    # A host added by address before the agent was enrolled (the agent
+    # reports another name): the request's private address finds it, in the
+    # agent's own site. (The test client's address is 127.0.0.1.)
+    async with _env() as (client, sf, captured):
+        async with sf() as s:
+            with system_scope("test: ip-keyed host", audit=False):
+                s.add(PingHost(id=102, tenant_id=A, name="Joplin", hostname="127.0.0.1",
+                               site_id=1))
+                s.add(PingHost(id=902, tenant_id=B, name="CANARY-B-loop",
+                               hostname="127.0.0.1", site_id=2))
+                await s.commit()
+        resp = await _relay([{"message": "own log"}], who="plain-a", client=client,
+                            hostname="joplin-server")
+        assert resp.status_code == 200
+        assert [(m[syslog.TENANT_KEY], m["host_id"]) for m in captured] == [(A, 102)]
+        captured.clear()
+        resp = await _relay([{"message": "own log"}], who="probe-b", client=client,
+                            hostname="probe-b")
+        assert [(m[syslog.TENANT_KEY], m["host_id"]) for m in captured] == [(B, 902)]
+
+
 async def test_invalid_relay_entries_are_dropped_not_guessed():
     async with _env() as (client, sf, captured):
         resp = await _relay([{"raw": "<13>a", "source_ip": "gw.example"},
@@ -209,8 +251,8 @@ async def test_heartbeat_carries_the_relay_config_to_probes_only():
 async def test_heartbeat_stores_only_sane_relay_counters():
     async with _env() as (client, sf, _):
         resp = await _report(client, "probe-a", syslog_relay={
-            "listening": True, "port": 514, "received": 12, "forwarded": 10, "dropped": 2,
-            "buffered": -5, "send_failures": "many", "error": "x" * 500, "evil": {"a": 1},
+            "listening": True, "port": 514, "received": 12, "forwarded": 10, "rejected": 1,
+            "dropped": 2, "buffered": -5, "send_failures": "many", "error": "x" * 500, "evil": {"a": 1},
         })
         assert resp.status_code == 200
         await _report(client, "plain-a", syslog_relay={"received": 1})
@@ -219,7 +261,7 @@ async def test_heartbeat_stores_only_sane_relay_counters():
                 agents = {a.name: a for a in (await s.execute(select(Agent))).scalars()}
         status = json.loads(agents["probe-a"].syslog_relay_status)
         assert status == {"listening": True, "port": 514, "received": 12, "forwarded": 10,
-                          "dropped": 2, "buffered": 0, "error": "x" * 300}
+                          "rejected": 1, "dropped": 2, "buffered": 0, "error": "x" * 300}
         assert agents["plain-a"].syslog_relay_status is None
 
         detail = (await client.get("/api/v1/agents/10")).json()

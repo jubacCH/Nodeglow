@@ -115,6 +115,39 @@ async def test_relayed_lookups_skip_reverse_dns(hosts):
         syslog._rdns_cache.pop("10.77.0.1", None)
 
 
+async def test_an_agents_own_host_falls_back_to_a_private_request_address(hosts):
+    r = syslog.resolve_agent_host_id
+    # By name first, inside the tenant and site.
+    assert r("203.0.113.7", "gw-hq", 1, HQ) == hosts[(1, "gw-hq", HQ)]
+    # A host keyed by its (private) address, the agent reporting another
+    # name: the request's address finds it — in the agent's own site only.
+    assert r("10.5.5.5", "only-branch-agent", 1, BRANCH) == hosts[(1, "only-branch", BRANCH)]
+    assert r("10.5.5.5", "only-branch-agent", 1, HQ) is None
+    assert r("192.168.1.1", "unknown-agent", 1, HQ) == hosts[(1, "gw-hq", HQ)]
+    # Never another tenant's host.
+    assert r("10.5.5.5", "x", 2, B_SITE) == hosts[(2, "srv-b", B_SITE)]
+    assert r("192.168.1.99", "x", 2, B_SITE) is None
+    # A public address of a multi-site tenant is a NAT more often than not.
+    assert r("9.9.9.9", "unknown-agent", 1, HQ) is None
+    # No reverse DNS for agents.
+    syslog._rdns_cache["10.77.0.1"] = "gw-hq.example"
+    try:
+        assert r("10.77.0.1", "unknown-agent", 1, HQ) is None
+    finally:
+        syslog._rdns_cache.pop("10.77.0.1", None)
+
+
+async def test_an_agents_public_address_counts_in_a_single_site_tenant(hosts):
+    # Tenant 2 has hosts in one site only: a public request address is the
+    # agent's own (a cloud server), as before phase 10.
+    syslog._site_host_cache[(2, B_SITE)]["198.51.100.4"] = 4242
+    try:
+        assert syslog.resolve_agent_host_id("198.51.100.4", "vps", 2, B_SITE) == 4242
+        assert syslog.resolve_agent_host_id(None, "vps", 2, B_SITE) is None
+    finally:
+        syslog._site_host_cache[(2, B_SITE)].pop("198.51.100.4", None)
+
+
 async def test_allowlist_is_site_scoped_for_relayed_syslog(hosts):
     syslog._allowlist_only[1] = True
     assert not syslog._is_allowed_source("10.5.5.5", 1, HQ)
@@ -218,6 +251,39 @@ def test_auto_listener_accepts_only_with_one_tenant(caplog):
     assert sum("refuses messages" in r.getMessage() for r in caplog.records) == 1
     syslog._listener_mode = "on"
     assert syslog._listener_accepts()
+
+
+def test_auto_listener_fails_closed_until_the_tenants_are_counted():
+    syslog._listener_mode = "auto"
+    assert syslog._active_tenant_count is None  # fresh process (reset)
+    assert not syslog._listener_accepts()
+
+
+async def test_a_failing_refresh_does_not_open_the_auto_listener(caplog):
+    @asynccontextmanager
+    async def broken():
+        raise RuntimeError("database unreachable")
+        yield  # pragma: no cover
+
+    syslog._listener_mode = "auto"
+    with patch.object(syslog, "AsyncSessionLocal", broken),          patch("services.tenancy.SingleTenancy.active_tenant_ids",
+               new=AsyncMock(return_value=[1, 2, 3])):
+        await syslog._refresh_host_cache()
+    assert syslog._active_tenant_count is None
+    assert not syslog._listener_accepts()
+
+
+async def test_the_tenant_count_survives_a_failing_setting(db):
+    @asynccontextmanager
+    async def factory():
+        yield db
+
+    syslog._listener_mode = "auto"
+    with patch.object(syslog, "AsyncSessionLocal", factory),          patch.object(syslog, "_resolve_many", new=AsyncMock(return_value={})),          patch("services.tenancy.SingleTenancy.active_tenant_ids",
+               new=AsyncMock(return_value=[1, 2, 3])),          patch("database.get_setting", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        await syslog._refresh_host_cache()
+    assert syslog._active_tenant_count == 3
+    assert not syslog._listener_accepts()
 
 
 async def test_a_refusing_listener_drops_datagrams():
