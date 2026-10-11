@@ -9,6 +9,8 @@ from datetime import datetime
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services import tenancy
+
 logger = logging.getLogger(__name__)
 
 # Tables to export (in dependency order — parents before children)
@@ -161,6 +163,16 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
             if not cols:
                 imported[table_name] = 0
                 continue
+            # A backup taken before multi-tenancy (revision < 040) has no
+            # tenant_id/site_id: its rows belong to the importing tenant and
+            # its default site. Raw SQL is not stamped by the session filter.
+            defaults: dict[str, int | None] = {}
+            if "tenant_id" in allowed and "tenant_id" not in rows[0]:
+                defaults["tenant_id"] = tenancy.session_tenant_id(db)
+            if "site_id" in allowed and "site_id" not in rows[0]:
+                tid = defaults.get("tenant_id") or tenancy.session_tenant_id(db)
+                defaults["site_id"] = tenancy.backend().default_site_id(tid)
+            cols += list(defaults)
             rejected = set(rows[0].keys()) - allowed
             if rejected:
                 logger.warning("Ignoring unknown columns in %s: %s", table_name, rejected)
@@ -171,6 +183,7 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
             for row in rows:
                 # Only include validated columns
                 safe_row = {c: row.get(c) for c in cols}
+                safe_row.update(defaults)
                 await db.execute(
                     text(f"INSERT INTO {_safe_table(table_name)} ({col_names}) VALUES ({placeholders})"),
                     safe_row,

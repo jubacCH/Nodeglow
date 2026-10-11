@@ -16,6 +16,7 @@ from database import Session, User, get_db, get_current_user
 from models.settings import _hash_token, _hash_token_legacy, get_setting, set_setting
 from ratelimit import rate_limit, failed_auth_throttled
 from services.audit import log_action
+from services.tenancy import user_tenant_scope
 from utils.password import verify_password
 
 logger = logging.getLogger(__name__)
@@ -323,9 +324,11 @@ async def login(
         token = secrets.token_hex(32)
         db.add(Session(token=_hash_token(token), user_id=user.id,
                        expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS)))
-        await log_action(db, request, "auth.login", "user", user.id, user.username,
-                         details={"method": method, "trusted_device": bool(device_nonce)})
-        await db.commit()
+        # The audit row belongs to the tenant the user signs in to.
+        async with user_tenant_scope(request, user):
+            await log_action(db, request, "auth.login", "user", user.id, user.username,
+                             details={"method": method, "trusted_device": bool(device_nonce)})
+            await db.commit()
         response = _create_session_response(user, token, request)
         _set_device_cookie(response, request, body.username, device_nonce)
         return response
@@ -377,9 +380,11 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
             # Fall back to legacy plain SHA256
             session = await db.get(Session, _hash_token_legacy(token))
         if session:
+            user = await db.get(User, session.user_id)
             await db.delete(session)
-            await log_action(db, request, "auth.logout")
-            await db.commit()
+            async with user_tenant_scope(request, user):
+                await log_action(db, request, "auth.logout")
+                await db.commit()
     response = JSONResponse({"ok": True})
     response.delete_cookie("nodeglow_session")
     return response

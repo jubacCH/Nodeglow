@@ -102,7 +102,8 @@ async def test_only_new_snapshots_are_fetched(db):
 
     assert series[100]["cpu"][-1] == 50.0
     assert len(queries) == 1
-    assert list(queries[0][1]) == [newer.id], "only the new snapshot is loaded"
+    # The trailing parameter is the tenant filter's tenant_id (= 1).
+    assert list(queries[0][1]) == [newer.id, 1], "only the new snapshot is loaded"
 
 
 async def test_snapshots_leaving_the_window_are_evicted(db):

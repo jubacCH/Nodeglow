@@ -41,15 +41,28 @@ from models.ai_usage import AiUsageLog
 from models.backup import BackupJob, BackupHistory
 from models.maintenance import MaintenanceWindow
 from models.user_preference import UserPreference
+from models.tenant import (
+    TenantScoped, Provider, Tenant, Site, TenantMembership, ProviderMembership,
+    TenantSetting, DEFAULT_PROVIDER_ID, DEFAULT_TENANT_ID, DEFAULT_SITE_ID,
+    ensure_default_tenant,
+)
+
+# The tenant filter hooks into every SQLAlchemy session; installing it here
+# means nothing can open a session before it is active.
+from services import tenancy as _tenancy  # noqa: E402
+
+_tenancy.install()
 
 
 async def init_db():
-    """Create all tables and PostgreSQL-specific objects (triggers, etc.)."""
-    from sqlalchemy import text
-    from config import DATABASE_URL
-
+    """Create all tables and the default provider/tenant/site (fresh installs)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Every tenant-owned row references tenant 1; on a database built by the
+    # migration chain these rows come from revision 039 and this is a no-op.
+    async with AsyncSessionLocal() as db:
+        await ensure_default_tenant(db)
 
     # Syslog messages are stored in ClickHouse — no PostgreSQL trigger needed
 
@@ -77,5 +90,9 @@ __all__ = [
     "BackupJob", "BackupHistory",
     "MaintenanceWindow",
     "UserPreference",
+    "TenantScoped", "Provider", "Tenant", "Site", "TenantMembership",
+    "ProviderMembership", "TenantSetting",
+    "DEFAULT_PROVIDER_ID", "DEFAULT_TENANT_ID", "DEFAULT_SITE_ID",
+    "ensure_default_tenant",
     "init_db",
 ]

@@ -10,6 +10,9 @@ to it; the core reads it at the few places where it can be extended:
   is registered (HA leader election) — otherwise it runs single-instance;
 * incident resolution (manual and automatic) calls the **incident-resolved
   hooks** after the transaction has committed;
+* the request middleware and the per-tenant jobs ask the **tenancy backend**
+  which tenant a request belongs to and which tenants exist — without one
+  registered, ``services.tenancy.SingleTenancy`` (always tenant 1);
 * ``GET /api/v2/features`` reports the **edition** and **feature flags** so
   the UI shows only what this installation can do. A plugin that gates its
   features (the enterprise license check) registers a **license provider**;
@@ -61,6 +64,37 @@ class SchedulerCoordinator(Protocol):
         """Stop coordinating; called before the scheduler shuts down."""
 
 
+class TenancyBackend(Protocol):
+    """Decides which tenant a request belongs to and which tenants exist.
+
+    The core ships ``services.tenancy.SingleTenancy`` (always tenant 1). A
+    plugin that supports several tenants registers its own through
+    :meth:`Registry.set_tenancy_backend`. See
+    docs/specs/2026-10-10-multi-tenancy-design.md.
+    """
+
+    async def resolve_request_tenant(self, request: Any, user: Any) -> int | None:
+        """Tenant of an authenticated request (header / session / membership).
+
+        ``None`` means "no tenant for this user"; the middleware answers 404.
+        """
+
+    async def list_tenants_for(self, user: Any) -> list[int]:
+        """Tenant ids the user may switch into."""
+
+    async def active_tenant_ids(self) -> list[int]:
+        """Tenants per-tenant background jobs iterate over. Runs in system scope."""
+
+    def effective_role(self, user: Any, tenant_id: int) -> str:
+        """The user's role (admin | editor | readonly) in that tenant."""
+
+    def can_create_tenant(self) -> bool:
+        """Whether a second tenant may be created on this installation."""
+
+    def default_site_id(self, tenant_id: int) -> int | None:
+        """Site a new host/agent/token/scan lands in when none is given."""
+
+
 IncidentResolvedHook = Callable[[int], Awaitable[None]]
 SchedulerHook = Callable[[Any], Awaitable[None]]
 # ``await provider()`` → ``{"license": {...summary...}, "active": {feature: bool}}``
@@ -77,6 +111,7 @@ class Registry:
     incident_resolved_hooks: list[IncidentResolvedHook] = field(default_factory=list)
     scheduler_coordinator: SchedulerCoordinator | None = None
     license_provider: LicenseProvider | None = None
+    tenancy_backend: TenancyBackend | None = None
     features: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_FEATURES))
     edition: str = EDITION_COMMUNITY
 
@@ -98,6 +133,12 @@ class Registry:
         if self.scheduler_coordinator is not None:
             raise RuntimeError("A scheduler coordinator is already registered")
         self.scheduler_coordinator = coordinator
+
+    def set_tenancy_backend(self, backend: TenancyBackend) -> None:
+        """Replace the core's single-tenant backend (``services.tenancy``)."""
+        if self.tenancy_backend is not None:
+            raise RuntimeError("A tenancy backend is already registered")
+        self.tenancy_backend = backend
 
     def enable_feature(self, name: str) -> None:
         self.features[name] = True

@@ -111,8 +111,30 @@ async def db():
         except ImportError:
             pass
 
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    await seed_default_tenant(engine)
+    # The test's own session acts for tenant 1, like a logged-in request does
+    # (services.tenancy.bind_session). Code under test that opens its own
+    # sessions gets no such binding and must set a tenant or system scope.
+    session_factory = tenant_bound_sessionmaker(engine)
     async with session_factory() as session:
         yield session
 
     await engine.dispose()
+
+
+def tenant_bound_sessionmaker(engine, tenant_id: int = 1):
+    """A session factory whose sessions act for ``tenant_id`` when no tenant
+    context is set — for seeding and asserting in tests."""
+    from services.tenancy import SESSION_TENANT_KEY
+
+    return async_sessionmaker(
+        engine, expire_on_commit=False, info={SESSION_TENANT_KEY: tenant_id},
+    )
+
+
+async def seed_default_tenant(engine) -> None:
+    """Provider 1, tenant 1 and site 1, as migration 039 / init_db create them."""
+    from models.tenant import ensure_default_tenant
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as s:
+        await ensure_default_tenant(s, name="NODEGLOW")

@@ -4,9 +4,10 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, Float, Index, Integer, String, Text
 
 from models.base import Base
+from models.tenant import TenantScoped
 
 
-class AiUsageLog(Base):
+class AiUsageLog(TenantScoped, Base):
     __tablename__ = "ai_usage_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)

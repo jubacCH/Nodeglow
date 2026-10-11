@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database import AsyncSessionLocal, get_setting, init_db
 from scheduler import start_scheduler, stop_scheduler
+from services import tenancy as _tenancy
 from routers import (
     auth, dashboard, ping, setup, settings, users,
     syslog as syslog_router,
@@ -410,7 +411,14 @@ async def inject_globals(request: Request, call_next):
             response = await call_next(request)
             return response
         request.state.current_user = user
-        role = getattr(user, "role", "admin") or "admin"
+        # The tenant this request acts for (core: always tenant 1; ee resolves
+        # it from header / session / membership). Not a member → 404, so a
+        # tenant id cannot be probed for existence.
+        tenant_id = await _tenancy.backend().resolve_request_tenant(request, user)
+        if tenant_id is None:
+            return _JSON({"error": "Not found"}, status_code=404)
+        request.state.tenant_id = tenant_id
+        role = _tenancy.backend().effective_role(user, tenant_id)
         if is_mutating:
             if path.startswith("/api/users") and role != "admin":
                 return _JSON({"error": "Admin access required"}, status_code=403)
@@ -425,7 +433,17 @@ async def inject_globals(request: Request, call_next):
     import secrets as _secrets
     request.state.csp_nonce = _secrets.token_urlsafe(16)
 
-    response = await call_next(request)
+    # Everything downstream (dependencies, the route, background tasks it
+    # spawns) runs in this tenant's context. Reset afterwards: the ASGI
+    # caller's context must not keep it (the test client runs in-task).
+    tenant_id = getattr(request.state, "tenant_id", None)
+    ctx_token = _tenancy.set_context(
+        _tenancy.TenantContext(tenant_id=tenant_id) if tenant_id is not None else None
+    )
+    try:
+        response = await call_next(request)
+    finally:
+        _tenancy.reset_context(ctx_token)
 
     # Set CSRF cookie if newly generated
     set_csrf_cookie(request, response)
@@ -483,17 +501,25 @@ async def ws_live(websocket: WebSocket):
             await websocket.close(code=4401, reason="Unauthorized")
             return
         user = (await _db.execute(_sel(_User).where(_User.id == session.user_id))).scalar_one_or_none()
-        role = getattr(user, "role", "admin") or "admin"
+
+    # Same resolution as HTTP requests. The hub still broadcasts to every
+    # client; scoping events per tenant is the auth-binding phase (4).
+    tenant_id = await _tenancy.backend().resolve_request_tenant(websocket, user)
+    if tenant_id is None:
+        await websocket.close(code=4404, reason="Not found")
+        return
+    role = _tenancy.backend().effective_role(user, tenant_id)
 
     from services.websocket import register, unregister
-    await register(websocket, role=role)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        unregister(websocket)
+    with _tenancy.tenant_scope(tenant_id):
+        await register(websocket, role=role)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            unregister(websocket)
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────
