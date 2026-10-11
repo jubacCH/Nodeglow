@@ -89,6 +89,19 @@ def _reset_tenant_job_state():
     tenant_jobs.reset_state()
 
 
+@pytest.fixture(autouse=True)
+def _reset_syslog_host_cache():
+    """The syslog host cache (hosts per tenant and site, allowlists, the
+    tenant count the direct listener's "auto" mode reads) is process-global."""
+    from services import syslog
+
+    syslog.reset_host_cache()
+    syslog._listener_mode = "auto"
+    yield
+    syslog.reset_host_cache()
+    syslog._listener_mode = "auto"
+
+
 @pytest.fixture
 async def db():
     """Provide a fresh in-memory SQLite database session per test."""
