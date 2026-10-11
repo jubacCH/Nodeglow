@@ -228,9 +228,14 @@ impl ApiClient {
     }
 
     /// Forward a batch of relayed syslog lines (probe syslog relay). Unlike
-    /// the agent's own logs, a failure is returned: the relay keeps the batch
-    /// and retries it.
-    pub async fn send_relay_logs(&self, hostname: &str, entries: &[RelayEntry]) -> anyhow::Result<()> {
+    /// the agent's own logs, a failure that may pass is returned as `Err`:
+    /// the relay keeps the batch and retries it. What the backend took and
+    /// what it refused (or refused outright) comes back as a `RelaySent`.
+    pub async fn send_relay_logs(
+        &self,
+        hostname: &str,
+        entries: &[RelayEntry],
+    ) -> anyhow::Result<RelaySent> {
         #[derive(Serialize)]
         struct RelayPayload<'a> {
             hostname: &'a str,
@@ -244,10 +249,15 @@ impl ApiClient {
             .json(&RelayPayload { hostname, logs: entries })
             .send()
             .await?;
-        if !resp.status().is_success() {
-            anyhow::bail!("relay submission failed: {}", resp.status());
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Ok(RelaySent::from_response(entries.len(), &body));
         }
-        Ok(())
+        if relay_status_is_permanent(status.as_u16()) {
+            return Ok(RelaySent::Refused(status.as_u16()));
+        }
+        anyhow::bail!("relay submission failed: {}", status);
     }
 
     /// Check latest agent version info (hash + optional signature) from server.
@@ -309,11 +319,77 @@ impl ApiClient {
     }
 }
 
+/// What became of a relayed batch the backend answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelaySent {
+    /// The backend stored `accepted` entries and dropped `rejected` of them
+    /// (not allowed, oversized, invalid, ...). Resending them cannot help.
+    Done { accepted: u64, rejected: u64 },
+    /// The backend refused the whole batch for good (a 4xx resending cannot
+    /// fix, such as 400 or 413): it is discarded, not retried forever.
+    Refused(u16),
+}
+
+impl RelaySent {
+    /// Read `{"count": n, "dropped": m}`. The accepted count is what the
+    /// backend stored; everything else of the batch counts as rejected
+    /// (that also covers entries past the backend's per-request limit). A
+    /// backend that does not say (an unreadable body) took the batch.
+    fn from_response(sent: usize, body: &str) -> Self {
+        let sent = sent as u64;
+        let accepted = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("count").and_then(|c| c.as_u64()))
+            .map(|c| c.min(sent))
+            .unwrap_or(sent);
+        RelaySent::Done { accepted, rejected: sent - accepted }
+    }
+}
+
+/// A 4xx resending cannot fix. Authentication (401/403: a token or probe
+/// an admin may restore), 404 (a backend mid-upgrade), 408 and 429 pass;
+/// 5xx and network errors are always retried.
+fn relay_status_is_permanent(status: u16) -> bool {
+    (400..500).contains(&status) && !matches!(status, 401 | 403 | 404 | 408 | 425 | 429)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::collector::SystemMetrics;
     use std::collections::{BTreeMap, HashMap};
+
+    #[test]
+    fn relay_responses_count_only_what_the_backend_stored() {
+        assert_eq!(
+            RelaySent::from_response(5, r#"{"ok": true, "count": 3, "dropped": 2}"#),
+            RelaySent::Done { accepted: 3, rejected: 2 }
+        );
+        // Entries the backend ignored without counting them are rejected too.
+        assert_eq!(
+            RelaySent::from_response(600, r#"{"ok": true, "count": 500, "dropped": 0}"#),
+            RelaySent::Done { accepted: 500, rejected: 100 }
+        );
+        // A count above the batch is capped; a body that says nothing means taken.
+        assert_eq!(
+            RelaySent::from_response(2, r#"{"count": 9}"#),
+            RelaySent::Done { accepted: 2, rejected: 0 }
+        );
+        assert_eq!(
+            RelaySent::from_response(4, ""),
+            RelaySent::Done { accepted: 4, rejected: 0 }
+        );
+    }
+
+    #[test]
+    fn only_unfixable_client_errors_discard_a_relay_batch() {
+        for permanent in [400, 413, 422] {
+            assert!(relay_status_is_permanent(permanent), "{permanent}");
+        }
+        for retry in [401, 403, 404, 408, 429, 500, 502, 503] {
+            assert!(!relay_status_is_permanent(retry), "{retry}");
+        }
+    }
 
     fn sample_metrics() -> SystemMetrics {
         SystemMetrics {
@@ -461,6 +537,7 @@ mod tests {
             port: 514,
             received: 7,
             forwarded: 5,
+            rejected: 1,
             dropped: 0,
             buffered: 2,
             send_failures: 1,
@@ -477,7 +554,7 @@ mod tests {
         assert_eq!(
             json["syslog_relay"],
             serde_json::json!({"listening": true, "port": 514, "received": 7, "forwarded": 5,
-                               "dropped": 0, "buffered": 2, "send_failures": 1})
+                               "rejected": 1, "dropped": 0, "buffered": 2, "send_failures": 1})
         );
     }
 
