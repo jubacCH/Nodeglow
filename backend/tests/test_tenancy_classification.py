@@ -50,8 +50,9 @@ def test_global_list_has_no_stale_entries():
 
 
 def test_expected_counts():
-    # 29 tenant-owned, 9 global. Changing these numbers is a deliberate act.
-    assert (len(TENANT_TABLES), len(GLOBAL_TABLES)) == (29, 9), TENANT_TABLES
+    # 30 tenant-owned (tenant_keys since 046), 9 global. Changing these numbers
+    # is a deliberate act.
+    assert (len(TENANT_TABLES), len(GLOBAL_TABLES)) == (30, 9), TENANT_TABLES
 
 
 @pytest.mark.parametrize("name", TENANT_TABLES)

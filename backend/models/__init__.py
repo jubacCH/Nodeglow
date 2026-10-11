@@ -43,7 +43,7 @@ from models.maintenance import MaintenanceWindow
 from models.user_preference import UserPreference
 from models.tenant import (
     TenantScoped, Provider, Tenant, Site, TenantMembership, ProviderMembership,
-    TenantSetting, DEFAULT_PROVIDER_ID, DEFAULT_TENANT_ID, DEFAULT_SITE_ID,
+    TenantSetting, TenantKey, DEFAULT_PROVIDER_ID, DEFAULT_TENANT_ID, DEFAULT_SITE_ID,
     ensure_default_tenant,
 )
 
@@ -107,7 +107,7 @@ __all__ = [
     "MaintenanceWindow",
     "UserPreference",
     "TenantScoped", "Provider", "Tenant", "Site", "TenantMembership",
-    "ProviderMembership", "TenantSetting",
+    "ProviderMembership", "TenantSetting", "TenantKey",
     "DEFAULT_PROVIDER_ID", "DEFAULT_TENANT_ID", "DEFAULT_SITE_ID",
     "ensure_default_tenant",
     "init_db",
