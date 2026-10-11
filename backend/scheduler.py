@@ -241,11 +241,11 @@ async def _apply_result(
                 )
                 if integration_type == "proxmox":
                     await extract_proxmox_bandwidth(
-                        cfg.id, result.data, source_name=cfg.name,
+                        cfg.id, result.data, tenant_id=cfg.tenant_id, source_name=cfg.name,
                     )
                 elif integration_type == "unifi":
                     await extract_unifi_bandwidth(
-                        cfg.id, result.data, source_name=cfg.name,
+                        cfg.id, result.data, tenant_id=cfg.tenant_id, source_name=cfg.name,
                     )
             except Exception as bw_exc:
                 logger.warning(
@@ -547,6 +547,7 @@ async def run_ping_checks():
             last_seen = last_seen_by_name.get(host.name.lower())
             success = bool(last_seen) and (ts_now - last_seen).total_seconds() < 120
             agent_ping_rows.append({
+                "tenant_id": host.tenant_id,
                 "timestamp": ts_now,
                 "host_id": host.id,
                 "host_name": host.name,
@@ -608,6 +609,7 @@ async def run_ping_checks():
         } if results else {}
         for host, online, port_error, latency, detail in results:
             icmp_rows.append({
+                "tenant_id": host.tenant_id,
                 "timestamp": now,
                 "host_id": host.id,
                 "host_name": host.name,

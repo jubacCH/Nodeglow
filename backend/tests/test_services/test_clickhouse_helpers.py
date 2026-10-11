@@ -22,6 +22,18 @@ from unittest.mock import AsyncMock
 import pytest
 
 from services import clickhouse_client as ch
+from services.tenancy import TenantContextError, system_scope, tenant_scope
+
+# The tenant every helper test runs for (see the autouse fixture below).
+TENANT = 7
+
+
+@pytest.fixture(autouse=True)
+def _tenant_context():
+    """Helpers need a tenant context; a sync fixture so the context var is
+    set before the test's task copies the context."""
+    with tenant_scope(TENANT):
+        yield
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -36,6 +48,7 @@ class _FakeQuery:
 
     def __init__(self):
         self.calls: list[tuple[str, dict]] = []
+        self.tenants: list[int] = []
         self._responses: list = []
 
     def returns(self, *responses):
@@ -43,7 +56,17 @@ class _FakeQuery:
         return self
 
     async def __call__(self, sql, params=None):
-        self.calls.append((sql, dict(params or {})))
+        params = dict(params or {})
+        # Every helper's SQL must pass the read guard of the real query() and
+        # bind the current tenant; the tenant parameter is checked here and
+        # kept out of the recorded params, so the tests below compare only
+        # the helper-specific ones.
+        ch._check_tenant_predicates(sql)
+        if ch.tenant_tables_read(sql):
+            assert params.pop(ch.TENANT_PARAM) == TENANT
+            assert sql.count(ch.TENANT_FILTER) == len(ch.tenant_tables_read(sql))
+        self.tenants.append(TENANT)
+        self.calls.append((sql, params))
         if self._responses:
             return self._responses.pop(0)
         return []
@@ -129,7 +152,7 @@ async def test_get_latest_ping_per_host_no_filter(fake_query):
 async def test_get_latest_ping_per_host_unbounded_on_request(fake_query):
     fake_query.returns([])
     await ch.get_latest_ping_per_host([4], lookback_hours=None)
-    assert "where host_id in" in " ".join(fake_query.last_sql.lower().split())
+    assert "where tenant_id = {nodeglow_tenant:uint32} and host_id in" in " ".join(fake_query.last_sql.lower().split())
     assert "tointervalhour" not in fake_query.last_sql.lower()
     assert len(fake_query.calls) == 1
 
@@ -164,7 +187,7 @@ async def test_get_ping_history(fake_query):
 
     assert fake_query.last_params == {"hid": 42, "h": 6}
     sql = fake_query.last_sql.lower()
-    assert "where host_id =" in sql
+    assert "and host_id = {hid:uint32}" in sql
     assert "order by timestamp asc" in sql
     assert len(rows) == 2
 
