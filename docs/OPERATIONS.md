@@ -658,7 +658,36 @@ python -m nodeglow_ee.licensing issue \
 ```
 
 The owner's own installation uses a license issued the same way — there is no
-built-in bypass. Back up the private key (password manager / vault); without
+built-in bypass.
+
+### Tenants (enterprise)
+
+With the `multi_tenancy` feature an installation holds several customers
+(tenants) whose data never meets. Installation operators manage them under
+Administration → Tenants (`/tenants`); the license's `max_tenants` caps how
+many exist (suspended and deleting ones count, purged ones do not).
+
+- **The second tenant** is refused until the ClickHouse tenant rebuild has
+  completed (System → Status, `clickhouse_tenant_rebuild`) and PostgreSQL
+  row-level security protects the app's connection
+  ([Row-level security](#row-level-security): `NODEGLOW_RLS=on`, the app as
+  `nodeglow_app`). An install that knowingly runs without RLS sets
+  `NODEGLOW_TENANTS_WITHOUT_RLS=1`; the application filter is then the only
+  isolation layer.
+- **Suspending** stops monitoring of the tenant and every login, API key,
+  agent and install token of it; nothing is deleted. **Deleting** suspends
+  the tenant for 30 days (cancellable), then a background job purges every
+  PostgreSQL and ClickHouse row of it, its memberships and the users who
+  belong to no other tenant (audit entry `tenant.purged`). The default
+  tenant (id 1) cannot be suspended or deleted.
+- **Plans** (Standard 30 / Professional 90 / Enterprise 365 days) cap every
+  retention setting of a tenant; its admins choose within the plan.
+- **Operators see no tenant data.** A tenant's admin grants time-limited
+  support access under Settings → Support access; every access is in that
+  tenant's audit log (`acting_via = support`).
+- When the license expires every tenant keeps being monitored and reachable;
+  creating, suspending, resuming and plan changes are refused, cancelling a
+  deletion and ending support access still work, scheduled purges still run. Back up the private key (password manager / vault); without
 it no new licenses can be issued. Rotating the key: generate a new one with a
 new `--kid`, add its public key to `TRUSTED_KEYS` next to the old one, and
 remove the old id only once every license signed with it has been replaced.
@@ -797,6 +826,7 @@ start from `.env.example`.
 | `SECRET_KEY` | unset (file in `./data`) | Encryption key for stored credentials. Strongly recommended; `install.sh` generates it — see [The encryption key](#the-encryption-key) | both |
 | `NODEGLOW_LICENSE` | unset | Enterprise license key or a path to a file with it ([Enterprise license](#enterprise-license)) | both |
 | `NODEGLOW_DISABLE_EE` | unset | `1` runs the community edition even with `ee/` present | both |
+| `NODEGLOW_TENANTS_WITHOUT_RLS` | unset | `1` lets the enterprise multi-tenancy create a second tenant without PostgreSQL row-level security ([Tenants](#tenants-enterprise)) | both |
 | `NODEGLOW_ALLOW_SHARED_ENROLLMENT` | unset | `1` re-enables the legacy shared agent enrollment key; leave unset | both |
 | `UI_BIND` | `0.0.0.0` | Host address for the UI port 8000 (`127.0.0.1` behind a local reverse proxy) | both |
 | `SYSLOG_BIND` | `0.0.0.0` | Host address for the syslog ports 514/udp, 1514/tcp | both |

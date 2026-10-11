@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10 — phases 1–8 implemented 2026-10-11 (see "Implementation status")
+Status: design · 2026-10-10 — phases 1–9 implemented 2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -790,7 +790,7 @@ is user-visible until phase 7.
 | 6 ✅ | ClickHouse: step A + helper filtering + row policies + two users; step B rebuild job | core | M + M |
 | 7 ✅ | Postgres RLS + role split; CI job on Postgres asserting policies | core | M |
 | 8 ✅ | Tenant-isolation test suite (built from phase 2 on, gating from phase 4) | core | M |
-| 9 | `ee/` skeleton, licence verification, tenant lifecycle incl. purge, tenant switcher | ee | L |
+| 9 ✅ | `ee/` skeleton, licence verification, tenant lifecycle incl. purge, tenant switcher | ee | L |
 | 10 | Probe syslog relay (agent) + `/api/agent/logs` per-entry source + site-scoped resolution | core (agent + backend) | M + S |
 | 11 | MSP portal: cross-tenant overview, incident board, provider roles and keys, provider channels | ee | L |
 | 12 | Export (core) / import (ee), agent `migrate` command | core + ee | L |
@@ -1483,8 +1483,8 @@ Deviations / not done:
   `ttl_only_drop_parts = 1`.
 - `site_id` exists on `syslog_messages` but nothing filters on it yet
   (phase 10).
-- ee does not call `clickhouse_rebuild.complete()` yet — there is no tenant
-  creation in ee (phase 9 must gate on it).
+- ~~ee does not call `clickhouse_rebuild.complete()` yet~~ — phase 9's
+  tenant creation gates the second tenant on it.
 - Integration with phases 5 and 8 (`integrate/tenancy-5-8`): every phase-6
   xfail of the isolation suite passed and was removed;
   `cleanup_old_results` reads `ping_retention_days` through phase 5's
@@ -1718,10 +1718,171 @@ Tests (integration branch): 1734 passed, 27 skipped, no xfail (with ee);
 1652 passed, 28 skipped (`NODEGLOW_DISABLE_EE=1`); PostgreSQL module 36
 passed. The isolation files add about 50 s to the suite on SQLite.
 
+### Phase 9 — first sellable multi-tenant install (done)
+
+Migration `045`; core extension points in `services/tenancy.py`,
+`extensions.py`, `services/tenant_jobs.py`, `routers/auth.py`; the logic in
+`ee/backend/nodeglow_ee/tenancy/` (`backend`, `lifecycle`, `purge`,
+`plans`, `support`, `api`, `jobs`); frontend `TenantSwitcher`, `/tenants`,
+Settings → Support access. Bound by the owner decisions of 2026-10-11
+(5, 6, 8, 9; 7 through a hook).
+
+- **Schema (045, core).** `tenants` gains `suspended_at`, `delete_after`,
+  `deletion_requested_at` / `_by`, `purge_started_at`, `purge_state`
+  (`plan` exists since 039). New tenant-owned table `support_grants` (role,
+  reason, `expires_at`, granted / revoked by, `ended_audited_at`) with the
+  `tenant_isolation` policy (045 applies it; `migrate.py` re-applies the
+  live classification on every start — verified on PostgreSQL: policy
+  present, RLS enabled and forced, tenant 1 sees none of tenant 2's grants,
+  down to 044 and up again, `alembic check`). Classification: **30
+  tenant-owned**, 9 global. Schema only in the core, like
+  `provider_memberships`.
+- **Extension points (core).** `TenancyBackend.resolve_login_access` (the
+  tenant a new session starts in) and `list_access_for` (every reachable
+  tenant with role and `via`); `ACTING_VIA_SUPPORT`; registry
+  `retention_policy` (a tenant's cap per retention key, combined with the
+  installation's `<key>_max` in `tenant_jobs.retention_cap` — used by the
+  settings form, the nightly cleanup and the new `retention_caps` of
+  `/settings/json`); feature flag `multi_tenancy`. `/api/auth/me` reports
+  `is_operator`, the active tenant (`id`, `via`) and `tenants` (id, name,
+  role, via); `POST /api/auth/tenant` asks the backend (support access
+  included) and audits with its `via`. `SingleTenancy` behaves as before.
+- **Backend (`MultiTenancy`, ee).** Subclass of `SingleTenancy`, always
+  registered by the plugin (a single-tenant install sees no difference):
+  memberships of every active tenant; `active_tenant_ids` from `tenants`
+  (suspended and deleting tenants are not monitored); operator =
+  `users.is_operator` or the core rule; a login with several tenants and no
+  choice starts in the last used one (newest session's tenant), else the
+  lowest id — the core refuses it; the default site per tenant is cached
+  for the synchronous session filter.
+- **Lifecycle (`/api/tenants`, operators).** Create (default site, first
+  admin — an existing user or a new local one; the operator gets **no**
+  membership), suspend (sessions working in it fall back), resume,
+  schedule deletion with the tenant's name typed as confirmation (status
+  `deleting`, `delete_after` = now + 30 days, decision 6), cancel deletion
+  (back to suspended; refused once the purge has started), rename, plan
+  assignment. The default tenant cannot be suspended or deleted. Every
+  action is audited twice: installation level (`tenant_id` NULL,
+  `acting_via = operator`) and in the tenant's own log. Audit rows are
+  flushed inside their scope — flushed at the commit, in the operator's
+  tenant, the session filter stamped the installation row with that tenant
+  and refused the other tenant's row (found by the isolation walk).
+- **Licence.** Creating tenants and the admin actions need the
+  `multi_tenancy` feature; `max_tenants` counts every existing tenant
+  (`None` = no limit, as the licence page already showed). The **second
+  tenant** additionally needs `clickhouse_rebuild.complete()` and active
+  RLS (`NODEGLOW_RLS` on, every tenant table enabled and forced, the app
+  connection neither superuser nor BYPASSRLS — `pg_rls.runtime_status` /
+  `assess`), or the documented override `NODEGLOW_TENANTS_WITHOUT_RLS=1`
+  (compose passes it; OPERATIONS.md "Tenants"). An expired licence
+  (decision 9) keeps every tenant monitored and reachable; create,
+  suspend, resume, plan changes and new support grants are refused (402);
+  cancelling a deletion, ending support access and scheduled purges keep
+  working.
+- **Purge (`purge.py`, job `ee_tenant_purges`, every 15 min).** Only due
+  tenants. Each step is idempotent, an interrupted purge resumes from the
+  top (`purge_state` records runs and counts): crypto-shred
+  (`services.tenant_keys.destroy_tenant_key(db, tenant_id)` when the core
+  has it — another track; recorded as `unavailable` otherwise), ClickHouse
+  (per tenant table a scoped count, then a lightweight `DELETE` with
+  `tenant_id = {nodeglow_tenant:UInt32}` on the main connection in the
+  tenant's scope, verified by a second count; also the step-B leftovers
+  `<t>__pre_tenant`), PostgreSQL (every tenant-owned table, children first
+  — `Base.metadata.sorted_tables` reversed, self references cleared — in
+  batches of 5000 with a commit each, in `system_scope`: under RLS the app
+  role deletes with `nodeglow.system = on`; no TRUNCATE, so no owner
+  connection), then memberships, the sessions working in it, the users of
+  this tenant only (not operators, not provider members), the tenant row,
+  and the installation-level audit row `tenant.purged` with the counts.
+  ClickHouse goes first: once the tenant row is gone nothing could resume.
+  Runs whatever the licence says.
+- **Plans (decision 5).** `standard` 30, `professional` 90, `enterprise`
+  365 days; the plan caps every retention key of the tenant (its admins
+  choose within it — form `max` plus the server-side clamp); assigning a
+  plan lowers stored values above it (and "keep forever"). Tenant 1 of an
+  existing install has no plan, so no plan cap. Storage-fixed retention
+  (ClickHouse `ping_checks` 30 days, agent / bandwidth metrics 7 days,
+  syslog severity TTLs) is not extended by a larger tier.
+- **Support access (decision 8, `/api/support-access`).** A tenant admin
+  grants a role (default read-only), a reason and 1 h – 14 days. While it
+  is active, installation operators (`users.is_operator`) and members of
+  the tenant's provider without an own membership resolve to the tenant
+  with that role and `via = support`; an own membership wins, a suspended
+  tenant's grants open nothing. Revocable at once (also without a
+  licence, also by the support user); grants cannot be made or extended
+  through support access. Audit in the tenant's log: `support.grant`,
+  `support.revoke`, `support.expired` (job `ee_support_expiry`, every
+  minute; access itself ends at `expires_at` on every request), and
+  `support.access` for the requests — one row per user, grant, method and
+  path per minute; every write additionally carries `acting_via =
+  support`. Long-lived streams end within the revalidation interval
+  (30 s).
+- **Frontend.** `TenantSwitcher` replaces the "Multi-tenant · Planned"
+  placeholder: hidden with one tenant; lists the user's tenants with role
+  and access (Support access tag); switching posts `/api/auth/tenant`,
+  re-reads `/api/auth/me`, resets every query (nothing of the previous
+  tenant stays on screen) and reconnects the socket. `/tenants`
+  (operators, only with `multi_tenancy` installed): status, plan
+  (assignable), members, licence usage x / max, what blocks a new tenant,
+  create, suspend / resume, delete with typed confirmation and the purge
+  date, cancel deletion. Settings → Support access (grant, history, end);
+  a banner under the top bar for every member while support access is
+  active. The retention fields show the plan cap.
+
+Tests: `ee/backend/tests/test_tenancy_lifecycle.py` (operator-only;
+creation incl. site, admin, name, default site of new hosts, audit;
+validation; the second-tenant gate for RLS and the ClickHouse rebuild, and
+on PostgreSQL that RLS on needs no override; `max_tenants`; feature list;
+expiry; suspend / resume; typed deletion and 30 days; cancel without a
+licence; plans and the settings clamp; login with several tenants; the
+switcher lists only the user's tenants), `test_tenancy_support.py` (no
+access by default; grant, access audit and its dedupe, read-only; editor
+writes audited as support; no grant through support; banner for members;
+revoke; expiry audited once; membership wins; who may use a grant; one
+tenant only; suspended tenant; validation and licence; stream
+revalidation), `test_tenancy_purge.py` (every tenant-owned table of B
+purged and A unchanged; users and memberships; ClickHouse calls scoped;
+refusals; resume after a ClickHouse failure; crypto-shred first; the job;
+end to end through the API). All three also run in the PostgreSQL router
+mode as `nodeglow_app` with RLS on (`ROUTER_TESTS_ON_PG`).
+`test_migrations_tenancy_pg.py::test_045_lifecycle_columns_and_support_grants`;
+a live ClickHouse purge test in `test_live_clickhouse.py` (CI; there is no
+local server, its first run is CI). Gating suite: the walk runs with the
+plugin's backend (marker `ee_tenancy`), seeds `support_grants`, maps
+`grant_id` / `tenant_id`, lists the seven `/api/tenants` routes as
+installation routes (operator-only; the 403 test covers them) and accepts
+in B only the lifecycle audit rows an installation route writes there on
+purpose. Frontend: `lib/tenants.test.ts` (switcher visibility, a switch
+resets the cache, a refused switch keeps it, page helpers, banner),
+`navigation.test.ts` (Tenants only for operators with the feature). The
+core suite pins the core backend (autouse fixture patching
+`services.tenancy.backend`; resetting the registry instead lost the
+plugin's backend whenever `main` was first imported during a test).
+
+Deviations / not done:
+
+- **The frontend moves the session**, it does not send
+  `X-Nodeglow-Tenant` per tab: every tab follows a switch (the header
+  would have to go with every request and the socket).
+- **Operators need a home membership** (tenant 1 in practice): the
+  middleware resolves a tenant before any route runs, so an operator
+  without any membership cannot reach `/api/tenants`.
+- **Support access is resolved, not written as a membership**: the grant is
+  checked on every request (one extra indexed query per authenticated
+  request); no `tenant_memberships` row exists for it.
+- **Provider members** can use support grants already; phase 11 gives them
+  direct provider roles.
+- **ClickHouse purge**: a lightweight DELETE hides the rows at once; they
+  leave the disk with the next merges of their parts.
+- **Not done here:** per-tenant encryption keys (other track — the purge
+  calls its hook); quotas and limits beyond retention (phase 14); provider
+  management UI (phase 11); a visual check of the new pages in a running
+  stack.
+
 ### Open items (after phases 5–8)
 
-- **Phase 6 (ClickHouse):** done (see above). Left: ee's tenant creation
-  must check `clickhouse_rebuild.complete()`; per-tenant retention beyond
+- **Phase 6 (ClickHouse):** done (see above). Left (the creation gate is
+  done in phase 9): per-tenant retention beyond
   `ping_checks`; CH quotas per tenant (phase 14); `site_id` filtering
   (phase 10); the live tests' first run is CI.
 - **Phase 7 (RLS):** done, see below. Still open from it: production runs
@@ -1744,8 +1905,10 @@ passed. The isolation files add about 50 s to the suite on SQLite.
   (no API yet — set by 043 and the setup wizard only); the AI provider
   settings (installation keys) are still saved through the tenant admin's
   AI form — gate them on the operator when tenant admins are not
-  operators; "last used tenant" at login; provider roles and operator
-  access in `resolve_access` (`via = provider_role | operator`);
+  operators (still open after phase 9: an operator with support access
+  is an operator there too); ~~"last used tenant" at login~~ (phase 9,
+  ee); provider roles in `resolve_access` (`via = provider_role`; operator
+  access is phase 9's support access, `via = support`);
   `audit_logs.provider_id` on the `system_scope.write` rows is NULL.
 
 ## Risks
