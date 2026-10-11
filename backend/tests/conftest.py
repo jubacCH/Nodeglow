@@ -125,6 +125,28 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "ee_tenancy: run with the tenancy backend the ee plugin registered (if any)",
     )
+def _reset_tenant_key_cache():
+    """Unwrapped tenant data keys are cached per process; each test's
+    database has its own keys."""
+    from services import tenant_keys
+
+    tenant_keys.clear_cache()
+    yield
+    tenant_keys.clear_cache()
+
+
+@pytest.fixture
+def keyless_tenant_cipher(monkeypatch):
+    """For tests that mock the database session (``AsyncMock``): the tenant
+    cipher is one without tenant keys, so values under the installation key
+    and plaintext still read as before, and a tenant-key value fails."""
+    from services import tenant_keys
+
+    async def fake(db, tenant_id=None, *, write=False):
+        return tenant_keys.TenantCipher(tenant_keys._KeySet(tenant_id=int(tenant_id or 1)))
+
+    monkeypatch.setattr(tenant_keys, "tenant_cipher", fake)
+    return fake
 
 
 @pytest.fixture

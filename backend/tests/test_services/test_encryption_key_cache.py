@@ -9,8 +9,13 @@ from unittest.mock import patch
 from models import base
 
 
-def test_key_is_derived_once():
+def _clear():
     base._fernet.cache_clear()
+    base.installation_key_material.cache_clear()
+
+
+def test_key_is_derived_once():
+    _clear()
     with patch.object(base, "PBKDF2HMAC", wraps=base.PBKDF2HMAC) as kdf:
         for _ in range(5):
             assert base.decrypt_value(base.encrypt_value("secret")) == "secret"
@@ -18,9 +23,9 @@ def test_key_is_derived_once():
 
 
 def test_values_encrypted_before_caching_still_decrypt():
-    base._fernet.cache_clear()
+    _clear()
     token = base.encrypt_value("payload")
-    base._fernet.cache_clear()
+    _clear()
     assert base.decrypt_value(token) == "payload"
 
 

@@ -380,7 +380,7 @@ async def run_integration_checks():
                 if cfg is None or not cfg.enabled:
                     continue
                 try:
-                    config_dict = int_svc.decrypt_config(cfg.config_json)
+                    config_dict = await int_svc.decrypt_config(db, cfg)
                 except Exception as dec_exc:
                     logger.error(
                         "Failed to decrypt config [%s/%s]: %s",
@@ -1126,7 +1126,7 @@ async def run_weekly_digest(*, force: bool = False):
     hour old and nothing was sent since — what the old weekly cron with an
     hour of misfire grace did, per tenant. ``force`` skips the slot check.
     """
-    from database import get_setting, decrypt_value, set_setting
+    from database import get_setting, set_setting
     from services.digest import build_weekly_digest, format_digest_html, format_digest_text
     from notifications import _send_email, _log_notification
 
@@ -1148,10 +1148,8 @@ async def run_weekly_digest(*, force: bool = False):
         smtp_port = int(await get_setting(db, "smtp_port", "587"))
         smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
 
-        try:
-            smtp_pw = decrypt_value(smtp_pw_enc)
-        except Exception:
-            smtp_pw = smtp_pw_enc
+        from services.tenant_keys import tenant_cipher
+        smtp_pw = (await tenant_cipher(db)).reveal(smtp_pw_enc)
 
         digest = await build_weekly_digest(db)
 

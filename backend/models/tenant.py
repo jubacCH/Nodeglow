@@ -253,6 +253,33 @@ class TenantSetting(TenantScoped, Base):
     encrypted = Column(Boolean, nullable=False, default=False)
 
 
+class TenantKey(TenantScoped, Base):
+    """A tenant's data-encryption key (DEK), wrapped by the installation's
+    key-encryption key (``services.tenant_keys``, revision 046).
+
+    ``wrapped_dek`` is the Fernet token of the 32 random DEK bytes under the
+    KEK named by ``kek_id``. A tenant has one active key (newest without
+    ``retired_at``); retired keys stay readable until the tenant's keys are
+    destroyed. Destroying (crypto-shred) sets ``wrapped_dek`` to NULL and
+    ``destroyed_at``: the row stays as a tombstone, so a later decrypt fails
+    with "destroyed" rather than "unknown key".
+    """
+
+    __tablename__ = "tenant_keys"
+
+    # Part of the primary key, which covers every tenant_id lookup.
+    tenant_id = Column(
+        Integer, ForeignKey("tenants.id", ondelete="CASCADE", name="fk_tenant_keys_tenant"),
+        primary_key=True,
+    )
+    key_id = Column(String(32), primary_key=True)
+    kek_id = Column(String(16), nullable=False)
+    wrapped_dek = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    retired_at = Column(DateTime, nullable=True)
+    destroyed_at = Column(DateTime, nullable=True)
+
+
 async def ensure_default_tenant(db, *, name: str | None = None) -> None:
     """Create provider 1, tenant 1 and site 1 if they do not exist yet.
 

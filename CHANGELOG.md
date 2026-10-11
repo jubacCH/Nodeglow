@@ -22,6 +22,18 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   granted time-limited access (Settings → Support access); every access is
   in the tenant's audit log and a banner shows it to every member. It
   cannot manage the tenant's users, passwords, API keys or install tokens.
+- Per-tenant envelope encryption: every tenant's credentials (integration
+  configs, credentials, notification channel secrets, SMTP/phpIPAM
+  passwords) are encrypted with the tenant's own data key, wrapped by a key
+  derived from `SECRET_KEY` (table `tenant_keys`, revision 046). Existing
+  values move to the tenant key when the new backend starts, not during the
+  migration, so the old backend keeps working while an update runs.
+  Destroying a tenant's keys makes its secrets unreadable everywhere
+  (crypto-shred). `python -m services.tenant_keys verify` reports the
+  formats and decrypt failures without printing secrets. JSON backups carry
+  the encrypted values and the wrapped keys, so restoring one needs
+  `SECRET_KEY` as well as the passphrase. A channel secret that does not
+  decrypt fails only its own notification channel.
 
 ## [2.0.0] - 2026-10-11
 

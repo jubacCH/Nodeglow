@@ -106,26 +106,9 @@ def _setting_tenant(db, tenant_id: int | None):
     the binding) decides, and with neither this raises — tenant keys fail
     closed like tenant tables.
     """
-    from contextlib import nullcontext
-
     from services import tenancy
 
-    if tenant_id is None:
-        return tenancy.session_tenant_id(db), nullcontext()
-    tenant_id = int(tenant_id)
-    ctx = tenancy.current()
-    if ctx is not None:
-        if not ctx.system and ctx.tenant_id != tenant_id:
-            raise tenancy.TenantContextError(
-                f"setting for tenant {tenant_id} requested in the context of tenant {ctx.tenant_id}"
-            )
-        return tenant_id, nullcontext()
-    bound = db.info.get(tenancy.SESSION_TENANT_KEY)
-    if bound is not None and bound != tenant_id:
-        raise tenancy.TenantContextError(
-            f"setting for tenant {tenant_id} requested on a session bound to tenant {bound}"
-        )
-    return tenant_id, tenancy.tenant_scope(tenant_id)
+    return tenancy.tenant_access(db, tenant_id)
 
 
 async def _tenant_row(db, tenant_id: int, key: str):
@@ -135,8 +118,20 @@ async def _tenant_row(db, tenant_id: int, key: str):
 
 
 def _plain(row):
+    """An installation row's value; ``encrypted`` rows use the installation key."""
     if row.encrypted and row.value:
         return decrypt_value(row.value)
+    return row.value
+
+
+async def _plain_tenant(db, row, tenant_id: int):
+    """A tenant row's value; ``encrypted`` rows use the tenant's data key (a
+    value written before revision 046 still decrypts with the installation
+    key — ``services.tenant_keys``)."""
+    if row.encrypted and row.value:
+        from services import tenant_keys
+
+        return await tenant_keys.decrypt_secret(db, row.value, tenant_id=tenant_id)
     return row.value
 
 
@@ -159,7 +154,9 @@ async def get_setting(db: AsyncSession, key: str, default=_UNSET, *, tenant_id: 
         tid, scope = _setting_tenant(db, tenant_id)
         with scope:
             row = await _tenant_row(db, tid, key)
-        if row is None and spec.fallback:
+            if row is not None:
+                return await _plain_tenant(db, row, tid)
+        if spec.fallback:
             row = await db.get(Setting, key)
     else:
         row = await db.get(Setting, key)
@@ -180,12 +177,17 @@ async def set_setting(
     from services.settings_registry import lookup
 
     spec = lookup(key)
-    stored = encrypt_value(value) if encrypted else value
     if spec.is_tenant:
         from models.tenant import TenantSetting
 
         tid, scope = _setting_tenant(db, tenant_id)
         with scope:
+            if encrypted:
+                from services import tenant_keys
+
+                stored = await tenant_keys.encrypt_secret(db, value, tenant_id=tid)
+            else:
+                stored = value
             row = await _tenant_row(db, tid, key)
             if row is None:
                 row = TenantSetting(tenant_id=tid, key=key)
@@ -196,6 +198,7 @@ async def set_setting(
             # this tenant even when no context is left at the caller's commit.
             await (db.commit() if commit else db.flush())
         return
+    stored = encrypt_value(value) if encrypted else value
     row = await db.get(Setting, key)
     if row is None:
         row = Setting(key=key)

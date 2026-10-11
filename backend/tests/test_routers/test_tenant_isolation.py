@@ -41,7 +41,6 @@ from fastapi.routing import APIWebSocketRoute
 from sqlalchemy import select
 from starlette.routing import Mount
 
-from database import encrypt_value
 from models.base import Base
 from models.settings import Session, User, _hash_token
 from models.tenant import Tenant, TenantMembership
@@ -72,15 +71,35 @@ def _later(days=30):
     return datetime.utcnow() + timedelta(days=days)
 
 
+def _seed_key(tid: int) -> tuple[str, bytes]:
+    """(key id, data key) of each tenant's seeded tenant key: the key id
+    carries the canary, the secrets below are encrypted under it."""
+    import hashlib
+
+    return f"{TAG[tid]}-tenant_keys", hashlib.sha256(f"seed-dek-{tid}".encode()).digest()
+
+
+def _secret(tid: int, plaintext: str) -> str:
+    from services import tenant_keys
+
+    key_id, dek = _seed_key(tid)
+    return tenant_keys.seal(tenant_keys.dek_fernet(dek), key_id, plaintext)
+
+
 def _seeds(tid: int) -> dict[str, list[dict]]:
     """table -> rows (column values) for tenant ``tid``; children after parents."""
+    from services import tenant_keys
+
     b, tag = BASE[tid], TAG[tid]
     net = 10 if tid == A else 20
 
     def c(table):
         return f"{tag}-{table}"
 
+    key_id, dek = _seed_key(tid)
     return {
+        "tenant_keys": [dict(key_id=key_id, kek_id=tenant_keys.KEK_ID,
+                             wrapped_dek=tenant_keys.wrap_dek(dek, tid, key_id))],
         "sites": [dict(id=b, name=c("sites"))],
         "agents": [dict(id=b, name=c("agents"), hostname=f"{tag.lower()}-agent", token=f"tok-{tid}",
                         is_probe=True, site_id=b, platform="linux",
@@ -104,7 +123,7 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
         "incident_events": [dict(id=b, incident_id=b, event_type="created",
                                  summary=c("incident_events"))],
         "integration_configs": [dict(id=b, type="proxmox", name=c("integration_configs"),
-                                     config_json=encrypt_value(json.dumps(
+                                     config_json=_secret(tid, json.dumps(
                                          {"host": f"{net}.0.0.9", "token_name": c("config")})),
                                      cluster_group=c("cluster"))],
         "snapshots": [dict(id=b, entity_type="proxmox", entity_id=b, ok=True,
@@ -119,7 +138,7 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
                              source_id=b + 1, field_path="online", operator="eq",
                              threshold="false")],
         "credentials": [dict(id=b, name=c("credentials"), type="snmp_v2c",
-                             data_json=encrypt_value(json.dumps({"community": c("community")})))],
+                             data_json=_secret(tid, json.dumps({"community": c("community")})))],
         "snmp_host_configs": [dict(id=b, host_id=b, credential_id=b,
                                    oids_json=json.dumps([{"oid": "1.3.6.1", "name": c("oid")}]))],
         "snmp_results": [dict(id=b, host_id=b, data_json=json.dumps({c("snmp_results"): 1}))],
