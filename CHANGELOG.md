@@ -10,6 +10,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- linux/arm64 release images are back: every image is a multi-arch manifest
+  list (linux/amd64 + linux/arm64), built per platform on native GitHub
+  runners instead of QEMU. Signatures and attestations cover the manifest
+  list. The attached offline bundle stays amd64; build an arm64 one with
+  `scripts/make-offline-bundle.sh --platform linux/arm64`.
 - PostgreSQL row-level security as the second tenant-isolation layer
   (`NODEGLOW_RLS`), with a separate app database user (`POSTGRES_APP_USER`,
   `POSTGRES_APP_PASSWORD`). New installs from `install.sh` get both; existing

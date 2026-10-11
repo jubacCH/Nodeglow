@@ -26,8 +26,8 @@ hardening, backups, the encryption key, diagnosis — is in
 
 ## Editions and images
 
-Every release publishes four images for `linux/amd64` (arm64 images are planned;
-until then, build from source on arm64 hosts):
+Every release publishes four multi-arch images for `linux/amd64` and
+`linux/arm64` (one manifest list per tag; Docker pulls the matching platform):
 
 | Image | Contents | License |
 |---|---|---|
@@ -63,7 +63,7 @@ The release images never contain the proprietary Ookla speedtest CLI
 
 ## Requirements
 
-- Linux host (ICMP checks need `NET_RAW`), x86_64 (arm64: build from source)
+- Linux host (ICMP checks need `NET_RAW`), x86_64 or arm64 (aarch64)
 - Docker Engine 20.10+ with the Compose v2 plugin (`docker compose`)
 - 2 vCPU / 4 GB RAM / 20 GB SSD minimum — details in
   [OPERATIONS.md](OPERATIONS.md#system-requirements-and-sizing)
@@ -126,8 +126,9 @@ Nodeglow images with the default backend, plus the pinned Postgres and
 ClickHouse), the compose file, the ClickHouse config, `install.sh`, a
 `SHA256SUMS` of its contents and `VERIFY.md`.
 
-Other platforms or the community edition: build the bundle on any machine with
-Docker and internet access:
+arm64 hosts or the community edition: build the bundle on any machine with
+Docker and internet access (it pulls the images for `--platform`, whatever the
+machine's own architecture):
 
 ```sh
 git clone https://github.com/jubacCH/Nodeglow.git && cd Nodeglow
@@ -408,10 +409,12 @@ Then remove the directory.
 
 3. The tag starts [`.github/workflows/release.yml`](../.github/workflows/release.yml):
    `prepare` (VERSION must match the tag; notes from the changelog) → `test`
-   (the whole CI workflow on the tag) → `images` (Trivy gate on CRITICAL
-   fixable findings, multi-arch build and push with SBOM + provenance, cosign
-   signature, build attestation) → `bundle` (offline bundle, verified
-   signatures) → `release` (GitHub Release with all assets and signed
+   (the whole CI workflow on the tag) → `build` (per image and platform on a
+   native runner, amd64 on `ubuntu-24.04` and arm64 on `ubuntu-24.04-arm`:
+   Trivy gate on CRITICAL fixable findings, push by digest with SBOM +
+   provenance) → `images` (per image: manifest list with the version tags,
+   cosign signature, build attestation) → `bundle` (amd64 offline bundle,
+   verified signatures) → `release` (GitHub Release with all assets and signed
    `SHA256SUMS`). Pre-releases get no `X.Y`/`latest` tags and are marked as
    pre-release.
 4. **First release only:** GHCR creates the four packages as *private*. Set
@@ -424,6 +427,12 @@ assets of an existing GitHub Release. To build a release by hand
 (workflow_dispatch), start the workflow **on the tag** ("Use workflow from →
 Tags"). Findings the Trivy gate should accept go into `.trivyignore`, each with
 a comment saying why.
+
+To test the image pipeline without releasing, run the workflow on a branch with
+**dry_run** checked (Actions → Release → Run workflow). It runs CI, builds both
+platforms of every image and pushes the manifest lists as `dryrun-<run id>`
+only — no version tags, no bundle, no GitHub Release. Delete those tags from
+the GHCR packages afterwards.
 
 The agent binaries attached to a release are the ones `agent-build.yml`
 committed to `backend/static/` — the same files the backend image serves to
