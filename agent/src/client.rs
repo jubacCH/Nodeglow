@@ -6,6 +6,7 @@ use crate::checks::{CheckAssignment, CheckResult};
 use crate::collector::SystemMetrics;
 use crate::config::{Config, ServerConfig};
 use crate::services::ServiceStatus;
+use crate::syslog_relay::{RelayEntry, RelayStatus};
 
 /// Hard cap on update-binary download size to prevent OOM/DoS from a malicious
 /// or compromised server returning an unbounded body. 200 MiB.
@@ -43,6 +44,9 @@ struct ReportPayload<'a> {
     check_results: &'a [CheckResult],
     #[serde(skip_serializing_if = "no_services")]
     service_states: &'a [ServiceStatus],
+    /// Syslog relay counters; only once the relay was ever switched on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    syslog_relay: Option<&'a RelayStatus>,
 }
 
 fn is_empty(results: &&[CheckResult]) -> bool {
@@ -156,6 +160,7 @@ impl ApiClient {
         logs: &[LogEntry],
         check_results: &[CheckResult],
         service_states: &[ServiceStatus],
+        syslog_relay: Option<&RelayStatus>,
     ) -> anyhow::Result<ReportResponse> {
         let resp = self
             .client
@@ -165,6 +170,7 @@ impl ApiClient {
                 metrics,
                 check_results,
                 service_states,
+                syslog_relay,
             })
             .send()
             .await?;
@@ -219,6 +225,29 @@ impl ApiClient {
                 }
             }
         }
+    }
+
+    /// Forward a batch of relayed syslog lines (probe syslog relay). Unlike
+    /// the agent's own logs, a failure is returned: the relay keeps the batch
+    /// and retries it.
+    pub async fn send_relay_logs(&self, hostname: &str, entries: &[RelayEntry]) -> anyhow::Result<()> {
+        #[derive(Serialize)]
+        struct RelayPayload<'a> {
+            hostname: &'a str,
+            logs: &'a [RelayEntry],
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/api/agent/logs", self.base_url))
+            .bearer_auth(&self.token)
+            .json(&RelayPayload { hostname, logs: entries })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("relay submission failed: {}", resp.status());
+        }
+        Ok(())
     }
 
     /// Check latest agent version info (hash + optional signature) from server.
@@ -336,6 +365,7 @@ mod tests {
             metrics: &metrics,
             check_results: &[],
             service_states: &[],
+            syslog_relay: None,
         };
         let with_probe_field = serde_json::to_value(&payload).unwrap();
         let plain = serde_json::to_value(&metrics).unwrap();
@@ -353,6 +383,7 @@ mod tests {
             metrics: &metrics,
             check_results: &results,
             service_states: &[],
+            syslog_relay: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
 
@@ -383,6 +414,7 @@ mod tests {
             metrics: &metrics,
             check_results: &[],
             service_states: &states,
+            syslog_relay: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["hostname"], "probe01");
@@ -419,6 +451,59 @@ mod tests {
         let resp: ReportResponse =
             serde_json::from_str(r#"{"ok": true, "config": {"watched_services": null}}"#).unwrap();
         assert!(resp.config.unwrap().watched_services.unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn relay_counters_ride_along_once_the_relay_was_on() {
+        let metrics = sample_metrics();
+        let status = RelayStatus {
+            listening: true,
+            port: 514,
+            received: 7,
+            forwarded: 5,
+            dropped: 0,
+            buffered: 2,
+            send_failures: 1,
+            error: None,
+        };
+        let payload = ReportPayload {
+            metrics: &metrics,
+            check_results: &[],
+            service_states: &[],
+            syslog_relay: Some(&status),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["hostname"], "probe01");
+        assert_eq!(
+            json["syslog_relay"],
+            serde_json::json!({"listening": true, "port": 514, "received": 7, "forwarded": 5,
+                               "dropped": 0, "buffered": 2, "send_failures": 1})
+        );
+    }
+
+    #[test]
+    fn the_relay_config_arrives_and_a_bad_one_does_not_break_the_heartbeat() {
+        use crate::syslog_relay::RelayConfig;
+        let resp: ReportResponse = serde_json::from_str(
+            r#"{"ok": true, "config": {"syslog_relay": {"enabled": true, "port": 1514}}}"#,
+        )
+        .unwrap();
+        let sc = resp.config.unwrap();
+        assert_eq!(
+            RelayConfig::from_server(sc.syslog_relay.as_ref()),
+            Some(RelayConfig { port: 1514 })
+        );
+        for bad in [
+            r#"{"ok": true, "config": {"syslog_relay": {"enabled": true, "port": 99999}}}"#,
+            r#"{"ok": true, "config": {"syslog_relay": "on"}}"#,
+            r#"{"ok": true, "config": {"syslog_relay": null}}"#,
+            r#"{"ok": true, "config": {"log_levels": "1"}}"#,
+        ] {
+            let resp: ReportResponse = serde_json::from_str(bad).unwrap();
+            let sc = resp.config.unwrap();
+            let cfg = RelayConfig::from_server(sc.syslog_relay.as_ref());
+            assert!(cfg.is_none() || cfg == Some(RelayConfig { port: 514 }), "{bad}");
+        }
     }
 
     #[test]
