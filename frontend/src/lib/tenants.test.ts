@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import {
-  deletionConfirmed, durationOptions, purgeDate, showTenantSwitcher, supportBanner, switchTenant,
-  tenantInitials, tenantStatusLabel, tenantStatusTone, usageLabel, viaLabel,
+  deletionConfirmed, durationOptions, planFromSelect, purgeDate, retentionLoweringLines,
+  showTenantSwitcher, supportBanner, switchTenant, tenantInitials, tenantStatusLabel, tenantStatusTone, usageLabel, viaLabel,
   type SupportState,
 } from './tenants';
 import type { TenantAccess } from '@/types';
@@ -86,6 +86,23 @@ describe('Tenants page helpers', () => {
     expect(deletionConfirmed('', '')).toBe(false);
     const now = new Date('2026-10-11T12:00:00Z');
     expect(purgeDate(now, 30).toISOString()).toBe('2026-11-10T12:00:00.000Z');
+  });
+
+  it('names what a plan change would lower, "keep forever" included', () => {
+    expect(retentionLoweringLines({
+      incident_event_retention_days: { from: 0, to: 30 },
+      integration_retention_days: { from: 80, to: 30 },
+      some_new_key: { from: 60, to: 30 },
+    })).toEqual([
+      'Incident events: keep forever → 30 days',
+      'Integration history: 80 days → 30 days',
+      'some_new_key: 60 days → 30 days',
+    ]);
+  });
+
+  it('sends "no plan" as null', () => {
+    expect(planFromSelect('')).toBeNull();
+    expect(planFromSelect('standard')).toBe('standard');
   });
 });
 

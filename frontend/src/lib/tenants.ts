@@ -114,6 +114,32 @@ export function purgeDate(now: Date, graceDays: number): Date {
   return new Date(now.getTime() + graceDays * 86_400_000);
 }
 
+/** What a plan change would lower: retention key -> stored and new days (409 retention_would_lower). */
+export type RetentionLowering = Record<string, { from: number; to: number }>;
+
+const RETENTION_LABELS: Record<string, string> = {
+  ping_retention_days: 'Ping history',
+  proxmox_retention_days: 'Proxmox history',
+  integration_retention_days: 'Integration history',
+  incident_event_retention_days: 'Incident events',
+  template_retention_days: 'Log templates',
+  template_singleton_retention_days: 'One-off log templates',
+};
+
+/** One line per lowered setting, e.g. "Incident events: keep forever → 30 days". */
+export function retentionLoweringLines(lowered: RetentionLowering): string[] {
+  return Object.entries(lowered).map(([key, { from, to }]) => {
+    const label = RETENTION_LABELS[key] ?? key;
+    const before = from <= 0 ? 'keep forever' : `${from} days`;
+    return `${label}: ${before} → ${to} days`;
+  });
+}
+
+/** The plan to send for a select value: '' is "no plan" (null). */
+export function planFromSelect(value: string): string | null {
+  return value === '' ? null : value;
+}
+
 /** The typed confirmation must be the tenant's name, exactly (spaces around ignored). */
 export function deletionConfirmed(typed: string, name: string): boolean {
   return typed.trim() === name && name.length > 0;
