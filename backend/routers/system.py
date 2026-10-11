@@ -174,6 +174,23 @@ def _collect_logs() -> list[str]:
     return []
 
 
+def _tenant_job_stats(request: Request) -> dict:
+    """Per-tenant job counters (multi-tenancy phase 5): the request's tenant
+    for its admins; every tenant's counters (no error texts) for operators."""
+    from services import tenant_jobs
+    from services.tenancy import request_is_admin, request_is_operator
+
+    out: dict = {}
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if request_is_admin(request) and tenant_id is not None:
+        out["tenant_jobs"] = tenant_jobs.stats.for_tenant(tenant_id)
+    if request_is_operator(request):
+        out["tenant_jobs_by_tenant"] = {
+            str(t): jobs for t, jobs in tenant_jobs.stats.by_tenant().items()
+        }
+    return out
+
+
 @router.get("/api/system/status")
 async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     now = datetime.utcnow()
@@ -568,6 +585,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         "dashboard_perf": _get_dashboard_perf(),
         "logs": log_lines,
     }
+    payload.update(_tenant_job_stats(request))
 
     from fastapi.responses import JSONResponse
     return JSONResponse(payload)

@@ -78,6 +78,17 @@ def pytest_sessionfinish(session, exitstatus):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_tenant_job_state():
+    """Per-tenant scheduling state (rotation, cadence, stats, fair-share
+    limiters) is process-global; each test starts from none."""
+    from services import tenant_jobs
+
+    tenant_jobs.reset_state()
+    yield
+    tenant_jobs.reset_state()
+
+
 @pytest.fixture
 async def db():
     """Provide a fresh in-memory SQLite database session per test."""
