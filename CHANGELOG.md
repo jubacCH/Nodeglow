@@ -9,6 +9,19 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+### Added
+- Enterprise multi-tenancy (licence feature `multi_tenancy`, `max_tenants`):
+  operators create, suspend, resume and delete tenants under Administration →
+  Tenants (deletion = 30 days suspended, then every PostgreSQL and ClickHouse
+  row of the tenant is purged), assign retention plans (30 / 90 / 365 days),
+  and see licence usage. The second tenant needs the ClickHouse tenant
+  rebuild and PostgreSQL row-level security (or
+  `NODEGLOW_TENANTS_WITHOUT_RLS=1`). Migration 045.
+- Tenant switcher in the top bar (only with more than one tenant).
+- Support access: operators see a tenant's data only while its admin has
+  granted time-limited access (Settings → Support access); every access is
+  in the tenant's audit log and a banner shows it to every member.
+
 ## [2.0.0] - 2026-10-11
 
 ### Added

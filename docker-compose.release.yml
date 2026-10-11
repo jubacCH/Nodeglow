@@ -104,6 +104,9 @@ services:
       # Enterprise license key or a path to a file holding it; optional, can
       # also be installed under Settings → License. See docs/INSTALL.md.
       NODEGLOW_LICENSE: ${NODEGLOW_LICENSE:-}
+      # "1" allows a second tenant without row-level security (ee); see
+      # docs/OPERATIONS.md, "Tenants".
+      NODEGLOW_TENANTS_WITHOUT_RLS: ${NODEGLOW_TENANTS_WITHOUT_RLS:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}
     depends_on:
