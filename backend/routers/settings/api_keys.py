@@ -12,7 +12,7 @@ from database import get_db
 from models.api_key import ApiKey
 from ratelimit import rate_limit
 
-from ._helpers import require_admin
+from ._helpers import require_access_admin
 
 router = APIRouter()
 
@@ -33,7 +33,7 @@ async def api_keys_list(request: Request, db: AsyncSession = Depends(get_db)):
 @router.post("/api-keys/create")
 @rate_limit(max_requests=10, window_seconds=60)
 async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
-    if err := require_admin(request):
+    if err := require_access_admin(request):
         return err
     body = await request.json()
     name = (body.get("name") or "").strip()
@@ -62,7 +62,7 @@ async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
 @router.delete("/api-keys/{key_id}")
 @rate_limit(max_requests=10, window_seconds=60)
 async def delete_api_key(key_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    if err := require_admin(request):
+    if err := require_access_admin(request):
         return err
     key = await db.get(ApiKey, key_id)
     if not key:

@@ -17,6 +17,14 @@ user, grant, method and path within :data:`ACCESS_AUDIT_WINDOW` seconds
 (a dashboard polling every few seconds would otherwise write a row each
 time); every write additionally carries ``acting_via = support`` in its own
 audit entry. Grants cannot be made or extended through support access.
+
+Support access is time-limited for real: whatever the grant's role, it
+cannot manage who has access to the tenant — no users or memberships
+created, deleted or re-roled, no passwords reset, no API keys or agent
+install tokens issued (``services.tenancy.request_may_manage_access``) — so
+nothing a support session does outlives the grant as a login. Nor does a
+role from support access ever make anyone an installation operator (an
+admin grant on the default tenant included, see ``MultiTenancy.is_operator``).
 """
 from __future__ import annotations
 
@@ -24,7 +32,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from sqlalchemy import exists, select
+from sqlalchemy import select
 
 from models.audit import AuditLog
 from models.tenant import ProviderMembership, SupportGrant, Tenant
@@ -39,6 +47,14 @@ MAX_HOURS = 24 * 14
 MAX_REASON = 500
 ACCESS_AUDIT_WINDOW = 60.0
 _ACCESS_AUDIT_MAX = 10_000
+# How long this process reuses the list of active grants. Every request
+# resolves its tenant access, and on an installation without any grant (the
+# usual case, a single tenant always) that would be one more session and
+# query per request for nothing. Grants, revocations and tenant status
+# changes made in this process invalidate it at once; another worker
+# process sees them within this many seconds. Expiry needs no
+# invalidation: ``expires_at`` is checked on every use.
+GRANT_CACHE_SECONDS = 5.0
 
 # (user id, grant id, method, path) -> monotonic time of the last audit row
 _audited: dict[tuple, float] = {}
@@ -74,31 +90,63 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ") if dt else None
 
 
-async def support_access_for(db, user) -> dict[int, tuple[int, str]]:
+# (monotonic time loaded, [(grant id, tenant id, role, expires_at, provider id)])
+_active_cache: tuple[float, list[tuple[int, int, str, datetime, int]]] | None = None
+
+
+def invalidate_grants() -> None:
+    """Forget the cached active grants (a grant was made or revoked, or a
+    tenant's status changed)."""
+    global _active_cache
+    _active_cache = None
+
+
+async def _active_grants(session_factory) -> list[tuple[int, int, str, datetime, int]]:
+    """Every active grant of an active tenant, by grant id (cached for
+    :data:`GRANT_CACHE_SECONDS`)."""
+    global _active_cache
+    cached = _active_cache
+    if cached is not None and time.monotonic() - cached[0] < GRANT_CACHE_SECONDS:
+        return cached[1]
+    loaded_at = time.monotonic()
+    now = datetime.utcnow()
+    async with session_factory() as db:
+        with system_scope("support access: active grants"):
+            rows = (await db.execute(
+                select(SupportGrant.id, SupportGrant.tenant_id, SupportGrant.role,
+                       SupportGrant.expires_at, Tenant.provider_id)
+                .join(Tenant, Tenant.id == SupportGrant.tenant_id)
+                .where(SupportGrant.revoked_at.is_(None), SupportGrant.expires_at > now,
+                       Tenant.status == "active")
+                .order_by(SupportGrant.id)
+            )).all()
+    grants = [(int(g), int(t), r, e, int(p)) for g, t, r, e, p in rows]
+    _active_cache = (loaded_at, grants)
+    return grants
+
+
+async def support_access_for(session_factory, user) -> dict[int, tuple[int, str]]:
     """``{tenant_id: (grant_id, role)}`` of the active grants this user may
     use: operators get every active tenant's grants, provider members those
-    of their providers' tenants. The newest grant wins per tenant."""
+    of their providers' tenants. The newest grant wins per tenant.
+
+    No grant anywhere (the usual case): no query beyond the cached list.
+    ``session_factory`` opens a session only when one is needed."""
     if user is None or getattr(user, "id", None) is None:
         return {}
     now = datetime.utcnow()
-    is_operator = bool(getattr(user, "is_operator", False))
-    with system_scope("support access: active grants for a user"):
-        stmt = (
-            select(SupportGrant.id, SupportGrant.tenant_id, SupportGrant.role)
-            .join(Tenant, Tenant.id == SupportGrant.tenant_id)
-            .where(SupportGrant.revoked_at.is_(None), SupportGrant.expires_at > now,
-                   Tenant.status == "active")
-            .order_by(SupportGrant.id)
-        )
-        if not is_operator:
-            stmt = stmt.where(exists().where(
-                ProviderMembership.user_id == user.id,
-                ProviderMembership.provider_id == Tenant.provider_id,
-            ))
-        rows = (await db.execute(stmt)).all()
+    grants = [g for g in await _active_grants(session_factory) if g[3] > now]
+    if not grants:
+        return {}
+    if not bool(getattr(user, "is_operator", False)):
+        async with session_factory() as db:
+            providers = set((await db.execute(
+                select(ProviderMembership.provider_id).where(ProviderMembership.user_id == user.id)
+            )).scalars().all())
+        grants = [g for g in grants if g[4] in providers]
     out: dict[int, tuple[int, str]] = {}
-    for gid, tid, role in rows:
-        out[int(tid)] = (int(gid), role if role in ROLES else "readonly")
+    for gid, tid, role, _expires, _provider in grants:
+        out[tid] = (gid, role if role in ROLES else "readonly")
     return out
 
 
@@ -153,6 +201,7 @@ async def audit_access(request, user, tenant_id: int, grant_id: int, role: str) 
 def reset_audit_window() -> None:
     """Test helper."""
     _audited.clear()
+    invalidate_grants()
 
 
 def validate_grant(body: dict) -> tuple[str, str, int] | str:

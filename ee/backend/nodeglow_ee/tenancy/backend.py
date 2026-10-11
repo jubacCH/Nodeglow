@@ -105,8 +105,8 @@ class MultiTenancy(SingleTenancy):
                 memberships = await memberships_for(db, user.id)
         out = {t: TenantAccess(tenant_id=t, role=r, via=ACTING_VIA_MEMBERSHIP)
                for t, r in memberships.items()}
-        async with _session_factory()() as db:
-            grants = await support.support_access_for(db, user)
+        # Cached list of active grants: no query at all while there is none.
+        grants = await support.support_access_for(_session_factory(), user)
         for tid, (grant_id, role) in grants.items():
             if tid not in out:  # an explicit membership always wins
                 out[tid] = TenantAccess(tenant_id=tid, role=role, via=ACTING_VIA_SUPPORT)
@@ -184,10 +184,14 @@ class MultiTenancy(SingleTenancy):
         return [int(tid) for tid, _ in rows]
 
     def is_operator(self, user: Any, role: str | None = None,
-                    tenant_id: int | None = None) -> bool:
+                    tenant_id: int | None = None, via: str | None = None) -> bool:
+        """The ``users.is_operator`` flag, else the core rule (admin of the
+        default tenant) — but only for a role held through a membership:
+        an admin support grant on the default tenant gives a provider
+        member that tenant's data for a while, never the installation."""
         if bool(getattr(user, "is_operator", False)):
             return True
-        return super().is_operator(user, role, tenant_id)
+        return super().is_operator(user, role, tenant_id, via=via)
 
     def can_create_tenant(self) -> bool:
         """Licence-wise (cached, no I/O). The full check — max_tenants, the

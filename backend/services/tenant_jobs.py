@@ -428,13 +428,32 @@ async def job_tick(spec: CadenceSpec) -> int:
     return min(intervals.values(), default=spec.default)
 
 
-async def retention_cap(db, key: str) -> int | None:
+class RetentionPolicyError(RuntimeError):
+    """The registered retention policy (ee: the plan tier) could not say
+    what the tenant's cap is."""
+
+
+async def retention_cap(db, key: str, *, strict: bool = True) -> int | None:
     """The cap of a tenant's retention key: the installation's ``<key>_max``
     (empty: none) and, when a retention policy is registered (ee: the
     tenant's plan tier), the tenant's cap — the smaller of the two. None:
-    no cap. The tenant is the session's (context or binding)."""
-    from models.settings import get_setting
+    no cap. The tenant is the session's (context or binding); without one
+    this raises (TenantContextError) — never "no plan".
 
+    When the policy fails, ``strict`` (the settings form) raises
+    :class:`RetentionPolicyError`, so nothing above the plan is ever saved;
+    ``strict=False`` (the nightly cleanup, see :func:`retention_days`) logs
+    a WARNING and returns the installation cap only. It is applied to the
+    *stored* value, which the form and a plan change already clamped to
+    the plan — so a broken policy deletes nothing and keeps nothing beyond
+    what the tenant last saved within its plan.
+    """
+    from models.settings import get_setting
+    from services.tenancy import session_tenant_id
+
+    policy = _retention_policy()
+    # Outside any try: a session without a tenant is a bug, not "no cap".
+    tenant_id = session_tenant_id(db) if policy is not None else None
     raw_cap = await get_setting(db, f"{key}_max")
     try:
         cap = int(raw_cap) if raw_cap not in (None, "") else None
@@ -442,14 +461,15 @@ async def retention_cap(db, key: str) -> int | None:
         cap = None
     if cap is not None and cap <= 0:
         cap = None
-    policy = _retention_policy()
     if policy is not None:
-        from services.tenancy import session_tenant_id
-
         try:
-            plan_cap = await policy(db, session_tenant_id(db), key)
-        except Exception:  # noqa: BLE001 — a broken plugin must not stop the cleanup
-            log.warning("retention policy failed for %s; installation cap only", key, exc_info=True)
+            plan_cap = await policy(db, tenant_id, key)
+        except Exception as exc:  # noqa: BLE001 — a broken plugin must not stop the cleanup
+            if strict:
+                raise RetentionPolicyError(
+                    f"the retention policy failed for {key} (tenant {tenant_id})") from exc
+            log.warning("retention policy failed for %s (tenant %s); keeping the stored value "
+                        "within the installation cap", key, tenant_id, exc_info=True)
             plan_cap = None
         if plan_cap is not None and plan_cap > 0:
             cap = plan_cap if cap is None else min(cap, plan_cap)
@@ -471,14 +491,16 @@ def apply_retention_cap(value: int, cap: int | None) -> int:
 
 
 async def retention_days(db, key: str, default: int) -> int:
-    """A tenant's retention setting, capped by :func:`retention_cap`."""
+    """A tenant's retention setting, capped by :func:`retention_cap` (not
+    strict: the cleanup runs on with the stored value when the policy
+    fails, see there)."""
     from models.settings import get_setting
 
     try:
         value = int(await get_setting(db, key, str(default)))
     except (TypeError, ValueError):
         value = default
-    return apply_retention_cap(value, await retention_cap(db, key))
+    return apply_retention_cap(value, await retention_cap(db, key, strict=False))
 
 
 # ── Decorators ───────────────────────────────────────────────────────────────

@@ -55,15 +55,15 @@ async def retention_policy(db, tenant_id: int, key: str) -> int | None:
     return plan.retention_days if plan is not None else None
 
 
-async def clamp_tenant_retention(db, tenant_id: int, plan: Plan) -> dict[str, str]:
-    """Lower the tenant's stored retention values to the plan (the settings
-    form shows what is in effect). Runs in the tenant's scope. Returns the
-    changed keys with their new value. Does not commit."""
-    from models.settings import get_setting, set_setting
+async def retention_reductions(db, tenant_id: int, plan: Plan) -> dict[str, dict]:
+    """What assigning ``plan`` would lower: ``{key: {"from": stored, "to":
+    days}}`` for every stored retention value above the plan ("keep
+    forever", 0, included). Writes nothing. Runs in the tenant's scope."""
+    from models.settings import get_setting
     from services.settings_registry import RETENTION_KEYS
     from services.tenancy import tenant_scope
 
-    changed: dict[str, str] = {}
+    out: dict[str, dict] = {}
     with tenant_scope(tenant_id):
         for key in RETENTION_KEYS:
             raw = await get_setting(db, key, None)
@@ -74,6 +74,23 @@ async def clamp_tenant_retention(db, tenant_id: int, plan: Plan) -> dict[str, st
             if value is None:
                 continue
             if value <= 0 or value > plan.retention_days:
-                changed[key] = str(plan.retention_days)
+                out[key] = {"from": value, "to": plan.retention_days}
+    return out
+
+
+async def clamp_tenant_retention(db, tenant_id: int, plan: Plan) -> dict[str, str]:
+    """Lower the tenant's stored retention values to the plan (the settings
+    form shows what is in effect). Runs in the tenant's scope. Returns the
+    changed keys with their new value. Does not commit."""
+    from models.settings import set_setting
+    from services.settings_registry import RETENTION_KEYS
+    from services.tenancy import tenant_scope
+
+    changed: dict[str, str] = {}
+    lowered = await retention_reductions(db, tenant_id, plan)
+    with tenant_scope(tenant_id):
+        for key in RETENTION_KEYS:
+            if key in lowered:
+                changed[key] = str(lowered[key]["to"])
                 await set_setting(db, key, changed[key], commit=False)
     return changed
