@@ -1809,7 +1809,23 @@ passed. The isolation files add about 50 s to the suite on SQLite.
 9. **Export/import round trip**: export tenant, import into a fresh
    installation, compare counts and spot-check remapped references.
 
-## Open questions for the owner
+## Owner decisions (2026-10-11)
+
+The owner answered the open questions below; they are binding for phases 9–14.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Provider level in SaaS | **Yes** — MSPs resell through the Swiss SaaS; the provider level stays as designed. |
+| 2 | AI provider in SaaS | **Both** — operator-owned key billed through by default, bring-your-own-key per tenant optional. |
+| 3 | Direct syslog in SaaS | **Probe-only at launch**; TLS syslog with per-tenant client certificates later. |
+| 4 | Probe-side integrations | **Yes, in parallel to phase 9** — needs its own spec (integrations collected by the probe inside the customer network and relayed). |
+| 5 | Retention | **Fixed plan tiers** (e.g. 30 / 90 / 365 days), not free values. |
+| 6 | Tenant deletion | **30 days suspended**, then purge of PostgreSQL and ClickHouse data (nDSG). |
+| 7 | Per-tenant encryption keys | **Yes for the SaaS** — envelope encryption per tenant; destroying the tenant key on purge (crypto-shred). |
+| 8 | Operator access to tenant data | **Only with the customer's explicit, time-limited approval** ("support access"), every access audited. |
+| 9 | Licence enforcement on expiry | **Keep monitoring, block admin features** (as implemented in the licensing work). |
+
+## Open questions for the owner (answered above, kept for context)
 
 1. **Provider level in SaaS**: will MSPs resell through the Swiss SaaS (needs
    the provider level as designed), or is the SaaS only for direct customers
