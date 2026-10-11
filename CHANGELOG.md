@@ -10,6 +10,15 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Multi-tenancy foundation (single tenant for now, nothing to configure):
+  tenants, providers and sites; `tenant_id` on every tenant-owned table and
+  every ClickHouse row; a fail-closed tenant filter on all database access;
+  tenant memberships as the source of roles; per-tenant settings, caches,
+  WebSocket/SSE fan-out and notifications; per-tenant fair scheduling of the
+  check jobs. See docs/specs/2026-10-10-multi-tenancy-design.md.
+- A gating tenant-isolation test suite that walks every API route and every
+  tenant job with two tenants (SQLite and PostgreSQL with RLS on); new routes
+  must be classified there.
 - linux/arm64 release images are back: every image is a multi-arch manifest
   list (linux/amd64 + linux/arm64), built per platform on native GitHub
   runners instead of QEMU. Signatures and attestations cover the manifest
@@ -48,6 +57,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   the two URLs name different databases.
 
 ### Fixed
+- Syslog lost its host mapping and allowlist after the tenancy schema
+  upgrade (2026-10-11 hotfix).
+- Backup/restore routes are installation-operator only; previously any tenant
+  admin could export or replace the whole installation.
+- System status listed expiring certificates of other tenants; host parents,
+  alert-rule sources and SNMP credentials could reference another tenant's
+  objects; twelve routes accepted foreign ids.
+- Backup restore on PostgreSQL (sequence reset and timestamp handling).
 - PostgreSQL: backup export skipped every table after the dropped legacy
   table `ping_results`, a restore of such an export failed, and
   `/api/system/status` lost its later sections for the same reason.
