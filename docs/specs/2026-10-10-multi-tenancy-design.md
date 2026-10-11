@@ -639,6 +639,10 @@ This makes probe-side integrations (Proxmox, UniFi, … — a non-goal of the pr
 spec) a practical prerequisite for a useful SaaS offering; it should be its own
 spec.
 
+That spec is [2026-10-11-probe-side-integrations.md](2026-10-11-probe-side-integrations.md)
+(design, 2026-10-11; recommendation: the existing Python collectors run on the
+probe, host-level primitives native in the agent, no generic proxy).
+
 ## Open Core boundary
 
 ### Principle
