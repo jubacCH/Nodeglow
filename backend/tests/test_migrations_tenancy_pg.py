@@ -194,6 +194,9 @@ def test_settings_split_and_auth_binding(pg_db):
     q(pg_db, "INSERT INTO users (id, username, password_hash, role, auth_source, created_at) "
              "VALUES (4, 'late', 'x', 'editor', 'ldap', now())")
     q(pg_db, "INSERT INTO sessions (token, user_id, expires_at) VALUES ('t1', 1, now() + interval '1 day')")
+    # ...and a role changed through the users API wrote only users.role.
+    q(pg_db, "UPDATE users SET role = 'editor' WHERE id = 3")
+    assert q(pg_db, "SELECT role FROM tenant_memberships WHERE user_id = 3")[0][0] == "admin"
     _alembic(pg_db, "upgrade", "head")
 
     # 042: tenant keys moved (encrypted flag kept), installation keys stayed.
@@ -212,9 +215,10 @@ def test_settings_split_and_auth_binding(pg_db):
 
     # 043: memberships for everybody, admins are operators, audit provider.
     members = q(pg_db, "SELECT user_id, role FROM tenant_memberships ORDER BY user_id")
-    assert [tuple(r) for r in members] == [(1, "admin"), (2, "readonly"), (3, "admin"), (4, "editor")]
+    # users.role won over the stale 039 copy of user 3.
+    assert [tuple(r) for r in members] == [(1, "admin"), (2, "readonly"), (3, "editor"), (4, "editor")]
     ops = q(pg_db, "SELECT id FROM users WHERE is_operator ORDER BY id")
-    assert [r[0] for r in ops] == [1, 3]
+    assert [r[0] for r in ops] == [1]
     assert q(pg_db, "SELECT active_tenant_id FROM sessions")[0][0] is None
     assert [tuple(r) for r in q(pg_db, "SELECT tenant_id, provider_id, acting_via FROM audit_logs")] \
         == [(1, 1, None)]
@@ -228,6 +232,7 @@ def test_settings_split_and_auth_binding(pg_db):
 
     # Downgrade: the settings come back, users.role reflects the memberships.
     q(pg_db, "UPDATE tenant_memberships SET role = 'readonly' WHERE user_id = 3")
+    q(pg_db, "UPDATE users SET role = 'admin' WHERE id = 3")
     _alembic(pg_db, "downgrade", "041")
     back = {r[0]: (r[1], r[2]) for r in q(pg_db, "SELECT key, value, encrypted FROM settings")}
     assert back["site_name"] == ("ACME Monitoring", False)
@@ -240,6 +245,53 @@ def test_settings_split_and_auth_binding(pg_db):
     assert not cols & {"is_operator", "active_tenant_id", "provider_id", "acting_via", "dashboard_layout"}
     _alembic(pg_db, "upgrade", "head")
     _alembic(pg_db, "check")
+
+
+RESTORE_SCRIPT = r"""
+import asyncio, json, sys
+from models.base import AsyncSessionLocal, engine
+from services import backup
+from services.tenancy import tenant_scope
+
+async def main():
+    data = json.loads(sys.argv[1])
+    with tenant_scope(1):
+        async with AsyncSessionLocal() as db:
+            print(json.dumps(await backup.import_backup(db, data)))
+    await engine.dispose()
+
+asyncio.run(main())
+"""
+
+
+def test_restoring_a_pre_042_backup_takes_its_settings_and_roles(pg_db):
+    """A backup from before the settings split / auth binding: its tenant
+    settings land in tenant 1 and replace the current ones; users.role wins
+    over memberships (none in the backup) and decides is_operator."""
+    import json
+
+    _run(["migrate.py"], pg_db)  # a current installation
+    q(pg_db, "INSERT INTO tenant_settings (tenant_id, key, value, encrypted) VALUES "
+             "(1, 'site_name', 'Current', false), (1, 'notify_enabled', '1', false)")
+    old = {
+        "_meta": {"format": "nodeglow-backup", "version": "1.0"},
+        "tables": {
+            "settings": [{"key": "site_name", "value": "Restored", "encrypted": False},
+                         {"key": "syslog_port", "value": "5514", "encrypted": False}],
+            "users": [{"id": 1, "username": "root", "password_hash": "x", "role": "admin",
+                       "auth_source": "local"},
+                      {"id": 2, "username": "eve", "password_hash": "x", "role": "readonly",
+                       "auth_source": "local"}],
+        },
+    }
+    _run(["-c", RESTORE_SCRIPT, json.dumps(old)], pg_db)
+    ts = {r[0]: r[1] for r in q(pg_db, "SELECT key, value FROM tenant_settings WHERE tenant_id = 1")}
+    assert ts == {"site_name": "Restored"}
+    assert {r[0] for r in q(pg_db, "SELECT key FROM settings")} >= {"syslog_port"}
+    assert q(pg_db, "SELECT count(*) FROM settings WHERE key = 'site_name'")[0][0] == 0
+    members = q(pg_db, "SELECT user_id, role FROM tenant_memberships ORDER BY user_id")
+    assert [tuple(r) for r in members] == [(1, "admin"), (2, "readonly")]
+    assert [r[0] for r in q(pg_db, "SELECT id FROM users WHERE is_operator ORDER BY id")] == [1]
 
 
 def test_downgrade_to_038_keeps_data(pg_db):

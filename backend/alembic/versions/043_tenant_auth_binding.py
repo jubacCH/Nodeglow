@@ -7,9 +7,10 @@
 * ``audit_logs.provider_id`` / ``acting_via`` — the provider of the tenant
   and how the actor had access. Existing rows get the provider of their
   tenant; ``acting_via`` stays NULL (unknown) for them.
-* Memberships are backfilled again for users created after 039 (setup
-  wizard, users API, LDAP auto-provisioning wrote none until now), with the
-  role from ``users.role``. ``users.role`` is kept in sync with the default
+* Memberships of tenant 1 are re-synced from ``users.role`` (between 039
+  and 043 only that column was written, so 039's copies are stale where a
+  role changed) and backfilled for users created after 039 (setup wizard,
+  users API, LDAP auto-provisioning wrote none until now). ``users.role`` is kept in sync with the default
   tenant's membership for one release, so a downgrade still has every role.
 
 Revision ID: 043
@@ -60,6 +61,18 @@ def upgrade() -> None:
         "UPDATE audit_logs SET provider_id = "
         "(SELECT t.provider_id FROM tenants t WHERE t.id = audit_logs.tenant_id) "
         "WHERE tenant_id IS NOT NULL AND provider_id IS NULL"
+    ))
+
+    # Between 039 and 043 only users.role was written (users API, LDAP login,
+    # setup): the memberships 039 created are stale wherever a role changed
+    # since. users.role wins for the default tenant.
+    bind.execute(sa.text(
+        "UPDATE tenant_memberships SET role = ("
+        "  SELECT COALESCE(NULLIF(u.role, ''), 'admin') FROM users u "
+        "  WHERE u.id = tenant_memberships.user_id) "
+        "WHERE tenant_id = 1 AND EXISTS ("
+        "  SELECT 1 FROM users u WHERE u.id = tenant_memberships.user_id "
+        "  AND COALESCE(NULLIF(u.role, ''), 'admin') <> tenant_memberships.role)"
     ))
 
     # Users created since 039 have no membership yet.

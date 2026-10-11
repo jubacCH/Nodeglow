@@ -192,18 +192,23 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
                     safe_row,
                 )
 
-            # Reset sequence
-            try:
-                safe = _safe_table(table_name)
-                await db.execute(
-                    text(
-                        f"SELECT setval(pg_get_serial_sequence(:tn, 'id'), "
-                        f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
-                    ),
-                    {"tn": table_name},
-                )
-            except Exception:
-                pass
+            # Reset sequence — only where there is a serial id, and in a
+            # savepoint: on PostgreSQL a failing statement (``settings`` has
+            # no ``id``) aborts the whole transaction, which the except below
+            # cannot undo, and every later INSERT of the restore failed.
+            if "id" in allowed:
+                try:
+                    safe = _safe_table(table_name)
+                    async with db.begin_nested():
+                        await db.execute(
+                            text(
+                                f"SELECT setval(pg_get_serial_sequence(:tn, 'id'), "
+                                f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
+                            ),
+                            {"tn": table_name},
+                        )
+                except Exception:
+                    pass
 
             imported[table_name] = len(rows)
 
@@ -215,13 +220,25 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
     # tenant's settings in ``settings``: they belong to the importing tenant.
     from models.settings import adopt_legacy_tenant_settings
 
+    # A restore replaces the data: the backup's values win, and the tenant's
+    # current settings go (the backup had no tenant_settings to truncate them).
     tenant_id = tenancy.session_tenant_id(db)
-    moved = await adopt_legacy_tenant_settings(db, tenant_id)
-    # ...and no memberships (before 039, or users added before 043): without
-    # one nobody could sign in after the restore.
-    from services.memberships import backfill_memberships
+    pre_042 = "settings" in tables_data and "tenant_settings" not in tables_data
+    moved = await adopt_legacy_tenant_settings(db, tenant_id, replace=pre_042)
+    # ...and from before the auth binding (043) only users.role was kept up
+    # to date — it wins over whatever memberships came along (039's stale
+    # copies) and decides is_operator; users without one get one, else
+    # nobody could sign in after the restore.
+    from services.memberships import backfill_memberships, sync_from_users_role
 
-    granted = await backfill_memberships(db, tenant_id)
+    user_rows = tables_data.get("users") or []
+    pre_043 = bool(user_rows) and (
+        "is_operator" not in user_rows[0] or not tables_data.get("tenant_memberships")
+    )
+    if pre_043:
+        granted = await sync_from_users_role(db, tenant_id)
+    else:
+        granted = await backfill_memberships(db, tenant_id)
     if moved or granted:
         await db.commit()
 
