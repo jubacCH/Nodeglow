@@ -158,9 +158,12 @@ async def _check_clickhouse() -> bool:
     import asyncio
     from services import clickhouse_client as _ch
     try:
+        from services.tenancy import system_scope
         # get_client() retries with back-off on a cold start; bound it so a
-        # probe never hangs for the whole retry ladder.
-        await asyncio.wait_for(_ch.query_scalar("SELECT 1"), timeout=_READY_CHECK_TIMEOUT)
+        # probe never hangs for the whole retry ladder. Installation health:
+        # no tenant data is read.
+        with system_scope("ClickHouse readiness probe", audit=False):
+            await asyncio.wait_for(_ch.query_scalar("SELECT 1"), timeout=_READY_CHECK_TIMEOUT)
         return True
     except Exception:
         return False
