@@ -317,6 +317,25 @@ async def test_cadence_tolerates_early_ticks(clock):
     assert not c.due("j", A, 60, tick=60)
 
 
+async def test_cadence_never_runs_a_tenant_faster_than_its_interval(clock, monkeypatch):
+    """90 s next to a 60 s tenant (tick 60): due at the 120 s tick, not every tick."""
+    monkeypatch.setattr(tenant_jobs, "tenant_intervals", AsyncMock(return_value={A: 60, B: 90}))
+    tenant_jobs.cadence.ticks["job"] = 60
+    runs = {A: [], B: []}
+
+    @fleet_job(cadence_spec=tenant_jobs.PING_CADENCE)
+    async def job():
+        runs[tenancy.current_tenant_id()].append(clock.t)
+
+    with _tenants(A, B):
+        for _ in range(7):
+            await job()
+            clock.t += 59.8  # ticks a little early
+    gaps = [b - a for a, b in zip(runs[B], runs[B][1:])]
+    assert len(runs[A]) == 7
+    assert gaps and all(g >= 90 - tenant_jobs.CADENCE_JITTER for g in gaps), gaps
+
+
 async def test_tick_is_the_fastest_tenant_within_the_floor(sf):
     async with sf() as s:
         with system_scope("test: settings", audit=False):
@@ -430,8 +449,9 @@ def test_slot_due_has_an_hour_of_grace_and_no_repeats():
 
 
 async def test_weekly_digest_fires_at_each_tenants_own_hour(sf, monkeypatch):
-    """Monday 07:30 UTC: tenant B (09:00 Europe/Zurich) is due, tenant A
-    (09:00 UTC) is not — the old global cron used the first tenant's hour."""
+    """Monday 07:30 UTC: tenant B (07:00) is due, tenant A (09:00) is not —
+    the old global cron used the first tenant's hour. Hours are UTC, also
+    for a tenant whose time zone is Europe/Zurich (the UI says UTC)."""
     import scheduler
 
     class FakeDT(datetime):
@@ -442,9 +462,10 @@ async def test_weekly_digest_fires_at_each_tenants_own_hour(sf, monkeypatch):
     monkeypatch.setattr(scheduler, "datetime", FakeDT)
     async with sf() as s:
         with system_scope("test: settings", audit=False):
-            for tid, tz in ((A, "UTC"), (B, "Europe/Zurich")):
+            for tid, hour in ((A, "9"), (B, "7")):
                 s.add_all([TenantSetting(tenant_id=tid, key="digest_enabled", value="1"),
-                           TenantSetting(tenant_id=tid, key="timezone", value=tz)])
+                           TenantSetting(tenant_id=tid, key="digest_hour", value=hour),
+                           TenantSetting(tenant_id=tid, key="timezone", value="Europe/Zurich")])
             await s.commit()
     due = {}
     for tid in (A, B):
@@ -481,6 +502,31 @@ async def test_weekly_digest_fires_at_each_tenants_own_hour(sf, monkeypatch):
             rows = (await s.execute(select(TenantSetting.tenant_id).where(
                 TenantSetting.key == "digest_last_sent"))).scalars().all()
     assert rows == [B]
+
+
+@pytest.mark.parametrize("now, due", [
+    (datetime(2026, 10, 12, 9, 0, 0, 300_000), True),   # the hourly tick at 09:00 UTC
+    (datetime(2026, 10, 12, 9, 59, 0), True),           # late, within the old cron's grace
+    (datetime(2026, 10, 12, 10, 0, 0, 200_000), False),  # next tick: no second digest
+    (datetime(2026, 10, 12, 7, 0, 0, 200_000), False),   # 09:00 Zurich is not the slot
+])
+async def test_digest_hour_is_utc_like_the_old_cron(db, monkeypatch, now, due):
+    """Production: tenant time zone Europe/Zurich, digest Monday 09 (UTC in
+    the UI). The hourly tick fires at 09:00 UTC, the hour the old cron did —
+    deploy day neither skips the digest nor sends it twice (the old cron at
+    09:00 and a restart before 10:00: the 10:00 tick is past the grace)."""
+    import scheduler
+    from tests.conftest import put_settings
+
+    await put_settings(db, timezone="Europe/Zurich", digest_day="0", digest_hour="9")
+
+    class FakeDT(datetime):
+        @classmethod
+        def utcnow(cls):
+            return now
+
+    monkeypatch.setattr(scheduler, "datetime", FakeDT)
+    assert await scheduler._digest_slot_due(db) is due
 
 
 # ── Metrics ──────────────────────────────────────────────────────────────────

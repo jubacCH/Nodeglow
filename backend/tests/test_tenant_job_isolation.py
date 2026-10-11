@@ -101,6 +101,11 @@ async def sf():
                     await s.flush()
                 for key, value in _triggers(tid).items():
                     await s.merge(TenantSetting(tenant_id=tid, key=key, value=value))
+                # Something for the cleanup to remove in each tenant.
+                from models.integration import Snapshot
+                s.add(Snapshot(id=BASE[tid] + 5, tenant_id=tid, entity_type="proxmox",
+                               entity_id=BASE[tid], ok=True,
+                               timestamp=datetime.utcnow() - timedelta(days=30)))
             # The installation's AI provider: postmortems and summaries run
             # (against the fake completion below) instead of logging errors.
             s.add(Setting(key="claude_api_key", value=encrypt_value("sk-test"), encrypted=True))
@@ -183,6 +188,13 @@ def boundaries(sf):
             stack.enter_context(patch.object(mod, "AsyncSessionLocal", sf))
         stack.enter_context(patch("services.tenancy.SingleTenancy.active_tenant_ids",
                                   new=AsyncMock(return_value=[A, B])))
+        # The in-memory SQLite database is one shared connection: concurrent
+        # tenant iterations would commit and roll back each other's work
+        # (on PostgreSQL every session has its own). Data-plane passes run
+        # one tenant at a time here; their concurrency is unit-tested in
+        # test_tenant_scheduling.py.
+        from services import tenant_jobs
+        stack.enter_context(patch.object(tenant_jobs, "FLEET_PARALLEL_TENANTS", 1))
         stack.enter_context(patch("services.clickhouse_client.get_client",
                                   new=AsyncMock(return_value=fake_ch)))
         stack.enter_context(patch.object(notifications, "_send_telegram", telegram))
@@ -204,9 +216,15 @@ def boundaries(sf):
         stack.enter_context(patch("utils.ping.check_host", host_down))
         stack.enter_context(patch("utils.ping.get_ssl_expiry_days", AsyncMock(return_value=10)))
         stack.enter_context(patch("socket.gethostbyaddr", side_effect=OSError("no network")))
-        stack.enter_context(patch("socket.gethostbyname", side_effect=OSError("no network")))
+        stack.enter_context(patch("socket.gethostbyname", return_value="198.51.100.7"))
         stack.enter_context(patch("integrations.get_registry", return_value={"proxmox": FakeProxmox}))
-        stack.enter_context(patch("services.snmp.poll_host", AsyncMock(return_value=None)))
+        async def poll_host(db, config, hostname):
+            from models.snmp import SnmpResult
+            db.add(SnmpResult(host_id=config.host_id, data_json='{"sysUpTime": 1}'))
+            return {}
+
+        stack.enter_context(patch("services.snmp.poll_host", poll_host))
+        stack.enter_context(patch("routers.snmp.poll_host", poll_host))
         stack.enter_context(patch("services.port_discovery.scan_host_ports",
                                   AsyncMock(return_value=[]), create=True))
         notifications._recent.clear()
@@ -233,6 +251,12 @@ async def _run(job_name: str):
             await ee.run_daily_ai_summary(force=True)
         await _settle()
         return
+    if job_name == "run_log_intelligence":
+        from services.log_intelligence import process_message
+        for tid in (A, B):  # messages of both tenants in the in-memory pipeline
+            for n in range(3):
+                process_message(f"{TAG[tid]} sshd: failed password for user{n} from 10.0.0.{n}", 3,
+                                tenant_id=tid)
     if job_name == "run_weekly_digest":
         await scheduler.run_weekly_digest(force=True)
     elif job_name == "check_disk_space":
@@ -274,14 +298,46 @@ def _foreign_tag(tid: int) -> str:
 
 @pytest.mark.parametrize("job_name", JOBS)
 async def test_job_keeps_each_tenants_data_in_its_tenant(job_name, sf, boundaries, caplog):
+    if job_name == "run_alert_rules":
+        await _run(job_name)  # required_consecutive defaults to 2: the 2nd run fires
     await assert_job_isolated(job_name, sf, boundaries, caplog)
 
 
+# Jobs that act on ClickHouse data only: with the fake returning no rows
+# they have nothing to do, so no effect is required of them (yet).
+NO_EFFECT_REQUIRED = {
+    "run_log_analytics": "fleet analytics over ClickHouse syslog",
+    "refresh_disk_predictions": "predictions from ClickHouse agent metrics",
+    "run_self_check_job": "staleness of ClickHouse series",
+}
+
+
+async def _fingerprint(sf, tid: int) -> set[str]:
+    return {f"{t}:{text}" for t, owner, text in await _rows_by_tenant(sf) if owner == tid}
+
+
 async def assert_job_isolated(job_name, sf, boundaries, caplog):
-    with caplog.at_level(logging.ERROR):
+    before = {tid: await _fingerprint(sf, tid) for tid in (A, B)}
+    with caplog.at_level(logging.WARNING):
         await _run(job_name)
     errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert not errors, f"{job_name} logged errors: {errors}"
+
+    # The job must have done something in *both* tenants — otherwise the
+    # checks below pass for lack of anything to check.
+    if job_name not in NO_EFFECT_REQUIRED:
+        effects = {}
+        for tid in (A, B):
+            now = await _fingerprint(sf, tid)
+            effects[tid] = sorted({r.split(":", 1)[0] for r in now ^ before[tid]})
+        for tid in (A, B):
+            changed = bool(effects[tid])
+            sent = any(addr.endswith((f"-{tid}", f"-{tid}@example.org"))
+                       for addr, _ in boundaries.sent)
+            asked = any(t == tid for t, _ in boundaries.prompts)
+            # A job whose only output is a report in the log (backup compliance).
+            logged = any(TAG[tid] in r.getMessage() for r in caplog.records)
+            assert changed or sent or asked or logged, f"{job_name} did nothing in tenant {tid} "                                              f"(changed tables: {effects})"
 
     for table, tid, text in await _rows_by_tenant(sf):
         if tid is None:

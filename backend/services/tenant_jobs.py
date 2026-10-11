@@ -322,12 +322,19 @@ def reset_state() -> None:
 
 # ── Per-tenant cadence ───────────────────────────────────────────────────────
 
+# Scheduler jitter a cadence check tolerates (seconds).
+CADENCE_JITTER = 2.0
+
+
 class TenantCadence:
     """When each tenant last ran a cadence job, and whether it is due again.
 
     A job ticks at the fastest tenant's interval (``tick``); a tenant is due
-    once its own interval has elapsed, with half a tick of tolerance so a
-    tenant whose interval equals the tick runs on every tick despite jitter.
+    once its own interval has elapsed, minus a small fixed tolerance
+    (:data:`CADENCE_JITTER`, at most half a tick) so a tenant whose interval
+    equals the tick runs on every tick despite scheduler jitter. An interval
+    between two ticks rounds *up* to the next tick (90 s at a 60 s tick runs
+    every 120 s) — never faster than configured.
     """
 
     def __init__(self) -> None:
@@ -339,7 +346,7 @@ class TenantCadence:
         if last is None:
             return True
         tick = tick if tick is not None else self.ticks.get(job, interval)
-        return monotonic() - last >= interval - tick / 2
+        return monotonic() - last >= interval - min(CADENCE_JITTER, tick / 2)
 
     def mark(self, job: str, tenant_id: int) -> None:
         self._last[(job, tenant_id)] = monotonic()

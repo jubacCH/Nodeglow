@@ -272,7 +272,7 @@ async def update_role(
         return RedirectResponse(url="/users?error=invalid_role", status_code=303)
     user, current_role = await _member(db, request, user_id)
     if not user:
-        return RedirectResponse(url="/users", status_code=303)
+        return JSONResponse({"error": "User not found"}, status_code=404)
     if role != "admin" and await _is_last_admin(db, request, current_role):
         return RedirectResponse(url="/users?error=last_admin", status_code=303)
     await ms.grant(db, user, _tenant(request), role)
@@ -295,7 +295,7 @@ async def reset_password(
         return JSONResponse({"error": pw_error}, status_code=400)
     user, _ = await _member(db, request, user_id)
     if not user:
-        return RedirectResponse(url="/users", status_code=303)
+        return JSONResponse({"error": "User not found"}, status_code=404)
     user.password_hash = hash_password(password)
     await db.execute(sa_delete(UserSession).where(UserSession.user_id == user_id))
     await db.commit()

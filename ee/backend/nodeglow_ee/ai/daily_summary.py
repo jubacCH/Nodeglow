@@ -2,7 +2,7 @@
 
 Collects the last 24 hours, asks the configured AI provider for a short
 briefing and sends it to the selected notification channels. Scheduled daily
-(``daily_ai_summary_hour`` in the tenant's time zone, default 08:00) and triggerable once from the
+(``daily_ai_summary_hour``, UTC, default 08:00) and triggerable once from the
 settings tab (POST /settings/ai/test-summary).
 
 The settings it reads (``daily_ai_summary_enabled/_hour/_channels``) are
@@ -276,17 +276,19 @@ Max ~800 words."""
 
 
 async def _slot_due(db) -> bool:
-    """Whether the current tenant's daily slot (``daily_ai_summary_hour`` in
-    its ``timezone``) is less than an hour old — the old daily cron with an
-    hour of misfire grace, per tenant. The 20-hour duplicate protection
-    below still applies."""
+    """Whether the current tenant's daily slot is less than an hour old — the
+    old daily cron with an hour of misfire grace, per tenant.
+    ``daily_ai_summary_hour`` is **UTC** (the settings UI says "Send at
+    (UTC)", the old cron ran in the container's zone, UTC), not the
+    tenant's ``timezone``. The 20-hour duplicate protection below still
+    applies."""
     from services import tenant_jobs
 
     try:
         hour = max(0, min(23, int(await get_setting(db, "daily_ai_summary_hour", "8") or "8")))
     except (TypeError, ValueError):
         hour = 8
-    zone = tenant_jobs.tenant_zone(await get_setting(db, "timezone", "UTC"))
+    zone = tenant_jobs.tenant_zone("UTC")
     return tenant_jobs.slot_due(datetime.utcnow(), zone, hour,
                                 grace_seconds=CRON_MISFIRE_GRACE_SECONDS)
 

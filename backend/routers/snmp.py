@@ -287,6 +287,8 @@ async def api_add_snmp_host(request: Request, db: AsyncSession = Depends(get_db)
     hq = await db.execute(select(PingHost).where(PingHost.id == host_id))
     if not hq.scalar_one_or_none():
         return JSONResponse({"error": "Host not found"}, status_code=404)
+    if credential_id and await db.get(Credential, int(credential_id)) is None:
+        return JSONResponse({"error": "Credential not found"}, status_code=404)
 
     # Determine OIDs
     if custom_oids:
@@ -334,6 +336,9 @@ async def api_update_snmp_host(config_id: int, request: Request,
     if "enabled" in body:
         cfg.enabled = bool(body["enabled"])
     if "credential_id" in body:
+        # Only a credential of this tenant (tenant-filtered lookup).
+        if body["credential_id"] and await db.get(Credential, int(body["credential_id"])) is None:
+            return JSONResponse({"error": "Credential not found"}, status_code=404)
         cfg.credential_id = body["credential_id"] or None
     if "port" in body:
         cfg.port = int(body["port"])
