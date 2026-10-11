@@ -184,8 +184,9 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
 
     # App logs (journald tail) can contain secrets — only collect them for
     # admins. Readonly/editor users get an empty list.
-    _user = getattr(request.state, "current_user", None)
-    _is_admin = getattr(_user, "role", None) == "admin"
+    # (Installation logs: the operator's, which in the core is the admin.)
+    from services.tenancy import request_is_operator
+    _is_admin = request_is_operator(request)
     logs_fut = loop.run_in_executor(None, _collect_logs) if _is_admin else None
 
     # ── Database stats + top tables (single query) ───────────────────────
@@ -292,17 +293,22 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Integration health (LATERAL join) ────────────────────────────────
     integration_summary = []
     try:
+        # Raw SQL: the tenant predicate is explicit — it is also the leading
+        # column of ix_snap_type_entity_ts since 041, so the LATERAL lookup
+        # uses the index again.
+        from services.tenancy import current_tenant_id
         rows = (await db.execute(text("""
             SELECT c.type, c.name, s.ok, s.timestamp AS ts, s.error
             FROM integration_configs c
             LEFT JOIN LATERAL (
                 SELECT ok, timestamp, error FROM snapshots
-                WHERE entity_type = c.type AND entity_id = c.id
+                WHERE tenant_id = c.tenant_id
+                  AND entity_type = c.type AND entity_id = c.id
                 ORDER BY timestamp DESC LIMIT 1
             ) s ON true
-            WHERE c.enabled = true
+            WHERE c.enabled = true AND c.tenant_id = :tenant_id
             ORDER BY c.type, c.name
-        """))).all()
+        """), {"tenant_id": current_tenant_id()})).all()
         for r in rows:
             integration_summary.append({
                 "type": r.type,
@@ -374,13 +380,15 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Notification channel config ──────────────────────────────────────
     notification_info = {}
     try:
-        settings = {}
-        s_rows = (await db.execute(text(
-            "SELECT key, value FROM settings WHERE key LIKE 'alert_%' OR key LIKE 'smtp_%' OR key LIKE 'telegram_%' OR key LIKE 'discord_%'"
-            " OR key LIKE 'teams_%' OR key LIKE 'slack_%' OR key LIKE 'ntfy_%'"
-        ))).all()
-        for s in s_rows:
-            settings[s.key] = s.value
+        # The request's tenant's channels, through the registry (raw SQL on
+        # `settings` saw none of them after the settings split).
+        from models.settings import get_setting
+        settings = {
+            k: await get_setting(db, k, "")
+            for k in ("telegram_bot_token", "telegram_chat_id", "discord_webhook_url",
+                      "smtp_host", "smtp_to", "teams_enabled", "teams_webhook_url",
+                      "slack_enabled", "slack_webhook_url", "ntfy_enabled", "ntfy_topic")
+        }
 
         notification_info = {
             "telegram": bool(settings.get("telegram_bot_token") and settings.get("telegram_chat_id")),

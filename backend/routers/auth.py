@@ -15,8 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import Session, User, get_db, get_current_user
 from models.settings import _hash_token, _hash_token_legacy, get_setting, set_setting
 from ratelimit import rate_limit, failed_auth_throttled
+from models.tenant import DEFAULT_TENANT_ID
+from services import memberships as ms
+from services import tenancy
 from services.audit import log_action
-from services.tenancy import user_tenant_scope
+from services.tenancy import system_scope, tenant_scope
 from utils.password import verify_password
 
 logger = logging.getLogger(__name__)
@@ -233,17 +236,17 @@ async def _try_ldap_login(db: AsyncSession, username: str, password: str):
     if not ldap_user:
         return None, False
 
+    # Core LDAP is installation-level and maps to the default tenant: the
+    # directory groups decide the membership role there on every login.
     if user:
         # Update role and display name from LDAP
-        changed = False
-        if ldap_user.role and user.role != ldap_user.role:
-            user.role = ldap_user.role
-            changed = True
         if ldap_user.display_name and user.display_name != ldap_user.display_name:
             user.display_name = ldap_user.display_name
-            changed = True
-        if changed:
-            await db.flush()
+        role = ldap_user.role or ms.normalise_role(user.role)
+        current = await ms.membership(db, user.id, DEFAULT_TENANT_ID)
+        if current is None or current.role != role:
+            await ms.grant(db, user, DEFAULT_TENANT_ID, role)
+        await db.flush()
         return user, False
     else:
         # Auto-create user from LDAP
@@ -257,15 +260,16 @@ async def _try_ldap_login(db: AsyncSession, username: str, password: str):
         )
         db.add(user)
         await db.flush()
+        await ms.grant(db, user, DEFAULT_TENANT_ID, ldap_user.role or "readonly")
         logger.info("Auto-created LDAP user: %s (role=%s)", username, ldap_user.role)
         return user, True
 
 
-def _create_session_response(user, token: str, request):
-    """Build JSON response with session cookie."""
+def _create_session_response(user, token: str, request, role: str):
+    """Build JSON response with session cookie (``role``: in the session's tenant)."""
     response = JSONResponse({
         "ok": True,
-        "user": {"id": user.id, "username": user.username, "role": user.role},
+        "user": {"id": user.id, "username": user.username, "role": role},
     })
     force_secure = os.environ.get("SECURE_COOKIES", "").lower() in ("1", "true", "yes")
     is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
@@ -317,19 +321,31 @@ async def login(
         return JSONResponse({"error": message}, status_code=401)
 
     async def _succeed(user, method: str):
+        # The session starts in the tenant the request names (header) or the
+        # user's only membership. A valid password without any tenant access
+        # opens nothing — no session.
+        # Commit first: an LDAP login may just have created or changed the
+        # membership, and the resolution reads memberships in its own session.
+        await db.commit()
+        access = await tenancy.backend().resolve_access(request, user)
+        if access is None:
+            return JSONResponse({"error": "This account has no access to any tenant"},
+                                status_code=403)
         # Resetting the counter while locked would give an attacker who keeps
         # failing a fresh budget every time the real user signs in.
         if not lock_remaining:
             await _clear_failed_attempts(db, body.username)
         token = secrets.token_hex(32)
         db.add(Session(token=_hash_token(token), user_id=user.id,
-                       expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS)))
+                       expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS),
+                       active_tenant_id=access.tenant_id))
         # The audit row belongs to the tenant the user signs in to.
-        async with user_tenant_scope(request, user):
+        request.state.acting_via = access.via
+        with tenant_scope(access.tenant_id):
             await log_action(db, request, "auth.login", "user", user.id, user.username,
                              details={"method": method, "trusted_device": bool(device_nonce)})
             await db.commit()
-        response = _create_session_response(user, token, request)
+        response = _create_session_response(user, token, request, access.role)
         _set_device_cookie(response, request, body.username, device_nonce)
         return response
 
@@ -368,7 +384,47 @@ async def get_current_user_api(request: Request, db: AsyncSession = Depends(get_
     user = await get_current_user(request, db)
     if not user:
         return JSONResponse({"user": None}, status_code=401)
-    return {"user": {"id": user.id, "username": user.username, "role": user.role or "admin"}}
+    access = await tenancy.backend().resolve_access(request, user)
+    if access is None:
+        # Signed in, but the session's tenant is gone (membership revoked).
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return {"user": {"id": user.id, "username": user.username, "role": access.role}}
+
+
+@router.post("/api/auth/tenant")
+@rate_limit(max_requests=30, window_seconds=60)
+async def switch_tenant(request: Request, db: AsyncSession = Depends(get_db)):
+    """Make another of the user's tenants the session's active tenant.
+
+    Not a member (or the tenant is not active) → 404, like every other
+    request for a foreign tenant. Audited in the tenant switched to. The
+    core has one tenant; the switcher UI is ee.
+    """
+    user = await get_current_user(request, db)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    # /api/auth/ skips the middleware, CSRF included: check it here, this
+    # one changes state of an existing session.
+    from csrf import csrf_error_response, validate_csrf
+    if not validate_csrf(request, None):
+        return csrf_error_response(request)
+    try:
+        tenant_id = int((await request.json()).get("tenant_id"))
+    except Exception:
+        return JSONResponse({"error": "tenant_id required"}, status_code=400)
+    token_hash = getattr(request.state, "session_token_hash", None)
+    session = await db.get(Session, token_hash) if token_hash else None
+    role = (await ms.memberships_for(db, user.id)).get(tenant_id)
+    if session is None or role is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    previous = session.active_tenant_id
+    session.active_tenant_id = tenant_id
+    request.state.current_user = user
+    with tenant_scope(tenant_id):
+        await log_action(db, request, "auth.tenant_switch", "tenant", tenant_id, None,
+                         details={"from": previous})
+        await db.commit()
+    return {"ok": True, "tenant_id": tenant_id, "role": role}
 
 
 @router.post("/api/auth/logout")
@@ -381,10 +437,19 @@ async def logout(request: Request, db: AsyncSession = Depends(get_db)):
             session = await db.get(Session, _hash_token_legacy(token))
         if session:
             user = await db.get(User, session.user_id)
+            request.state.session_active_tenant_id = session.active_tenant_id
             await db.delete(session)
-            async with user_tenant_scope(request, user):
-                await log_action(db, request, "auth.logout")
-                await db.commit()
+            access = await tenancy.backend().resolve_access(request, user)
+            if access is not None:
+                with tenant_scope(access.tenant_id):
+                    await log_action(db, request, "auth.logout")
+                    await db.commit()
+            else:
+                # The session's tenant is gone: log out anyway, logged at
+                # installation level.
+                with system_scope("logout of a session without tenant access"):
+                    await log_action(db, request, "auth.logout")
+                    await db.commit()
     response = JSONResponse({"ok": True})
     response.delete_cookie("nodeglow_session")
     return response

@@ -34,3 +34,22 @@ async def mark_dashboard_seen(db, user_id: int, at: datetime | None = None) -> t
         row.updated_at = at
     await db.commit()
     return at, previous
+
+
+async def dashboard_layout(db, user_id: int | None) -> str | None:
+    """The user's saved dashboard layout (JSON) in the current tenant, or None."""
+    if not user_id:
+        return None
+    row = await _row(db, user_id)
+    return row.dashboard_layout if row else None
+
+
+async def set_dashboard_layout(db, user_id: int, layout_json: str | None) -> None:
+    """Save (or with None: reset) the user's dashboard layout. Does not commit."""
+    now = datetime.utcnow()
+    row = await _row(db, user_id)
+    if row is None:
+        db.add(UserPreference(user_id=user_id, dashboard_layout=layout_json, updated_at=now))
+    else:
+        row.dashboard_layout = layout_json
+        row.updated_at = now

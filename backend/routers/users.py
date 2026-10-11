@@ -1,3 +1,12 @@
+"""User management of the request's tenant.
+
+Users are global identities; what this router manages is their membership
+in the request's tenant (``tenant_memberships``, the source of truth for the
+role since the auth binding). In the core there is one tenant, so this is
+exactly the old user management. ``users.role`` is kept as a mirror of the
+default tenant's role for one release (rollback safety, see
+``services.memberships``).
+"""
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete as sa_delete, select
@@ -5,20 +14,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db
 from models.settings import Session as UserSession, _hash_token, _hash_token_legacy
+from models.tenant import TenantMembership
 from ratelimit import rate_limit
+from services import memberships as ms
+from services.tenancy import request_is_admin
 from utils.password import hash_password, validate_password, verify_password
 
 router = APIRouter(prefix="/users")
 api_router = APIRouter()
 
-VALID_ROLES = {"admin", "editor", "readonly"}
+VALID_ROLES = set(ms.VALID_ROLES)
 
 
 def _require_admin(request: Request) -> bool:
-    """Return True (= blocked) if the current user is not an admin."""
-    user = getattr(request.state, "current_user", None)
-    role = getattr(user, "role", "admin") or "admin"
-    return role != "admin"
+    """Return True (= blocked) if the current user is not an admin of the
+    request's tenant."""
+    return not request_is_admin(request)
+
+
+def _tenant(request: Request) -> int:
+    return request.state.tenant_id
 
 
 def _verify_password(user, candidate) -> bool:
@@ -37,32 +52,57 @@ def _verify_password(user, candidate) -> bool:
         return False
 
 
+async def _member(db: AsyncSession, request: Request, user_id: int) -> tuple[User | None, str | None]:
+    """The user and their role, if they are a member of the request's tenant.
+    A user of another tenant is "not found" here."""
+    user = await db.get(User, user_id)
+    if user is None:
+        return None, None
+    m = await ms.membership(db, user_id, _tenant(request))
+    if m is None:
+        return None, None
+    return user, ms.normalise_role(m.role)
+
+
+async def _remove_from_tenant(db: AsyncSession, request: Request, user: User) -> None:
+    """Revoke the membership; a user left without any membership is deleted
+    (in the core: always — there is one tenant)."""
+    await ms.revoke(db, user.id, _tenant(request))
+    remaining = (await db.execute(
+        select(TenantMembership.tenant_id).where(TenantMembership.user_id == user.id)
+    )).first()
+    if remaining is None:
+        await db.execute(sa_delete(UserSession).where(UserSession.user_id == user.id))
+        await db.delete(user)
+
+
+async def _is_last_admin(db: AsyncSession, request: Request, role: str) -> bool:
+    return role == "admin" and await ms.admin_count(db, _tenant(request)) <= 1
+
+
+def _user_json(u: User, role: str, *, full: bool = True) -> dict:
+    out = {"id": u.id, "username": u.username, "role": role}
+    if full:
+        out["auth_source"] = getattr(u, "auth_source", "local") or "local"
+        out["display_name"] = getattr(u, "display_name", None)
+    out["created_at"] = u.created_at.isoformat() if u.created_at else None
+    return out
+
+
 @api_router.get("/api/users")
 async def list_users_api(request: Request, db: AsyncSession = Depends(get_db)):
-    """JSON user list for the frontend (session-authenticated)."""
-    user = getattr(request.state, "current_user", None)
-    if not user or getattr(user, "role", None) != "admin":
+    """JSON user list (members of the request's tenant) for the frontend."""
+    if not getattr(request.state, "current_user", None) or _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
-    result = await db.execute(select(User).order_by(User.created_at))
-    users = result.scalars().all()
-    return JSONResponse([
-        {
-            "id": u.id,
-            "username": u.username,
-            "role": u.role or "admin",
-            "auth_source": getattr(u, "auth_source", "local") or "local",
-            "display_name": getattr(u, "display_name", None),
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-        }
-        for u in users
-    ])
+    members = await ms.tenant_members(db, _tenant(request))
+    return JSONResponse([_user_json(u, role) for u, role in members])
 
 
 @api_router.post("/api/users")
 async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
-    """Create a new user (admin only, JSON API)."""
+    """Create a new user in the request's tenant (admin only, JSON API)."""
     current = getattr(request.state, "current_user", None)
-    if not current or getattr(current, "role", None) != "admin":
+    if not current or _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     body = await request.json()
     username = (body.get("username") or "").strip()
@@ -81,26 +121,26 @@ async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
     pw_hash = hash_password(password)
     user = User(username=username, password_hash=pw_hash, role=role)
     db.add(user)
+    await db.flush()
+    await ms.grant(db, user, _tenant(request), role, created_by=getattr(current, "id", None))
     await db.commit()
-    return JSONResponse({"ok": True, "id": user.id, "username": user.username, "role": user.role})
+    return JSONResponse({"ok": True, "id": user.id, "username": user.username, "role": role})
 
 
 @api_router.delete("/api/users/{user_id}")
 async def delete_user_api(user_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    """Delete a user (admin only, JSON API)."""
+    """Remove a user from the request's tenant (admin only, JSON API)."""
     current = getattr(request.state, "current_user", None)
-    if not current or getattr(current, "role", None) != "admin":
+    if not current or _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     if current.id == user_id:
         return JSONResponse({"error": "Cannot delete yourself"}, status_code=400)
-    user = await db.get(User, user_id)
+    user, role = await _member(db, request, user_id)
     if not user:
         return JSONResponse({"error": "User not found"}, status_code=404)
-    if user.role == "admin":
-        admins = (await db.execute(select(User).where(User.role == "admin"))).scalars().all()
-        if len(admins) <= 1:
-            return JSONResponse({"error": "Cannot delete the last admin"}, status_code=400)
-    await db.delete(user)
+    if await _is_last_admin(db, request, role):
+        return JSONResponse({"error": "Cannot delete the last admin"}, status_code=400)
+    await _remove_from_tenant(db, request, user)
     await db.commit()
     return JSONResponse({"ok": True})
 
@@ -108,11 +148,11 @@ async def delete_user_api(user_id: int, request: Request, db: AsyncSession = Dep
 @api_router.patch("/api/users/{user_id}")
 @rate_limit(max_requests=5, window_seconds=300)
 async def update_user_api(user_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    """Update user role or password (admin only, JSON API)."""
+    """Update user role (in the request's tenant) or password (admin only, JSON API)."""
     current = getattr(request.state, "current_user", None)
-    if not current or getattr(current, "role", None) != "admin":
+    if not current or _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
-    user = await db.get(User, user_id)
+    user, role = await _member(db, request, user_id)
     if not user:
         return JSONResponse({"error": "User not found"}, status_code=404)
     body = await request.json()
@@ -120,11 +160,9 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
         new_role = body["role"]
         if new_role not in VALID_ROLES:
             return JSONResponse({"error": "Invalid role"}, status_code=400)
-        if user.role == "admin" and new_role != "admin":
-            admins = (await db.execute(select(User).where(User.role == "admin"))).scalars().all()
-            if len(admins) <= 1:
-                return JSONResponse({"error": "Cannot demote the last admin"}, status_code=400)
-        user.role = new_role
+        if new_role != "admin" and await _is_last_admin(db, request, role):
+            return JSONResponse({"error": "Cannot demote the last admin"}, status_code=400)
+        await ms.grant(db, user, _tenant(request), new_role)
     if "password" in body and body["password"]:
         # An admin resetting SOMEONE ELSE needs no old password. Changing
         # one's own does: otherwise a hijacked session (or an unlocked
@@ -189,17 +227,8 @@ async def change_own_password(
 async def users_page(request: Request, db: AsyncSession = Depends(get_db)):
     if _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
-    result = await db.execute(select(User).order_by(User.created_at))
-    users = result.scalars().all()
-    return JSONResponse([
-        {
-            "id": u.id,
-            "username": u.username,
-            "role": u.role or "admin",
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-        }
-        for u in users
-    ])
+    members = await ms.tenant_members(db, _tenant(request))
+    return JSONResponse([_user_json(u, role, full=False) for u, role in members])
 
 
 @router.post("/add")
@@ -221,7 +250,11 @@ async def add_user(
     if existing:
         return RedirectResponse(url="/users?error=exists", status_code=303)
     pw_hash = hash_password(password)
-    db.add(User(username=username.strip(), password_hash=pw_hash, role=role))
+    user = User(username=username.strip(), password_hash=pw_hash, role=role)
+    db.add(user)
+    await db.flush()
+    current = getattr(request.state, "current_user", None)
+    await ms.grant(db, user, _tenant(request), role, created_by=getattr(current, "id", None))
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)
 
@@ -237,14 +270,12 @@ async def update_role(
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     if role not in VALID_ROLES:
         return RedirectResponse(url="/users?error=invalid_role", status_code=303)
-    user = await db.get(User, user_id)
+    user, current_role = await _member(db, request, user_id)
     if not user:
         return RedirectResponse(url="/users", status_code=303)
-    if user.role == "admin" and role != "admin":
-        admins = (await db.execute(select(User).where(User.role == "admin"))).scalars().all()
-        if len(admins) <= 1:
-            return RedirectResponse(url="/users?error=last_admin", status_code=303)
-    user.role = role
+    if role != "admin" and await _is_last_admin(db, request, current_role):
+        return RedirectResponse(url="/users?error=last_admin", status_code=303)
+    await ms.grant(db, user, _tenant(request), role)
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)
 
@@ -262,7 +293,7 @@ async def reset_password(
     pw_error = validate_password(password)
     if pw_error:
         return JSONResponse({"error": pw_error}, status_code=400)
-    user = await db.get(User, user_id)
+    user, _ = await _member(db, request, user_id)
     if not user:
         return RedirectResponse(url="/users", status_code=303)
     user.password_hash = hash_password(password)
@@ -282,13 +313,11 @@ async def delete_user(
     current = request.state.current_user
     if current and current.id == user_id:
         return RedirectResponse(url="/users?error=self_delete", status_code=303)
-    user = await db.get(User, user_id)
+    user, role = await _member(db, request, user_id)
     if not user:
         return RedirectResponse(url="/users", status_code=303)
-    if user.role == "admin":
-        admins = (await db.execute(select(User).where(User.role == "admin"))).scalars().all()
-        if len(admins) <= 1:
-            return RedirectResponse(url="/users?error=last_admin", status_code=303)
-    await db.delete(user)
+    if await _is_last_admin(db, request, role):
+        return RedirectResponse(url="/users?error=last_admin", status_code=303)
+    await _remove_from_tenant(db, request, user)
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)

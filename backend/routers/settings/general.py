@@ -13,8 +13,9 @@ from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
 from ratelimit import rate_limit
 from services.audit import log_action
 from services.channel_secrets import LEGACY_SECRET_KEYS
+from services.tenancy import per_tenant_job
 
-from ._helpers import require_admin
+from ._helpers import is_operator, require_admin, require_operator
 
 router = APIRouter()
 
@@ -129,10 +130,21 @@ async def save_settings(
     if err := require_admin(request):
         return err
     await set_setting(db, "site_name", site_name.strip())
-    # The address agents call back on. Needed wherever the proxy in front of
-    # this app does not pass a usable X-Forwarded-Host, and as an override
-    # when agents must reach the server on a different name than operators do.
-    await set_setting(db, "agent_server_url", agent_server_url.strip().rstrip("/"))
+    # site_name is the tenant's display name.
+    from models.tenant import Tenant
+    from services.tenancy import current_tenant_id
+    tenant = await db.get(Tenant, current_tenant_id())
+    if tenant is not None and site_name.strip():
+        tenant.name = site_name.strip()[:128]
+    operator = is_operator(request)
+    # Installation keys (the URL agents call, the syslog listener) are the
+    # operator's; in the core that is the admin of the one tenant, so this
+    # form saves exactly what it always did.
+    if operator:
+        # The address agents call back on. Needed wherever the proxy in front of
+        # this app does not pass a usable X-Forwarded-Host, and as an override
+        # when agents must reach the server on a different name than operators do.
+        await set_setting(db, "agent_server_url", agent_server_url.strip().rstrip("/"))
 
     try:
         p_interval = max(10, min(3600, int(ping_interval)))
@@ -204,7 +216,10 @@ async def save_settings(
         new_sp = max(1, min(65535, int(syslog_port)))
     except ValueError:
         new_sp = 1514
-    await set_setting(db, "syslog_port", str(new_sp))
+    if not operator:
+        new_sp = int(old_syslog_port or 1514)
+    else:
+        await set_setting(db, "syslog_port", str(new_sp))
     await set_setting(db, "syslog_allowlist_only", "1" if syslog_allowlist_only == "1" else "0")
 
     if str(new_sp) != old_syslog_port:
@@ -288,28 +303,37 @@ async def save_phpipam(
     await set_setting(db, "phpipam_sync_hours", str(sync_h))
 
     from scheduler import scheduler
-    from integrations.phpipam import sync_phpipam_hosts
-    from services import integration as _int_svc
     job = scheduler.get_job("phpipam_sync")
     if sync_h > 0:
         if job:
             job.reschedule(trigger="interval", hours=sync_h)
         else:
-            async def _sync():
-                from database import AsyncSessionLocal
-                async with AsyncSessionLocal() as _db:
-                    cfgs = (await _db.execute(
-                        select(IntegrationConfig).where(IntegrationConfig.type == "phpipam")
-                    )).scalars().all()
-                    for cfg in cfgs:
-                        config_dict = _int_svc.decrypt_config(cfg.config_json)
-                        await sync_phpipam_hosts(_db, config_dict)
-            scheduler.add_job(_sync, "interval", hours=sync_h, id="phpipam_sync", replace_existing=True)
+            scheduler.add_job(run_phpipam_sync, "interval", hours=sync_h, id="phpipam_sync",
+                              replace_existing=True)
     else:
         if job:
             job.remove()
 
     return RedirectResponse(url="/settings?saved=1", status_code=303)
+
+
+@per_tenant_job
+async def run_phpipam_sync():
+    """Scheduled phpIPAM import: every tenant's phpIPAM integrations.
+
+    Declares its tenancy like the jobs in scheduler.py — scheduled jobs start
+    without any context (scheduler.ContextFreeExecutor)."""
+    from database import AsyncSessionLocal
+    from integrations.phpipam import sync_phpipam_hosts
+    from services import integration as _int_svc
+
+    async with AsyncSessionLocal() as _db:
+        cfgs = (await _db.execute(
+            select(IntegrationConfig).where(IntegrationConfig.type == "phpipam")
+        )).scalars().all()
+        for cfg in cfgs:
+            config_dict = _int_svc.decrypt_config(cfg.config_json)
+            await sync_phpipam_hosts(_db, config_dict)
 
 
 @router.post("/phpipam/sync")
@@ -336,8 +360,9 @@ async def manual_phpipam_sync(request: Request, db: AsyncSession = Depends(get_d
 @router.post("/geoip/download")
 @rate_limit(max_requests=10, window_seconds=60)
 async def geoip_download(request: Request, db: AsyncSession = Depends(get_db)):
-    """Trigger a manual GeoLite2-City database download. Admin only."""
-    if err := require_admin(request):
+    """Trigger a manual GeoLite2-City database download. Operator only (one
+    GeoIP database for the installation; in the core: the admin)."""
+    if err := require_operator(request):
         return err
 
     from database import decrypt_value

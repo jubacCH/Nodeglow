@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db, is_setup_complete, set_setting
+from models.tenant import DEFAULT_TENANT_ID
 from utils.password import hash_password
 
 router = APIRouter(prefix="/setup")
@@ -39,17 +40,30 @@ async def complete_setup(
     if await is_setup_complete(db):
         return RedirectResponse(url="/", status_code=303)
 
-    # Only create user if none exist
+    # The wizard sets up the installation and its first (core: only) tenant.
+    tenant_id = DEFAULT_TENANT_ID
+
+    # Only create user if none exist: the installation operator and admin
+    # of the first tenant.
     count = (await db.execute(select(func.count()).select_from(User))).scalar()
     if count == 0:
         pw_hash = hash_password(password)
-        db.add(User(username=username.strip() or "admin", password_hash=pw_hash, role="admin"))
+        user = User(username=username.strip() or "admin", password_hash=pw_hash, role="admin",
+                    is_operator=True)
+        db.add(user)
+        await db.flush()
+        from services.memberships import grant
+        await grant(db, user, tenant_id, "admin")
 
-    await set_setting(db, "site_name", site_name.strip() or "NODEGLOW")
-    await set_setting(db, "ping_interval", "60")
+    from models.tenant import Tenant
+    tenant = await db.get(Tenant, tenant_id)
+    if tenant is not None:  # site_name is the tenant's display name
+        tenant.name = (site_name.strip() or "NODEGLOW")[:128]
+    await set_setting(db, "site_name", site_name.strip() or "NODEGLOW", tenant_id=tenant_id)
+    await set_setting(db, "ping_interval", "60", tenant_id=tenant_id)
     # Secure-by-default for new installs: only accept syslog from registered hosts.
     # Operators can opt out on the settings page.
-    await set_setting(db, "syslog_allowlist_only", "1")
+    await set_setting(db, "syslog_allowlist_only", "1", tenant_id=tenant_id)
     # Set setup_complete last — only after user creation
     await set_setting(db, "setup_complete", "true")
     await db.commit()

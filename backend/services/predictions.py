@@ -206,38 +206,44 @@ async def predict_agent_disks(db: AsyncSession, days_back: int = 14) -> dict[str
 
 # ── Cache ────────────────────────────────────────────────────────────────────
 # Both prediction kinds read days of history. The scheduler refreshes them
-# (scheduler.refresh_disk_predictions); request paths only read the cache, the
-# integration kind falls back to computing on a miss as the old dashboard did.
-# _disk_pred_cache/_disk_pred_cache_ts are the names the old dashboard reads.
+# (scheduler.refresh_disk_predictions, once per tenant); request paths only
+# read the cache, the integration kind falls back to computing on a miss as
+# the old dashboard did. Keyed by (tenant, kind): a dashboard only ever sees
+# predictions computed for its own tenant.
 
 INTEGRATION_CACHE_TTL = 300.0
 AGENT_CACHE_TTL = 3600.0
-_disk_pred_cache: dict | None = None
-_disk_pred_cache_ts: float = 0.0
-_agent_pred_cache: dict | None = None
-_agent_pred_cache_ts: float = 0.0
+_pred_cache: dict[tuple[int, str], tuple[dict, float]] = {}
 
 
-def cached_predictions(kind: str, max_age: float) -> dict | None:
+def _kind(kind: str) -> str:
+    return "agent" if kind == "agent" else "integration"
+
+
+def cached_predictions(kind: str, max_age: float, tenant_id: int | None = None) -> dict | None:
+    """The tenant's (default: current tenant's) cached predictions, if fresh."""
     import time
 
-    if kind == "agent":
-        data, ts = _agent_pred_cache, _agent_pred_cache_ts
-    else:
-        data, ts = _disk_pred_cache, _disk_pred_cache_ts
-    if data is not None and time.time() - ts < max_age:
-        return data
+    from services.tenancy import current_tenant_id
+
+    tid = current_tenant_id() if tenant_id is None else tenant_id
+    hit = _pred_cache.get((tid, _kind(kind)))
+    if hit is not None and time.time() - hit[1] < max_age:
+        return hit[0]
     return None
 
 
-def store_predictions(kind: str, data: dict) -> None:
+def store_predictions(kind: str, data: dict, tenant_id: int | None = None) -> None:
     import time
 
-    global _disk_pred_cache, _disk_pred_cache_ts, _agent_pred_cache, _agent_pred_cache_ts
-    if kind == "agent":
-        _agent_pred_cache, _agent_pred_cache_ts = data, time.time()
-    else:
-        _disk_pred_cache, _disk_pred_cache_ts = data, time.time()
+    from services.tenancy import current_tenant_id
+
+    tid = current_tenant_id() if tenant_id is None else tenant_id
+    _pred_cache[(tid, _kind(kind))] = (data, time.time())
+
+
+def clear_cache() -> None:
+    _pred_cache.clear()
 
 
 async def integration_predictions(db: AsyncSession) -> dict[str, dict]:

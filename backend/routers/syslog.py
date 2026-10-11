@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from services import tenancy
 from models.syslog import SEVERITY_LABELS
 from services.clickhouse_client import query as ch_query, query_scalar as ch_scalar, _where_clauses
 
@@ -174,20 +175,38 @@ async def _check_severity_spike() -> dict | None:
 
 @router.get("/stream")
 async def syslog_stream(
+    request: Request,
     severity: str = Query(""),
     host: str = Query(""),
     app: str = Query(""),
 ):
     from services.syslog import subscribe, unsubscribe
+    from services.tenancy import current_tenant_id
 
     sev_filter = int(severity) if severity not in ("", None) else None
+    # Resolved now, in the request's tenant scope: the stream only ever
+    # carries this tenant's messages (raises without a tenant).
+    tenant_id = current_tenant_id()
+
+    role = tenancy.request_role(request)
 
     async def event_generator():
-        q = subscribe()
+        import time as _time
+
+        q = subscribe(tenant_id)
+        checked = _time.monotonic()
         try:
             while True:
+                # The stream outlives the request's auth check: re-check the
+                # access periodically and end the stream when it changed.
+                if _time.monotonic() - checked >= tenancy.STREAM_REVALIDATE_SECONDS:
+                    checked = _time.monotonic()
+                    now = await tenancy.revalidate_access(request, tenant_id)
+                    if now is None or now.role != role:
+                        break
                 try:
-                    msg = await asyncio.wait_for(q.get(), timeout=30)
+                    msg = await asyncio.wait_for(
+                        q.get(), timeout=min(30, tenancy.STREAM_REVALIDATE_SECONDS) or 30)
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue

@@ -211,7 +211,7 @@ def test_noise_score_bounds():
 # ── Process Message (integration) ────────────────────────────────────────────
 
 def test_process_message_returns_enrichment():
-    result = process_message("Failed password for root from 10.0.0.1 port 22345", severity=4)
+    result = process_message("Failed password for root from 10.0.0.1 port 22345", severity=4, tenant_id=1)
     assert "template_hash" in result
     assert "tags" in result
     assert "noise_score" in result
@@ -222,15 +222,14 @@ def test_process_message_returns_enrichment():
 def test_process_message_detects_new_template():
     """First time seeing a template = is_new_template."""
     # Clear caches for test isolation
-    from services.log_intelligence import _template_cache, _new_templates
-    _template_cache.clear()
-    _new_templates.clear()
+    from services.log_intelligence import reset_state
+    reset_state()
 
-    result = process_message("A very unique message 12345678 that nobody has ever seen", severity=6)
+    result = process_message("A very unique message 12345678 that nobody has ever seen", severity=6, tenant_id=1)
     assert result["is_new_template"] is True
 
     # Second time = not new
-    result2 = process_message("A very unique message 87654321 that nobody has ever seen", severity=6)
+    result2 = process_message("A very unique message 87654321 that nobody has ever seen", severity=6, tenant_id=1)
     assert result2["is_new_template"] is False
     assert result2["template_hash"] == result["template_hash"]
 
@@ -241,7 +240,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 from models.log_template import LogTemplate, PrecursorPattern
-from services.log_intelligence import _learn_precursors_for_event, _template_cache
+from services.log_intelligence import _learn_precursors_for_event, _tenant_state
 from sqlalchemy import select
 
 
@@ -250,7 +249,7 @@ async def _seed_template(db, template_text: str, template_hash: str) -> int:
     db.add(tpl)
     await db.commit()
     await db.refresh(tpl)
-    _template_cache[template_hash] = tpl.id
+    _tenant_state(1).template_cache[template_hash] = tpl.id
     return tpl.id
 
 

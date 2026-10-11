@@ -18,6 +18,12 @@ GOLDEN = Path(__file__).parent / "golden" / "notification_channels"
 TEAMS_URL = "https://prod-01.westeurope.logic.azure.com/workflows/abc/triggers/manual/paths/invoke?sig=SECRET"
 SLACK_URL = "https://hooks.slack.com/services/T000/B000/SECRETxyz"
 
+def _notify(*args, **kwargs):
+    """notify() for tenant 1 (notifications are per tenant since phase 4)."""
+    kwargs.setdefault("tenant_id", 1)
+    return notifications.notify(*args, **kwargs)
+
+
 
 def _golden(name: str, actual: dict) -> None:
     path = GOLDEN / f"{name}.json"
@@ -256,7 +262,7 @@ async def test_load_config_decrypts_secrets():
         "slack_webhook_url": "https://legacy-plaintext.example/hook",
     }
 
-    async def get_setting(db, key, default=""):
+    async def get_setting(db, key, default="", **_kw):
         return stored.get(key, default)
 
     cfg = await nc.load_config(None, get_setting, decrypt_value)
@@ -271,7 +277,7 @@ async def test_load_config_decrypts_secrets():
 # ── Dispatcher integration (notifications.notify) ────────────────────────────
 
 def _patched_notify_env(settings):
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     mock_cls = patch("database.AsyncSessionLocal")
@@ -290,7 +296,7 @@ async def _run_notify(settings, **kwargs):
         mock_db = AsyncMock()
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        await notifications.notify(**kwargs)
+        await _notify(**kwargs)
         return {"teams": teams, "slack": slack, "ntfy": ntfy, "telegram": tg, "log": log}
 
 
@@ -343,7 +349,7 @@ async def test_notify_failure_is_logged_and_others_still_send():
          patch.object(notifications, "_log_notification", new_callable=AsyncMock) as log:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        await notifications.notify("D", "m")
+        await _notify("D", "m")
     slack.assert_awaited_once()
     teams_logs = [c for c in log.await_args_list if c.args[0] == "teams"]
     assert teams_logs[0].args[4] == "failed"
@@ -356,5 +362,5 @@ async def test_notify_rate_limit_covers_new_channels():
     # second call with the same title inside the cooldown: nothing at all
     cls_patch, gs_patch = _patched_notify_env(_ALL)
     with cls_patch, gs_patch, patch.object(nc, "send_teams", new_callable=AsyncMock) as teams:
-        await notifications.notify("Same", "m")
+        await _notify("Same", "m")
     teams.assert_not_called()

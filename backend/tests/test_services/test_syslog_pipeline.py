@@ -22,7 +22,8 @@ def _clean_state():
 
 
 def _msg(i: int = 0) -> dict:
-    return {"message": f"hello {i}", "severity": 6, "source_ip": "10.0.0.1", "host_id": None}
+    return {"message": f"hello {i}", "severity": 6, "source_ip": "10.0.0.1", "host_id": None,
+            syslog.TENANT_KEY: 1}
 
 
 async def test_insert_runs_outside_the_buffer_lock():
@@ -161,7 +162,7 @@ async def test_host_cache_refresh_loads_hosts_under_system_scope(db):
          patch.object(syslog, "_resolve_many", new=AsyncMock(return_value={})):
         await syslog._refresh_host_cache()
     try:
-        assert "fw.example.internal" in syslog._host_cache
-        assert "edge-fw" in syslog._host_cache
+        assert "fw.example.internal" in syslog._host_cache[1]
+        assert "edge-fw" in syslog._host_cache[1]
     finally:
         syslog._host_cache, syslog._host_cache_ts = {}, 0.0

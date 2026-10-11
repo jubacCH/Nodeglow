@@ -151,7 +151,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
     PingHost,
-    get_db, get_setting, set_setting, is_setup_complete,
+    get_db, get_setting, is_setup_complete,
 )
 from models.integration import IntegrationConfig, Snapshot
 from integrations import get_meta as _int_meta
@@ -836,15 +836,8 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Disk-full predictions (cached for 5 minutes) ────────────────────────
     disk_predictions = {}
     try:
-        import time as _cache_time
-        _PRED_CACHE = getattr(pred_svc, '_disk_pred_cache', None)
-        _PRED_CACHE_TS = getattr(pred_svc, '_disk_pred_cache_ts', 0)
-        if _PRED_CACHE is not None and (_cache_time.time() - _PRED_CACHE_TS) < 300:
-            disk_predictions = _PRED_CACHE
-        else:
-            disk_predictions = await pred_svc.predict_disk_full(db)
-            pred_svc._disk_pred_cache = disk_predictions
-            pred_svc._disk_pred_cache_ts = _cache_time.time()
+        # This tenant's predictions (cached per tenant for 5 minutes).
+        disk_predictions = await pred_svc.integration_predictions(db)
 
         for pool in storage_pools:
             pred = disk_predictions.get(pool.get("_pred_key"))
@@ -1242,8 +1235,9 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 
         s["health_score"] = round(min(score, 1.0), 3)
 
-    # Dashboard widget layout
-    layout_json = await get_setting(db, "dashboard_layout")
+    # Dashboard widget layout: the user's own, in this tenant
+    from services.user_prefs import dashboard_layout as _user_layout
+    layout_json = await _user_layout(db, getattr(request.state.current_user, "id", None))
     try:
         layout = json.loads(layout_json) if layout_json else DEFAULT_LAYOUT
         if layout and isinstance(layout[0], dict) and "x" not in layout[0]:
@@ -1369,13 +1363,21 @@ async def save_dashboard_layout(request: Request, db: AsyncSession = Depends(get
             "w": max(1, min(12, int(w.get("w", 12)))),
             "h": max(1, min(24, int(w.get("h", 4)))),
         })
-    await set_setting(db, "dashboard_layout", json.dumps(cleaned))
+    user = getattr(request.state, "current_user", None)
+    if user is None:
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    from services.user_prefs import set_dashboard_layout
+    await set_dashboard_layout(db, user.id, json.dumps(cleaned))
     await db.commit()
     return JSONResponse({"ok": True})
 
 
 @router.post("/api/dashboard-layout/reset")
 async def reset_dashboard_layout(request: Request, db: AsyncSession = Depends(get_db)):
-    await set_setting(db, "dashboard_layout", json.dumps(DEFAULT_LAYOUT))
+    user = getattr(request.state, "current_user", None)
+    if user is None:
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    from services.user_prefs import set_dashboard_layout
+    await set_dashboard_layout(db, user.id, None)
     await db.commit()
     return JSONResponse({"ok": True})

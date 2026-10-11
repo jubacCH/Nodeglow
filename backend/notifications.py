@@ -56,40 +56,56 @@ async def _url_is_safe(url: str) -> bool:
 
 
 # ── Rate Limiting ─────────────────────────────────────────────────────────────
-# In-memory cooldown: same title won't fire again within cooldown window
-_recent: dict[str, float] = {}
+# In-memory cooldown: the same title won't fire again within the window — per
+# tenant: "Host down: router" at customer A must not swallow the same alert
+# at customer B.
+_recent: dict[tuple[int, str], float] = {}
 _COOLDOWN_SECONDS = 300  # 5 minutes
 
 
-def _is_rate_limited(title: str) -> bool:
+def _is_rate_limited(title: str, tenant_id: int) -> bool:
     """Check if this notification was sent recently (prevents alert storms)."""
     now = time.monotonic()
     # Cleanup old entries
     stale = [k for k, v in _recent.items() if now - v > _COOLDOWN_SECONDS * 2]
     for k in stale:
         del _recent[k]
-    key = title.strip().lower()
+    key = (tenant_id, title.strip().lower())
     if key in _recent and now - _recent[key] < _COOLDOWN_SECONDS:
         return True
     _recent[key] = now
     return False
 
 
+def _notify_tenant(tenant_id: int | None) -> int:
+    """The tenant a notification belongs to: explicit, else the current one.
+    Raises TenantContextError without either (channels are per tenant)."""
+    if tenant_id is not None:
+        return int(tenant_id)
+    from services.tenancy import current_tenant_id
+
+    return current_tenant_id()
+
+
 # ── History Logging ───────────────────────────────────────────────────────────
 
 async def _log_notification(channel: str, title: str, message: str,
                             severity: str, status: str = "sent",
-                            error: str | None = None) -> None:
-    """Persist notification to DB for audit trail."""
+                            error: str | None = None, *, tenant_id: int | None = None) -> None:
+    """Persist notification to DB for audit trail, in the notification's tenant."""
     try:
         from database import AsyncSessionLocal
         from models.notification import NotificationLog
-        async with AsyncSessionLocal() as db:
-            db.add(NotificationLog(
-                channel=channel, title=title, message=message,
-                severity=severity, status=status, error=error,
-            ))
-            await db.commit()
+        from services.tenancy import tenant_scope
+
+        tid = _notify_tenant(tenant_id)
+        with tenant_scope(tid):
+            async with AsyncSessionLocal() as db:
+                db.add(NotificationLog(
+                    tenant_id=tid, channel=channel, title=title, message=message,
+                    severity=severity, status=status, error=error,
+                ))
+                await db.commit()
     except Exception as exc:
         logger.warning("Failed to log notification: %s", exc)
 
@@ -222,14 +238,25 @@ def _severity_passes(incident_severity: str, min_severity: str) -> bool:
 
 async def notify(title: str, message: str, severity: str = "critical",
                  channels: list[str] | None = None,
-                 link_path: str | None = None) -> None:
-    """Send notification to configured channels. If channels is given, only send to those.
+                 link_path: str | None = None, *, tenant_id: int | None = None) -> None:
+    """Send a notification of ``tenant_id`` (default: the current tenant) to
+    that tenant's configured channels. If channels is given, only send to those.
 
     ``link_path`` (e.g. ``/incidents/42``) becomes a link in channels that
-    support one, when the ``public_url`` setting is set.
+    support one, when the ``public_url`` setting is set. Without a tenant
+    this raises: there are no installation-wide channels in the core.
     """
+    tenant_id = _notify_tenant(tenant_id)
+    from services.tenancy import tenant_scope
+
+    with tenant_scope(tenant_id):
+        await _notify_tenant_channels(tenant_id, title, message, severity, channels, link_path)
+
+
+async def _notify_tenant_channels(tenant_id: int, title: str, message: str, severity: str,
+                                  channels: list[str] | None, link_path: str | None) -> None:
     # Rate limit check
-    if _is_rate_limited(title):
+    if _is_rate_limited(title, tenant_id):
         logger.debug("Notification rate-limited: %s", title)
         return
 
@@ -306,6 +333,7 @@ async def notify(title: str, message: str, severity: str = "critical",
     for (ch_name, _), result in zip(channels_list, results):
         if isinstance(result, Exception):
             logger.warning("Notification %s failed: %s", ch_name, result)
-            await _log_notification(ch_name, title, message, severity, "failed", str(result))
+            await _log_notification(ch_name, title, message, severity, "failed", str(result),
+                                    tenant_id=tenant_id)
         else:
-            await _log_notification(ch_name, title, message, severity, "sent")
+            await _log_notification(ch_name, title, message, severity, "sent", tenant_id=tenant_id)

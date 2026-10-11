@@ -281,19 +281,28 @@ def parse_syslog(raw: str, source_ip: str) -> dict:
 
 
 # ── Host cache for auto-assignment ──────────────────────────────────────────
+#
+# Keyed by tenant: the same RFC1918 address or host name is a different device
+# in every customer network, so a lookup is always "(tenant, ip | name) ->
+# host". The direct UDP/TCP listener knows only the source address; it feeds
+# the default tenant (LISTENER_TENANT_ID, see the spec's "Syslog ingestion").
+# Agent log submissions resolve in the agent's tenant.
 
-_host_cache: dict[str, int] = {}  # ip_or_hostname -> host_id
+LISTENER_TENANT_ID = DEFAULT_TENANT_ID
+_host_cache: dict[int, dict[str, int]] = {}  # tenant_id -> ip_or_hostname -> host_id
 _host_cache_ts: float = 0.0
 _HOST_CACHE_TTL = 120  # seconds
-_allowlist_only: bool = False  # when True, only accept syslog from known hosts
-_allowlist_ips: set[str] = set()  # resolved IPs of known hosts (fast lookup)
+# Per tenant: only accept syslog from known hosts (syslog_allowlist_only).
+_allowlist_only: dict[int, bool] = {}
+_allowlist_ips: dict[int, set[str]] = {}  # tenant_id -> resolved IPs of known hosts
 
 
-def _is_allowed_source(source_ip: str) -> bool:
-    """Check if source IP is from a known host. Only enforced when allowlist is enabled."""
-    if not _allowlist_only:
+def _is_allowed_source(source_ip: str, tenant_id: int = LISTENER_TENANT_ID) -> bool:
+    """Check if source IP is from a known host of the tenant. Only enforced
+    when that tenant's allowlist is enabled."""
+    if not _allowlist_only.get(tenant_id, False):
         return True
-    return source_ip in _allowlist_ips
+    return source_ip in _allowlist_ips.get(tenant_id, ())
 
 
 _DNS_CONCURRENCY = _env_int("NODEGLOW_SYSLOG_DNS_CONCURRENCY", 16)
@@ -326,6 +335,15 @@ async def _resolve_many(names: list[str], resolver) -> dict[str, Optional[str]]:
     return dict(await asyncio.gather(*(one(n) for n in names)))
 
 
+def _raw_host(hostname: str) -> str:
+    """Hostname/IP part of a PingHost.hostname (URL parts stripped)."""
+    raw = hostname
+    for prefix in ("https://", "http://"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):]
+    return raw.split("/")[0].split(":")[0]
+
+
 async def _refresh_host_cache():
     global _host_cache, _host_cache_ts, _allowlist_only, _allowlist_ips
     import time
@@ -334,56 +352,60 @@ async def _refresh_host_cache():
         return
     try:
         from database import get_setting
-        # One listener serves the installation, so its host cache spans every
-        # tenant. (Keyed by IP/hostname only: tenant-keying it is phase 4.)
-        # system_scope/tenant_scope are plain (sync) context managers: they
-        # cannot share an ``async with`` with the session.
+        from services.tenancy import backend as _tenancy_backend
+        # One listener serves the installation, so the refresh reads every
+        # tenant's hosts (system scope) and files them per tenant.
+        # (Two statements: system_scope is a plain context manager — inside
+        # an ``async with`` it raised, and the cache silently stayed empty.)
         with _system_scope("syslog: host cache"):
             async with AsyncSessionLocal() as db:
                 hosts = (await db.execute(select(PingHost))).scalars().all()
-                _allowlist_only = (await get_setting(db, "syslog_allowlist_only", "0")) == "1"
-        cache: dict[str, int] = {}
-        allowed_ips: set[str] = set()
-        raws: list[tuple[str, int]] = []
+                tenant_ids = set(await _tenancy_backend().active_tenant_ids())
+                tenant_ids |= {h.tenant_id for h in hosts}
+                allowlist_only = {
+                    t: (await get_setting(db, "syslog_allowlist_only", "0", tenant_id=t)) == "1"
+                    for t in sorted(tenant_ids)
+                }
+        cache: dict[int, dict[str, int]] = {t: {} for t in tenant_ids}
+        allowed_ips: dict[int, set[str]] = {t: set() for t in tenant_ids}
+        raws: list[tuple[int, str, int]] = []
         for h in hosts:
-            cache[h.hostname.lower()] = h.id
+            tc = cache[h.tenant_id]
+            tc[h.hostname.lower()] = h.id
             if h.name:
-                cache[h.name.lower()] = h.id
+                tc[h.name.lower()] = h.id
 
-            # Strip URL parts to get raw hostname/IP
-            raw = h.hostname
-            for prefix in ("https://", "http://"):
-                if raw.startswith(prefix):
-                    raw = raw[len(prefix):]
-            raw = raw.split("/")[0].split(":")[0]
-            cache[raw.lower()] = h.id
-            raws.append((raw, h.id))
+            raw = _raw_host(h.hostname)
+            tc[raw.lower()] = h.id
+            raws.append((h.tenant_id, raw, h.id))
 
             # If raw is already an IP, add it directly
             try:
                 socket.inet_aton(raw)
-                allowed_ips.add(raw)
+                allowed_ips[h.tenant_id].add(raw)
             except OSError:
                 pass
 
         # Forward DNS: resolve hostname to IP (catches FQDNs → IPs). These ran
         # one after another, so a few unresolvable names (each waiting for the
         # resolver timeout) stalled the refresh for minutes. Now concurrent,
-        # bounded, and each lookup capped.
+        # bounded, and each lookup capped. (Resolved by this installation's
+        # resolver; the answer is filed under the host's own tenant.)
         resolved = await _resolve_many(
-            sorted({raw for raw, _ in raws}), socket.gethostbyname,
+            sorted({raw for _, raw, _ in raws}), socket.gethostbyname,
         )
-        for raw, host_id in raws:
+        for tenant_id, raw, host_id in raws:
             ip = resolved.get(raw)
             if ip:
-                cache[ip] = host_id
-                allowed_ips.add(ip)
+                cache[tenant_id][ip] = host_id
+                allowed_ips[tenant_id].add(ip)
 
         _host_cache = cache
         _allowlist_ips = allowed_ips
+        _allowlist_only = allowlist_only
         _host_cache_ts = now
-        log.debug("Syslog host cache refreshed: %d entries from %d hosts (allowlist=%s, %d IPs)",
-                  len(cache), len(hosts), _allowlist_only, len(allowed_ips))
+        log.debug("Syslog host cache refreshed: %d hosts in %d tenant(s) (allowlist=%s)",
+                  len(hosts), len(tenant_ids), allowlist_only)
     except Exception as e:
         log.warning("Failed to refresh host cache: %s", e)
 
@@ -395,24 +417,33 @@ _RDNS_CACHE_MAX = 5_000  # max cached entries
 _rdns_cache_ts: float = 0.0
 
 
-def _resolve_host_id(source_ip: str, hostname: Optional[str]) -> Optional[int]:
-    """Try to match source_ip or hostname to a PingHost."""
-    if hostname and hostname.lower() in _host_cache:
-        return _host_cache[hostname.lower()]
-    if source_ip in _host_cache:
-        return _host_cache[source_ip]
-    if source_ip.lower() in _host_cache:
-        return _host_cache[source_ip.lower()]
+def _resolve_host_id(
+    source_ip: str, hostname: Optional[str], tenant_id: int = LISTENER_TENANT_ID,
+) -> Optional[int]:
+    """Try to match source_ip or hostname to a PingHost of ``tenant_id``.
 
-    # Try reverse DNS on source_ip (cached)
+    Only that tenant's hosts are candidates: an address or name another
+    customer also uses never resolves to the other customer's host.
+    """
+    cache = _host_cache.get(tenant_id) or {}
+    if hostname and hostname.lower() in cache:
+        return cache[hostname.lower()]
+    if source_ip in cache:
+        return cache[source_ip]
+    if source_ip.lower() in cache:
+        return cache[source_ip.lower()]
+
+    # Try reverse DNS on source_ip (cached). The rDNS cache holds what this
+    # installation's resolver says about an address — no tenant data; the
+    # match against a host is per tenant like everything above.
     rdns_name = _rdns_cache.get(source_ip)
-    if rdns_name and rdns_name.lower() in _host_cache:
-        return _host_cache[rdns_name.lower()]
+    if rdns_name and rdns_name.lower() in cache:
+        return cache[rdns_name.lower()]
     # Also try short hostname from FQDN (e.g. "gw.example.com" → "gw")
     if rdns_name and "." in rdns_name:
         short = rdns_name.split(".")[0].lower()
-        if short in _host_cache:
-            return _host_cache[short]
+        if short in cache:
+            return cache[short]
 
     return None
 
@@ -446,20 +477,29 @@ async def _rdns_resolve_loop():
 
 # ── Live tail broadcast ────────────────────────────────────────────────────
 
-_subscribers: list[asyncio.Queue] = []
+# Every subscriber queue is registered with the one tenant it may see; a
+# message is only ever put into queues of its own tenant.
+_subscribers: list[tuple[int, asyncio.Queue]] = []
+
+# Internal key on a parsed message: the tenant it belongs to. Set by every
+# producer (direct listener: LISTENER_TENANT_ID, agent logs: the agent's
+# tenant); stripped before the ClickHouse insert until the tables carry
+# tenant_id (phase 6).
+TENANT_KEY = "_tenant_id"
 
 
-def subscribe() -> asyncio.Queue:
-    """Subscribe to live syslog stream. Returns an asyncio.Queue."""
+def subscribe(tenant_id: int) -> asyncio.Queue:
+    """Subscribe to the live syslog stream of ``tenant_id``. Returns an asyncio.Queue."""
+    if tenant_id is None:
+        raise ValueError("subscribe() needs the subscriber's tenant")
     q: asyncio.Queue = asyncio.Queue(maxsize=200)
-    _subscribers.append(q)
+    _subscribers.append((int(tenant_id), q))
     return q
 
 
 def unsubscribe(q: asyncio.Queue):
     """Unsubscribe from live syslog stream."""
-    if q in _subscribers:
-        _subscribers.remove(q)
+    _subscribers[:] = [(t, sq) for t, sq in _subscribers if sq is not q]
 
 
 # ── Write buffer ────────────────────────────────────────────────────────────
@@ -497,10 +537,19 @@ def _trim_buffer_locked() -> None:
 
 
 async def _enqueue(parsed: dict):
+    tenant_id = parsed.get(TENANT_KEY)
+    if tenant_id is None:
+        # Fail closed: a message nobody attributed to a tenant is neither
+        # learned from, shown nor stored.
+        log.error("Syslog message without tenant dropped (source %s)", parsed.get("source_ip"))
+        _count_drop("no_tenant")
+        return
     # Run through intelligence pipeline (template extraction + tagging)
     try:
         from services.log_intelligence import process_message
-        enrichment = process_message(parsed.get("message", ""), parsed.get("severity"))
+        enrichment = process_message(
+            parsed.get("message", ""), parsed.get("severity"), tenant_id=tenant_id,
+        )
         parsed["template_hash"] = enrichment["template_hash"]
         parsed["tags"] = enrichment["tags"]
         parsed["noise_score"] = enrichment["noise_score"]
@@ -521,8 +570,10 @@ async def _enqueue(parsed: dict):
     # Ingest time is when we received it, not when the batch happens to flush.
     parsed.setdefault("received_at", datetime.utcnow())
 
-    # Broadcast to live tail subscribers
-    for q in _subscribers[:]:
+    # Broadcast to the live tail subscribers of this message's tenant only
+    for sub_tenant, q in _subscribers[:]:
+        if sub_tenant != tenant_id:
+            continue
         try:
             q.put_nowait(parsed)
         except asyncio.QueueFull:
@@ -558,7 +609,7 @@ async def _flush_buffer():
 
 
 def _clean_rows(batch: list[dict]) -> list[dict]:
-    _transient = {"is_new_template", "severity_label"}
+    _transient = {"is_new_template", "severity_label", TENANT_KEY}
     cleaned = []
     for msg in batch:
         row = {k: v for k, v in msg.items() if k not in _transient}
@@ -646,7 +697,8 @@ class SyslogUDPProtocol(asyncio.DatagramProtocol):
         parsed = parse_syslog(raw, source_ip)
         if not parsed:
             return
-        parsed["host_id"] = _resolve_host_id(source_ip, parsed.get("hostname"))
+        parsed[TENANT_KEY] = LISTENER_TENANT_ID
+        parsed["host_id"] = _resolve_host_id(source_ip, parsed.get("hostname"), LISTENER_TENANT_ID)
         parsed["received_at"] = datetime.utcnow()
         queue = _udp_queue
         if queue is None:
@@ -699,7 +751,10 @@ class SyslogTCPHandler:
                 parsed = parse_syslog(raw, source_ip)
                 if not parsed:
                     continue
-                parsed["host_id"] = _resolve_host_id(source_ip, parsed.get("hostname"))
+                parsed[TENANT_KEY] = LISTENER_TENANT_ID
+                parsed["host_id"] = _resolve_host_id(
+                    source_ip, parsed.get("hostname"), LISTENER_TENANT_ID,
+                )
                 await _enqueue(parsed)
         except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
             pass
@@ -738,7 +793,7 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
     # Initial host cache load (also populates _allowlist_only from DB setting).
     await _refresh_host_cache()
 
-    if not _allowlist_only:
+    if not _allowlist_only.get(LISTENER_TENANT_ID, False):
         log.warning(
             "Syslog host allowlist is DISABLED — every UDP/TCP source on "
             "port %d/%d can inject log entries and trigger host auto-assignment. "
@@ -752,7 +807,7 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
         from services.log_intelligence import load_template_cache
         # The direct listener feeds the default tenant (single-tenant
         # behaviour, see the spec's "Syslog ingestion"); so does the cache.
-        with _tenant_scope(DEFAULT_TENANT_ID):
+        with _tenant_scope(LISTENER_TENANT_ID):
             async with AsyncSessionLocal() as db:
                 await load_template_cache(db)
     except Exception as e:

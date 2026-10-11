@@ -1,4 +1,6 @@
-"""Isolation smoke test through the HTTP stack.
+"""Isolation smoke test through the HTTP stack (sessions, memberships, API
+keys, the WebSocket hub and notifications have their own two-tenant tests in
+test_tenant_auth_binding.py).
 
 A second tenant is seeded directly in the database, every row carrying a
 canary string. The core resolves every request to tenant 1, so no response
@@ -13,8 +15,8 @@ from datetime import datetime
 import pytest
 
 from models import (
-    Agent, AlertRule, AuditLog, Credential, DiscoveredPort, Incident, IncidentEvent,
-    IntegrationConfig, PingHost, Site, Snapshot, Tenant,
+    Agent, AlertRule, ApiKey, AuditLog, Credential, DiscoveredPort, Incident, IncidentEvent,
+    IntegrationConfig, NotificationLog, PingHost, Site, Snapshot, Tenant, TenantSetting,
 )
 from services.tenancy import system_scope
 from tests.test_routers.conftest import make_client
@@ -48,6 +50,14 @@ async def _seed_tenant_b(sf) -> dict:
                             field_path="x", operator="gt"))
             s.add(Credential(tenant_id=B, name=f"{CANARY}-cred", type="snmp_v2c", data_json="x"))
             s.add(AuditLog(tenant_id=B, action=f"{CANARY}-action", timestamp=datetime.utcnow()))
+            # Phase 3/4: settings, notification history and API keys.
+            s.add(TenantSetting(tenant_id=B, key="site_name", value=f"{CANARY}-site-name"))
+            s.add(TenantSetting(tenant_id=B, key="telegram_chat_id", value=f"{CANARY}-chat"))
+            s.add(TenantSetting(tenant_id=B, key="ntfy_topic", value=f"{CANARY}-topic"))
+            s.add(NotificationLog(tenant_id=B, channel="telegram", title=f"{CANARY}-notification",
+                                  message="m", severity="info", status="sent"))
+            s.add(ApiKey(tenant_id=B, name=f"{CANARY}-key", key_hash="b-key-hash", prefix="ng_b",
+                         role="admin", enabled=True))
             await s.commit()
     # And one host of tenant 1, so the lists are not trivially empty.
     async with sf() as s:
@@ -68,6 +78,11 @@ LIST_ROUTES = [
     "/api/v2/dashboard",
     "/api/tasks",
     "/api/v2/nav-counts",
+    "/api/v1/keys",
+    "/settings/json",
+    "/settings/ai/config",
+    "/settings/api-keys",
+    "/settings/notifications/history",
 ]
 
 DETAIL_ROUTES = [
@@ -102,14 +117,17 @@ async def test_the_canary_is_visible_from_its_own_tenant(client_and_ids, monkeyp
     import extensions
     from services.tenancy import SingleTenancy
 
+    from services.tenancy import TenantAccess
+
     class TenantB(SingleTenancy):
-        async def resolve_request_tenant(self, request, user):
-            return B
+        async def resolve_access(self, request, user):
+            return TenantAccess(tenant_id=B, role="admin")
 
     monkeypatch.setattr(extensions.registry, "tenancy_backend", TenantB())
     client, ids = client_and_ids
     for path in ("/api/v1/hosts", "/api/v1/incidents",
-                 "/api/v1/incidents/{incident}".format(**ids)):
+                 "/api/v1/incidents/{incident}".format(**ids),
+                 "/settings/json", "/settings/notifications/history", "/api/v1/keys"):
         resp = await client.get(path)
         assert resp.status_code == 200 and CANARY in resp.text, path
     assert "a-host" not in (await client.get("/api/v1/hosts")).text

@@ -73,11 +73,18 @@ class TenancyBackend(Protocol):
     docs/specs/2026-10-10-multi-tenancy-design.md.
     """
 
-    async def resolve_request_tenant(self, request: Any, user: Any) -> int | None:
-        """Tenant of an authenticated request (header / session / membership).
+    async def resolve_access(self, request: Any, user: Any) -> Any:
+        """The user's access for this request: a ``services.tenancy.TenantAccess``
+        (tenant id, effective role, how access was granted) or ``None``.
 
-        ``None`` means "no tenant for this user"; the middleware answers 404.
+        Resolution: ``X-Nodeglow-Tenant`` header (WebSocket: ``?tenant=``),
+        else the session's ``active_tenant_id``, else the only membership;
+        the tenant must be one the user may access. ``None`` means "no
+        tenant for this user"; the middleware answers 404.
         """
+
+    async def resolve_request_tenant(self, request: Any, user: Any) -> int | None:
+        """``resolve_access(...).tenant_id`` or None."""
 
     async def list_tenants_for(self, user: Any) -> list[int]:
         """Tenant ids the user may switch into."""
@@ -85,8 +92,12 @@ class TenancyBackend(Protocol):
     async def active_tenant_ids(self) -> list[int]:
         """Tenants per-tenant background jobs iterate over. Runs in system scope."""
 
-    def effective_role(self, user: Any, tenant_id: int) -> str:
-        """The user's role (admin | editor | readonly) in that tenant."""
+    async def effective_role(self, user: Any, tenant_id: int) -> str | None:
+        """The user's role (admin | editor | readonly) in that tenant, None without access."""
+
+    def is_operator(self, user: Any, role: str | None = None, tenant_id: int | None = None) -> bool:
+        """Whether the user may manage installation settings (``role``: the
+        user's role in the request's tenant ``tenant_id``)."""
 
     def can_create_tenant(self) -> bool:
         """Whether a second tenant may be created on this installation."""

@@ -11,19 +11,15 @@ JSON = {"accept": "application/json"}
 
 
 async def _set(sf, **values):
+    from tests.conftest import put_settings
     async with sf() as db:
-        for k, v in values.items():
-            row = await db.get(Setting, k)
-            if row:
-                row.value = v
-            else:
-                db.add(Setting(key=k, value=v))
-        await db.commit()
+        await put_settings(db, **values)
 
 
 async def _get(sf, key):
+    from tests.conftest import setting_row
     async with sf() as db:
-        row = await db.get(Setting, key)
+        row = await setting_row(db, key)
         return row.value if row else None
 
 

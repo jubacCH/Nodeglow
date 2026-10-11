@@ -10,9 +10,9 @@ _JSON = {"accept": "application/json"}
 
 
 async def _setting_row(session_factory, key):
-    from database import Setting
+    from tests.conftest import setting_row
     async with session_factory() as db:
-        return await db.get(Setting, key)
+        return await setting_row(db, key)
 
 
 async def test_save_encrypts_secrets_and_json_only_exposes_flags():
