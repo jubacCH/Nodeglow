@@ -58,7 +58,6 @@ async def test_tenant_setting_without_a_tenant_raises(plain, key):
         await get_setting(plain, key)
 
 
-@pytest.mark.xfail(strict=True, reason="phase 6")
 async def test_clickhouse_query_without_a_tenant_raises():
     from unittest.mock import AsyncMock, patch
 

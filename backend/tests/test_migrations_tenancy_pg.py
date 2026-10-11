@@ -677,6 +677,9 @@ ROUTER_TESTS_ON_PG = [
     "tests/test_routers/test_tenancy_review_fixes.py",
     "tests/test_routers/test_api_v1.py",
     "tests/test_routers/test_dashboard_v2.py",
+    # The phase-8 isolation walk (every route, session / API key / header,
+    # reference check, licensed ee walk) as nodeglow_app with RLS on.
+    "tests/test_routers/test_tenant_isolation.py",
 ]
 
 

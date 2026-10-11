@@ -13,9 +13,10 @@ an alert rule that fires, hosts that are down, a Proxmox cluster called
 * the job raised nothing and logged no ERROR.
 
 A job missing from ``JOBS`` fails ``test_every_job_is_covered``. ClickHouse
-is a recording fake: ``test_job_clickhouse_calls_are_tenant_scoped`` runs as
-``xfail(strict=True, reason="phase 6")`` for the jobs whose queries do not
-carry the tenant yet (``PHASE6_CH_JOBS``).
+is a recording fake: every call a job makes is scoped to the tenant whose
+iteration made it, inserts carry that tenant on every row
+(``test_job_clickhouse_calls_are_tenant_scoped``), and scoped reads get
+canned rows of their own tenant (``FakeClickHouse.responders``).
 """
 from __future__ import annotations
 
@@ -52,10 +53,12 @@ JOBS = [
     "run_self_check_job", "refresh_disk_predictions", "run_weekly_digest", "check_disk_space",
 ]
 # Installation jobs: no tenant data (system scope by design).
-INSTALLATION_JOBS = {"cleanup_clickhouse_logs", "cleanup_legacy_api_keys", "update_geoip"}
+INSTALLATION_JOBS = {"cleanup_clickhouse_logs", "cleanup_legacy_api_keys", "update_geoip",
+                     "run_clickhouse_tenant_rebuild"}
 
-# Jobs whose ClickHouse queries do not carry the tenant yet (phase 6).
-PHASE6_CH_JOBS = {
+# Jobs that must reach ClickHouse in this scenario (a check that finds no
+# call at all would pass vacuously).
+CH_JOBS = {
     "run_ping_checks", "run_correlation", "run_alert_rules", "run_log_analytics",
     "run_self_check_job", "refresh_disk_predictions", "run_weekly_digest",
 }
@@ -147,6 +150,19 @@ def boundaries(sf):
 
     out = Outbox()
     fake_ch = FakeClickHouse()
+
+    def agent_history(tid, params):
+        """Ten days of a filling disk — for the tenant's own agents only."""
+        if params.get("aid") not in (BASE[tid], BASE[tid] + 1):
+            return []
+        now = datetime.utcnow()
+        return [{"timestamp": now - timedelta(days=d), "data_json": json.dumps(
+            {"disks": [{"mount": f"/{TAG[tid]}", "pct": 80 - 3 * d, "total_gb": 100,
+                        "used_gb": 80 - 3 * d}]})} for d in range(10)]
+
+    fake_ch.responders.append((r"FROM\s+agent_metrics.*agent_id\s*=\s*\{aid", agent_history))
+    from services import predictions as pred_svc
+    pred_svc._pred_cache.clear()
 
     async def telegram(token, chat, text):
         out.sent.append((chat, text))
@@ -307,7 +323,6 @@ async def test_job_keeps_each_tenants_data_in_its_tenant(job_name, sf, boundarie
 # they have nothing to do, so no effect is required of them (yet).
 NO_EFFECT_REQUIRED = {
     "run_log_analytics": "fleet analytics over ClickHouse syslog",
-    "refresh_disk_predictions": "predictions from ClickHouse agent metrics",
     "run_self_check_job": "staleness of ClickHouse series",
 }
 
@@ -337,7 +352,9 @@ async def assert_job_isolated(job_name, sf, boundaries, caplog):
             asked = any(t == tid for t, _ in boundaries.prompts)
             # A job whose only output is a report in the log (backup compliance).
             logged = any(TAG[tid] in r.getMessage() for r in caplog.records)
-            assert changed or sent or asked or logged, f"{job_name} did nothing in tenant {tid} "                                              f"(changed tables: {effects})"
+            from services import predictions as pred_svc
+            cached = any(key[0] == tid and value[0] for key, value in pred_svc._pred_cache.items())
+            assert changed or sent or asked or logged or cached, f"{job_name} did nothing in tenant {tid} "                                              f"(changed tables: {effects})"
 
     for table, tid, text in await _rows_by_tenant(sf):
         if tid is None:
@@ -402,23 +419,24 @@ async def test_digest_goes_to_each_tenants_recipients(sf, boundaries):
 
 # ── ClickHouse (phase 6) ─────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("job_name", sorted(set(JOBS) - PHASE6_CH_JOBS))
+@pytest.mark.parametrize("job_name", JOBS)
 async def test_job_clickhouse_calls_are_tenant_scoped(job_name, sf, boundaries):
     await _run(job_name)
     assert_ch_scoped(job_name, boundaries)
 
 
-@pytest.mark.parametrize("job_name", sorted(PHASE6_CH_JOBS))
-@pytest.mark.xfail(strict=True, reason="phase 6")
-async def test_phase6_job_clickhouse_calls_are_tenant_scoped(job_name, sf, boundaries):
-    await _run(job_name)
-    assert_ch_scoped(job_name, boundaries)
-
-
 def assert_ch_scoped(job_name, boundaries):
+    from services import clickhouse_client as ch
+
+    def ok(c):
+        # Scoped to the tenant whose iteration made the call; a call outside
+        # a tenant scope may only touch installation-level tables.
+        if c.tenant is not None:
+            return ch_call_is_scoped(c, c.tenant)
+        return c.kind != "insert" and not ch.tenant_tables_read(c.sql)
+
     calls = boundaries.ch.calls
-    # Every call must name the tenant it ran for; with two tenants we accept
-    # either id but require one of them.
-    bad = [c for c in calls if not (ch_call_is_scoped(c, A) or ch_call_is_scoped(c, B))]
+    assert calls or job_name not in CH_JOBS, f"{job_name} made no ClickHouse call"
+    bad = [c for c in calls if not ok(c)]
     assert not bad, f"{job_name}: unscoped ClickHouse calls: " + \
         "; ".join((c.sql or f"insert {c.table}").strip()[:100] for c in bad[:5])
