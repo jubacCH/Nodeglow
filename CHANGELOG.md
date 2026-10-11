@@ -20,7 +20,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - Tenant switcher in the top bar (only with more than one tenant).
 - Support access: operators see a tenant's data only while its admin has
   granted time-limited access (Settings → Support access); every access is
-  in the tenant's audit log and a banner shows it to every member.
+  in the tenant's audit log and a banner shows it to every member. It
+  cannot manage the tenant's users, passwords, API keys or install tokens.
 
 ## [2.0.0] - 2026-10-11
 

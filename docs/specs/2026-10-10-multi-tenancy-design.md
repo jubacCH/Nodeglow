@@ -1859,6 +1859,69 @@ core suite pins the core backend (autouse fixture patching
 `services.tenancy.backend`; resetting the registry instead lost the
 plugin's backend whenever `main` was first imported during a test).
 
+Review fixes (phase 9, before merge):
+
+- **Shared identities.** Users are global, and `POST /api/tenants` may make
+  an existing user a tenant's admin, so a tenant admin could reset the
+  password of a user who also reaches other tenants — the operator
+  included — and take the installation over. Now a tenant admin resets a
+  password (`PATCH /api/users/{id}`, `POST /users/{id}/password`) only for
+  an account the request's tenant alone owns: no other membership, no
+  `provider_memberships` row, not `users.is_operator` (else 403
+  `foreign_identity`); an installation operator may for anyone (in the
+  core the admin of the one tenant — unchanged there). Removing such a user
+  from a tenant revokes the membership and keeps the account (a provider
+  member's always; an operator's unless an operator removes it).
+- **Installation AI keys are the operator's** (decision 2). The provider,
+  its endpoint, model and keys (`claude_api_key`, `ai_provider`,
+  `ai_anthropic_model`, `ai_openai_*`) are written only when
+  `request_is_operator`; a tenant admin who changes one gets 403
+  `operator_required` (the unchanged values the form sends back are
+  accepted and not rewritten), keeps the tenant keys (opt-in, redaction,
+  daily summary), and tests the connection with the saved values only.
+  `/settings/ai/config` reports `provider_editable`; the AI tab locks the
+  provider section for tenant admins.
+- **Support access manages no identities.** While `acting_via ==
+  support`, whatever the grant's role: no users created, deleted, re-roled
+  or reset, no API keys (`/settings/api-keys/*`, `/api/v1/keys*`) and no
+  agent install tokens issued or revoked (403 `support_access`;
+  `services.tenancy.request_may_manage_access`, the helpers
+  `require_access_admin` in `routers/settings/_helpers.py` and
+  `routers/api_v1.py`). Reading the user list stays possible. A test
+  enumerates every such route of the app and fails when a new one is not
+  covered.
+- **A support role never makes an operator.** `TenancyBackend.is_operator`
+  takes `via`; the core rule (admin of the default tenant) ignores a role
+  that comes from support access — an admin grant on tenant 1 gave a
+  provider member the installation. `request_is_operator`, `/api/auth/me`
+  and the API's `require_operator` pass it. The `users.is_operator` flag
+  still decides on its own.
+- **The default tenant gets no plan.** `PATCH /api/tenants/1` with a plan
+  is refused (409 `default_tenant`); `plan: null` ("no plan", installation
+  caps only) is accepted for every tenant, so a plan can be taken back. A
+  plan that would lower stored retention values (and so make the nightly
+  cleanup delete history for good) is refused with 409
+  `retention_would_lower` and what would change, unless
+  `confirm_retention_lowering` is true; the Tenants page asks first and
+  disables the plan of the default row.
+- **The plan cap fails closed in the form.** `retention_cap` resolves the
+  tenant outside its error handling (no tenant: `TenantContextError`, never
+  "no plan"); a failing policy raises `RetentionPolicyError` in the
+  settings save, which then saves nothing (503
+  `retention_policy_unavailable`). The nightly cleanup (`strict=False`)
+  logs a WARNING and applies the stored value within the installation cap
+  — the form and plan changes already clamped it to the plan, so a broken
+  policy deletes nothing extra.
+- **No grant query per request.** The active grants are cached per
+  process for 5 s (`support.GRANT_CACHE_SECONDS`); with none (every
+  single-tenant install) resolving access runs no grant query at all, and
+  a non-operator's provider memberships are read only while grants exist.
+  Granting, revoking and every lifecycle action invalidate the cache in
+  this process; `expires_at` is checked on every use.
+
+Tests: `ee/backend/tests/test_tenancy_hardening.py` (also in the
+PostgreSQL router mode).
+
 Deviations / not done:
 
 - **The frontend moves the session**, it does not send
@@ -1868,8 +1931,15 @@ Deviations / not done:
   middleware resolves a tenant before any route runs, so an operator
   without any membership cannot reach `/api/tenants`.
 - **Support access is resolved, not written as a membership**: the grant is
-  checked on every request (one extra indexed query per authenticated
-  request); no `tenant_memberships` row exists for it.
+  checked on every request against the per-process cache of active grants
+  (no query while there is none); no `tenant_memberships` row exists for
+  it. A grant revoked, or a tenant suspended, in **another** worker process
+  is seen here within 5 s.
+- **`ms.revoke` of a default-tenant membership does not clear
+  `users.is_operator`** (only a demotion does, through the mirror); a
+  tenant-1 admin removed from tenant 1 but kept in another tenant stays an
+  operator. Removing the flag needs the operator management that is still
+  open (below).
 - **Provider members** can use support grants already; phase 11 gives them
   direct provider roles.
 - **ClickHouse purge**: a lightweight DELETE hides the rows at once; they
@@ -1903,10 +1973,10 @@ Deviations / not done:
   switcher or membership revoke could push a close via the hub.
 - Later / ee: drop `users.role` after one release; manage `is_operator`
   (no API yet — set by 043 and the setup wizard only); the AI provider
-  settings (installation keys) are still saved through the tenant admin's
-  AI form — gate them on the operator when tenant admins are not
-  operators (still open after phase 9: an operator with support access
-  is an operator there too); ~~"last used tenant" at login~~ (phase 9,
+  settings (installation keys) were saved through the tenant admin's
+  AI form — ~~gate them on the operator~~ (phase 9 review fixes; an
+  operator with support access is still an operator there, by design); a
+  per-tenant bring-your-own key (decision 2) is open; ~~"last used tenant" at login~~ (phase 9,
   ee); provider roles in `resolve_access` (`via = provider_role`; operator
   access is phase 9's support access, `via = support`);
   `audit_logs.provider_id` on the `system_scope.write` rows is NULL.
