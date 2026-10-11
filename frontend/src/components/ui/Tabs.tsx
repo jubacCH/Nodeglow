@@ -41,7 +41,7 @@ function Count({ n, tone }: { n: number; tone?: 'neutral' | 'down' }) {
 const tabClass = (active: boolean) =>
   cn(
     'relative inline-flex h-[40px] shrink-0 items-center whitespace-nowrap px-3 text-ui font-medium transition-colors',
-    'after:absolute after:inset-x-2 after:bottom-[-1px] after:h-[2px] after:rounded-full',
+    'after:absolute after:inset-x-2 after:-bottom-px after:h-[2px] after:rounded-full',
     active ? 'text-fg after:bg-accent' : 'text-fg-2 hover:text-fg after:bg-transparent',
   );
 
@@ -100,7 +100,7 @@ export function Tabs<K extends string>({ items, value, onChange, label, idBase, 
 export function TabPanel({ idBase, id, active, children, className }: { idBase: string; id: string; active: boolean; children: ReactNode; className?: string }) {
   if (!active) return null;
   return (
-    <div role="tabpanel" id={`${idBase}-panel-${id}`} aria-labelledby={`${idBase}-tab-${id}`} tabIndex={0} className={cn('outline-none', className)}>
+    <div role="tabpanel" id={`${idBase}-panel-${id}`} aria-labelledby={`${idBase}-tab-${id}`} tabIndex={0} className={cn('outline-hidden', className)}>
       {children}
     </div>
   );
@@ -121,7 +121,7 @@ export interface NavTabItem {
 export function NavTabs({ items, label, className }: { items: NavTabItem[]; label: string; className?: string }) {
   return (
     <nav aria-label={label} className={cn('border-b border-border', className)}>
-      <ul className="-mb-px flex gap-1 overflow-x-auto [scrollbar-width:none]">
+      <ul className="-mb-px flex gap-1 overflow-x-auto scrollbar-none">
         {items.map((t) => (
           <li key={t.href} className="shrink-0">
             <Link href={t.href} aria-current={t.active ? 'page' : undefined} className={cn(tabClass(t.active), 'ng-focus-inset')}>

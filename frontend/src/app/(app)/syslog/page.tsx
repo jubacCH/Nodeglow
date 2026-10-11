@@ -276,7 +276,7 @@ export default function SyslogPage() {
                       {isExpanded && (
                         <tr id={detailId} className="border-b border-border bg-bg">
                           <td colSpan={5} className="px-4 py-3">
-                            <pre className="whitespace-pre-wrap break-words font-mono text-meta leading-relaxed text-fg">{msg.message}</pre>
+                            <pre className="whitespace-pre-wrap wrap-break-word font-mono text-meta leading-relaxed text-fg">{msg.message}</pre>
                             <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1.5 text-meta">
                               <DetailItem term="time" value={time.full} />
                               {msg.app_name && <DetailItem term="app" value={msg.app_name} />}

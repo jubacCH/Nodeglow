@@ -218,7 +218,7 @@ export default function BackupsPage() {
                 <XCircle size={16} className="mt-0.5 shrink-0 text-down" aria-hidden="true" />
                 <div className="min-w-0">
                   <p className="text-ui font-medium text-fg">{job.name} <span className="font-normal text-down">failed</span></p>
-                  <p className="mt-0.5 break-words text-meta text-fg-2">
+                  <p className="mt-0.5 wrap-break-word text-meta text-fg-2">
                     Target: {job.target_name}
                     {job.last_error && <span className="text-down"> — {job.last_error}</span>}
                   </p>
@@ -338,7 +338,7 @@ export default function BackupsPage() {
         {selected && (
           <>
             {selected.last_error && (
-              <p role="alert" className="mb-4 break-words rounded-ctl border border-down/30 bg-down-soft px-3 py-2 text-meta text-down">
+              <p role="alert" className="mb-4 wrap-break-word rounded-ctl border border-down/30 bg-down-soft px-3 py-2 text-meta text-down">
                 Last error: {selected.last_error}
               </p>
             )}

@@ -121,7 +121,7 @@ function HeadNode({ t, bad }: { t: TreeNode; bad: boolean }) {
     >
       <span className={cn('relative grid h-9 w-9 shrink-0 place-items-center rounded-[8px] bg-surface', st === 'unknown' ? 'text-fg-3' : 'text-fg')} aria-hidden="true">
         <Icon size={19} className={st === 'unknown' ? 'opacity-70' : undefined} />
-        <span className="absolute -bottom-[3px] -right-[3px] rounded-full border-2 border-surface-2 bg-surface-2">
+        <span className="absolute bottom-[-3px] right-[-3px] rounded-full border-2 border-surface-2 bg-surface-2">
           <StatusDot status={st} size="lg" label="" />
         </span>
       </span>
@@ -170,14 +170,14 @@ export function TopologyTree({ trees, orphans }: { trees: TreeNode[]; orphans: T
   return (
     <div className="space-y-6">
       {trees.length > 0 && (
-        <ul aria-label="Dependency trees" className="grid gap-x-4 gap-y-6 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]">
+        <ul aria-label="Dependency trees" className="grid gap-x-4 gap-y-6 grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))]">
           {trees.map((t) => <Column key={t.node.id} t={t} />)}
         </ul>
       )}
       {orphans.length > 0 && (
         <div>
           <h3 className="mb-2 text-meta font-medium text-fg-2">Without parent · {orphans.length}</h3>
-          <ul className="grid gap-x-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr))]">
+          <ul className="grid gap-x-4 grid-cols-[repeat(auto-fill,minmax(min(100%,240px),1fr))]">
             {orphans.map((n) => (
               <li key={n.id} className="min-w-0"><Row t={{ node: n, children: [] }} /></li>
             ))}

@@ -162,7 +162,7 @@ export function SaveBar({
   return (
     <div
       className={cn(
-        'z-[5] mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-card border border-border bg-surface px-4 py-3',
+        'z-5 mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-card border border-border bg-surface px-4 py-3',
         sticky && 'sticky bottom-3 max-[759px]:bottom-[calc(var(--ng-tabbar-h)+12px)]',
       )}
     >

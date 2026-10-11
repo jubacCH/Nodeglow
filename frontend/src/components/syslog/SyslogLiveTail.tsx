@@ -89,7 +89,7 @@ export function SyslogLiveTail({ enabled, severity, host, app }: SyslogLiveTailP
                   >
                     {msg.hostname || '—'}
                   </Link>
-                  <span className={cn('min-w-0 flex-1 truncate pt-0.5 font-mono text-meta text-fg', 'max-[759px]:basis-full max-[759px]:whitespace-normal max-[759px]:break-words')}>
+                  <span className={cn('min-w-0 flex-1 truncate pt-0.5 font-mono text-meta text-fg', 'max-[759px]:basis-full max-[759px]:whitespace-normal max-[759px]:wrap-break-word')}>
                     {msg.message}
                   </span>
                 </li>

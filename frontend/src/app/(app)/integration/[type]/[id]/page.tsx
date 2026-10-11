@@ -144,7 +144,7 @@ export default function IntegrationDetailPage() {
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-down" aria-hidden="true" />
                 <div className="min-w-0">
                   <h2 className="mb-1 text-body font-medium text-fg">Last collection failed</h2>
-                  <p className="break-words font-mono text-meta text-down">{snapshot.error}</p>
+                  <p className="wrap-break-word font-mono text-meta text-down">{snapshot.error}</p>
                   <p className="mt-2 text-meta text-fg-2">
                     {snapshot.data_json ? 'Data below may be incomplete or outdated.' : 'No data was collected in this attempt.'}
                   </p>

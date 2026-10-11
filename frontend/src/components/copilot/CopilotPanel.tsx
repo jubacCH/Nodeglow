@@ -25,7 +25,7 @@ function renderMarkdown(text: string): string {
     .replace(/^### (.+)$/gm, '<strong class="glow-heading text-meta uppercase tracking-wide">$1</strong>')
     .replace(/^## (.+)$/gm, '<strong class="glow-heading text-ui">$1</strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong class="glow-bold">$1</strong>')
-    .replace(/`([^`]+)`/g, '<code class="glow-code px-1 py-0.5 rounded text-meta">$1</code>')
+    .replace(/`([^`]+)`/g, '<code class="glow-code px-1 py-0.5 rounded-sm text-meta">$1</code>')
     .replace(/^- (.+)$/gm, '<span class="flex gap-1.5"><span class="glow-bullet">•</span><span>$1</span></span>')
     .replace(/^(\d+)\. (.+)$/gm, '<span class="flex gap-1.5"><span class="glow-bullet">$1.</span><span>$2</span></span>');
 }
@@ -241,9 +241,9 @@ export function GlowPanel() {
               )}
             >
               {msg.role === 'assistant' ? (
-                <div className="whitespace-pre-wrap break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(msg.content)) }} />
+                <div className="whitespace-pre-wrap wrap-break-word leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderMarkdown(msg.content)) }} />
               ) : (
-                <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                <div className="whitespace-pre-wrap wrap-break-word">{msg.content}</div>
               )}
               {msg.role === 'assistant' && isStreaming && i === messages.length - 1 && (
                 <span className="ml-1 inline-flex gap-0.5" aria-hidden="true">

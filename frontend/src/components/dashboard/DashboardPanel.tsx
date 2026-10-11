@@ -29,7 +29,7 @@ function GlyphTile({ glyph, state }: { glyph: ReturnType<typeof glyphFor>; state
   return (
     <span className={cn('relative grid h-11 w-11 place-items-center rounded-card bg-surface-2', state === 'unknown' ? 'text-fg-3' : 'text-fg')}>
       <DeviceGlyph glyph={glyph} size={22} />
-      <span className="absolute -bottom-[3px] -right-[3px] rounded-full bg-surface p-[2px]">
+      <span className="absolute bottom-[-3px] right-[-3px] rounded-full bg-surface p-[2px]">
         <StatusDot status={state} size="lg" label="" />
       </span>
     </span>
@@ -41,7 +41,7 @@ function Stats({ items }: { items: [ReactNode, string][] }) {
     <div className="grid grid-cols-3 gap-2">
       {items.map(([v, k]) => (
         <div key={k} className="min-w-0 rounded-ctl bg-surface-2 px-3 py-2.5">
-          <div className="num truncate font-display text-[1.3571rem] font-medium leading-[1.25] tracking-[-0.035em] text-fg">{v}</div>
+          <div className="num truncate font-display text-[1.3571rem] font-medium leading-tight tracking-[-0.035em] text-fg">{v}</div>
           <div className="text-micro text-fg-2">{k}</div>
         </div>
       ))}
