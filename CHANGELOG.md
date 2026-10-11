@@ -9,6 +9,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-11
+
 ### Added
 - Multi-tenancy foundation (single tenant for now, nothing to configure):
   tenants, providers and sites; `tenant_id` on every tenant-owned table and
@@ -203,7 +205,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   sidecar finds the database without a hard-coded container name.
 - Password hashing survives bcrypt 5's 72-byte limit.
 
-[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.6...HEAD
+[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.6...v2.0.0
 [2.0.0-rc.6]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.5...v2.0.0-rc.6
 [2.0.0-rc.5]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.4...v2.0.0-rc.5
 [2.0.0-rc.4]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.3...v2.0.0-rc.4
