@@ -125,18 +125,27 @@ jobs:
   clickhouse-live:
     name: ClickHouse (live)
     runs-on: ubuntu-latest
-    services:
-      clickhouse:
-        image: clickhouse/clickhouse-server:24.8
-        env:
-          CLICKHOUSE_SKIP_USER_SETUP: "1"
-        ports:
-          - 8123:8123
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+
+      # Started after the checkout (not as a service container) so it runs
+      # with the production config and init.sql, and with the user setup of
+      # docker-compose.yml (a named user with access management — the
+      # tenancy tests create a restricted user and row policies).
+      - name: Start ClickHouse
+        working-directory: .
+        run: |
+          docker run -d --name clickhouse -p 8123:8123 \
+            -e CLICKHOUSE_DB=nodeglow \
+            -e CLICKHOUSE_USER=nodeglow \
+            -e CLICKHOUSE_PASSWORD=nodeglow \
+            -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+            -v "$PWD/clickhouse/config.xml:/etc/clickhouse-server/config.d/nodeglow.xml:ro" \
+            -v "$PWD/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
+            clickhouse/clickhouse-server:24.8
 
       - uses: actions/setup-python@v7
         with:
@@ -149,15 +158,20 @@ jobs:
 
       - name: Wait for ClickHouse
         run: |
+          # The entrypoint runs init.sql on a temporary server bound to the
+          # container's loopback; the published port answers once the real
+          # server (with the application user) is up.
           for i in $(seq 1 60); do
-            curl -fsS http://localhost:8123/ping && exit 0
+            curl -fsS "http://localhost:8123/?user=nodeglow&password=nodeglow" \
+              --data-binary "SELECT 1" 2>/dev/null | grep -q 1 && exit 0
             sleep 2
           done
+          docker logs clickhouse || true
           echo "::error::ClickHouse did not come up"; exit 1
 
       - name: Run live ClickHouse tests
         env:
-          NODEGLOW_TEST_CLICKHOUSE_URL: http://default:@localhost:8123/default
+          NODEGLOW_TEST_CLICKHOUSE_URL: http://nodeglow:nodeglow@localhost:8123/nodeglow
         run: pytest -q tests/test_live_clickhouse.py -rs
 
   migrations:
