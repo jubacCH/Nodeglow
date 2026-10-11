@@ -55,6 +55,7 @@ Two installation types, one set of docs:
 | Document | Status |
 |---|---|
 | [specs/2026-10-10-multi-tenancy-design.md](specs/2026-10-10-multi-tenancy-design.md) | Multi-tenancy (MSP) design; implementation of the first phases is in progress. Nothing tenant-related is released yet. |
+| [specs/2026-10-11-probe-side-integrations.md](specs/2026-10-11-probe-side-integrations.md) | Probe-side integrations: how Proxmox, UniFi, NAS, SNMP and the other collectors run on a probe inside the customer network for the SaaS. Design only, not implemented. |
 
 ## Historical
 
