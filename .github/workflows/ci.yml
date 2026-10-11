@@ -74,7 +74,18 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci
           UPDATE_SIDECAR_TOKEN: ci
-        run: docker compose -f docker-compose.yml config --quiet
+        run: |
+          set -eu
+          docker compose -f docker-compose.yml config --quiet
+          # An existing .env (no POSTGRES_APP_USER) keeps one database user
+          # for app and migrations; a new one (install.sh) splits them.
+          old=$(docker compose -f docker-compose.yml config)
+          new=$(POSTGRES_APP_USER=nodeglow_app POSTGRES_APP_PASSWORD=app \
+            docker compose -f docker-compose.yml config)
+          echo "$old" | grep -F 'DATABASE_URL: postgresql+asyncpg://nodeglow:ci@db:5432/nodeglow'
+          echo "$old" | grep -F 'NODEGLOW_COMPOSE_OWNER_URL: postgresql+asyncpg://nodeglow:ci@db:5432/nodeglow'
+          echo "$new" | grep -F 'DATABASE_URL: postgresql+asyncpg://nodeglow_app:app@db:5432/nodeglow'
+          echo "$new" | grep -F 'POSTGRES_APP_USER: nodeglow_app'
 
       # The release compose file (image mode) must render as well, for both
       # editions, and both files must define the same services.
@@ -125,18 +136,27 @@ jobs:
   clickhouse-live:
     name: ClickHouse (live)
     runs-on: ubuntu-latest
-    services:
-      clickhouse:
-        image: clickhouse/clickhouse-server:24.8
-        env:
-          CLICKHOUSE_SKIP_USER_SETUP: "1"
-        ports:
-          - 8123:8123
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+
+      # Started after the checkout (not as a service container) so it runs
+      # with the production config and init.sql, and with the user setup of
+      # docker-compose.yml (a named user with access management — the
+      # tenancy tests create a restricted user and row policies).
+      - name: Start ClickHouse
+        working-directory: .
+        run: |
+          docker run -d --name clickhouse -p 8123:8123 \
+            -e CLICKHOUSE_DB=nodeglow \
+            -e CLICKHOUSE_USER=nodeglow \
+            -e CLICKHOUSE_PASSWORD=nodeglow \
+            -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+            -v "$PWD/clickhouse/config.xml:/etc/clickhouse-server/config.d/nodeglow.xml:ro" \
+            -v "$PWD/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
+            clickhouse/clickhouse-server:24.8
 
       - uses: actions/setup-python@v7
         with:
@@ -149,15 +169,20 @@ jobs:
 
       - name: Wait for ClickHouse
         run: |
+          # The entrypoint runs init.sql on a temporary server bound to the
+          # container's loopback; the published port answers once the real
+          # server (with the application user) is up.
           for i in $(seq 1 60); do
-            curl -fsS http://localhost:8123/ping && exit 0
+            curl -fsS "http://localhost:8123/?user=nodeglow&password=nodeglow" \
+              --data-binary "SELECT 1" 2>/dev/null | grep -q 1 && exit 0
             sleep 2
           done
+          docker logs clickhouse || true
           echo "::error::ClickHouse did not come up"; exit 1
 
       - name: Run live ClickHouse tests
         env:
-          NODEGLOW_TEST_CLICKHOUSE_URL: http://default:@localhost:8123/default
+          NODEGLOW_TEST_CLICKHOUSE_URL: http://nodeglow:nodeglow@localhost:8123/nodeglow
         run: pytest -q tests/test_live_clickhouse.py -rs
 
   migrations:
@@ -184,11 +209,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: backend/requirements-dev.txt
 
       - name: Install dependencies
         working-directory: backend
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: fresh install builds the schema and stamps head
         working-directory: backend
@@ -241,6 +266,19 @@ jobs:
           SECRET_KEY: ci-secret-key
           DATA_DIR: ${{ runner.temp }}/nodeglow-data
         run: python migrate.py
+
+      # Tenancy migrations and PostgreSQL row-level security (multi-tenancy
+      # phase 7): upgrade paths, RLS enabled and forced on every tenant
+      # table, raw SQL as nodeglow_app, and a subset of the router tests
+      # running as the app role with RLS on. The service's pg_hba uses
+      # scram-sha-256, so the app role's password is checked for real.
+      - name: tenancy and row-level security on PostgreSQL
+        working-directory: backend
+        env:
+          NODEGLOW_PG_TEST_URL: postgresql://nodeglow:nodeglow@localhost:5432/postgres
+          SECRET_KEY: ci-secret-key
+          DATA_DIR: ${{ runner.temp }}/nodeglow-data
+        run: python -m pytest -q -rs tests/test_migrations_tenancy_pg.py tests/test_pg_rls.py
 
       - name: entrypoint runs migrations and honours SKIP_MIGRATIONS
         working-directory: backend

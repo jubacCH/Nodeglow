@@ -9,6 +9,36 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+### Added
+- PostgreSQL row-level security as the second tenant-isolation layer
+  (`NODEGLOW_RLS`), with a separate app database user (`POSTGRES_APP_USER`,
+  `POSTGRES_APP_PASSWORD`). New installs from `install.sh` get both; existing
+  installs are unchanged until switched (docs/OPERATIONS.md, "Row-level
+  security"). Migrations run on the owner connection (`DATABASE_OWNER_URL`,
+  alias `MIGRATION_DATABASE_URL`, default `DATABASE_URL`).
+
+### Changed
+- **Ping history retention now takes effect.** "Ping history (days)" was
+  stored but ignored: ClickHouse kept every ping result for its fixed 30-day
+  TTL. The nightly cleanup now deletes a tenant's ping results older than the
+  configured value. Installs that set a value below 30 lose the older ping
+  history at the first cleanup after the upgrade; the default (30) changes
+  nothing. Values above 30 cannot be honoured (the table keeps 30 days) and
+  the setting is now limited to 1-30.
+- ClickHouse tables carry a tenant id (multi-tenancy). Existing rows belong to
+  the default tenant; a background job rebuilds each table once so the tenant
+  leads its sort key (needs free disk of about twice the table's size; the
+  old copy is kept for 24 h).
+- If you override `DATABASE_URL` (e.g. in docker-compose.override.yml) **and**
+  enable a separate app user, also set `DATABASE_OWNER_URL`; otherwise the
+  migrations would target the bundled `db`. The backend logs an error when
+  the two URLs name different databases.
+
+### Fixed
+- PostgreSQL: backup export skipped every table after the dropped legacy
+  table `ping_results`, a restore of such an export failed, and
+  `/api/system/status` lost its later sections for the same reason.
+
 ## [2.0.0-rc.6] - 2026-10-11
 
 ### Changed

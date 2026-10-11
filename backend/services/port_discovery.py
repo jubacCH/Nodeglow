@@ -130,21 +130,27 @@ async def scan_host_ports(hostname: str) -> list[dict]:
     return open_ports
 
 
-async def discover_ports_for_host(db: AsyncSession, host: PingHost):
-    """Scan a single host and upsert discovered ports."""
-    # Strip protocol from hostname for raw TCP scan
-    hostname = host.hostname
+def scan_target(hostname: str) -> str:
+    """The bare host name of a check target (no scheme, path or port)."""
     for prefix in ("https://", "http://"):
         if hostname.startswith(prefix):
             hostname = hostname[len(prefix):]
-    hostname = hostname.split("/")[0].split(":")[0]
+    return hostname.split("/")[0].split(":")[0]
 
-    open_ports = await scan_host_ports(hostname)
+
+async def discover_ports_for_host(db: AsyncSession, host: PingHost):
+    """Scan a single host and upsert discovered ports."""
+    open_ports = await scan_host_ports(scan_target(host.hostname))
+    await upsert_discovered_ports(db, host.id, open_ports)
+
+
+async def upsert_discovered_ports(db: AsyncSession, host_id: int, open_ports: list[dict]) -> None:
+    """Store one scan's result for a host and commit."""
     now = datetime.utcnow()
 
     # Get existing discovered ports for this host
     existing = (await db.execute(
-        select(DiscoveredPort).where(DiscoveredPort.host_id == host.id)
+        select(DiscoveredPort).where(DiscoveredPort.host_id == host_id)
     )).scalars().all()
     existing_map = {dp.port: dp for dp in existing}
 
@@ -164,7 +170,7 @@ async def discover_ports_for_host(db: AsyncSession, host: PingHost):
         else:
             # New port found
             db.add(DiscoveredPort(
-                host_id=host.id,
+                host_id=host_id,
                 port=op["port"],
                 protocol="tcp",
                 service=op["service"],
@@ -199,15 +205,22 @@ async def run_port_discovery():
         if not hosts:
             return
 
-        # Scan hosts with concurrency limit (5 hosts at a time)
-        sem = asyncio.Semaphore(5)
+    # Scan hosts with concurrency limit (5 hosts at a time). The network scan
+    # runs with no session open; each result is stored in its own short
+    # session (one AsyncSession shared by concurrent tasks broke as soon as
+    # two scans committed at once, and a session held across the scan kept
+    # a pooled connection idle in transaction for its whole duration).
+    sem = asyncio.Semaphore(5)
+    targets = [(h.id, h.name, scan_target(h.hostname)) for h in hosts]
 
-        async def _scan(host):
-            async with sem:
-                try:
-                    await discover_ports_for_host(db, host)
-                except Exception as exc:
-                    logger.warning("Port discovery failed for %s: %s", host.name, exc)
+    async def _scan(host_id: int, name: str, target: str):
+        async with sem:
+            try:
+                open_ports = await scan_host_ports(target)
+                async with AsyncSessionLocal() as sdb:
+                    await upsert_discovered_ports(sdb, host_id, open_ports)
+            except Exception as exc:
+                logger.warning("Port discovery failed for %s: %s", name, exc)
 
-        await asyncio.gather(*[_scan(h) for h in hosts])
-        logger.info("Port discovery completed for %d hosts", len(hosts))
+    await asyncio.gather(*[_scan(*t) for t in targets])
+    logger.info("Port discovery completed for %d hosts", len(hosts))

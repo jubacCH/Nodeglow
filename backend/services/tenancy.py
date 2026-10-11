@@ -432,44 +432,10 @@ def system_job(reason: str):
     return decorator
 
 
-def per_tenant_job(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[None]]:
-    """Decorator: run the async function once per active tenant, each in its
-    own ``tenant_scope``.
-
-    One tenant's exception does not stop the others: it is logged with the
-    tenant id and re-raised after the loop (the first one), so the job's
-    instrumentation still records the failure. With one tenant this is
-    exactly the undecorated behaviour. A call that already runs inside a
-    tenant scope (a test, or a route triggering the job for "its" tenant)
-    runs for that tenant only.
-    """
-
-    @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
-        ctx = _current.get()
-        if ctx is not None and not ctx.system and ctx.tenant_id is not None:
-            return await fn(*args, **kwargs)
-        with system_scope(f"{fn.__name__}: list tenants"):
-            tenant_ids = await backend().active_tenant_ids()
-        if len(tenant_ids) == 1:  # the core case: exactly the plain call
-            with tenant_scope(tenant_ids[0]):
-                return await fn(*args, **kwargs)
-        first_error: BaseException | None = None
-        result = None
-        for tenant_id in tenant_ids:
-            with tenant_scope(tenant_id):
-                try:
-                    await fn(*args, **kwargs)
-                except Exception as exc:  # noqa: BLE001 — isolate tenants
-                    log.error("%s failed for tenant %s", fn.__name__, tenant_id, exc_info=True)
-                    if first_error is None:
-                        first_error = exc
-        if first_error is not None:
-            raise first_error
-        return result
-
-    wrapper.__tenancy__ = "per_tenant"
-    return wrapper
+# per_tenant_job lives with the rest of the per-tenant scheduling (phase 5):
+# rotation, time budget, per-tenant metrics. Re-exported here, where every
+# job imports it from.
+from services.tenant_jobs import fleet_job, per_tenant_job  # noqa: E402,F401
 
 
 # ── Session filter ───────────────────────────────────────────────────────────

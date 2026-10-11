@@ -120,7 +120,7 @@ class Docker:
                     with open(path, "w") as fh:
                         fh.write(content)
             return CmdResult(0, "", "")
-        if self.migrate_rc and "alembic" in argv:
+        if self.migrate_rc and "migrate.py" in argv:
             return CmdResult(self.migrate_rc, "", "relation already exists")
         if "docker" in argv and "compose" in argv:
             return CmdResult(0, "ok", "")

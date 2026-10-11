@@ -15,6 +15,7 @@ import pytest
 class FakePingHost:
     def __init__(self, host_id: int, name: str, source: str = "icmp"):
         self.id = host_id
+        self.tenant_id = 1
         self.name = name
         self.source = source
         self.enabled = True

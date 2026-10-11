@@ -49,6 +49,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     from models import init_db as init_new_db
     await init_new_db()
+    # Say loudly when row-level security is switched on but does not protect
+    # this connection (superuser, BYPASSRLS), or is on in the database while
+    # NODEGLOW_RLS is off (every tenant table would look empty).
+    from models.base import engine as _engine
+    from services.pg_rls import log_runtime_status
+    await log_runtime_status(_engine)
     # AI became opt-in: installations that already had a Claude key keep AI on (once).
     try:
         from services.ai_config import migrate_ai_opt_in
@@ -158,9 +164,12 @@ async def _check_clickhouse() -> bool:
     import asyncio
     from services import clickhouse_client as _ch
     try:
+        from services.tenancy import system_scope
         # get_client() retries with back-off on a cold start; bound it so a
-        # probe never hangs for the whole retry ladder.
-        await asyncio.wait_for(_ch.query_scalar("SELECT 1"), timeout=_READY_CHECK_TIMEOUT)
+        # probe never hangs for the whole retry ladder. Installation health:
+        # no tenant data is read.
+        with system_scope("ClickHouse readiness probe", audit=False):
+            await asyncio.wait_for(_ch.query_scalar("SELECT 1"), timeout=_READY_CHECK_TIMEOUT)
         return True
     except Exception:
         return False

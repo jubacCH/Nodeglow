@@ -99,6 +99,9 @@ way in.
 - [ ] Optional: `NODEGLOW_NO_NEW_PRIVILEGES=true`, after confirming ICMP checks
       still work (see the comment in `docker-compose.yml`).
 - [ ] `DEBUG` is unset (it exposes the OpenAPI docs).
+- [ ] The app runs as its own database user with row-level security on
+      (`POSTGRES_APP_USER`, `NODEGLOW_RLS=on`; new installs have it, older
+      ones: [Switching an existing install on](#switching-an-existing-install-on)).
 
 ---
 
@@ -411,6 +414,100 @@ rules and incidents are back.
 
 ---
 
+## Row-level security
+
+Every customer's rows carry a `tenant_id`, and two independent layers keep
+them apart. The application filter (always on) adds the tenant to every ORM
+query and refuses queries without one. PostgreSQL **row-level security**
+(RLS) is the net under it: a policy on every tenant-owned table lets a
+connection see and write only the rows of the tenant the application set
+for the current transaction — also for raw SQL and for any query the filter
+missed. A connection that set no tenant sees nothing.
+
+| | New install (`install.sh`, from 2026-10) | Existing install |
+|---|---|---|
+| Database users | `POSTGRES_USER` owns the schema and migrates; the app runs as `nodeglow_app` | one user for everything, as before |
+| `NODEGLOW_RLS` | `on` | `off` — nothing changes |
+| What the migrations did | created `nodeglow_app`, its grants, the policies, RLS on | created `nodeglow_app` (cannot log in), its grants and the policies; RLS stays off |
+
+`migrate.py` (run on every start and by every update) brings the database in
+line with `.env`: it creates the app role and sets its password from the app
+URL, grants it SELECT/INSERT/UPDATE/DELETE on every table, keeps a policy
+`tenant_isolation` on every tenant-owned table, and enables + forces RLS when
+`NODEGLOW_RLS=on` — or disables it again when it is `off`. The app role owns
+nothing and cannot `TRUNCATE`, change the schema or switch RLS off; the
+backup restore therefore uses the owner connection.
+
+### Switching an existing install on
+
+Do it in two steps, so a problem is easy to place. Take a backup first
+([Taking one manually](#taking-one-manually)).
+
+1. **Separate app user, RLS still off.** Add to `.env`:
+
+   ```bash
+   POSTGRES_APP_USER=nodeglow_app
+   POSTGRES_APP_PASSWORD=<openssl rand -hex 24>
+   NODEGLOW_RLS=off
+   ```
+
+   then `docker compose up -d nodeglow`. The start (migrate.py, as
+   `POSTGRES_USER`) lets `nodeglow_app` log in with that password; the app
+   now connects as it. Check that the UI works as before and that the log
+   shows `app login nodeglow_app` and no `nodeglow.rls` warning:
+
+   ```bash
+   docker compose logs nodeglow | grep -E "row-level security|nodeglow.rls"
+   ```
+
+2. **RLS on**, after a few days without surprises: set `NODEGLOW_RLS=on`,
+   `docker compose up -d nodeglow`. The log says
+   `row-level security enabled and forced on N tenant tables` (migrate) and
+   `row-level security active on N tenant tables (app role nodeglow_app)`
+   (backend). In the database:
+
+   ```bash
+   docker compose exec db psql -U nodeglow -c "SELECT relname, relforcerowsecurity FROM pg_class WHERE relrowsecurity"
+   ```
+
+**Back out** at any point: set `NODEGLOW_RLS=off` in `.env` and run
+`docker compose up -d nodeglow` (RLS is switched off again, the policies stay
+and do nothing); to return to one user remove `POSTGRES_APP_USER` /
+`POSTGRES_APP_PASSWORD` as well. A plain `docker compose restart` keeps the
+container's old environment and changes nothing.
+
+Apply changes to these variables with `docker compose up -d nodeglow`. An
+update started from the UI does not switch RLS **on** in its migrate step
+(the old backend is still serving then); the new backend switches it on when
+it starts.
+
+Turning RLS on while the app still connects as `POSTGRES_USER` protects
+nothing in the Compose stack: that user is a superuser, and superusers bypass
+RLS. The backend logs a warning saying so.
+
+### What the backend checks at start
+
+| Log (`nodeglow.rls`) | Meaning |
+|---|---|
+| `... NODEGLOW_RLS is off: the app sets no tenant and those tables look empty` (error) | RLS is enabled in the database but the flag is off — e.g. `SKIP_MIGRATIONS=1` after switching. Set the flag back or run migrate.py |
+| `... enabled/forced on only x/y of N tenant tables — run migrate.py` (error) | Flag on, database not (yet) in line |
+| `... connects as <user>, which is a superuser / BYPASSRLS` (warning) | RLS cannot apply to this connection; use the app user |
+| `cannot create role nodeglow_app (needs CREATEROLE)` (warning, migrate) | The owner may not manage roles (managed PostgreSQL). Not fatal: have a DBA run `CREATE ROLE nodeglow_app LOGIN PASSWORD '...' NOBYPASSRLS;` and restart; migrate.py does the grants |
+
+### Limits
+
+- RLS is defence in depth against a *forgotten tenant predicate*, not against
+  SQL injection: cross-tenant work (token lookups, installation jobs) sets a
+  system bypass (`nodeglow.system`) that the app role can set itself.
+- The owner's password is in the backend container's environment, because
+  the container runs the migrations before the app starts.
+- A dump restored into a **new** PostgreSQL cluster references `nodeglow_app`
+  in its grants; `pg_restore` reports those statements as errors when the
+  role does not exist yet. Harmless — the next start creates the role and
+  the grants.
+
+---
+
 ## When something looks wrong
 
 ### Nodeglow tells you first
@@ -688,7 +785,10 @@ start from `.env.example`.
 
 | Variable | Default | Purpose | Used by |
 |---|---|---|---|
-| `POSTGRES_DB`, `POSTGRES_USER` | `nodeglow` | Database name and user | both |
+| `POSTGRES_DB`, `POSTGRES_USER` | `nodeglow` | Database name and the user that owns the schema and runs the migrations | both |
+| `POSTGRES_APP_USER` | `POSTGRES_USER` | Database user the app runs as; `install.sh`: `nodeglow_app`. Created by the migrations ([Row-level security](#row-level-security)) | both |
+| `POSTGRES_APP_PASSWORD` | `POSTGRES_PASSWORD` | Its password; `install.sh` generates it | both |
+| `NODEGLOW_RLS` | `off` | `on` enables PostgreSQL row-level security on every tenant table; `install.sh` sets `on` ([Row-level security](#row-level-security)) | both |
 | `CLICKHOUSE_PASSWORD` | `POSTGRES_PASSWORD` | Separate ClickHouse password, if wanted | both |
 | `POSTGRES_SHARED_BUFFERS` | `512MB` | Raise on hosts with plenty of RAM, lower on small ones | both |
 | `POSTGRES_EFFECTIVE_CACHE_SIZE` | `1536MB` | Planner hint; about half the host RAM | both |
@@ -731,6 +831,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | Variable | Service | Default | Purpose |
 |---|---|---|---|
 | `REDIS_URL` | `nodeglow` | unset | Shared rate-limit state across processes; with an enterprise license also scheduler leader election (HA) |
+| `DATABASE_URL`, `DATABASE_OWNER_URL` (alias `MIGRATION_DATABASE_URL`) | `nodeglow` | built from `POSTGRES_*` | The app's and the schema owner's connection. Compose builds `DATABASE_URL`; the owner is `POSTGRES_USER` on the bundled `db` only when `POSTGRES_APP_USER` is set, otherwise `DATABASE_URL`. **If you point `DATABASE_URL` at another server and use two users, set `DATABASE_OWNER_URL` too** — the backend logs an error when the two name different databases |
 | `SECURE_COOKIES` | `nodeglow` | auto | `1` always marks session cookies `Secure` (otherwise only when the request or `X-Forwarded-Proto` is HTTPS) |
 | `CORS_ORIGINS` | `nodeglow` | unset | Comma list of origins allowed to call the API cross-origin; not needed for the bundled UI |
 | `DEBUG` | `nodeglow` | unset | `1` serves the OpenAPI docs at `/api/docs` — never in production |

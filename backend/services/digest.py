@@ -90,11 +90,11 @@ async def build_weekly_digest(db: AsyncSession) -> dict:
     try:
         from services.clickhouse_client import query as ch_query, query_scalar as ch_scalar
         syslog_stats["total"] = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)}",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)}",
             {"t": week_ago},
         ) or 0)
         syslog_stats["errors"] = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
             {"t": week_ago},
         ) or 0)
 
@@ -102,7 +102,7 @@ async def build_weekly_digest(db: AsyncSession) -> dict:
         top_tpl_rows = await ch_query(
             "SELECT template_hash, count() AS cnt "
             "FROM syslog_messages "
-            "WHERE timestamp >= {t:DateTime64(3)} AND template_hash != '' "
+            "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} AND template_hash != '' "
             "GROUP BY template_hash "
             "ORDER BY cnt DESC LIMIT 10",
             {"t": week_ago},

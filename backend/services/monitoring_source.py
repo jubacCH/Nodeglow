@@ -95,10 +95,10 @@ async def run_source(source_cls: type[MonitoringSource]) -> None:
     decorator records them as failures.
     """
     from services.metrics import instrument_job
-    from services.tenancy import per_tenant_job
+    from services.tenancy import fleet_job
 
     @instrument_job(source_cls.name)
-    @per_tenant_job
+    @fleet_job
     async def _runner():
         try:
             await source_cls().poll()
