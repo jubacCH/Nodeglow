@@ -416,7 +416,9 @@ async def _handle_report(db, agent: Agent, body: dict):
     # Extract bandwidth samples from agent network data (writes to ClickHouse)
     try:
         from services.bandwidth import extract_agent_bandwidth
-        await extract_agent_bandwidth(agent.id, body, snap_ts, source_name=agent.name)
+        await extract_agent_bandwidth(
+            agent.id, body, snap_ts, tenant_id=agent.tenant_id, source_name=agent.name,
+        )
     except Exception as bw_exc:
         logger.warning("Bandwidth extraction failed for agent %d: %s", agent.id, bw_exc)
 
@@ -436,6 +438,7 @@ async def _handle_report(db, agent: Agent, body: dict):
     try:
         from services.clickhouse_client import insert_agent_metrics
         await insert_agent_metrics([{
+            "tenant_id": agent.tenant_id,
             "timestamp": snap_ts,
             "agent_id": agent.id,
             "agent_name": agent.name,
@@ -538,9 +541,9 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
     # an id of a host it does not check (or of another tenant: the query runs
     # in the probe's tenant scope) must not get its results written.
     async with AsyncSessionLocal() as db:
-        assigned = set((await db.execute(
-            select(PingHost.id).where(PingHost.probe_id == probe_id)
-        )).scalars().all())
+        assigned = dict((await db.execute(
+            select(PingHost.id, PingHost.tenant_id).where(PingHost.probe_id == probe_id)
+        )).all())
 
     rows = []
     dropped = 0
@@ -559,6 +562,7 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
             except ValueError:
                 ts = None
         rows.append({
+            "tenant_id": assigned[host_id],  # the host's tenant (= the probe's)
             "timestamp": ts or _dt.utcnow(),
             "host_id": host_id,
             "host_name": str(r.get("host_name") or ""),

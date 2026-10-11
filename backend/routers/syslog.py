@@ -127,7 +127,7 @@ async def _build_rate_chart(since: datetime, bucket_min: int) -> dict:
                    severity AS sev,
                    count() AS cnt
                FROM syslog_messages
-               WHERE timestamp >= {since:DateTime64(3)}
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {since:DateTime64(3)}
                GROUP BY bucket, sev
                ORDER BY bucket""",
             {"since": since, "bm": bucket_min},
@@ -156,11 +156,11 @@ async def _check_severity_spike() -> dict | None:
     try:
         now = datetime.utcnow()
         recent = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
             {"t": now - timedelta(minutes=5)},
         ) or 0)
         hour_total = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
             {"t": now - timedelta(hours=1)},
         ) or 0)
         avg_per_5min = hour_total / 12
@@ -306,7 +306,7 @@ async def template_browser(
         try:
             rate_rows = await _ch_q_chunked(
                 "SELECT template_hash, count() / 24.0 AS rate "
-                "FROM syslog_messages WHERE template_hash IN ({hashes:Array(String)}) "
+                "FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND template_hash IN ({hashes:Array(String)}) "
                 "AND timestamp >= now() - INTERVAL 24 HOUR "
                 "GROUP BY template_hash",
                 list_param="hashes",
@@ -361,7 +361,7 @@ async def root_cause_suggestions(
     # 1. How often did this template occur in last 30 days?
     total_count = int(await ch_scalar(
         "SELECT count() FROM syslog_messages "
-        "WHERE template_hash = {th:String} AND timestamp >= {since:DateTime64(3)}",
+        "WHERE tenant_id = {nodeglow_tenant:UInt32} AND template_hash = {th:String} AND timestamp >= {since:DateTime64(3)}",
         {"th": template_hash, "since": since},
     ) or 0)
 
@@ -369,7 +369,7 @@ async def root_cause_suggestions(
     occurrences = await ch_query(
         """SELECT timestamp, source_ip, hostname, host_id, severity, app_name
            FROM syslog_messages
-           WHERE template_hash = {th:String} AND timestamp >= {since:DateTime64(3)}
+           WHERE tenant_id = {nodeglow_tenant:UInt32} AND template_hash = {th:String} AND timestamp >= {since:DateTime64(3)}
            ORDER BY timestamp DESC
            LIMIT 200""",
         {"th": template_hash, "since": since},
@@ -399,7 +399,7 @@ async def root_cause_suggestions(
         follow_ups = await ch_query(
             """SELECT template_hash, message, severity
                FROM syslog_messages
-               WHERE source_ip = {sip:String}
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND source_ip = {sip:String}
                  AND timestamp > {ts:DateTime64(3)}
                  AND timestamp <= {ts_end:DateTime64(3)}
                  AND template_hash != {th:String}
@@ -478,7 +478,7 @@ async def reverse_cause(
     occurrences = await ch_query(
         """SELECT timestamp, source_ip, hostname, host_id, severity
            FROM syslog_messages
-           WHERE template_hash = {th:String} AND timestamp >= {since:DateTime64(3)}
+           WHERE tenant_id = {nodeglow_tenant:UInt32} AND template_hash = {th:String} AND timestamp >= {since:DateTime64(3)}
            ORDER BY timestamp DESC
            LIMIT 200""",
         {"th": template_hash, "since": since},
@@ -501,7 +501,7 @@ async def reverse_cause(
         predecessors = await ch_query(
             """SELECT template_hash, message, severity
                FROM syslog_messages
-               WHERE source_ip = {sip:String}
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND source_ip = {sip:String}
                  AND timestamp >= {ts_start:DateTime64(3)}
                  AND timestamp < {ts:DateTime64(3)}
                  AND template_hash != {th:String}
@@ -546,7 +546,7 @@ async def reverse_cause(
             xh_rows = await ch_query(
                 """SELECT template_hash, source_ip, count() AS cnt
                    FROM syslog_messages
-                   WHERE source_ip != {sip:String}
+                   WHERE tenant_id = {nodeglow_tenant:UInt32} AND source_ip != {sip:String}
                      AND timestamp >= {ts_start:DateTime64(3)}
                      AND timestamp < {ts:DateTime64(3)}
                      AND severity <= 3

@@ -51,6 +51,7 @@ JOBS = [
     "update_ssl_expiry",
     "run_self_check_job",
     "refresh_disk_predictions",
+    "run_clickhouse_tenant_rebuild",
 ]
 
 
@@ -88,6 +89,10 @@ def isolated_boundaries():
         patch("services.clickhouse_client.get_latest_agent_metrics",
               new=AsyncMock(return_value={})),
         patch("services.clickhouse_client.get_ping_uptime", new=AsyncMock(return_value={})),
+        # Jobs that talk to the server directly (the step-B rebuild) find it
+        # unreachable, as on an install whose ClickHouse is down.
+        patch("services.clickhouse_client.get_client",
+              new=AsyncMock(side_effect=ConnectionError("no ClickHouse in tests"))),
         patch("notifications.notify", new=AsyncMock()),
     ]
     started = []

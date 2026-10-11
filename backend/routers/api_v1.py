@@ -1702,7 +1702,7 @@ async def get_incident(
         rows = await ch_query(
             "SELECT timestamp, hostname, severity, app_name, message, template_hash "
             "FROM syslog_messages "
-            "WHERE timestamp >= {t0:DateTime64(3)} AND timestamp <= {t1:DateTime64(3)} "
+            "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t0:DateTime64(3)} AND timestamp <= {t1:DateTime64(3)} "
             "AND severity <= 3 "
             "ORDER BY timestamp DESC LIMIT 100",
             {"t0": start, "t1": end},
@@ -1923,37 +1923,37 @@ async def syslog_stats(
         params = {"t": since}
         total, sev_rows, host_rows, app_rows, rate_rows, geo_rows = await asyncio.gather(
             ch_scalar(
-                "SELECT count() FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)}",
+                "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)}",
                 params,
             ),
             ch_query(
                 "SELECT severity, count() AS cnt FROM syslog_messages "
-                "WHERE timestamp >= {t:DateTime64(3)} GROUP BY severity ORDER BY severity",
+                "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} GROUP BY severity ORDER BY severity",
                 params,
             ),
             ch_query(
                 "SELECT coalesce(nullIf(hostname, ''), source_ip) AS host, "
                 "source_ip, count() AS cnt FROM syslog_messages "
-                "WHERE timestamp >= {t:DateTime64(3)} "
+                "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} "
                 "GROUP BY host, source_ip ORDER BY cnt DESC LIMIT 10",
                 params,
             ),
             ch_query(
                 "SELECT app_name, count() AS cnt FROM syslog_messages "
-                "WHERE timestamp >= {t:DateTime64(3)} AND app_name != '' "
+                "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} AND app_name != '' "
                 "GROUP BY app_name ORDER BY cnt DESC LIMIT 10",
                 params,
             ),
             ch_query(
                 f"SELECT {bucket_fn}(timestamp) AS bucket, "
                 "count() AS cnt, countIf(severity <= 3) AS errors "
-                "FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)} "
+                "FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} "
                 "GROUP BY bucket ORDER BY bucket",
                 params,
             ),
             ch_query(
                 "SELECT geo_country, count() AS cnt FROM syslog_messages "
-                "WHERE timestamp >= {t:DateTime64(3)} AND geo_country != '' "
+                "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} AND geo_country != '' "
                 "GROUP BY geo_country ORDER BY cnt DESC LIMIT 20",
                 params,
             ),

@@ -159,7 +159,9 @@ async def save_settings(
     await set_setting(db, "proxmox_interval", str(px_interval))
 
     try:
-        p_ret = max(1, min(365, int(ping_retention)))
+        # ClickHouse keeps ping_checks 30 days (table TTL): more cannot be
+        # honoured, so it is not offered.
+        p_ret = max(1, min(30, int(ping_retention)))
     except ValueError:
         p_ret = 30
     await set_setting(db, "ping_retention_days", str(p_ret))

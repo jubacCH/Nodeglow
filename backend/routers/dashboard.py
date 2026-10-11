@@ -253,7 +253,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         spark_rows = await ch_query(
             "SELECT host_id, success, latency_ms "
             "FROM ping_checks "
-            "WHERE host_id IN ({hids:Array(UInt32)}) "
+            "WHERE tenant_id = {nodeglow_tenant:UInt32} AND host_id IN ({hids:Array(UInt32)}) "
             "  AND timestamp >= {since:DateTime64(3)} "
             "ORDER BY host_id, timestamp ASC",
             {"hids": host_ids, "since": window_2h},
@@ -612,12 +612,12 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     }
     try:
         syslog_stats["total"] = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)}",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)}",
             {"t": window_24h},
         ) or 0)
 
         sev_rows = await ch_query(
-            "SELECT severity, count() AS cnt FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)} GROUP BY severity ORDER BY severity",
+            "SELECT severity, count() AS cnt FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} GROUP BY severity ORDER BY severity",
             {"t": window_24h},
         )
         syslog_stats["by_severity"] = {
@@ -626,13 +626,13 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         }
 
         src_rows = await ch_query(
-            "SELECT source_ip, count() AS cnt FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)} GROUP BY source_ip ORDER BY cnt DESC LIMIT 5",
+            "SELECT source_ip, count() AS cnt FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} GROUP BY source_ip ORDER BY cnt DESC LIMIT 5",
             {"t": window_24h},
         )
         syslog_stats["top_sources"] = [{"ip": r["source_ip"], "count": r["cnt"]} for r in src_rows]
 
         syslog_stats["error_rate_1h"] = int(await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
             {"t": now - timedelta(hours=1)},
         ) or 0)
 
@@ -642,7 +642,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                       countIf(severity <= 3) AS errors,
                       countIf(severity = 4) AS warnings
                FROM syslog_messages
-               WHERE timestamp >= {t:DateTime64(3)}
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)}
                GROUP BY hour ORDER BY hour""",
             {"t": window_24h},
         )
@@ -656,7 +656,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             """SELECT coalesce(nullIf(hostname, ''), source_ip) AS host,
                       count() AS cnt
                FROM syslog_messages
-               WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}
                GROUP BY host ORDER BY cnt DESC LIMIT 5""",
             {"t": window_24h},
         )
@@ -667,7 +667,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             """SELECT timestamp, severity, coalesce(nullIf(hostname, ''), source_ip) AS host,
                       substring(message, 1, 120) AS msg
                FROM syslog_messages
-               WHERE severity <= 2 AND timestamp >= {t:DateTime64(3)}
+               WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 2 AND timestamp >= {t:DateTime64(3)}
                ORDER BY timestamp DESC LIMIT 5""",
             {"t": window_24h},
         )
@@ -1064,7 +1064,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
                 count() AS total,
                 sumIf(1, success = 1) AS ok
             FROM ping_checks
-            WHERE host_id IN ({hids:Array(UInt32)})
+            WHERE tenant_id = {nodeglow_tenant:UInt32} AND host_id IN ({hids:Array(UInt32)})
               AND timestamp >= {since:DateTime64(3)}
             GROUP BY host_id, day
             """,
@@ -1140,7 +1140,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     syslog_errors_by_host: dict[int, int] = {}
     try:
         syslog_err_rows = await ch_query(
-            "SELECT host_id, count() AS cnt FROM syslog_messages WHERE host_id IS NOT NULL AND severity <= 3 AND timestamp >= {t:DateTime64(3)} GROUP BY host_id",
+            "SELECT host_id, count() AS cnt FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND host_id IS NOT NULL AND severity <= 3 AND timestamp >= {t:DateTime64(3)} GROUP BY host_id",
             {"t": window_24h},
         )
         syslog_errors_by_host = {int(r["host_id"]): r["cnt"] for r in syslog_err_rows if r["host_id"] is not None}
