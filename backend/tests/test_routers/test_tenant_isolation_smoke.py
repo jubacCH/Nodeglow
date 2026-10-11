@@ -29,6 +29,9 @@ async def _seed_tenant_b(sf) -> dict:
     async with sf() as s:
         with system_scope("test: seed tenant B"):
             s.add(Tenant(id=B, provider_id=1, name=f"{CANARY}-tenant", slug="b"))
+            # The tenant first: the system-scope audit row of the next flush
+            # references it (PostgreSQL enforces that FK, SQLite does not).
+            await s.flush()
             s.add(Site(id=2, tenant_id=B, name=f"{CANARY}-site"))
             await s.flush()
             s.add(Agent(id=900, tenant_id=B, name=f"{CANARY}-agent", hostname="b-srv",

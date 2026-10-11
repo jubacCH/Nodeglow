@@ -67,11 +67,11 @@ async def gather_infrastructure_context(db: AsyncSession) -> str:
         since = datetime.utcnow() - timedelta(hours=1)
 
         total = await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)}",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)}",
             {"t": since},
         )
         errors = await ch_scalar(
-            "SELECT count() FROM syslog_messages WHERE timestamp >= {t:DateTime64(3)} AND severity <= 3",
+            "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} AND severity <= 3",
             {"t": since},
         )
 
@@ -82,7 +82,7 @@ async def gather_infrastructure_context(db: AsyncSession) -> str:
             top_templates = await ch_query(
                 "SELECT any(message) as example, count() as cnt "
                 "FROM syslog_messages "
-                "WHERE timestamp >= {t:DateTime64(3)} AND severity <= 3 "
+                "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t:DateTime64(3)} AND severity <= 3 "
                 "GROUP BY template_hash ORDER BY cnt DESC LIMIT 3",
                 {"t": since},
             )
@@ -152,7 +152,7 @@ async def gather_incident_context(db: AsyncSession, incident_id: int) -> str:
             "SELECT any(message) as example, count() as cnt, "
             "min(severity) as worst_sev, groupUniqArray(hostname) as hosts "
             "FROM syslog_messages "
-            "WHERE timestamp >= {t0:DateTime64(3)} AND timestamp <= {t1:DateTime64(3)} "
+            "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {t0:DateTime64(3)} AND timestamp <= {t1:DateTime64(3)} "
             "AND severity <= 4 "
             "GROUP BY template_hash ORDER BY cnt DESC LIMIT 5",
             {"t0": start, "t1": end},

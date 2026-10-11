@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 # Import all models so metadata knows about them
-from config import DATABASE_URL
+from config import DATABASE_OWNER_URL
 from models.base import Base
 from models.integration import IntegrationConfig, Snapshot  # noqa: F401
 from models.settings import Setting, User, Session  # noqa: F401
@@ -31,12 +31,16 @@ from models.snmp import SnmpMib, SnmpOid, SnmpHostConfig, SnmpResult  # noqa: F4
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Keep the loggers that exist already: migrate.py runs alembic in-process
+    # and its own messages (and the RLS setup's warnings) must not vanish.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
-# Override sqlalchemy.url from our config
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# Override sqlalchemy.url from our config. Migrations run as the schema
+# owner (DATABASE_OWNER_URL, default DATABASE_URL) — never as the runtime
+# role, which owns nothing. "%" is configparser interpolation syntax.
+config.set_main_option("sqlalchemy.url", DATABASE_OWNER_URL.replace("%", "%%"))
 
 
 def _include_object(obj, name, type_, reflected, compare_to):
@@ -84,10 +88,16 @@ def do_run_migrations(connection):
 
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async engine."""
+    from services.pg_rls import system_connect_args
+
+    # A migration acts for the whole installation: with FORCE ROW LEVEL
+    # SECURITY a data migration run by a non-superuser owner would
+    # otherwise see no tenant rows (services/pg_rls.py).
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=system_connect_args(DATABASE_OWNER_URL),
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

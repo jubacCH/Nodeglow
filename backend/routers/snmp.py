@@ -22,6 +22,23 @@ from services.snmp import (
 router = APIRouter()
 
 
+async def _catalogue_write_refused(request: Request) -> JSONResponse | None:
+    """The MIB catalogue (``snmp_mibs`` / ``snmp_oids``) is global: one
+    tenant changing it changes it for every tenant. With more than one
+    tenant only the operator may (spec: "uploads are operator-only in
+    multi-tenant mode"); with one tenant nothing changes."""
+    from services.tenancy import backend, request_is_operator, system_scope
+
+    if request_is_operator(request):
+        return None
+    with system_scope("snmp: count tenants for the MIB catalogue rule", audit=False):
+        tenants = await backend().active_tenant_ids()
+    if len(tenants) > 1:
+        return JSONResponse({"error": "The MIB catalogue is shared; only the operator can change it"},
+                            status_code=403)
+    return None
+
+
 # ── SNMP Management Page ────────────────────────────────────────────────────
 
 
@@ -104,9 +121,11 @@ async def snmp_page(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/api/snmp/mibs/upload")
-async def api_upload_mib(file: UploadFile = File(...),
+async def api_upload_mib(request: Request, file: UploadFile = File(...),
                          db: AsyncSession = Depends(get_db)):
     """Upload and parse a MIB file (max 2MB)."""
+    if refused := await _catalogue_write_refused(request):
+        return refused
     content = await file.read(2 * 1024 * 1024 + 1)  # Read up to 2MB + 1 byte
     if len(content) > 2 * 1024 * 1024:
         return JSONResponse({"error": "MIB file too large (max 2MB)"}, status_code=413)
@@ -123,7 +142,9 @@ async def api_upload_mib(file: UploadFile = File(...),
 
 
 @router.delete("/api/snmp/mibs/{mib_id}")
-async def api_delete_mib(mib_id: int, db: AsyncSession = Depends(get_db)):
+async def api_delete_mib(mib_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    if refused := await _catalogue_write_refused(request):
+        return refused
     q = await db.execute(select(SnmpMib).where(SnmpMib.id == mib_id))
     mib = q.scalar_one_or_none()
     if mib:
@@ -134,8 +155,10 @@ async def api_delete_mib(mib_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/api/snmp/mibs/seed-defaults")
-async def api_seed_defaults(db: AsyncSession = Depends(get_db)):
+async def api_seed_defaults(request: Request, db: AsyncSession = Depends(get_db)):
     """Seed default OID definitions."""
+    if refused := await _catalogue_write_refused(request):
+        return refused
     added = await seed_default_oids(db)
     return JSONResponse({"added": added})
 
@@ -156,6 +179,8 @@ async def api_search_mib_library(q: str = ""):
 async def api_import_from_library(request: Request,
                                   db: AsyncSession = Depends(get_db)):
     """Download a MIB from the online library and import it."""
+    if refused := await _catalogue_write_refused(request):
+        return refused
     body = await request.json()
     mib_name = (body.get("mib_name") or body.get("name") or "").strip()
     vendor = body.get("vendor", "").strip()
@@ -262,6 +287,8 @@ async def api_add_snmp_host(request: Request, db: AsyncSession = Depends(get_db)
     hq = await db.execute(select(PingHost).where(PingHost.id == host_id))
     if not hq.scalar_one_or_none():
         return JSONResponse({"error": "Host not found"}, status_code=404)
+    if credential_id and await db.get(Credential, int(credential_id)) is None:
+        return JSONResponse({"error": "Credential not found"}, status_code=404)
 
     # Determine OIDs
     if custom_oids:
@@ -290,7 +317,9 @@ async def api_add_snmp_host(request: Request, db: AsyncSession = Depends(get_db)
 
 @router.delete("/api/snmp/hosts/{config_id}")
 async def api_remove_snmp_host(config_id: int, db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(SnmpHostConfig).where(SnmpHostConfig.id == config_id))
+    result = await db.execute(delete(SnmpHostConfig).where(SnmpHostConfig.id == config_id))
+    if not result.rowcount:
+        return JSONResponse({"error": "Not found"}, status_code=404)
     await db.commit()
     return JSONResponse({"ok": True})
 
@@ -307,6 +336,9 @@ async def api_update_snmp_host(config_id: int, request: Request,
     if "enabled" in body:
         cfg.enabled = bool(body["enabled"])
     if "credential_id" in body:
+        # Only a credential of this tenant (tenant-filtered lookup).
+        if body["credential_id"] and await db.get(Credential, int(body["credential_id"])) is None:
+            return JSONResponse({"error": "Credential not found"}, status_code=404)
         cfg.credential_id = body["credential_id"] or None
     if "port" in body:
         cfg.port = int(body["port"])
@@ -405,6 +437,8 @@ async def api_poll_host(config_id: int, db: AsyncSession = Depends(get_db)):
 async def api_get_results(host_id: int, limit: int = 60,
                           db: AsyncSession = Depends(get_db)):
     """Get recent SNMP results for a host."""
+    if await db.get(PingHost, host_id) is None:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
     q = await db.execute(
         select(SnmpResult)
         .where(SnmpResult.host_id == host_id)

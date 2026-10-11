@@ -523,7 +523,7 @@ async def _rule_syslog_spike(db, min_cycles: int = 2):
 
     # Count errors (severity <= 3) in last 5min
     recent_errors = int(await ch_scalar(
-        "SELECT count() FROM syslog_messages WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}",
+        "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
         {"t": window_5m},
     ) or 0)
 
@@ -532,7 +532,7 @@ async def _rule_syslog_spike(db, min_cycles: int = 2):
 
     # Count errors in last hour (baseline)
     hourly_errors = int(await ch_scalar(
-        "SELECT count() FROM syslog_messages WHERE severity <= 3 AND timestamp >= {t:DateTime64(3)}",
+        "SELECT count() FROM syslog_messages WHERE tenant_id = {nodeglow_tenant:UInt32} AND severity <= 3 AND timestamp >= {t:DateTime64(3)}",
         {"t": window_1h},
     ) or 0)
 
@@ -778,7 +778,7 @@ async def _rule_precursor_observed(
         rows = await ch_query(
             "SELECT DISTINCT template_hash, host_id "
             "FROM syslog_messages "
-            "WHERE timestamp >= {since:DateTime64(3)} "
+            "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= {since:DateTime64(3)} "
             "  AND template_hash != '' "
             "LIMIT 1000",
             {"since": window},

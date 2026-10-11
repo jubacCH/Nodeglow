@@ -17,7 +17,9 @@ from models.integration import IntegrationConfig
 from services import integration as int_svc
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
-from services.tenancy import current_tenant_id, per_tenant_job, system_job, system_scope
+from services import tenant_jobs
+from services.tenancy import current_tenant_id, per_tenant_job, system_job
+from services.tenant_jobs import INTEGRATION_CADENCE, PING_CADENCE, fleet_job
 
 logger = logging.getLogger(__name__)
 
@@ -107,27 +109,27 @@ _inflight_cfgs: set[int] = set()
 _background_units: set[asyncio.Task] = set()
 # Created per event loop: asyncio primitives bind to the loop they first wait
 # on, and the test suite runs every test on a fresh loop.
-_loop_primitives: dict[int, tuple[asyncio.Semaphore, asyncio.Lock]] = {}
+_loop_locks: dict[int, asyncio.Lock] = {}
 
 
-def _primitives() -> tuple[asyncio.Semaphore, asyncio.Lock]:
-    key = id(asyncio.get_running_loop())
-    prims = _loop_primitives.get(key)
-    if prims is None:
-        _loop_primitives.clear()  # at most one live loop in production
-        prims = (asyncio.Semaphore(INTEGRATION_CONCURRENCY), asyncio.Lock())
-        _loop_primitives[key] = prims
-    return prims
-
-
-def _collect_semaphore() -> asyncio.Semaphore:
-    return _primitives()[0]
+def _collect_slot():
+    """One of the NODEGLOW_INTEGRATION_CONCURRENCY collection slots, booked
+    to the current tenant. Shared by every tenant's pass: free slots go
+    round-robin to the waiting tenants (services.tenant_jobs.FairShareLimiter),
+    so one tenant's hundred configs cannot hold every slot while another
+    tenant's three wait. One tenant: a plain FIFO semaphore, as before."""
+    return tenant_jobs.limiter("integration_collect", INTEGRATION_CONCURRENCY).slot()
 
 
 def _snapshot_write_lock() -> asyncio.Lock:
     # Writes stay serial: they are cheap, some (on_snapshot auto-import)
     # touch shared host rows, and cluster-group ownership is decided in order.
-    return _primitives()[1]
+    key = id(asyncio.get_running_loop())
+    lock = _loop_locks.get(key)
+    if lock is None:
+        _loop_locks.clear()  # at most one live loop in production
+        lock = _loop_locks[key] = asyncio.Lock()
+    return lock
 
 
 def collect_timeout_for(integration_cls, integration_type: str) -> float:
@@ -157,7 +159,7 @@ async def _collect_one(integration_type: str, integration_cls, due: _DueConfig):
     from services.tracing import tracer
 
     timeout = collect_timeout_for(integration_cls, integration_type)
-    async with _collect_semaphore():
+    async with _collect_slot():
         with tracer.start_as_current_span("integration.collect") as span:
             span.set_attribute("integration.type", integration_type)
             span.set_attribute("integration.config_id", due.cfg_id)
@@ -241,11 +243,11 @@ async def _apply_result(
                 )
                 if integration_type == "proxmox":
                     await extract_proxmox_bandwidth(
-                        cfg.id, result.data, source_name=cfg.name,
+                        cfg.id, result.data, tenant_id=cfg.tenant_id, source_name=cfg.name,
                     )
                 elif integration_type == "unifi":
                     await extract_unifi_bandwidth(
-                        cfg.id, result.data, source_name=cfg.name,
+                        cfg.id, result.data, tenant_id=cfg.tenant_id, source_name=cfg.name,
                     )
             except Exception as bw_exc:
                 logger.warning(
@@ -308,7 +310,7 @@ async def _run_unit(
 
 
 @instrument_job("integration_checks")
-@per_tenant_job
+@fleet_job(cadence_spec=INTEGRATION_CADENCE)
 async def run_integration_checks():
     """
     Generic collector loop: for each registered integration, fetch all configs
@@ -338,8 +340,12 @@ async def run_integration_checks():
         return
 
     async with AsyncSessionLocal() as db:
-        # Fallback cadence for integrations that specify none of their own.
-        integration_interval = int(await get_setting(db, "proxmox_interval", "60"))
+        # Fallback cadence for integrations that specify none of their own:
+        # this tenant's, never below the installation floor.
+        integration_interval = tenant_jobs.clamp_interval(
+            await get_setting(db, "proxmox_interval", "60"),
+            await tenant_jobs.interval_floor(db, INTEGRATION_CADENCE), INTEGRATION_CADENCE,
+        )
 
     async with AsyncSessionLocal() as db:
         # Pull only the IDs in id-order, then re-fetch each cfg fresh. This
@@ -435,6 +441,9 @@ async def run_integration_checks():
 # ── Ping checks ──────────────────────────────────────────────────────────────
 
 
+# Concurrent ping checks (all tenants together).
+PING_CONCURRENCY = 50
+
 # Grace period tracker: host_id -> first_seen_offline timestamp
 _offline_since: dict[int, datetime] = {}
 _grace_notified: set[int] = set()  # host_ids already notified after grace
@@ -475,7 +484,7 @@ async def _broadcast_ping_updates(updates: list[tuple], tenant_id: int) -> None:
 
 
 @instrument_job("ping_checks")
-@per_tenant_job
+@fleet_job(cadence_spec=PING_CADENCE)
 async def run_ping_checks():
     """Ping all enabled hosts concurrently and store results."""
     import asyncio as _asyncio
@@ -547,6 +556,7 @@ async def run_ping_checks():
             last_seen = last_seen_by_name.get(host.name.lower())
             success = bool(last_seen) and (ts_now - last_seen).total_seconds() < 120
             agent_ping_rows.append({
+                "tenant_id": host.tenant_id,
                 "timestamp": ts_now,
                 "host_id": host.id,
                 "host_name": host.name,
@@ -574,11 +584,12 @@ async def run_ping_checks():
         logger.warning("ClickHouse previous-state lookup failed: %s", ch_exc)
         prev_success = {}
 
-    # Run all checks concurrently with semaphore to limit parallelism
-    sem = _asyncio.Semaphore(50)
+    # Run all checks concurrently, at most PING_CONCURRENCY at once across
+    # every tenant's pass, the free slots shared round-robin between tenants.
+    sem = tenant_jobs.limiter("ping_checks", PING_CONCURRENCY)
 
     async def _check_one(host):
-        async with sem:
+        async with sem.slot():
             res = await check_host(host)
             online, port_error, latency, detail = res
             errors_by_host[host.id] = getattr(res, "errors", None) or {}
@@ -608,6 +619,7 @@ async def run_ping_checks():
         } if results else {}
         for host, online, port_error, latency, detail in results:
             icmp_rows.append({
+                "tenant_id": host.tenant_id,
                 "timestamp": now,
                 "host_id": host.id,
                 "host_name": host.name,
@@ -720,7 +732,7 @@ async def run_ping_checks():
 
 
 @instrument_job("ssl_expiry")
-@per_tenant_job
+@fleet_job
 async def update_ssl_expiry():
     """Update ssl_expiry_days for all HTTPS hosts."""
     from utils.ping import get_ssl_expiry_days
@@ -757,18 +769,29 @@ async def update_ssl_expiry():
 @instrument_job("cleanup_old_results")
 @per_tenant_job
 async def cleanup_old_results():
-    """Delete old integration snapshots and SNMP results from Postgres.
+    """Delete old integration snapshots and SNMP results from Postgres, and
+    apply the tenant's retention to ClickHouse.
 
     Time-series data (ping_checks, agent_metrics, bandwidth_metrics, syslog)
-    lives in ClickHouse and is reaped by table-level TTL — no cleanup needed.
+    lives in ClickHouse; its table TTLs are the installation's ceiling. A
+    tenant that keeps less (``ping_retention_days`` below the 30-day TTL) has
+    its older rows deleted here (``clickhouse_client.RETENTION_RULES``).
     """
-    from database import get_setting
+    from services import clickhouse_client as ch
 
     async with AsyncSessionLocal() as db:
-        int_ret = int(await get_setting(db, "integration_retention_days", "7"))
-        ev_ret = int(await get_setting(db, "incident_event_retention_days", "30"))
-        tpl_ret = int(await get_setting(db, "template_retention_days", "90"))
-        tpl_single_ret = int(await get_setting(db, "template_singleton_retention_days", "7"))
+        # The tenant's retention, capped by the installation (<key>_max);
+        # ClickHouse additionally by the table's TTL (the ceiling).
+        ch_retention = {
+            "ping_checks": min(
+                await tenant_jobs.retention_days(db, "ping_retention_days", 30),
+                ch.RETENTION_RULES["ping_checks"][1],
+            ),
+        }
+        int_ret = await tenant_jobs.retention_days(db, "integration_retention_days", 7)
+        ev_ret = await tenant_jobs.retention_days(db, "incident_event_retention_days", 30)
+        tpl_ret = await tenant_jobs.retention_days(db, "template_retention_days", 90)
+        tpl_single_ret = await tenant_jobs.retention_days(db, "template_singleton_retention_days", 7)
 
     async with AsyncSessionLocal() as db:
         await snap_svc.cleanup_all(db, int_ret)
@@ -790,6 +813,12 @@ async def cleanup_old_results():
             # template seen again would count as known, its counts would go
             # to an UPDATE matching nothing, and it would never be re-created.
             await load_template_cache(db)
+
+    for table, days in ch_retention.items():
+        try:
+            await ch.enforce_retention(table, days)
+        except Exception:
+            logger.warning("ClickHouse retention for %s failed", table, exc_info=True)
 
     logger.info(
         "Cleanup done (integrations: %dd, incident events: %dd/%d pruned, "
@@ -1016,6 +1045,21 @@ async def cleanup_clickhouse_logs():
         logger.debug("ClickHouse log cleanup skipped", exc_info=True)
 
 
+@instrument_job("clickhouse_tenant_rebuild")
+@system_job("ClickHouse tenancy step B: sort-key rebuild (installation)")
+async def run_clickhouse_tenant_rebuild():
+    """Rebuild the ClickHouse tables with tenant_id leading the sort key.
+
+    Resumable and bounded per run (services/clickhouse_rebuild.py); a no-op
+    once every table is rebuilt, and with NODEGLOW_CH_TENANT_REBUILD=off.
+    """
+    from services import clickhouse_rebuild
+
+    states = await clickhouse_rebuild.run()
+    if states:
+        logger.debug("ClickHouse tenant rebuild: %s", states)
+
+
 # ── Scheduler lifecycle ──────────────────────────────────────────────────────
 
 
@@ -1058,7 +1102,7 @@ async def run_self_check_job():
 
 
 @instrument_job("snmp_polls")
-@per_tenant_job
+@fleet_job
 async def run_snmp_polls():
     """Run due SNMP polls."""
     from routers.snmp import run_snmp_polls as _run
@@ -1066,7 +1110,7 @@ async def run_snmp_polls():
 
 
 @instrument_job("port_discovery")
-@per_tenant_job
+@fleet_job
 async def run_port_discovery():
     """Discover open ports and SSL certs on monitored hosts."""
     from services.port_discovery import run_port_discovery as _run
@@ -1074,15 +1118,23 @@ async def run_port_discovery():
 
 
 @per_tenant_job
-async def run_weekly_digest():
-    """Build and send weekly digest email."""
-    from database import get_setting, decrypt_value
+async def run_weekly_digest(*, force: bool = False):
+    """Build and send the weekly digest email of the current tenant.
+
+    Scheduled hourly; a tenant's digest goes out when its own slot
+    (``digest_day`` / ``digest_hour`` in its ``timezone``) is less than an
+    hour old and nothing was sent since — what the old weekly cron with an
+    hour of misfire grace did, per tenant. ``force`` skips the slot check.
+    """
+    from database import get_setting, decrypt_value, set_setting
     from services.digest import build_weekly_digest, format_digest_html, format_digest_text
     from notifications import _send_email, _log_notification
 
     async with AsyncSessionLocal() as db:
         enabled = await get_setting(db, "digest_enabled", "0")
         if enabled != "1":
+            return
+        if not force and not await _digest_slot_due(db):
             return
 
         smtp_host = await get_setting(db, "smtp_host", "")
@@ -1112,11 +1164,39 @@ async def run_weekly_digest():
             smtp_from, smtp_to,
             "[Nodeglow] Weekly Digest", text_body, html_body,
         )
+        async with AsyncSessionLocal() as db:
+            await set_setting(db, "digest_last_sent", datetime.utcnow().isoformat())
+            await db.commit()
         await _log_notification("email", "Weekly Digest", "Automated weekly digest", "info", "sent")
         logger.info("Weekly digest email sent to %s", smtp_to)
     except Exception as exc:
         await _log_notification("email", "Weekly Digest", "Automated weekly digest", "info", "failed", str(exc))
         logger.error("Weekly digest email failed: %s", exc)
+
+
+async def _digest_slot_due(db) -> bool:
+    """Whether the current tenant's weekly digest slot fires now.
+
+    ``digest_day`` / ``digest_hour`` are **UTC** — the settings UI says so,
+    and the old weekly cron ran in the container's zone, UTC. The hourly
+    tick fires at the same full hour the old cron did, so the deploy day
+    neither skips nor repeats a digest.
+    """
+    from database import get_setting
+
+    try:
+        day = max(0, min(6, int(await get_setting(db, "digest_day", "0"))))
+        hour = max(0, min(23, int(await get_setting(db, "digest_hour", "9"))))
+    except (TypeError, ValueError):
+        day, hour = 0, 9
+    zone = tenant_jobs.tenant_zone("UTC")
+    raw = await get_setting(db, "digest_last_sent", "")
+    try:
+        last_sent = datetime.fromisoformat(raw) if raw else None
+    except ValueError:
+        last_sent = None
+    return tenant_jobs.slot_due(datetime.utcnow(), zone, hour, weekday=day,
+                                grace_seconds=CRON_MISFIRE_GRACE_SECONDS, last_sent=last_sent)
 
 
 @system_job("GeoIP database update (installation)")
@@ -1152,7 +1232,7 @@ async def update_geoip():
 
 
 @instrument_job("dns_resolution")
-@per_tenant_job
+@fleet_job
 async def resolve_host_dns():
     """Resolve DNS for hosts: rDNS for IP-only hosts, forward DNS for hostname-only hosts.
     Also merges duplicate scanner hosts into existing Proxmox/UniFi/agent hosts."""
@@ -1338,27 +1418,13 @@ async def run_backup_compliance():
 
 async def start_scheduler():
     """Read intervals from DB, then register and start all jobs."""
-    from database import get_setting
-    from services.tenancy import backend as _tenancy_backend
-
-    # The cadence settings are per tenant, the jobs are global (per-tenant
-    # cadence is phase 5): ping and integration jobs run at the fastest
-    # tenant's interval, the digest cron at the first tenant's schedule.
-    # With one tenant this is exactly that tenant's setting.
-    with system_scope("scheduler start: read every tenant's job cadence"):
-        tenant_ids = await _tenancy_backend().active_tenant_ids()
-        async with AsyncSessionLocal() as db:
-            ping_interval = min([
-                int(await get_setting(db, "ping_interval", "60", tenant_id=t))
-                for t in tenant_ids
-            ] or [60])
-            integration_interval = min([
-                int(await get_setting(db, "proxmox_interval", "60", tenant_id=t))
-                for t in tenant_ids
-            ] or [60])
-            first = tenant_ids[0] if tenant_ids else None
-            digest_day = int(await get_setting(db, "digest_day", "0", tenant_id=first)) if first else 0
-            digest_hour = int(await get_setting(db, "digest_hour", "9", tenant_id=first)) if first else 9
+    # Ping and integration jobs tick at the fastest tenant's interval; each
+    # tenant runs at its own (services.tenant_jobs.fleet_job). With one
+    # tenant the tick is exactly that tenant's setting.
+    ping_interval = await tenant_jobs.job_tick(PING_CADENCE)
+    integration_interval = await tenant_jobs.job_tick(INTEGRATION_CADENCE)
+    tenant_jobs.cadence.ticks["ping_checks"] = ping_interval
+    tenant_jobs.cadence.ticks["integration_checks"] = integration_interval
 
     scheduler.add_job(run_ping_checks, "interval", seconds=ping_interval,
                       id="ping_checks", replace_existing=True)
@@ -1419,6 +1485,12 @@ async def start_scheduler():
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
                       id="ch_cleanup", replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
+    # Multi-tenancy step B; first run a few minutes after start, then hourly
+    # (each run is bounded and resumes where the last one stopped).
+    scheduler.add_job(run_clickhouse_tenant_rebuild, "interval", hours=1,
+                      id="ch_tenant_rebuild", replace_existing=True,
+                      max_instances=1, coalesce=True,
+                      next_run_time=datetime.now() + timedelta(minutes=5))
 
     # DNS resolution + host dedup (every 30 minutes)
     scheduler.add_job(resolve_host_dns, "interval", minutes=30,
@@ -1430,9 +1502,9 @@ async def start_scheduler():
                       id="geoip_update", replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
-    # Weekly digest email (default: Monday 9:00, configurable)
-    scheduler.add_job(run_weekly_digest, "cron",
-                      day_of_week=digest_day, hour=digest_hour, minute=0,
+    # Weekly digest email: hourly tick, each tenant at its own day and hour
+    # in its own time zone (default: Monday 9:00).
+    scheduler.add_job(run_weekly_digest, "cron", minute=0,
                       id="weekly_digest", replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 
@@ -1467,6 +1539,18 @@ async def start_scheduler():
         pass
     logger.info("Scheduler started (ping=%ds, integrations=%ds)",
                 ping_interval, integration_interval)
+
+
+async def reschedule_cadence_jobs() -> None:
+    """Re-derive the ticks of the cadence jobs after a tenant changed its
+    ``ping_interval`` / ``proxmox_interval``: the fastest tenant's interval,
+    never below the installation floor."""
+    for job_id, spec in (("ping_checks", PING_CADENCE), ("integration_checks", INTEGRATION_CADENCE)):
+        tick = await tenant_jobs.job_tick(spec)
+        tenant_jobs.cadence.ticks[job_id] = tick
+        job = scheduler.get_job(job_id)
+        if job is not None:
+            job.reschedule(trigger="interval", seconds=tick)
 
 
 def stop_scheduler():

@@ -483,8 +483,7 @@ _subscribers: list[tuple[int, asyncio.Queue]] = []
 
 # Internal key on a parsed message: the tenant it belongs to. Set by every
 # producer (direct listener: LISTENER_TENANT_ID, agent logs: the agent's
-# tenant); stripped before the ClickHouse insert until the tables carry
-# tenant_id (phase 6).
+# tenant); written to the row's tenant_id column on insert (_clean_rows).
 TENANT_KEY = "_tenant_id"
 
 
@@ -609,10 +608,22 @@ async def _flush_buffer():
 
 
 def _clean_rows(batch: list[dict]) -> list[dict]:
+    """Insert rows for ClickHouse: the in-process tenant becomes ``tenant_id``.
+
+    A message without a tenant is dropped here — _enqueue already refuses
+    them, so this only guards against a producer that bypassed it; a batch
+    with such a row would otherwise fail as a whole and be retried forever.
+    """
     _transient = {"is_new_template", "severity_label", TENANT_KEY}
     cleaned = []
     for msg in batch:
+        tenant_id = msg.get(TENANT_KEY, msg.get("tenant_id"))
+        if tenant_id is None:
+            log.error("Syslog message without tenant not stored (source %s)", msg.get("source_ip"))
+            _count_drop("no_tenant")
+            continue
         row = {k: v for k, v in msg.items() if k not in _transient}
+        row["tenant_id"] = int(tenant_id)
         if isinstance(row.get("tags"), list):
             row["tags"] = ",".join(row["tags"]) if row["tags"] else ""
         row.setdefault("tags", "")

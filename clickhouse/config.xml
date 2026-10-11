@@ -4,6 +4,12 @@
     <mark_cache_size>268435456</mark_cache_size>
     <uncompressed_cache_size>536870912</uncompressed_cache_size>
     <max_concurrent_queries>20</max_concurrent_queries>
+
+    <!-- Custom settings the app sends per query. SQL_nodeglow_tenant carries
+         the tenant for the row policies of the restricted tenant user
+         (CLICKHOUSE_TENANT_URL, multi-tenancy phase 6). Stated here so the
+         policies do not depend on the image's default config. -->
+    <custom_settings_prefixes>SQL_</custom_settings_prefixes>
     <logger>
         <level>warning</level>
     </logger>

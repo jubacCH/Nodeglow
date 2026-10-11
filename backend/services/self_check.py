@@ -228,9 +228,13 @@ def _job_intervals(scheduler) -> dict[str, float]:
 
 async def _last_seen(key: str) -> float | None:
     """Newest datapoint for a ClickHouse-backed source, as a unix timestamp."""
-    from services.clickhouse_client import query_scalar
+    from services.clickhouse_client import TENANT_FILTER, query_scalar
 
-    value = await query_scalar(f"SELECT toUnixTimestamp(max(timestamp)) FROM {key}")
+    # The current tenant's newest row: one tenant's stream going quiet must
+    # not hide behind another tenant's that keeps writing.
+    value = await query_scalar(
+        f"SELECT toUnixTimestamp(max(timestamp)) FROM {key} WHERE {TENANT_FILTER}"
+    )
     # ClickHouse returns 0 for an empty table, which must read as "never".
     return float(value) if value else None
 
@@ -265,7 +269,7 @@ async def _active_sources(db) -> dict[str, bool]:
         from services.clickhouse_client import query_scalar
         recent = await query_scalar(
             "SELECT count() FROM syslog_messages "
-            "WHERE timestamp >= now() - INTERVAL 7 DAY"
+            "WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 7 DAY"
         )
         active["syslog_messages"] = bool(recent)
     except Exception:  # noqa: BLE001

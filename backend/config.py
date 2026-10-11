@@ -16,6 +16,58 @@ if not DATABASE_URL:
     DATABASE_PATH = DATA_DIR / "nodeglow.db"
     DATABASE_URL = f"sqlite+aiosqlite:///{DATABASE_PATH}"
 
+# Owner connection: the role that owns the schema. Migrations (migrate.py,
+# alembic, the update sidecar), the row-level-security setup and the backup
+# restore use it; the application itself runs on DATABASE_URL. Unset (every
+# install before phase 7 of multi-tenancy): the same connection as the app —
+# one user that owns and runs everything, exactly as before.
+def resolve_owner_url(env, app_url: str) -> str:
+    """The owner connection: ``DATABASE_OWNER_URL`` / ``MIGRATION_DATABASE_URL``
+    if set; else the compose stack's owner URL (``NODEGLOW_COMPOSE_OWNER_URL``)
+    but only when the app runs as its own user (``POSTGRES_APP_USER``); else
+    the app's URL. So an install that points only ``DATABASE_URL`` at another
+    server (docker-compose.override.yml) keeps migrating that server."""
+    explicit = (env.get("DATABASE_OWNER_URL") or "").strip() \
+        or (env.get("MIGRATION_DATABASE_URL") or "").strip()
+    if explicit:
+        return explicit
+    if (env.get("POSTGRES_APP_USER") or "").strip():
+        compose = (env.get("NODEGLOW_COMPOSE_OWNER_URL") or "").strip()
+        if compose:
+            return compose
+    return app_url
+
+
+def same_database(url_a: str, url_b: str) -> bool:
+    """Whether two URLs name the same server and database (users may differ)."""
+    try:
+        from sqlalchemy.engine import make_url
+
+        a, b = make_url(url_a), make_url(url_b)
+    except Exception:  # noqa: BLE001 — unparsable: let the engine complain
+        return True
+    return (a.host, a.port or 5432, a.database) == (b.host, b.port or 5432, b.database)
+
+
+DATABASE_OWNER_URL = resolve_owner_url(os.environ, DATABASE_URL)
+if not same_database(DATABASE_OWNER_URL, DATABASE_URL):
+    log.error(
+        "DATABASE_OWNER_URL and DATABASE_URL point to different databases: the migrations "
+        "would run on one and the app on the other. Set both to the same server/database "
+        "(docs/OPERATIONS.md, 'Row-level security')."
+    )
+
+
+def _flag(value: str | None) -> bool:
+    return (value or "").strip().lower() in ("1", "on", "true", "yes")
+
+
+# PostgreSQL row-level security, the second tenant-isolation layer
+# (services/pg_rls.py). Off by default so existing installs behave exactly as
+# before; scripts/install.sh turns it on for new installs. See
+# docs/OPERATIONS.md, "Row-level security".
+RLS_ENABLED = _flag(os.getenv("NODEGLOW_RLS"))
+
 # Optional Redis URL for shared, durable state (e.g. rate-limit counters).
 # When unset, state lives in-process (per-worker) exactly as before; when set,
 # limits are shared across workers/nodes. No connection is made at import time.
