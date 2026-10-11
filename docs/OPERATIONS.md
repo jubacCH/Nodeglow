@@ -681,10 +681,21 @@ many exist (suspended and deleting ones count, purged ones do not).
   belong to no other tenant (audit entry `tenant.purged`). The default
   tenant (id 1) cannot be suspended or deleted.
 - **Plans** (Standard 30 / Professional 90 / Enterprise 365 days) cap every
-  retention setting of a tenant; its admins choose within the plan.
+  retention setting of a tenant; its admins choose within the plan. A plan
+  below the tenant's stored retention lowers it after a confirmation, and
+  the nightly cleanup then deletes the older history for good. The default
+  tenant gets no plan; "No plan" takes a tenant back to the installation
+  caps.
 - **Operators see no tenant data.** A tenant's admin grants time-limited
   support access under Settings → Support access; every access is in that
-  tenant's audit log (`acting_via = support`).
+  tenant's audit log (`acting_via = support`). Support access cannot manage
+  users, passwords, API keys or install tokens of the tenant, and never
+  makes anyone an operator.
+- **Users are global.** A tenant admin can reset the password only of users
+  who belong to that tenant alone; for a user who also reaches another
+  tenant, the provider or the installation, only the user or an operator
+  can. The AI provider, its endpoint and keys (Settings → AI) are
+  installation settings: only operators change them.
 - When the license expires every tenant keeps being monitored and reachable;
   creating, suspending, resuming and plan changes are refused, cancelling a
   deletion and ending support access still work, scheduled purges still run. Back up the private key (password manager / vault); without
