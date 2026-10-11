@@ -336,9 +336,12 @@ async def _refresh_host_cache():
         from database import get_setting
         # One listener serves the installation, so its host cache spans every
         # tenant. (Keyed by IP/hostname only: tenant-keying it is phase 4.)
-        async with AsyncSessionLocal() as db, _system_scope("syslog: host cache"):
-            hosts = (await db.execute(select(PingHost))).scalars().all()
-            _allowlist_only = (await get_setting(db, "syslog_allowlist_only", "0")) == "1"
+        # system_scope/tenant_scope are plain (sync) context managers: they
+        # cannot share an ``async with`` with the session.
+        with _system_scope("syslog: host cache"):
+            async with AsyncSessionLocal() as db:
+                hosts = (await db.execute(select(PingHost))).scalars().all()
+                _allowlist_only = (await get_setting(db, "syslog_allowlist_only", "0")) == "1"
         cache: dict[str, int] = {}
         allowed_ips: set[str] = set()
         raws: list[tuple[str, int]] = []
@@ -749,8 +752,9 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
         from services.log_intelligence import load_template_cache
         # The direct listener feeds the default tenant (single-tenant
         # behaviour, see the spec's "Syslog ingestion"); so does the cache.
-        async with AsyncSessionLocal() as db, _tenant_scope(DEFAULT_TENANT_ID):
-            await load_template_cache(db)
+        with _tenant_scope(DEFAULT_TENANT_ID):
+            async with AsyncSessionLocal() as db:
+                await load_template_cache(db)
     except Exception as e:
         log.warning("Failed to load template cache: %s", e)
 

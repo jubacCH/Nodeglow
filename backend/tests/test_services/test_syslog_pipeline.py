@@ -142,3 +142,26 @@ async def test_start_and_stop_manage_every_background_task():
 
     assert all(t.cancelled() or t.done() for t in tasks)
     assert syslog._udp_queue is None
+
+
+async def test_host_cache_refresh_loads_hosts_under_system_scope(db):
+    """Regression (2026-10-11): ``async with session, system_scope(...)`` mixed a
+    sync context manager into ``async with``; every refresh raised, the error
+    was logged as a warning and syslog lost its host mapping and allowlist."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from models.ping import PingHost
+
+    db.add(PingHost(name="edge-fw", hostname="fw.example.internal"))
+    await db.commit()
+
+    plain = async_sessionmaker(db.bind, expire_on_commit=False)  # no tenant binding
+    syslog._host_cache, syslog._host_cache_ts = {}, 0.0
+    with patch.object(syslog, "AsyncSessionLocal", plain), \
+         patch.object(syslog, "_resolve_many", new=AsyncMock(return_value={})):
+        await syslog._refresh_host_cache()
+    try:
+        assert "fw.example.internal" in syslog._host_cache
+        assert "edge-fw" in syslog._host_cache
+    finally:
+        syslog._host_cache, syslog._host_cache_ts = {}, 0.0
