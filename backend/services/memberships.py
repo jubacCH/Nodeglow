@@ -42,9 +42,12 @@ async def membership(db, user_id: int, tenant_id: int) -> TenantMembership | Non
 
 
 def _mirror_role(user: User, tenant_id: int, role: str) -> None:
-    # users.role mirrors the default tenant's membership (rollback safety).
+    # users.role mirrors the default tenant's membership (rollback safety);
+    # users.is_operator follows "admin of the default tenant" (the core's
+    # operator rule, see SingleTenancy.is_operator), demotion included.
     if tenant_id == DEFAULT_TENANT_ID:
         user.role = role
+        user.is_operator = role == "admin"
 
 
 async def grant(db, user: User, tenant_id: int, role: str, *, created_by: int | None = None) -> TenantMembership:
@@ -91,6 +94,30 @@ async def admin_count(db, tenant_id: int) -> int:
         select(func.count()).select_from(TenantMembership)
         .where(TenantMembership.tenant_id == tenant_id, TenantMembership.role == "admin")
     )).scalar() or 0
+
+
+async def sync_from_users_role(db, tenant_id: int = DEFAULT_TENANT_ID) -> int:
+    """Make ``users.role`` win over the default tenant's memberships, and
+    set ``is_operator`` from it: for data written before the auth binding
+    (revision 043), where only ``users.role`` was maintained — e.g. a
+    restored pre-043 backup. Creates missing memberships too. Returns the
+    number of memberships created or changed. Flushes."""
+    changed = 0
+    users = (await db.execute(select(User))).scalars().all()
+    for u in users:
+        role = normalise_role(u.role or "admin", "admin")
+        row = await membership(db, u.id, tenant_id)
+        if row is None:
+            db.add(TenantMembership(user_id=u.id, tenant_id=tenant_id, role=role,
+                                    created_at=datetime.utcnow()))
+            changed += 1
+        elif row.role != role:
+            row.role = role
+            changed += 1
+        if tenant_id == DEFAULT_TENANT_ID:
+            u.is_operator = role == "admin"
+    await db.flush()
+    return changed
 
 
 async def backfill_memberships(db, tenant_id: int = DEFAULT_TENANT_ID) -> int:

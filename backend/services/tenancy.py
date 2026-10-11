@@ -313,11 +313,15 @@ class SingleTenancy:
         async with _base.AsyncSessionLocal() as db:
             return (await memberships_for(db, user.id)).get(tenant_id)
 
-    def is_operator(self, user: Any, role: str | None = None) -> bool:
-        """Installation operator. In the core the admin of the one tenant
-        administers the installation too (``role`` is the user's role in the
-        request's tenant), so this is never narrower than before the split."""
-        return bool(getattr(user, "is_operator", False)) or role == "admin"
+    def is_operator(self, user: Any, role: str | None = None,
+                    tenant_id: int | None = None) -> bool:
+        """Installation operator. In the core: the admin of the default
+        tenant (``role`` is the user's role in the request's tenant
+        ``tenant_id``) — exactly who administered the installation before
+        the split, and nobody else: a demoted admin loses it with the role.
+        ``users.is_operator`` is kept equal to that (services.memberships)
+        for an ee backend, which decides by the flag."""
+        return tenant_id == DEFAULT_TENANT_ID and role == "admin"
 
     def can_create_tenant(self) -> bool:
         return False
@@ -364,7 +368,35 @@ def request_is_operator(request: Any) -> bool:
     user = getattr(state, "current_user", None)
     if user is None:
         return False
-    return backend().is_operator(user, request_role(request))
+    return backend().is_operator(user, request_role(request), getattr(state, "tenant_id", None))
+
+
+# How often a long-lived connection (/ws/live, the syslog live tail) checks
+# that its user still has access to its tenant with the same role.
+STREAM_REVALIDATE_SECONDS = 30.0
+
+
+async def revalidate_access(conn: Any, tenant_id: int) -> TenantAccess | None:
+    """Re-run the authentication and tenant resolution of a long-lived
+    connection: the access it has *now* to ``tenant_id``, or None (session
+    gone, membership revoked, tenant suspended, or the session switched to
+    another tenant). Nothing is cached from the first resolution."""
+    import database  # looked up at call time (patched in tests)
+    from models import base as _base
+
+    state = getattr(conn, "state", None)
+    if state is not None:
+        for attr in ("_tenancy_memberships", "session_active_tenant_id"):
+            if hasattr(state, attr):
+                delattr(state, attr)
+    async with _base.AsyncSessionLocal() as db:
+        user = await database.get_current_user(conn, db)
+    if user is None:
+        return None
+    access = await backend().resolve_access(conn, user)
+    if access is None or access.tenant_id != tenant_id:
+        return None
+    return access
 
 
 @asynccontextmanager

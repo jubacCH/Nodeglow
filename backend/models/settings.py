@@ -206,27 +206,35 @@ async def set_setting(
         await db.commit()
 
 
-async def adopt_legacy_tenant_settings(db: AsyncSession, tenant_id: int) -> int:
+async def adopt_legacy_tenant_settings(db: AsyncSession, tenant_id: int, *,
+                                       replace: bool = False) -> int:
     """Move tenant-scoped keys found in ``settings`` into ``tenant_settings``
-    of ``tenant_id`` (an existing tenant value wins). Returns the number of
-    keys moved. Revision 042 does this for upgrades; this is for data that
-    arrives later in the old shape (a restored pre-042 backup). Not committed.
+    of ``tenant_id``. Returns the number of keys moved. Revision 042 does
+    this for upgrades; this is for data that arrives later in the old shape
+    (a restored pre-042 backup). With ``replace`` the moved data is the
+    truth: the tenant's existing settings are dropped first (a restore);
+    without it an existing tenant value wins. Not committed.
     """
+    from sqlalchemy import delete
+
     from models.tenant import TenantSetting
     from services import tenancy
     from services.settings_registry import tenant_keys
 
     rows = (await db.execute(select(Setting).where(Setting.key.in_(tenant_keys())))).scalars().all()
-    if not rows:
+    if not rows and not replace:
         return 0
     with tenancy.system_scope(f"settings: adopt pre-split settings into tenant {tenant_id}"):
+        if replace:
+            await db.execute(delete(TenantSetting).where(TenantSetting.tenant_id == tenant_id))
         for row in rows:
-            if await db.get(TenantSetting, (tenant_id, row.key)) is None:
+            existing = await db.get(TenantSetting, (tenant_id, row.key))
+            if existing is None:
                 db.add(TenantSetting(tenant_id=tenant_id, key=row.key, value=row.value,
                                      encrypted=bool(row.encrypted)))
             await db.delete(row)
         await db.flush()
-    return len(rows)
+    return len(rows) or (1 if replace else 0)
 
 
 async def is_setup_complete(db: AsyncSession) -> bool:
