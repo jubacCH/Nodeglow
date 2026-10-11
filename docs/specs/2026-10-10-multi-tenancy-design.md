@@ -643,6 +643,13 @@ That spec is [2026-10-11-probe-side-integrations.md](2026-10-11-probe-side-integ
 (design, 2026-10-11; recommendation: the existing Python collectors run on the
 probe, host-level primitives native in the agent, no generic proxy).
 
+Phase 9 consequences from that spec: a suspended tenant's probes must still
+reach a minimal lifecycle endpoint (`GET /api/agent/lifecycle`, answering only
+`active` / `suspended` / `wipe`) so they stop collecting and drop cached
+secrets, and the purge must, before deleting agent rows, copy each agent's
+token hash into an installation-level tombstone so the probe can still be told
+to `wipe` (see "Tenant suspension and purge" there).
+
 ## Open Core boundary
 
 ### Principle
