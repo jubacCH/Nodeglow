@@ -47,6 +47,12 @@ from models.tenant import (
     ensure_default_tenant,
 )
 
+# The tenant filter hooks into every SQLAlchemy session; installing it here
+# means nothing can open a session before it is active.
+from services import tenancy as _tenancy  # noqa: E402
+
+_tenancy.install()
+
 
 async def init_db():
     """Create all tables and the default provider/tenant/site (fresh installs)."""

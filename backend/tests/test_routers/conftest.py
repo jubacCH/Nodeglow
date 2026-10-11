@@ -19,7 +19,9 @@ from starlette.responses import HTMLResponse
 
 from models.base import Base as ModelsBase
 from database import Base as DbBase
-from tests.conftest import install_naive_datetime_guard
+from tests.conftest import (
+    install_naive_datetime_guard, seed_default_tenant, tenant_bound_sessionmaker,
+)
 
 
 class FakeUser:
@@ -72,7 +74,12 @@ async def make_client(fake_user=_AUTH_DISABLED):
         await conn.run_sync(DbBase.metadata.create_all)
         await conn.run_sync(ModelsBase.metadata.create_all)
 
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    # The app's sessions carry no tenant binding: every route has to get its
+    # tenant from the middleware (or an explicit scope), exactly as in
+    # production. Tests seed and assert through a factory bound to tenant 1.
+    app_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = tenant_bound_sessionmaker(engine)
+    await seed_default_tenant(engine)
 
     # Seed minimal settings
     async with session_factory() as seed_db:
@@ -85,7 +92,7 @@ async def make_client(fake_user=_AUTH_DISABLED):
 
     @asynccontextmanager
     async def fake_session():
-        async with session_factory() as session:
+        async with app_session_factory() as session:
             yield session
 
     async def _ch_query_mock(sql, params=None):
