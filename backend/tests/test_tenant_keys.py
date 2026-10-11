@@ -3,7 +3,7 @@
 Wrap/unwrap, the cipher (formats, fail closed), the caches (per tenant, per
 transaction), rotation, destroy (crypto-shred), isolation between tenants
 (also with direct database access to the ciphertext and the wrapped keys),
-the settings layer, the startup pass, backups (export opens, restore seals)
+the settings layer, the startup pass, backups (the export decrypts nothing)
 and revision 046's data step on SQLite. The PostgreSQL run of 046 is in
 tests/test_tenant_keys_pg.py.
 """
@@ -451,46 +451,39 @@ async def test_scan_reports_formats_and_failures_without_secrets(db):
 
 
 # ── Backups ──────────────────────────────────────────────────────────────────
+# (the restore needs PostgreSQL: tests/test_tenant_keys_pg.py)
 
-async def test_export_opens_and_restore_seals_under_the_target_key(db):
+async def test_export_decrypts_nothing_and_carries_the_wrapped_keys(db):
+    """An export (operator API key + a passphrase the caller picks) never
+    yields a tenant secret: values stay under the tenant key, whose wrapped
+    data key needs SECRET_KEY."""
     await _seed_secrets(db)
-    from services.backup import export_backup
+    await tk.reencrypt_legacy(db, A)
+    await db.commit()
+    from services.backup import EXPORT_TABLES, export_backup
     s = _session(db)
     with tenant_scope(A):
+        key_id = (await tk.get_dek(s, create=False)).key_id
         data = await export_backup(s)
-    assert data["_meta"]["tenant_secrets"] == "plaintext"
+    assert "tenant_secrets" not in data["_meta"]
     tables = data["tables"]
-    assert "tenant_keys" not in tables
+    assert EXPORT_TABLES.index("tenant_keys") < EXPORT_TABLES.index("tenant_settings")
+    keys = tables["tenant_keys"]
+    assert [(k["tenant_id"], k["key_id"]) for k in keys] == [(A, key_id)]
+    assert keys[0]["wrapped_dek"].startswith("gAAAAA")
+    for row in tables["integration_configs"] + tables["credentials"]:
+        value = row.get("config_json") or row.get("data_json")
+        assert isinstance(value, str) and value.startswith(f"v2:{key_id}:")
+    dump = json.dumps(data)
+    for secret in ('{"token": "t"}', '"community"', "pub", "https://plain.example/hook",
+                   '"smtp"', tk.SECRET_COLUMNS[0][1] + '": {'):
+        assert secret not in dump, secret
+    # The exported value opens only with the exported wrapped key and this
+    # installation's KEK — nothing in the file itself suffices.
     cfg = tables["integration_configs"][0]["config_json"]
-    assert tk.is_plain_marker(cfg) and json.loads(cfg["value"]) == {"token": "t"}
-    assert tk.is_plain_marker(tables["credentials"][0]["data_json"])
-    by_key = {r["key"]: r["value"] for r in tables["tenant_settings"]}
-    assert by_key["smtp_password"]["value"] == "smtp"
-    assert by_key["site_name"] == "not a secret"
-    # Exported only inside the passphrase envelope; it round-trips.
-    from services.backup import decrypt_backup, encrypt_backup
-    restored = decrypt_backup(encrypt_backup(data, "a" * 16), "a" * 16)
-    assert restored["tables"]["credentials"] == tables["credentials"]
-
-    # Restore into another installation: its own tenant key.
-    with system_scope("test: restore"):
-        target_key = (await tk.get_dek(s, A)).key_id
-        sealed = await tk.seal_for_restore(s, restored["tables"], A)
-    # config, credential, smtp_password; the plaintext webhook_url row was
-    # exported as stored (the restore's legacy pass encrypts it).
-    assert sealed == 3
-    cfg_value = restored["tables"]["integration_configs"][0]["config_json"]
-    assert tk.parse_v2(cfg_value)[0] == target_key
-    with tenant_scope(A):
-        assert json.loads(await tk.decrypt_secret(s, cfg_value)) == {"token": "t"}
+    fernet = tk.dek_fernet(tk.unwrap_dek(keys[0]["wrapped_dek"], A, key_id, keys[0]["kek_id"]))
+    assert json.loads(fernet.decrypt(tk.parse_v2(cfg)[1].encode())) == {"token": "t"}
     await s.close()
-
-
-async def test_restore_refuses_plaintext_markers_outside_secret_columns(db):
-    tables = {"ping_hosts": [{"tenant_id": 1, "name": {tk.SECRET_MARKER: "plain", "value": "x"}}]}
-    with system_scope("test"):
-        with pytest.raises(ValueError, match="plaintext secret"):
-            await tk.seal_for_restore(db, tables, A)
 
 
 # ── Revision 046's data step (SQLite; PostgreSQL in test_tenant_keys_pg.py) ──
@@ -506,47 +499,62 @@ def _load_046():
     return mod
 
 
-async def test_revision_046_data_step_is_idempotent_and_reversible(db):
+async def test_revision_046_rewrites_no_secret_so_the_old_backend_keeps_reading(db):
+    """The updater migrates while the old backend still serves: 046 leaves
+    every value as the old code reads it; the new backend's startup pass
+    moves them; the downgrade puts them back."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
     rev = _load_046()
     assert set(rev.SECRET_SETTING_KEYS) == tk._secret_setting_keys(), \
         "frozen list in 046 must match the registry at this revision"
-    await _seed_secrets(db)
     with tenant_scope(A):
+        db.add(IntegrationConfig(type="proxmox", name="p",
+                                 config_json=encrypt_value(json.dumps({"token": "t"}))))
+        db.add(Credential(name="c", type="snmp_v2c",
+                          data_json=encrypt_value(json.dumps({"community": "pub"}))))
+        db.add(TenantSetting(key="smtp_password", value=encrypt_value("smtp"), encrypted=True))
         db.add(TenantSetting(key="smtp_user", value=encrypt_value("flagged"), encrypted=True))
         db.add(Credential(name="old-key", type="snmp_v2c", data_json="gAAAAABold" + "A" * 60))
         await db.commit()
-    s = _session(db)
-    before = await _secret_values(s)
+
+    def raw_values(conn):
+        rows = conn.execute(text(
+            "SELECT config_json FROM integration_configs UNION ALL "
+            "SELECT data_json FROM credentials UNION ALL "
+            "SELECT value FROM tenant_settings")).scalars().all()
+        return sorted(rows)
+
     async with db.bind.connect() as conn:
-        up = await conn.run_sync(rev.migrate_up)
+        before = await conn.run_sync(raw_values)
+        key_id = await conn.run_sync(rev.migrate_up)
         again = await conn.run_sync(rev.migrate_up)
+        after = await conn.run_sync(raw_values)
         await conn.commit()
-    assert up["integration_configs.config_json"] == {"converted": 0, "skipped": 1, "failed": 0}
-    assert up["credentials.data_json"] == {"converted": 1, "skipped": 0, "failed": 1}
-    # smtp_password (legacy) and smtp_user (flagged) move; the plaintext
-    # webhook_url is left for the startup pass.
-    assert up["tenant_settings.value"] == {"converted": 2, "skipped": 0, "failed": 1}
-    assert all(c["converted"] == 0 for c in again.values())
-    await s.commit()
-    after = await _secret_values(s)
-    assert {k: v for k, (_f, v) in after.items()} == {k: v for k, (_f, v) in before.items()}
+    assert key_id and again == key_id          # tenant 1's key, created once
+    assert after == before                     # not one value rewritten
+    # What the code of 044 does with each of them: decrypt_value.
+    assert {decrypt_value(v) for v in after if not v.startswith("gAAAAABold")} == {
+        json.dumps({"token": "t"}), json.dumps({"community": "pub"}), "smtp", "flagged"}
+
+    # The new backend's start moves them, under the key 046 created.
+    factory = async_sessionmaker(db.bind, expire_on_commit=False)
+    assert await tk.upgrade_legacy_secrets(factory) == 4
+    s = _session(db)
+    values = await _secret_values(s)
+    assert {k for k, _ in values.values()} == {key_id, "legacy"}   # "legacy": the old-key row
     from models.settings import get_setting
     assert await get_setting(db, "smtp_user") == "flagged"
-    with system_scope("test"):
-        old = (await s.execute(select(Credential).where(Credential.name == "old-key"))).scalar_one()
-    assert old.data_json.startswith("gAAAAABold")  # left exactly as it was
 
     async with db.bind.connect() as conn:
         down = await conn.run_sync(rev.migrate_down)
         await conn.commit()
-    assert down["credentials.data_json"]["converted"] == 1
-    await s.commit()
-    with system_scope("test"):
-        rows = (await s.execute(text("SELECT data_json FROM credentials ORDER BY id"))).scalars().all()
-    assert decrypt_value(rows[0]) == json.dumps({"community": "pub"})
-    # Back under the installation key, same plaintext everywhere.
-    assert {k: v for k, (_f, v) in (await _secret_values(s)).items()} == \
-        {k: v for k, (_f, v) in before.items()}
+    assert down["credentials.data_json"] == {"converted": 1, "skipped": 1, "failed": 0}
+    async with db.bind.connect() as conn:
+        assert await conn.run_sync(raw_values) != before          # fresh tokens...
+        restored = await conn.run_sync(raw_values)
+    assert sorted(decrypt_value(v) for v in restored if not v.startswith("gAAAAABold")) == \
+        sorted(decrypt_value(v) for v in before if not v.startswith("gAAAAABold"))  # ...same plaintext
     await s.close()
 
 
@@ -558,6 +566,64 @@ async def test_revision_046_creates_tenant_1_key_without_secrets(db):
     with system_scope("test"):
         keys = (await db.execute(select(TenantKey.tenant_id))).scalars().all()
     assert keys == [A]
+
+
+# ── Destroy without a key, keys that do not unwrap ──────────────────────────
+
+async def test_destroying_a_tenant_without_a_key_leaves_a_tombstone(db):
+    await _add_tenant_b(db)
+    s = _session(db)
+    with system_scope("test: purge tenant B, which never had a secret"):
+        assert await tk.destroy_tenant_key(s, B) == 0
+        await s.commit()
+        rows = (await s.execute(select(TenantKey).where(TenantKey.tenant_id == B))).scalars().all()
+    assert [(r.wrapped_dek, r.destroyed_at is not None) for r in rows] == [(None, True)]
+    with tenant_scope(B):
+        with pytest.raises(tk.TenantKeyDestroyed):
+            await tk.encrypt_secret(s, "new secret for a shredded tenant")
+        with pytest.raises(tk.TenantKeyDestroyed):
+            await tk.get_dek(s)
+    with system_scope("test: destroy again"):
+        assert await tk.destroy_tenant_key(s, B) == 0          # idempotent: one tombstone
+        await s.commit()
+        assert len((await s.execute(select(TenantKey).where(TenantKey.tenant_id == B))).all()) == 1
+    await s.close()
+
+
+async def _broken_key(db, tenant_id=A, key_id="brokenkey"):
+    """A key row whose wrapped key does not unwrap here (another tenant's)."""
+    with system_scope("test: a key that does not unwrap", audit=False):
+        db.add(TenantKey(tenant_id=tenant_id, key_id=key_id, kek_id=tk.KEK_ID,
+                         wrapped_dek=tk.wrap_dek(tk.new_dek(), tenant_id + 100, key_id)))
+        await db.commit()
+
+
+async def test_get_dek_of_a_key_that_does_not_unwrap_fails_closed(db):
+    await _broken_key(db)
+    s = _session(db)
+    with tenant_scope(A):
+        with pytest.raises(tk.TenantKeyUnavailable, match="does not belong"):
+            await tk.get_dek(s)
+        with pytest.raises(tk.TenantKeyUnavailable):
+            await tk.create_tenant_key(s, A)
+        with pytest.raises(tk.TenantKeyUnavailable):
+            await tk.encrypt_secret(s, "x")
+    await s.close()
+
+
+async def test_rotation_retires_a_key_that_does_not_unwrap(db):
+    await _broken_key(db)
+    s = _session(db)
+    with system_scope("test: rotate"):
+        report = await tk.rotate_tenant_key(s, A)
+        await s.commit()
+        states = (await tk.scan(s))["keys"][str(A)]
+    assert report.retired == ["brokenkey"]
+    assert states == {"brokenkey": "retired", report.key_id: "active"}
+    with tenant_scope(A):
+        assert (await tk.get_dek(s, create=False)).key_id == report.key_id
+        assert await tk.decrypt_secret(s, await tk.encrypt_secret(s, "x")) == "x"
+    await s.close()
 
 
 async def test_retired_and_destroyed_states_in_scan(db):

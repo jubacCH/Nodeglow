@@ -11,10 +11,12 @@ Installation secrets (``settings``: LDAP bind password, AI provider keys,
 the licence, GeoIP) keep the installation key (``models.base.encrypt_value``).
 
 Destroying a tenant's keys (:func:`destroy_tenant_key`, the purge of a
-deleted tenant) is a crypto-shred: the wrapped DEKs are deleted, and every
-copy of that tenant's ciphertext — in the database, a replica, a dump — is
-unreadable from then on, even with ``SECRET_KEY``. Decrypts fail closed with
-:class:`TenantKeyDestroyed`.
+deleted tenant) is a crypto-shred: the wrapped DEKs are deleted, and the
+tenant's ciphertext — in the database, a replica, every dump or JSON export
+taken afterwards — is unreadable from then on, even with ``SECRET_KEY``.
+A dump or export taken *before* the destroy holds the wrapped keys like it
+holds the data, so it stays readable with ``SECRET_KEY`` until it leaves
+backup retention. Decrypts fail closed with :class:`TenantKeyDestroyed`.
 
 Value format (one string column, self-describing)::
 
@@ -427,6 +429,10 @@ async def get_dek(db, tenant_id: int | None = None, *, create: bool = True) -> D
         if ks.destroyed:
             raise TenantKeyDestroyed(f"tenant {ks.tenant_id}'s keys were destroyed")
         raise TenantKeyError(f"tenant {ks.tenant_id} has no data key")
+    if ks.active in ks.broken:
+        # Fail closed like the cipher: a key that does not unwrap (another
+        # SECRET_KEY, a copied row) is never replaced behind the caller's back.
+        raise TenantKeyUnavailable(ks.broken[ks.active])
     return DataKey(ks.tenant_id, ks.active, ks.keys[ks.active])
 
 
@@ -614,7 +620,10 @@ async def rotate_tenant_key(db, tenant_id: int) -> ReencryptReport:
         if ks.active is None and ks.destroyed:
             raise TenantKeyDestroyed(f"tenant {tid}'s keys were destroyed")
         old = TenantCipher(_KeySet(tid, dict(ks.keys), ks.active, ks.destroyed, dict(ks.broken)))
-        previous = [k for k, f in ks.keys.items() if f is not None or k in ks.broken]
+        # Every live key goes, the ones that do not unwrap included (they are
+        # in ``broken``, not in ``keys``); tombstones (None) are history.
+        previous = [k for k, f in ks.keys.items() if f is not None]
+        previous += [k for k in ks.broken if k not in ks.keys]
         await _create(db, tid, ks)
         cipher = TenantCipher(ks)
         report = await _reencrypt(db, tid, cipher, old, only_legacy=False)
@@ -639,7 +648,12 @@ async def destroy_tenant_key(db, tenant_id: int) -> int:
     they are shredded too. Afterwards every decrypt of the tenant's secrets
     fails with :class:`TenantKeyDestroyed` and nothing can be encrypted for
     it. Returns the number of keys destroyed. Not committed — the caller
-    commits (the purge, in system scope)."""
+    commits (the purge, in system scope).
+
+    A tenant without a key gets a tombstone (a key row without a wrapped
+    key, destroyed): the destroyed state is recorded either way, so a later
+    encrypt for the tenant fails with :class:`TenantKeyDestroyed` instead of
+    quietly creating a fresh key."""
     from sqlalchemy import update
 
     from models.tenant import TenantKey
@@ -657,84 +671,26 @@ async def destroy_tenant_key(db, tenant_id: int) -> int:
             .values(wrapped_dek=None, destroyed_at=datetime.utcnow())
             .execution_options(synchronize_session=False)
         )
+        count = result.rowcount or 0
+        if count == 0 and not ks.destroyed:
+            now = datetime.utcnow()
+            db.add(TenantKey(tenant_id=tid, key_id=new_key_id(), kek_id=KEK_ID,
+                             wrapped_dek=None, created_at=now, destroyed_at=now))
         await db.flush()
     _memo(db).pop(tid, None)
     clear_cache(tid)
-    count = result.rowcount or 0
     log.warning("destroyed %d data key(s) of tenant %s (crypto-shred)", count, tid)
     return count
 
 
 # ── Backups ──────────────────────────────────────────────────────────────────
 #
-# A tenant key never leaves its installation (tenant_keys is not exported).
-# The export decrypts every tenant secret and carries it as
-# {"$nodeglow_secret": "plain", "value": ...} — only ever inside the
-# passphrase-encrypted envelope (services.backup); the restore encrypts it
-# again under the key of the tenant the row lands in. A value that does not
-# decrypt is exported as it is stored.
-
-SECRET_MARKER = "$nodeglow_secret"
-
-
-def secret_fields(table: str, row) -> tuple[str, ...]:
-    """The columns of an exported row that hold a tenant secret."""
-    cols = tuple(c for t, c in SECRET_COLUMNS if t == table)
-    if table == "tenant_settings" and (row.get("encrypted") or row.get("key") in _secret_setting_keys()):
-        cols += ("value",)
-    return cols
-
-
-def is_plain_marker(value) -> bool:
-    return isinstance(value, dict) and value.get(SECRET_MARKER) == "plain" \
-        and isinstance(value.get("value"), str)
-
-
-async def open_for_export(db, table: str, rows: list[dict]) -> int:
-    """Replace the tenant secrets of exported ``rows`` by plaintext markers
-    (in place, system scope). Returns the number of values opened."""
-    opened = 0
-    ciphers: dict[int, TenantCipher] = {}
-    for row in rows:
-        fields = secret_fields(table, row)
-        if not fields or row.get("tenant_id") is None:
-            continue
-        tid = int(row["tenant_id"])
-        for col in fields:
-            value = row.get(col)
-            if not value or not isinstance(value, str):
-                continue
-            if tid not in ciphers:
-                ciphers[tid] = await tenant_cipher(db, tid)
-            try:
-                plain = ciphers[tid].decrypt(value)
-            except Exception:
-                continue   # not ours to open (plaintext, another SECRET_KEY, destroyed)
-            row[col] = {SECRET_MARKER: "plain", "value": plain}
-            opened += 1
-    return opened
-
-
-async def seal_for_restore(db, tables: dict, default_tenant: int) -> int:
-    """Encrypt the plaintext markers of a backup under the key of the tenant
-    each row belongs to (in place, system scope, keys created as needed in
-    ``db``'s transaction). Returns the number of values sealed."""
-    sealed = 0
-    ciphers: dict[int, TenantCipher] = {}
-    for table, rows in tables.items():
-        for row in rows or []:
-            fields = secret_fields(table, row)
-            for col, value in list(row.items()):
-                if not is_plain_marker(value):
-                    continue
-                if col not in fields:
-                    raise ValueError(f"backup carries a plaintext secret in {table}.{col}")
-                tid = int(row.get("tenant_id") or default_tenant)
-                if tid not in ciphers:
-                    ciphers[tid] = await tenant_cipher(db, tid, write=True)
-                row[col] = ciphers[tid].encrypt(value["value"])
-                sealed += 1
-    return sealed
+# The JSON export (services.backup) carries tenant secrets exactly as they
+# are stored (``v2:`` under the tenant's data key) together with the
+# ``tenant_keys`` rows, whose data keys are wrapped by the KEK — like a
+# pg_dump. Opening a restored secret needs the installation's SECRET_KEY as
+# well as the backup passphrase: an export alone (one operator API key and a
+# passphrase the caller picks) never yields a tenant's credentials.
 
 
 # ── Verify / CLI ─────────────────────────────────────────────────────────────
