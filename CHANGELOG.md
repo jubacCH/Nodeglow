@@ -9,6 +9,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+### Changed
+- Release images are published for linux/amd64 only for now; the arm64
+  frontend build under QEMU exceeded the 6 h job limit. arm64 will return with
+  native arm runners.
+
 ## [2.0.0-rc.5] - 2026-10-10
 
 ### Fixed
