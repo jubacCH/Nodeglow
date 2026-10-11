@@ -1738,7 +1738,7 @@ Migration `045`; core extension points in `services/tenancy.py`,
 `ee/backend/nodeglow_ee/tenancy/` (`backend`, `lifecycle`, `purge`,
 `plans`, `support`, `api`, `jobs`); frontend `TenantSwitcher`, `/tenants`,
 Settings → Support access. Bound by the owner decisions of 2026-10-11
-(5, 6, 8, 9; 7 through a hook).
+(5, 6, 8, 9; 7 through the envelope keys).
 
 - **Schema (045, core).** `tenants` gains `suspended_at`, `delete_after`,
   `deletion_requested_at` / `_by`, `purge_started_at`, `purge_state`
@@ -1795,8 +1795,9 @@ Settings → Support access. Bound by the owner decisions of 2026-10-11
 - **Purge (`purge.py`, job `ee_tenant_purges`, every 15 min).** Only due
   tenants. Each step is idempotent, an interrupted purge resumes from the
   top (`purge_state` records runs and counts): crypto-shred
-  (`services.tenant_keys.destroy_tenant_key(db, tenant_id)` when the core
-  has it — another track; recorded as `unavailable` otherwise), ClickHouse
+  (`services.tenant_keys.destroy_tenant_key(db, tenant_id)`; since the
+  integration with the envelope keys a real destroy — a failure stops the
+  purge before anything is deleted), ClickHouse
   (per tenant table a scoped count, then a lightweight `DELETE` with
   `tenant_id = {nodeglow_tenant:UInt32}` on the main connection in the
   tenant's scope, verified by a second count; also the step-B leftovers
@@ -1957,10 +1958,21 @@ Deviations / not done:
   direct provider roles.
 - **ClickHouse purge**: a lightweight DELETE hides the rows at once; they
   leave the disk with the next merges of their parts.
-- **Not done here:** per-tenant encryption keys (other track — the purge
-  calls its hook); quotas and limits beyond retention (phase 14); provider
+- **Not done here:** quotas and limits beyond retention (phase 14); provider
   management UI (phase 11); a visual check of the new pages in a running
   stack.
+
+Integration (branch `integrate/phase9-10`): the purge calls the real
+`destroy_tenant_key` (direct import, no fallback: a failing shred fails the
+purge run before ClickHouse or PostgreSQL are touched; the key tombstones go
+with the other tenant-owned rows), and tenant creation gives the new tenant
+its data key at once (`create_tenant_key`). Tests:
+`test_tenancy_purge.py::test_purge_crypto_shreds_the_tenant_key_first` (B's
+seeded secrets decrypt before, raise `TenantKeyDestroyed` right after the
+shred, A's still decrypt) and `test_a_failing_crypto_shred_stops_the_purge`.
+`support_grants` and the other 045 columns hold no secret, so the envelope
+keys need no new secret source.
+
 ### Per-tenant envelope keys — owner decision 7 (done)
 
 Revision `046` (chained after phase 9's `045`);
@@ -2111,6 +2123,7 @@ Deviations / limits:
   a follow-up.
 - Other processes may hold an unwrapped DEK until their current
   transaction ends (≈ request); destroy is immediate for new transactions.
+
 ### Phase 10 — probe syslog relay (done)
 
 Revision `047` (chained after `046`: 044 → 045 phase 9 → 046 tenant keys →

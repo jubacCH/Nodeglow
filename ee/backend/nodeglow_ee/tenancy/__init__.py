@@ -10,7 +10,7 @@ there is more than one tenant (spec "Open Core boundary"):
 * :mod:`.lifecycle` — create, suspend, resume, schedule deletion (30 days
   suspended, owner decision 6), plans;
 * :mod:`.purge` — the purge of a tenant's PostgreSQL and ClickHouse rows
-  (resumable, audited, crypto-shred hook);
+  (resumable, audited, crypto-shred of its data keys first);
 * :mod:`.plans` — fixed retention tiers (owner decision 5), the core's
   retention policy;
 * :mod:`.support` — time-limited support access (owner decision 8);

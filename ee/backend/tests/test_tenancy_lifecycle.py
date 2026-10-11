@@ -92,6 +92,13 @@ async def test_create_a_tenant_with_its_site_admin_and_name(env):
                 TenantMembership.tenant_id == tid))).scalars().all()
     assert [x.name for x in sites] == ["Default"]
     assert [m.role for m in members] == ["admin"]
+    # Its own data key from the start (owner decision 7), wrapped.
+    from models.tenant import TenantKey
+
+    async with env.sf() as s:
+        with system_scope("test", audit=False):
+            keys = (await s.execute(select(TenantKey).where(TenantKey.tenant_id == tid))).scalars().all()
+    assert len(keys) == 1 and keys[0].wrapped_dek and keys[0].destroyed_at is None
     # The operator is no member: no access to the new tenant's data.
     r = await env.client.get("/api/v1/hosts", headers={"X-Nodeglow-Tenant": str(tid)})
     assert r.status_code == 404
