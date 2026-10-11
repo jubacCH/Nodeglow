@@ -4,13 +4,16 @@ Production safety: an install at 044 — RLS on, two database users — with
 real-looking secrets in every secret-bearing table (integration configs,
 credentials, encrypted and pre-encrypted tenant settings, plaintext channel
 secrets of old installs, a value under a previous SECRET_KEY, installation
-secrets) is upgraded; every secret must still decrypt to the same plaintext
-through the app's own read paths, as ``nodeglow_app`` with RLS on. Also:
-re-running is a no-op, ``python -m services.tenant_keys verify`` reports
-counts without printing a secret, the downgrade puts everything back under
-the installation key, and a backup restores into an installation with a
-different SECRET_KEY (tenant secrets travel in plaintext inside the
-passphrase envelope and are sealed under the target's tenant key).
+secrets) is upgraded. 046 itself rewrites no secret (the old backend still
+serves while the updater migrates); the new backend's startup pass moves
+them to the tenant keys. Every secret must decrypt to the same plaintext
+through the app's own read paths at each step, as ``nodeglow_app`` with RLS
+on. Also: re-running is a no-op, ``python -m services.tenant_keys verify``
+reports counts without printing a secret, the downgrade puts everything
+back under the installation key, and backups: the export decrypts nothing
+(the wrapped tenant keys travel along, so the file needs SECRET_KEY as well
+as its passphrase), and a two-tenant backup restores into an install that
+has only tenant 1.
 
 Needs ``NODEGLOW_PG_TEST_URL`` like tests/test_migrations_tenancy_pg.py.
 """
@@ -132,6 +135,25 @@ EXPECTED = {
 }
 
 
+# The new backend's start (main.py lifespan), as the app role with RLS on.
+STARTUP_SCRIPT = r"""
+import asyncio
+from models import engine
+from services.tenant_keys import upgrade_legacy_secrets
+
+async def main():
+    print("moved", await upgrade_legacy_secrets())
+    await engine.dispose()
+
+asyncio.run(main())
+"""
+
+
+def _startup_pass(dsn: str, env: dict) -> int:
+    out = _run(["-c", STARTUP_SCRIPT], dsn, **env).stdout.strip().splitlines()[-1]
+    return int(out.split()[-1])
+
+
 def _read(dsn: str, env: dict) -> dict:
     from models.base import decrypt_value
 
@@ -172,8 +194,22 @@ def test_046_keeps_every_secret_readable_with_rls_on(pg_db):
     before = _formats(pg_db)
     expected = {**EXPECTED, "ldap": LDAP_PW, "claude": CLAUDE}
 
-    proc = _alembic(pg_db, "upgrade", "head", **env)
-    assert "046: integration_configs.config_json: 2 re-encrypted" in proc.stdout + proc.stderr
+    _alembic(pg_db, "upgrade", "head", **env)
+    # 046 rewrites no secret: the old backend, still serving while the
+    # updater migrates (or brought back by NODEGLOW_VERSION alone), reads
+    # every value exactly as before — decrypt_value on each of them.
+    from models.base import decrypt_value
+
+    assert _formats(pg_db) == before
+    for name in ("cfg:pve", "cfg:unifi", "cred:snmp", "ts:1:discord_webhook_url",
+                 "ts:1:smtp_password", "ts:2:smtp_password", "ts:1:teams_webhook_url",
+                 "ts:1:webhook_secret"):
+        decrypt_value(before[name])
+    assert [r[0] for r in q(pg_db, "SELECT tenant_id FROM tenant_keys")] == [1]
+    assert _read(pg_db, env) == expected
+
+    # The new backend's start moves them (as nodeglow_app, RLS on).
+    assert _startup_pass(pg_db, env) == 9   # 8 under the installation key + 1 plaintext
     after = _formats(pg_db)
 
     # One key per tenant that has secrets, wrapped (never the raw key).
@@ -186,17 +222,16 @@ def test_046_keeps_every_secret_readable_with_rls_on(pg_db):
                       ("ts:1:smtp_password", 1), ("ts:1:teams_webhook_url", 1),
                       ("ts:1:webhook_secret", 1), ("ts:2:smtp_password", 2)):
         assert after[name].startswith(f"v2:{key_of[tid]}:"), name
-    # ...plaintext of old installs, a value under another key, non-secrets and
-    # installation secrets are untouched.
-    for name in ("cred:stale", "ts:1:telegram_bot_token", "ts:1:site_name",
-                 "set:ldap_bind_password", "set:claude_api_key"):
+    # ...the plaintext channel secret of an old install is encrypted too...
+    assert after["ts:1:telegram_bot_token"].startswith(f"v2:{key_of[1]}:")
+    # ...a value under another key, non-secrets and installation secrets are untouched.
+    for name in ("cred:stale", "ts:1:site_name", "set:ldap_bind_password", "set:claude_api_key"):
         assert after[name] == before[name], name
     assert before["cred:stale"] == OLD_KEY_TOKEN and before_rows["ldap"] == after["set:ldap_bind_password"]
-    # No secret in clear anywhere it was not before.
+    # No secret in clear anywhere.
     dump = json.dumps(after)
     for secret in ALL_SECRETS:
-        if secret != TG_PLAIN:
-            assert secret not in dump, secret
+        assert secret not in dump, secret
 
     # Every secret still decrypts to the same plaintext, as nodeglow_app with RLS on.
     assert _read(pg_db, env) == expected
@@ -208,6 +243,7 @@ def test_046_keeps_every_secret_readable_with_rls_on(pg_db):
 
     # Re-running (every start; an interrupted run resumed) changes nothing.
     _run(["migrate.py"], pg_db, **env)
+    assert _startup_pass(pg_db, env) == 0
     assert _formats(pg_db) == after
     _alembic(pg_db, "check", **env)
 
@@ -218,7 +254,7 @@ def test_046_keeps_every_secret_readable_with_rls_on(pg_db):
     cfg_line = next(line for line in out.splitlines() if "integration_configs.config_json" in line)
     assert f"v2:{key_of[1]}=1" in cfg_line and f"v2:{key_of[2]}=1" in cfg_line
     assert "credentials.data_json: undecryptable=1, v2:" in out
-    assert "plaintext=1" in out and "Decrypt failures: 1" in out
+    assert "plaintext=" not in out and "Decrypt failures: 1" in out
     for secret in ALL_SECRETS:
         assert secret not in out + v.stderr, secret
 
@@ -235,14 +271,17 @@ def test_046_keeps_every_secret_readable_with_rls_on(pg_db):
         "cred:snmp": json.dumps(CRED_A), "ts:1:discord_webhook_url": DISCORD,
         "ts:1:smtp_password": SMTP_PW, "ts:2:smtp_password": SMTP_PW,
         "ts:1:teams_webhook_url": TEAMS, "ts:1:webhook_secret": WH_SECRET,
+        "ts:1:telegram_bot_token": TG_PLAIN,
         "set:ldap_bind_password": LDAP_PW, "set:claude_api_key": CLAUDE,
     }
     assert {k: decrypt_value(down[k]) for k in plain} == plain
-    for name in ("cred:stale", "ts:1:telegram_bot_token", "ts:1:site_name"):
+    for name in ("cred:stale", "ts:1:site_name"):
         assert down[name] == before[name], name
 
-    # And up again: new keys, everything readable.
+    # And up again: everything readable before and after the startup pass.
     _alembic(pg_db, "upgrade", "head", **env)
+    assert _read(pg_db, env) == expected
+    assert _startup_pass(pg_db, env) == 9
     assert _read(pg_db, env) == expected
 
 
@@ -295,40 +334,95 @@ def pg_db2():
     asyncio.run(_admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
 
 
-def test_backup_round_trip_into_an_install_with_another_secret_key(pg_db, pg_db2, tmp_path):
+def _export(dsn: str, env: dict, path) -> dict:
+    """Export as the app does; returns the opened envelope (what the
+    passphrase alone gives whoever holds the file)."""
+    from services.backup import decrypt_backup
+
+    _run(["-c", EXPORT_SCRIPT, str(path)], dsn, **env)
+    raw = path.read_text(encoding="utf-8")
+    assert '"nodeglow-backup-encrypted"' in raw
+    return decrypt_backup(json.loads(raw), "backup-passphrase-1")
+
+
+def _restore(dsn: str, env: dict, path) -> dict:
+    return json.loads(_run(["-c", RESTORE_SCRIPT, str(path)], dsn, **env).stdout.strip().splitlines()[-1])
+
+
+def test_backups_decrypt_nothing_and_restore_two_tenants_into_a_one_tenant_install(
+        pg_db, pg_db2, tmp_path):
     env = _rls_env(pg_db)
     _alembic(pg_db, "upgrade", "044", **env)
-    _seed_044(pg_db)
-    q(pg_db, "DELETE FROM integration_configs WHERE tenant_id = 2")   # one tenant, as on-prem
-    q(pg_db, "DELETE FROM tenant_settings WHERE tenant_id = 2")
+    _seed_044(pg_db)                                 # tenants 1 and 2
     _alembic(pg_db, "upgrade", "head", **env)
+    env2 = _rls_env(pg_db2)
+    _run(["migrate.py"], pg_db2, **env2)             # a fresh install: tenant 1 only
+    assert [r[0] for r in q(pg_db2, "SELECT id FROM tenants")] == [1]
 
-    backup = tmp_path / "backup.json"
-    _run(["-c", EXPORT_SCRIPT, str(backup)], pg_db, **env)
-    raw = backup.read_text(encoding="utf-8")
-    assert '"nodeglow-backup-encrypted"' in raw
-    for secret in ALL_SECRETS:
-        assert secret not in raw, secret        # plaintext only inside the envelope
-
-    other_key = {"SECRET_KEY": "a-completely-different-secret-key"}
-    env2 = {**_rls_env(pg_db2), **other_key}
-    _run(["migrate.py"], pg_db2, **env2)
-    _run(["-c", RESTORE_SCRIPT, str(backup)], pg_db2, **env2)
-
-    keys = q(pg_db2, "SELECT tenant_id, key_id FROM tenant_keys")
-    assert [r[0] for r in keys] == [1]
-    src_key = q(pg_db, "SELECT key_id FROM tenant_keys WHERE tenant_id = 1")[0][0]
-    assert keys[0][1] != src_key                 # the target's own key
+    # 1. Values still under the installation key (046 done, the new backend
+    #    not started yet): the restore moves tenant 1's to its key and
+    #    creates no key for tenant 2, which the target does not have.
+    legacy_file = tmp_path / "legacy.json"
+    _export(pg_db, env, legacy_file)
+    result = _restore(pg_db2, env2, legacy_file)
+    assert "tenant(s) 2" in result["warning"], result
+    assert [r[0] for r in q(pg_db2, "SELECT DISTINCT tenant_id FROM tenant_keys")] == [1]
+    t1_key = q(pg_db2, "SELECT key_id FROM tenant_keys WHERE tenant_id = 1")[0][0]
     restored = _formats(pg_db2)
-    assert restored["cfg:pve"].startswith(f"v2:{keys[0][1]}:")
-    assert restored["ts:1:telegram_bot_token"].startswith(f"v2:{keys[0][1]}:")  # plaintext sealed too
+    assert restored["cfg:pve"].startswith(f"v2:{t1_key}:")
+    assert not restored["cfg:unifi"].startswith("v2:")       # tenant 2: left as it was
+    out = json.loads(_run(["-c", READ_SCRIPT], pg_db2, **env2).stdout.strip().splitlines()[-1])
+    assert out["cfg:pve"] == CONFIG_A and out["discord_webhook_url"] == DISCORD
 
+    # 2. After the startup pass: the export carries v2 values and the wrapped
+    #    keys, and nothing opened — the passphrase alone yields no secret.
+    _startup_pass(pg_db, env)
+    v2_file = tmp_path / "v2.json"
+    opened = _export(pg_db, env, v2_file)
+    dump = json.dumps(opened)
+    for secret in ALL_SECRETS:
+        assert secret not in dump, secret
+    src_keys = sorted(tuple(r) for r in q(pg_db, "SELECT tenant_id, key_id, wrapped_dek FROM tenant_keys"))
+    assert sorted((k["tenant_id"], k["key_id"], k["wrapped_dek"])
+                  for k in opened["tables"]["tenant_keys"]) == src_keys
+    result = _restore(pg_db2, env2, v2_file)
+    assert "tenant(s) 2" in result["warning"], result
+    assert sorted(tuple(r) for r in q(pg_db2, "SELECT tenant_id, key_id, wrapped_dek FROM tenant_keys")) \
+        == src_keys
     out = json.loads(_run(["-c", READ_SCRIPT], pg_db2, **env2).stdout.strip().splitlines()[-1])
     assert out["cfg:pve"] == CONFIG_A and out["cred:snmp"] == CRED_A
     assert out["smtp:1"] == SMTP_PW and out["discord_webhook_url"] == DISCORD
     assert out["teams_webhook_url"] == TEAMS and out["webhook_secret"] == WH_SECRET
     assert out["telegram_bot_token"] == TG_PLAIN
     assert out["cred:stale"] == "InvalidToken"   # was unreadable at the source, still is
-    # Installation secrets stay under the source SECRET_KEY (the restore warns).
-    from models.base import decrypt_value
-    assert decrypt_value(out["ldap"]) == LDAP_PW
+
+    # 3. The same file under another SECRET_KEY: the wrapped keys do not
+    #    unwrap — the restore goes through and warns, nothing decrypts.
+    other = {**env2, "SECRET_KEY": "a-completely-different-secret-key"}
+    result = _restore(pg_db2, other, v2_file)
+    assert "will not decrypt" in result["warning"]
+    probe = _run(["-c", PROBE_SCRIPT], pg_db2, **other).stdout.strip().splitlines()[-1]
+    assert probe == "TenantKeyUnavailable"
+
+
+PROBE_SCRIPT = r"""
+import asyncio
+from sqlalchemy import select
+from models import AsyncSessionLocal, engine
+from models.integration import IntegrationConfig
+from services.integration import decrypt_config
+from services.tenancy import tenant_scope
+
+async def main():
+    with tenant_scope(1):
+        async with AsyncSessionLocal() as db:
+            cfg = (await db.execute(select(IntegrationConfig))).scalars().first()
+            try:
+                await decrypt_config(db, cfg)
+                print("DECRYPTED")
+            except Exception as exc:
+                print(type(exc).__name__)
+    await engine.dispose()
+
+asyncio.run(main())
+"""

@@ -5,20 +5,24 @@
   random 32-byte data key encrypted by the installation's key-encryption key
   (``kek_id`` ``sk1``: HKDF over the stretched SECRET_KEY), see
   ``services/tenant_keys.py``.
-* Tenant 1 gets its data key, and so does every other tenant that has
-  secrets.
-* Every tenant secret still under the installation key is re-encrypted in
-  place under its tenant's key and marked ``v2:<key_id>:``:
-  ``integration_configs.config_json``, ``credentials.data_json`` and
-  ``tenant_settings.value`` (rows flagged ``encrypted`` and the secret keys
-  frozen below). Values already in ``v2`` are skipped, so a re-run after a
-  failure resumes where it stopped; values that do not decrypt with this
-  installation's SECRET_KEY (a previous key, plaintext) are left exactly as
-  they are and counted in the log. Installation secrets (``settings``) keep
-  the installation key. The app keeps reading values in the old format.
+* Tenant 1 gets its data key.
+* **No secret is rewritten here.** The updater runs the migration with the
+  new image while the old backend still serves (sidecar ``step_migrate``
+  before ``step_restart``) — and a rollback by ``NODEGLOW_VERSION`` alone
+  runs the old code on the migrated database. The old code reads every
+  secret with the installation key, so the values stay exactly as they are
+  until the new backend has started: its startup pass
+  (``services.tenant_keys.upgrade_legacy_secrets``, idempotent) moves them
+  to the tenant keys — ``integration_configs.config_json``,
+  ``credentials.data_json`` and the secret ``tenant_settings`` — and keeps
+  doing so on every start. ``python -m services.tenant_keys upgrade`` does
+  the same by hand.
 * The downgrade re-encrypts every ``v2`` value it can read back under the
   installation key and drops ``tenant_keys``. Values under a destroyed key
-  stay unreadable — they were before the downgrade, too.
+  stay unreadable — they were before the downgrade, too. Going back to an
+  older version **after** the new backend ran needs this downgrade (``alembic
+  downgrade 044`` with the new image) first: from then on the secrets are
+  under the tenant keys, which the old code cannot read.
 
 Check afterwards: ``python -m services.tenant_keys verify``.
 
@@ -121,42 +125,17 @@ def _active_key(bind, tenant_id: int, *, create: bool):
     return key_id, tk.dek_fernet(dek)
 
 
-def migrate_up(bind) -> dict:
-    """Re-encrypt every tenant secret still under the installation key.
-    Returns counts per column (converted / skipped / failed). Idempotent."""
-    from models.base import decrypt_value
-    from services import tenant_keys as tk
-
+def migrate_up(bind) -> str | None:
+    """Tenant 1's data key (idempotent). Rewrites no secret — see the module
+    docstring: the old backend may still be running on this database.
+    Returns the key id, or None on a database without tenant 1."""
     if bind.execute(sa.text("SELECT 1 FROM tenants WHERE id = :t"),
-                    {"t": DEFAULT_TENANT_ID}).first() is not None:
-        _active_key(bind, DEFAULT_TENANT_ID, create=True)
-    keys: dict[int, tuple] = {}
-    report: dict[str, dict[str, int]] = {}
-    for label, select, params, update, _pk in _row_sources():
-        counts = report.setdefault(label, {"converted": 0, "skipped": 0, "failed": 0})
-        for pk_value, tenant_id, value in bind.execute(select, params).all():
-            if not value or value.startswith(tk.FORMAT_PREFIX):
-                counts["skipped"] += 1
-                continue
-            try:
-                plain = decrypt_value(value)
-            except Exception:
-                counts["failed"] += 1
-                continue
-            if tenant_id not in keys:
-                keys[tenant_id] = _active_key(bind, tenant_id, create=True)
-            key_id, fernet = keys[tenant_id]
-            bind.execute(update, {"new": tk.seal(fernet, key_id, plain), "old": value,
-                                  "tenant_id": tenant_id, "pk": pk_value})
-            counts["converted"] += 1
-    for label, counts in report.items():
-        log.info("046: %s: %d re-encrypted under the tenant key, %d skipped, %d failed",
-                 label, counts["converted"], counts["skipped"], counts["failed"])
-        if counts["failed"]:
-            log.warning("046: %d value(s) in %s do not decrypt with this SECRET_KEY and were "
-                        "left unchanged (python -m services.tenant_keys verify)",
-                        counts["failed"], label)
-    return report
+                    {"t": DEFAULT_TENANT_ID}).first() is None:
+        return None
+    key_id, _fernet = _active_key(bind, DEFAULT_TENANT_ID, create=True)
+    log.info("046: tenant secrets stay under the installation key until the new backend "
+             "starts (it moves them to the tenant keys; python -m services.tenant_keys verify)")
+    return key_id
 
 
 def migrate_down(bind) -> dict:
