@@ -39,8 +39,14 @@ How a table ``T`` is rebuilt, in a background job that resumes where it left off
    postpones the cutover to a later run (a monthly syslog partition is small
    again at the start of the month).
 6. **Grace**: the old table is kept ``NODEGLOW_CH_REBUILD_GRACE_HOURS`` (24),
-   then dropped after one more delta pass. A mismatch after the exchange marks
-   the table ``attention`` and the old table is never dropped automatically.
+   then dropped after one more delta pass. Its merges are stopped again on
+   every run (a ClickHouse restart lifts the blockers); rows it loses to TTL
+   or deletes meanwhile are fine (the live table drops them too). Late rows
+   go through a staging table and ``MOVE PARTITION``, so a retry never
+   duplicates them. Only a part mixing copied and uncopied rows marks the
+   table ``attention``: the old table is then kept and never dropped
+   automatically. Recovery: check the live table, then ``DROP TABLE
+   <t>__pre_tenant`` — the next run reports the table as rebuilt.
 
 Row policies and grants are bound to table names, so they apply to the
 rebuilt table from the moment of the exchange; the work tables are not
@@ -64,6 +70,8 @@ log = logging.getLogger("nodeglow.clickhouse.rebuild")
 
 WORK_SUFFIX = "__tenant_rebuild"
 OLD_SUFFIX = "__pre_tenant"
+DELTA_SUFFIX = "__tenant_delta"
+STAGED_MARK = "@staged"
 PROGRESS_TABLE = "nodeglow_tenant_rebuild_progress"
 
 
@@ -403,37 +411,80 @@ async def sync_partition(c, src: str, dst: str, partition_id: str, parts: list[P
     return action, prog
 
 
+def _delta_plan(parts: list[Part], prog: Progress) -> tuple[list[Part], bool]:
+    """After the exchange: (parts to copy, ok).
+
+    Parts above the recorded block are late rows to copy. Parts at or below it
+    were copied already; their rows may only have gone *down* since (after a
+    ClickHouse restart the old table's merges, TTL and queued deletes run
+    again — the live table applies the same TTL and deletes). Only a part that
+    straddles the recorded block mixes copied rows with uncopied ones and
+    cannot be handled automatically.
+    """
+    if prog.max_block < 0:
+        return list(parts), True
+    new = [p for p in parts if p.min_block > prog.max_block]
+    old = [p for p in parts if p.max_block <= prog.max_block]
+    return new, len(new) + len(old) == len(parts)
+
+
+async def _ensure_staging(c, live: str, staging: str) -> None:
+    # Same engine and sort key as the live table, so a partition can be moved.
+    await c.command(f"CREATE TABLE IF NOT EXISTS {staging} AS {live}")
+    await c.command(f"SYSTEM STOP TTL MERGES {staging}")
+
+
 async def copy_delta(c, old: str, live: str, table: str) -> int:
     """After the exchange: copy rows that reached the old table late.
 
-    The old table's merges are stopped, so its part set only grows by inserts
-    — new parts lie entirely above the recorded block numbers. Anything else
-    (a merge after a server restart, a count that does not add up) is not
-    something to repair automatically.
+    Idempotent: rows are copied into a staging table first, an intent
+    (``<partition>@staged``) is recorded, then the staged partition is moved
+    into the live table (``MOVE PARTITION … TO TABLE``) and the progress
+    saved. A retry after a failure anywhere in between neither loses nor
+    duplicates rows: a pending intent is finished (moved if the staging
+    partition still holds rows, else only recorded), staging leftovers
+    without an intent are discarded and copied again.
     """
+    staging = table + DELTA_SUFFIX
+    await _ensure_staging(c, live, staging)
     progress = await load_progress(c, table)
     copied = 0
+
+    # 1. Finish what a previous run started.
+    for key, intent in list(progress.items()):
+        if not key.endswith(STAGED_MARK) or intent.max_block < 0:
+            continue
+        partition_id = key[:-len(STAGED_MARK)]
+        if await count_rows(c, staging, partition_id):
+            await c.command(
+                f"ALTER TABLE {staging} MOVE PARTITION ID '{_pid(partition_id)}' TO TABLE {live}"
+            )
+        await _save_progress(c, table, partition_id, intent)
+        await _save_progress(c, table, key, Progress())
+        progress[partition_id] = intent
+
+    # 2. Late parts.
     for partition_id, parts in sorted((await partitions(c, old)).items()):
         prog = progress.get(partition_id, Progress())
-        if prog.max_block < 0:
-            # A partition that first appeared after the final pass.
-            action = "append" if parts else "in_sync"
-        else:
-            old_names = [p.name for p in parts if p.max_block <= prog.max_block]
-            src_old = await count_rows(c, old, partition_id, old_names)
-            action = plan(parts, prog, src_old, None)
-        if action == "in_sync":
-            continue
-        if action == "full":
+        new, ok = _delta_plan(parts, prog)
+        if not ok:
             raise NeedsAttention(
-                f"{old} partition {partition_id} changed after the exchange "
-                f"({prog.rows} rows copied up to block {prog.max_block})"
+                f"{old} partition {partition_id}: a part mixes rows copied up to block "
+                f"{prog.max_block} with later ones"
             )
-        new = [p.name for p in parts if p.min_block > prog.max_block]
-        n = await count_rows(c, old, partition_id, new)
-        await _insert_parts(c, old, live, partition_id, new)
-        prog = Progress(max(p.max_block for p in parts), prog.rows + n)
-        await _save_progress(c, table, partition_id, prog)
+        if not new:
+            continue
+        await c.command(f"ALTER TABLE {staging} DROP PARTITION ID '{_pid(partition_id)}'")
+        await _insert_parts(c, old, staging, partition_id, [p.name for p in new])
+        n = await count_rows(c, staging, partition_id)
+        done = Progress(max(p.max_block for p in parts), max(prog.rows, 0) + n)
+        await _save_progress(c, table, partition_id + STAGED_MARK, done)
+        if n:
+            await c.command(
+                f"ALTER TABLE {staging} MOVE PARTITION ID '{_pid(partition_id)}' TO TABLE {live}"
+            )
+        await _save_progress(c, table, partition_id, done)
+        await _save_progress(c, table, partition_id + STAGED_MARK, Progress())
         copied += n
     if copied:
         log.info("Rebuild %s: copied %d late rows from %s", table, copied, old)
@@ -441,12 +492,19 @@ async def copy_delta(c, old: str, live: str, table: str) -> int:
 
 
 async def verify_old(c, old: str, table: str) -> None:
+    """Every row of the old table is in the live one: no part above the
+    recorded block is left uncopied, and a partition holds no more rows than
+    were copied (fewer is TTL or deletes, which the live table applies too)."""
     progress = await load_progress(c, table)
-    for partition_id in sorted(await partitions(c, old)):
+    for partition_id, parts in sorted((await partitions(c, old)).items()):
+        prog = progress.get(partition_id, Progress())
+        new, ok = _delta_plan(parts, prog)
         have = await count_rows(c, old, partition_id)
-        copied = progress.get(partition_id, Progress()).rows
-        if have != copied:
-            raise NeedsAttention(f"{old} partition {partition_id}: {have} rows, {copied} copied")
+        if not ok or new or have > prog.rows:
+            raise NeedsAttention(
+                f"{old} partition {partition_id}: {have} rows, {prog.rows} copied "
+                f"up to block {prog.max_block}"
+            )
 
 
 # ── One table ────────────────────────────────────────────────────────────────
@@ -525,12 +583,19 @@ async def _ready_for_exchange(c, table: str, work: str) -> bool:
 
 
 async def _finish(c, table: str, *, waits=DELTA_WAITS, sleep=asyncio.sleep) -> str:
-    old = table + OLD_SUFFIX
+    old, staging = table + OLD_SUFFIX, table + DELTA_SUFFIX
     state, detail, age_s = await get_state(c, table)
     if state == "attention":
-        log.warning("ClickHouse rebuild of %s needs attention: %s (old data kept in %s)",
-                    table, detail, old)
+        log.warning(
+            "ClickHouse rebuild of %s needs attention: %s. The live table is complete "
+            "unless that says otherwise; after checking, DROP TABLE %s ends it.",
+            table, detail, old,
+        )
         return f"attention: {detail}"
+    # The blockers on the old table are in-memory: a ClickHouse restart lifts
+    # them. Renew them on every run so the old table stays as it was copied.
+    for action in ("MERGES", "TTL MERGES"):
+        await c.command(f"SYSTEM STOP {action} {old}")
     try:
         if state != "delta_done":
             for wait in waits:
@@ -546,9 +611,11 @@ async def _finish(c, table: str, *, waits=DELTA_WAITS, sleep=asyncio.sleep) -> s
         await verify_old(c, old, table)
     except NeedsAttention as exc:
         await _set_state(c, table, "attention", str(exc))
-        log.error("ClickHouse rebuild of %s needs attention: %s", table, exc)
+        log.error("ClickHouse rebuild of %s needs attention: %s (old data kept in %s)",
+                  table, exc, old)
         return f"attention: {exc}"
     await c.command(f"DROP TABLE IF EXISTS {old}")
+    await c.command(f"DROP TABLE IF EXISTS {staging}")
     await _set_state(c, table, "done")
     log.info("ClickHouse rebuild of %s: dropped %s after the grace period", table, old)
     return "done"
@@ -569,6 +636,9 @@ async def rebuild_table(c, table: str, *, budget_seconds: int | None = None,
             await _set_state(c, table, "exchanged")
         if await table_info(c, old) is not None:
             return await _finish(c, table, waits=waits, sleep=sleep)
+        if await table_info(c, table + DELTA_SUFFIX) is not None:
+            # The old table was dropped by hand (recovery from "attention").
+            await c.command(f"DROP TABLE IF EXISTS {table + DELTA_SUFFIX}")
         return "done"
 
     # ── Preflight ──

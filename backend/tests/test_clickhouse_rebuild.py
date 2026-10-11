@@ -50,6 +50,80 @@ def test_after_the_exchange_the_live_table_count_is_not_consulted():
     assert plan(_parts((1, 5), (6, 6)), Progress(5, 50), 50, None) == "append"
 
 
+def test_after_the_exchange_old_rows_may_only_shrink_and_late_parts_are_copied():
+    # TTL merged and shrank the copied parts after a ClickHouse restart: fine.
+    assert rb._delta_plan(_parts((1, 5)), Progress(5, 50)) == ([], True)
+    late = _parts((6, 6), (7, 8))
+    assert rb._delta_plan(_parts((1, 5)) + late, Progress(5, 50)) == (late, True)
+    # A part mixing copied (<=5) and uncopied (6) rows cannot be resolved.
+    assert rb._delta_plan(_parts((4, 6)), Progress(5, 50))[1] is False
+    # A partition that appeared only after the final pass: everything is late.
+    assert rb._delta_plan(_parts((9, 9)), Progress()) == (_parts((9, 9)), True)
+
+
+class _DeltaClient:
+    """Enough of ClickHouse for copy_delta: parts, counts, staging, moves."""
+
+    def __init__(self, fail_after_move=False):
+        self.fail_after_move = fail_after_move
+        self.staged = 0
+        self.live_rows = 0
+        self.progress: dict[str, Progress] = {}
+        self.commands: list[str] = []
+
+
+async def test_copy_delta_is_idempotent_when_a_run_dies_after_the_move(monkeypatch):
+    state = _DeltaClient()
+    old_parts = {"20261011": _parts((1, 5), (6, 6), rows=10)}
+
+    async def partitions(c, table):
+        return old_parts
+
+    async def count_rows(c, table, partition_id, parts=None):
+        if table.endswith(rb.DELTA_SUFFIX):
+            return state.staged
+        return 10 if parts else 20
+
+    async def load_progress(c, table):
+        return dict(state.progress)
+
+    saves = []
+
+    async def save_progress(c, table, partition_id, prog):
+        saves.append(partition_id)
+        if state.fail_after_move and partition_id == "20261011" and state.live_rows:
+            state.fail_after_move = False
+            raise ConnectionError("lost after the move")
+        state.progress[partition_id] = prog
+
+    async def insert_parts(c, src, dst, partition_id, names):
+        state.staged += 10
+
+    class C:
+        async def command(self, sql, parameters=None, settings=None):
+            state.commands.append(sql)
+            if "MOVE PARTITION" in sql:
+                state.live_rows += state.staged
+                state.staged = 0
+            elif "DROP PARTITION" in sql:
+                state.staged = 0
+
+    for name, fn in (("partitions", partitions), ("count_rows", count_rows),
+                     ("load_progress", load_progress), ("_save_progress", save_progress),
+                     ("_insert_parts", insert_parts)):
+        monkeypatch.setattr(rb, name, fn)
+    state.progress["20261011"] = Progress(5, 10)
+    state.fail_after_move = True
+    with pytest.raises(ConnectionError):
+        await rb.copy_delta(C(), "t__pre_tenant", "t", "t")
+    assert state.live_rows == 10
+    # The retry finishes the recorded intent and copies nothing twice.
+    await rb.copy_delta(C(), "t__pre_tenant", "t", "t")
+    assert state.live_rows == 10
+    assert state.progress["20261011"] == Progress(6, 20)
+    assert state.progress["20261011" + rb.STAGED_MARK] == Progress()
+
+
 # ── The rebuilt engine clause ────────────────────────────────────────────────
 
 
