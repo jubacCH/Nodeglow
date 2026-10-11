@@ -61,3 +61,14 @@ else:
         control.set(issue_test_license())
         yield control
         license_runtime.manager.reset()
+
+    @pytest.fixture(autouse=True)
+    def _ee_tenancy_state():
+        """The tenancy backend caches default sites per tenant id; tests reuse ids."""
+        from nodeglow_ee.tenancy import backend, support
+
+        backend.reset_state()
+        support.reset_audit_window()
+        yield
+        backend.reset_state()
+        support.reset_audit_window()

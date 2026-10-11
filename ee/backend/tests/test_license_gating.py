@@ -170,6 +170,15 @@ async def test_daily_summary_test_send_is_gated(ee_license, license_days):
     assert resp.status_code == 402
 
 
+def _only_tenant_1():
+    """No database here: the tenancy backend (ee: from the tenants table)
+    reports the one default tenant."""
+    from services import tenancy
+
+    return patch.object(type(tenancy.backend()), "active_tenant_ids",
+                        new=AsyncMock(return_value=[1]))
+
+
 async def test_daily_summary_job_does_not_run_without_a_license(ee_license):
     from nodeglow_ee.ai import daily_summary
 
@@ -182,7 +191,7 @@ async def test_daily_summary_job_does_not_run_without_a_license(ee_license):
         yield None
 
     with patch.object(license_runtime.manager, "_read_db", new=AsyncMock(return_value=(None, None))), \
-         patch.object(daily_summary, "AsyncSessionLocal", factory):
+         patch.object(daily_summary, "AsyncSessionLocal", factory), _only_tenant_1():
         await daily_summary.run_daily_ai_summary()
     assert opened == []
 
@@ -199,7 +208,8 @@ async def test_daily_summary_job_runs_with_a_license():
         yield  # pragma: no cover
 
     with patch.object(license_runtime.manager, "_read_db", new=AsyncMock(return_value=(None, None))), \
-         patch.object(daily_summary, "AsyncSessionLocal", factory), pytest.raises(RuntimeError):
+         patch.object(daily_summary, "AsyncSessionLocal", factory), _only_tenant_1(), \
+         pytest.raises(RuntimeError):
         await daily_summary.run_daily_ai_summary()
     assert opened == [True]
 

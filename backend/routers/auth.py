@@ -327,7 +327,7 @@ async def login(
         # Commit first: an LDAP login may just have created or changed the
         # membership, and the resolution reads memberships in its own session.
         await db.commit()
-        access = await tenancy.backend().resolve_access(request, user)
+        access = await tenancy.backend().resolve_login_access(request, user)
         if access is None:
             return JSONResponse({"error": "This account has no access to any tenant"},
                                 status_code=403)
@@ -388,7 +388,31 @@ async def get_current_user_api(request: Request, db: AsyncSession = Depends(get_
     if access is None:
         # Signed in, but the session's tenant is gone (membership revoked).
         return JSONResponse({"error": "Not found"}, status_code=404)
-    return {"user": {"id": user.id, "username": user.username, "role": access.role}}
+    # Every tenant the user may switch into (the switcher is hidden with
+    # one), with its name — the user's own tenants only.
+    tenants = await _tenant_list(db, await tenancy.backend().list_access_for(user))
+    return {
+        "user": {"id": user.id, "username": user.username, "role": access.role,
+                 # Installation operator (e.g. the ee Tenants page); in the
+                 # core: the admin of the default tenant.
+                 "is_operator": tenancy.backend().is_operator(user, access.role, access.tenant_id,
+                                                              via=access.via)},
+        "tenant": {"id": access.tenant_id, "via": access.via},
+        "tenants": tenants,
+    }
+
+
+async def _tenant_list(db: AsyncSession, accesses) -> list[dict]:
+    from models.tenant import Tenant
+
+    ids = [a.tenant_id for a in accesses]
+    if not ids:
+        return []
+    names = dict((await db.execute(
+        select(Tenant.id, Tenant.name).where(Tenant.id.in_(ids))
+    )).all())
+    return [{"id": a.tenant_id, "name": names.get(a.tenant_id) or f"Tenant {a.tenant_id}",
+             "role": a.role, "via": a.via} for a in accesses]
 
 
 @router.post("/api/auth/tenant")
@@ -414,17 +438,20 @@ async def switch_tenant(request: Request, db: AsyncSession = Depends(get_db)):
         return JSONResponse({"error": "tenant_id required"}, status_code=400)
     token_hash = getattr(request.state, "session_token_hash", None)
     session = await db.get(Session, token_hash) if token_hash else None
-    role = (await ms.memberships_for(db, user.id)).get(tenant_id)
-    if session is None or role is None:
+    # Whatever the backend grants (core: memberships; ee: also support access).
+    access = next((a for a in await tenancy.backend().list_access_for(user)
+                   if a.tenant_id == tenant_id), None)
+    if session is None or access is None:
         return JSONResponse({"error": "Not found"}, status_code=404)
     previous = session.active_tenant_id
     session.active_tenant_id = tenant_id
     request.state.current_user = user
+    request.state.acting_via = access.via
     with tenant_scope(tenant_id):
         await log_action(db, request, "auth.tenant_switch", "tenant", tenant_id, None,
                          details={"from": previous})
         await db.commit()
-    return {"ok": True, "tenant_id": tenant_id, "role": role}
+    return {"ok": True, "tenant_id": tenant_id, "role": access.role, "via": access.via}
 
 
 @router.post("/api/auth/logout")

@@ -54,6 +54,7 @@ const FEATURE_LABELS: Record<string, string> = {
   ai_assistant: 'Glow',
   ai_postmortem: 'AI postmortems',
   ai_daily_summary: 'AI daily summary',
+  multi_tenancy: 'Multi-tenancy',
 };
 
 function day(iso: string | null): string {

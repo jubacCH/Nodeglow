@@ -21,16 +21,25 @@ from ._helpers import is_operator, require_admin, require_operator
 logger = logging.getLogger(__name__)
 
 
-async def _capped(db: AsyncSession, key: str, value: int) -> int:
-    """A retention value within the installation's cap (``<key>_max``)."""
-    raw = await get_setting(db, f"{key}_max")
-    try:
-        cap = int(raw) if raw not in (None, "") else 0
-    except (TypeError, ValueError):
-        cap = 0
-    if cap <= 0:
-        return value
-    return cap if value <= 0 else min(value, cap)
+# Retention keys the general form writes.
+_FORM_RETENTION_KEYS = ("ping_retention_days", "proxmox_retention_days",
+                        "integration_retention_days", "incident_event_retention_days")
+
+
+async def _retention_caps(db: AsyncSession) -> dict[str, int | None]:
+    """The cap of every retention key the form writes: the installation's
+    (``<key>_max``) and the tenant's plan (ee), whichever is lower. Raises
+    ``tenant_jobs.RetentionPolicyError`` when the plan cannot be read —
+    the form then saves nothing rather than a value above the plan."""
+    from services import tenant_jobs
+
+    return {k: await tenant_jobs.retention_cap(db, k, strict=True) for k in _FORM_RETENTION_KEYS}
+
+
+def _capped(caps: dict[str, int | None], key: str, value: int) -> int:
+    from services import tenant_jobs
+
+    return tenant_jobs.apply_retention_cap(value, caps[key])
 
 router = APIRouter()
 
@@ -114,6 +123,18 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
     for key in ldap_keys:
         result[key] = await get_setting(db, key, ldap_defaults.get(key, ""))
     result["ldap_has_bind_pw"] = bool(await get_setting(db, "ldap_bind_password", ""))
+    # The highest value the form may offer per retention key (installation
+    # cap and, ee, the tenant's plan tier); absent = no cap.
+    from services import tenant_jobs
+    from services.settings_registry import RETENTION_KEYS
+    caps = {}
+    for key in RETENTION_KEYS:
+        # Display only (strict=False): the save refuses on its own when the
+        # plan cannot be read.
+        cap = await tenant_jobs.retention_cap(db, key, strict=False)
+        if cap is not None:
+            caps[key] = cap
+    result["retention_caps"] = caps
     return JSONResponse(result)
 
 
@@ -144,6 +165,17 @@ async def save_settings(
 ):
     if err := require_admin(request):
         return err
+    # Before anything is written: a plan that cannot be read refuses the
+    # whole save (fail closed) instead of saving retention above the plan.
+    from services import tenant_jobs
+    try:
+        retention_caps = await _retention_caps(db)
+    except tenant_jobs.RetentionPolicyError:
+        logger.warning("Settings save refused: the tenant's retention plan could not be read",
+                       exc_info=True)
+        return JSONResponse({"error": "The retention plan of this tenant could not be read; "
+                                      "nothing was saved. Try again later.",
+                             "code": "retention_policy_unavailable"}, status_code=503)
     await set_setting(db, "site_name", site_name.strip())
     # site_name is the tenant's display name.
     from models.tenant import Tenant
@@ -163,7 +195,6 @@ async def save_settings(
 
     # Intervals: the tenant's choice, never below the installation floor
     # (ping_interval_min / proxmox_interval_min, default 10 s).
-    from services import tenant_jobs
     p_interval = tenant_jobs.clamp_interval(
         ping_interval, await tenant_jobs.interval_floor(db, tenant_jobs.PING_CADENCE),
         tenant_jobs.PING_CADENCE)
@@ -181,14 +212,14 @@ async def save_settings(
         p_ret = max(1, min(30, int(ping_retention)))
     except ValueError:
         p_ret = 30
-    await set_setting(db, "ping_retention_days", str(await _capped(db, "ping_retention_days", p_ret)))
+    await set_setting(db, "ping_retention_days", str(_capped(retention_caps, "ping_retention_days", p_ret)))
 
     try:
         px_ret = max(1, min(90, int(proxmox_retention)))
     except ValueError:
         px_ret = 7
     await set_setting(db, "proxmox_retention_days",
-                      str(await _capped(db, "proxmox_retention_days", px_ret)))
+                      str(_capped(retention_caps, "proxmox_retention_days", px_ret)))
 
     try:
         threshold = max(1.5, min(10.0, float(anomaly_threshold)))
@@ -212,7 +243,7 @@ async def save_settings(
     except ValueError:
         int_ret = 7
     await set_setting(db, "integration_retention_days",
-                      str(await _capped(db, "integration_retention_days", int_ret)))
+                      str(_capped(retention_caps, "integration_retention_days", int_ret)))
 
     # 0 disables incident event pruning entirely.
     try:
@@ -220,7 +251,7 @@ async def save_settings(
     except ValueError:
         ev_ret = 30
     await set_setting(db, "incident_event_retention_days",
-                      str(await _capped(db, "incident_event_retention_days", ev_ret)))
+                      str(_capped(retention_caps, "incident_event_retention_days", ev_ret)))
 
     for key, val, lo, hi, default in [
         ("proxmox_cpu_threshold",  cpu_threshold,  1, 100, 85),

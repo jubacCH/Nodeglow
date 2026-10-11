@@ -17,9 +17,10 @@ license key; redistribution is not permitted.
 | **Glow** — the AI assistant chat, `POST /api/v1/glow/chat` | `nodeglow_ee.ai.glow` | router |
 | **AI postmortems** — drafted when an incident is resolved (manually or by correlation), regenerated via `POST /api/v1/incidents/{id}/postmortem` | `nodeglow_ee.ai.postmortem`, `.postmortem_api` | incident-resolved hook, router |
 | **AI daily summary** — daily job and `POST /settings/ai/test-summary` | `nodeglow_ee.ai.daily_summary` | scheduler hook, router |
+| **Multi-tenancy** — more than one tenant: lifecycle (create, suspend, resume, delete = 30 days suspended then purge), retention plans, the tenant switcher's data, support access for operators (`/api/tenants`, `/api/support-access`) | `nodeglow_ee.tenancy` | tenancy backend, retention policy, router, scheduler hook |
 
-Planned: multi-tenancy and the MSP portal (design and first phases in
-progress: [`docs/specs/2026-10-10-multi-tenancy-design.md`](../docs/specs/2026-10-10-multi-tenancy-design.md)),
+Planned: the MSP portal (cross-tenant overview, provider roles; see
+[`docs/specs/2026-10-10-multi-tenancy-design.md`](../docs/specs/2026-10-10-multi-tenancy-design.md)),
 SSO (SAML / OIDC) + SCIM, custom RBAC, on-call escalation, SLA reports per
 customer, audit export / SIEM and long audit retention.
 
@@ -59,8 +60,10 @@ ee/
     │   ├── licensing.py     license format, offline verification, keygen/issue/verify CLI
     │   ├── license_runtime.py  license source + cache, feature gates, /settings/license
     │   ├── ha/              leader_lock.py (Redis / in-memory lease), coordinator.py
-    │   └── ai/              glow.py, postmortem.py, postmortem_api.py, daily_summary.py,
-    │                        context.py (prompt context), common.py
+    │   ├── ai/              glow.py, postmortem.py, postmortem_api.py, daily_summary.py,
+    │   │                    context.py (prompt context), common.py
+    │   └── tenancy/         backend.py (MultiTenancy), lifecycle.py, purge.py, plans.py,
+    │                        support.py, api.py, jobs.py
     └── tests/               collected through backend/pytest.ini (testpaths)
 ```
 

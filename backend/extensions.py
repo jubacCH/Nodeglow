@@ -13,6 +13,9 @@ to it; the core reads it at the few places where it can be extended:
 * the request middleware and the per-tenant jobs ask the **tenancy backend**
   which tenant a request belongs to and which tenants exist — without one
   registered, ``services.tenancy.SingleTenancy`` (always tenant 1);
+* the retention settings (form and nightly cleanup) ask the **retention
+  policy** for a tenant's cap on top of the installation's ``<key>_max``
+  (ee: the tenant's plan tier) — without one only the installation caps;
 * ``GET /api/v2/features`` reports the **edition** and **feature flags** so
   the UI shows only what this installation can do. A plugin that gates its
   features (the enterprise license check) registers a **license provider**;
@@ -48,6 +51,8 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "ai_postmortem": False,
     # The AI daily summary sent to notification channels.
     "ai_daily_summary": False,
+    # More than one tenant: lifecycle, plans, tenant switcher, support access.
+    "multi_tenancy": False,
 }
 
 
@@ -86,8 +91,14 @@ class TenancyBackend(Protocol):
     async def resolve_request_tenant(self, request: Any, user: Any) -> int | None:
         """``resolve_access(...).tenant_id`` or None."""
 
+    async def resolve_login_access(self, request: Any, user: Any) -> Any:
+        """The ``TenantAccess`` a new session starts in (login), or ``None``."""
+
     async def list_tenants_for(self, user: Any) -> list[int]:
         """Tenant ids the user may switch into."""
+
+    async def list_access_for(self, user: Any) -> list[Any]:
+        """``TenantAccess`` per tenant the user may switch into, by tenant id."""
 
     async def active_tenant_ids(self) -> list[int]:
         """Tenants per-tenant background jobs iterate over. Runs in system scope."""
@@ -95,9 +106,11 @@ class TenancyBackend(Protocol):
     async def effective_role(self, user: Any, tenant_id: int) -> str | None:
         """The user's role (admin | editor | readonly) in that tenant, None without access."""
 
-    def is_operator(self, user: Any, role: str | None = None, tenant_id: int | None = None) -> bool:
+    def is_operator(self, user: Any, role: str | None = None, tenant_id: int | None = None,
+                    via: str | None = None) -> bool:
         """Whether the user may manage installation settings (``role``: the
-        user's role in the request's tenant ``tenant_id``)."""
+        user's role in the request's tenant ``tenant_id``, granted ``via``
+        — a role from support access never counts)."""
 
     def can_create_tenant(self) -> bool:
         """Whether a second tenant may be created on this installation."""
@@ -107,6 +120,9 @@ class TenancyBackend(Protocol):
 
 
 IncidentResolvedHook = Callable[[int], Awaitable[None]]
+# ``await policy(db, tenant_id, key)`` → the tenant's cap for a retention key
+# (days), or None for no cap beyond the installation's.
+RetentionPolicy = Callable[[Any, int, str], Awaitable["int | None"]]
 SchedulerHook = Callable[[Any], Awaitable[None]]
 # ``await provider()`` → ``{"license": {...summary...}, "active": {feature: bool}}``
 LicenseProvider = Callable[[], Awaitable[dict]]
@@ -123,6 +139,7 @@ class Registry:
     scheduler_coordinator: SchedulerCoordinator | None = None
     license_provider: LicenseProvider | None = None
     tenancy_backend: TenancyBackend | None = None
+    retention_policy: RetentionPolicy | None = None
     features: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_FEATURES))
     edition: str = EDITION_COMMUNITY
 
@@ -150,6 +167,12 @@ class Registry:
         if self.tenancy_backend is not None:
             raise RuntimeError("A tenancy backend is already registered")
         self.tenancy_backend = backend
+
+    def set_retention_policy(self, policy: RetentionPolicy) -> None:
+        """Cap the tenants' retention settings (on top of the installation caps)."""
+        if self.retention_policy is not None:
+            raise RuntimeError("A retention policy is already registered")
+        self.retention_policy = policy
 
     def enable_feature(self, name: str) -> None:
         self.features[name] = True

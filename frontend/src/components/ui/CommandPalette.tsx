@@ -10,6 +10,7 @@ import { useIsAdmin } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useUiStore } from '@/stores/ui';
 import { visibleSections } from '@/lib/navigation';
+import { useNavAudience } from '@/components/layout/useShellNav';
 import { Keyboard, Moon, Plug, RefreshCw, Search, Server } from 'lucide-react';
 import { StatusDot } from './StatusDot';
 import { Kbd } from './Kbd';
@@ -33,7 +34,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const debouncedSearch = useDebouncedValue(search, 200);
   const { data: hosts, isFetching: hostsLoading } = useHostSearch(debouncedSearch, open);
   const { data: integrations } = useIntegrations(undefined, { enabled: open });
-  const sections = visibleSections(isAdmin);
+  const audience = useNavAudience();
+  const sections = visibleSections(isAdmin, audience);
 
   useEffect(() => {
     if (!open) setSearch('');

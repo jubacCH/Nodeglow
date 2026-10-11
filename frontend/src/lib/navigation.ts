@@ -9,7 +9,7 @@
  * (navigation.test.ts enforces this).
  */
 import {
-  Activity, ArrowUpDown, BarChart3, Bell, BookOpen, Bot, ClipboardList, FileText, History,
+  Activity, ArrowUpDown, BarChart3, Bell, BookOpen, Bot, Building2, ClipboardList, FileText, History,
   KeyRound, LayoutDashboard, LayoutList, Network, Plug, Radio, Scan, ScrollText,
   Server, Settings, Shield, ShieldCheck, TriangleAlert, Users, Wrench, Archive,
   type LucideIcon,
@@ -27,6 +27,10 @@ export interface NavItem {
   /** Query parameters the URL must carry for this item to be active. */
   query?: Record<string, string>;
   adminOnly?: boolean;
+  /** Installation operators only (e.g. managing tenants). */
+  operatorOnly?: boolean;
+  /** Only where this feature is installed (GET /api/v2/features → installed). */
+  feature?: string;
   badge?: NavBadge;
   /** `g <key>` shortcut. */
   shortcut?: string;
@@ -132,14 +136,25 @@ export const NAV_SECTIONS: NavSection[] = [
       { id: 'credentials', label: 'Credentials', href: '/credentials', icon: KeyRound },
       { id: 'system', label: 'System status', href: '/system/status', icon: Activity, shortcut: 't', keywords: 'updates version' },
       { id: 'audit', label: 'Audit log', href: '/system/audit', icon: Shield, adminOnly: true },
+      { id: 'tenants', label: 'Tenants', href: '/tenants', icon: Building2, operatorOnly: true, feature: 'multi_tenancy', keywords: 'customers msp multi-tenant plans' },
     ],
   },
 ];
 
+export interface NavAudience {
+  isOperator?: boolean;
+  /** Installed features (GET /api/v2/features → installed). */
+  installed?: Record<string, boolean | undefined>;
+}
+
 /** Sections and items the user may see. Empty sections are dropped. */
-export function visibleSections(isAdmin: boolean): NavSection[] {
+export function visibleSections(isAdmin: boolean, audience: NavAudience = {}): NavSection[] {
+  const allowed = (i: NavItem) =>
+    (isAdmin || !i.adminOnly)
+    && (!i.operatorOnly || audience.isOperator === true)
+    && (!i.feature || audience.installed?.[i.feature] === true);
   return NAV_SECTIONS
-    .map((s) => ({ ...s, items: s.items.filter((i) => isAdmin || !i.adminOnly) }))
+    .map((s) => ({ ...s, items: s.items.filter(allowed) }))
     .filter((s) => s.items.length > 0);
 }
 
