@@ -221,9 +221,12 @@ async def ensure_default_tenant(db, *, name: str | None = None) -> None:
 
     The migration chain does this in 039; a fresh install builds its schema
     with ``create_all()`` instead and needs the same rows, because every
-    tenant-owned row references tenant 1. Idempotent.
+    tenant-owned row references tenant 1. Idempotent. Runs in system scope:
+    ``sites`` is tenant-owned and no tenant is resolved at startup.
     """
-    if True:
+    from services.tenancy import system_scope
+
+    with system_scope("startup: ensure the default tenant exists"):
         if await db.get(Provider, DEFAULT_PROVIDER_ID) is None:
             db.add(Provider(id=DEFAULT_PROVIDER_ID, name="Default", slug="default"))
             await db.flush()
