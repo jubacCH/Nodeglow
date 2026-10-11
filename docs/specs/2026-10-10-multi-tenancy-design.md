@@ -1288,6 +1288,34 @@ per-tenant counts, resuming, carrying late rows, keeping TTL and indexes,
 dropping after the grace period, refusing without disk. The live tests
 were written without a local server; CI is their first run.
 
+After review (2026-10-11):
+
+- `syslog_messages` is created by the app as well (`init.sql` runs once and,
+  with the image's entrypoint, not necessarily in the app's database).
+- A failed `CREATE TABLE` or step-A `ALTER` fails the connect attempt (the
+  client is published only with its schema), so it is retried instead of
+  every insert failing until the next restart. The older optional ALTERs
+  stay best effort.
+- Restricted user: created with `DEFAULT DATABASE` (the main DSN's database
+  if its own DSN names none, also passed on connect); a DSN naming the main
+  user is refused; the connection is verified once (a read without the
+  setting must fail on every tenant table, one with it must succeed) and
+  tenant reads fail closed with `TenantIsolationError` while it does not
+  (retried every minute) — a failed or partial provisioning is no longer
+  just a log line. A renamed restricted user: the previous one (found in the
+  policy's `apply_to_list`) loses its grants before the policies are
+  re-targeted.
+- Step B after the exchange: the old table's merge blockers are renewed on
+  every run (a ClickHouse restart lifts them); rows at or below the recorded
+  block may only shrink (TTL, deletes — the live table applies them too);
+  only a part straddling the block is `attention`. Late rows go through a
+  staging table (`<t>__tenant_delta`), an intent row and `MOVE PARTITION`,
+  so a retry never duplicates them. Recovery from `attention`: check the
+  live table, `DROP TABLE <t>__pre_tenant`.
+- `ping_retention_days` is limited to 1–30 (the table TTL) in the settings;
+  a stored larger value is logged once and expires at 30 days. CHANGELOG
+  notes the behaviour change (production has 30: no extra deletion).
+
 Deviations / not done:
 
 - Two users, but not `nodeglow_app` + `nodeglow_system` as two new DSNs:
