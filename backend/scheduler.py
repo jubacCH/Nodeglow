@@ -16,7 +16,7 @@ from models.integration import IntegrationConfig
 from services import integration as int_svc
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
-from services.tenancy import per_tenant_job, system_job, system_scope
+from services.tenancy import current_tenant_id, per_tenant_job, system_job, system_scope
 
 logger = logging.getLogger(__name__)
 
@@ -422,12 +422,13 @@ def reset_port_error_state(host_id: int) -> None:
     _port_pass_streak.pop(host_id, None)
 
 
-async def _broadcast_ping_updates(updates: list[tuple]) -> None:
-    """Send (host_id, name, online, latency_ms) updates to WebSocket clients."""
+async def _broadcast_ping_updates(updates: list[tuple], tenant_id: int) -> None:
+    """Send (host_id, name, online, latency_ms) updates to the WebSocket
+    clients of ``tenant_id`` (the tenant whose hosts were checked)."""
     from services.websocket import broadcast_ping_update
     for host_id, name, online, latency in updates:
         try:
-            await broadcast_ping_update(host_id, name, online, latency)
+            await broadcast_ping_update(host_id, name, online, latency, tenant_id=tenant_id)
         except Exception:
             logger.debug("WebSocket ping broadcast failed", exc_info=True)
 
@@ -512,7 +513,7 @@ async def run_ping_checks():
                 "latency_ms": 0 if success else None,
             })
             agent_updates.append((host.id, host.name, success, 0 if success else None))
-        _asyncio.create_task(_broadcast_ping_updates(agent_updates))
+        _asyncio.create_task(_broadcast_ping_updates(agent_updates, current_tenant_id()))
 
         try:
             await insert_ping_checks(agent_ping_rows)
@@ -633,7 +634,7 @@ async def run_ping_checks():
     # Broadcast live updates via WebSocket — one task for the whole cycle
     # rather than one per host.
     if ws_updates:
-        _asyncio.create_task(_broadcast_ping_updates(ws_updates))
+        _asyncio.create_task(_broadcast_ping_updates(ws_updates, current_tenant_id()))
 
     # ClickHouse is the authoritative store for ping check time-series.
     if icmp_rows:

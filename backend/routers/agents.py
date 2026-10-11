@@ -50,9 +50,8 @@ def _shared_enrollment_allowed() -> bool:
 
 def _require_admin(request: Request):
     """Return None on admin, or a 403 JSONResponse otherwise."""
-    user = getattr(request.state, "current_user", None)
-    role = getattr(user, "role", None)
-    if not user or role != "admin":
+    # The role in the request's tenant (membership), never users.role.
+    if not getattr(request.state, "current_user", None) or not tenancy.request_is_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     return None
 
@@ -143,6 +142,8 @@ async def _consume_install_token(
         row = result.scalar_one_or_none()
     if not row:
         return False, "unknown", None
+    if not await tenancy.tenant_is_active(db, row.tenant_id):
+        return False, "tenant_inactive", None
     if row.revoked:
         return False, "revoked", None
     if row.expires_at <= datetime.utcnow():
@@ -178,6 +179,8 @@ async def _find_agent_by_token(db, token: str) -> Agent | None:
             agent = result.scalar_one_or_none()
             if agent is not None:
                 agent.token = token_hash  # migrate to HMAC
+    if agent is not None and not await tenancy.tenant_is_active(db, agent.tenant_id):
+        return None  # the agent's tenant is suspended: its token stops working
     return agent
 
 
@@ -248,7 +251,12 @@ async def agent_enroll(request: Request):
             hostname,
         )
         # A shared key cannot carry a tenant: it only ever enrols into the
-        # default tenant (and is to be refused once there is more than one).
+        # default tenant, and is refused once there is more than one.
+        with system_scope("agent enrolment: count tenants for the shared key"):
+            tenant_count = len(await tenancy.backend().active_tenant_ids())
+        if tenant_count > 1:
+            logger.warning("Rejected shared-key enrollment from %s: several tenants", client_ip_log)
+            return generic_403
         tenant_id = DEFAULT_TENANT_ID
         site_id = tenancy.backend().default_site_id(tenant_id)
 
@@ -447,8 +455,8 @@ async def _handle_report(db, agent: Agent, body: dict):
     except Exception as ch_exc:
         logger.error("ClickHouse insert (agent_metrics) failed: %s", ch_exc)
 
-    # Broadcast to all WebSocket clients (global hub)
-    await broadcast_agent_metric(agent.id, agent.name, {
+    # Broadcast to the agent's tenant's WebSocket clients
+    await broadcast_agent_metric(agent.id, agent.name, tenant_id=agent.tenant_id, metrics={
         "hostname": body.get("hostname"),
         "cpu_pct": body.get("cpu_pct"),
         "mem_pct": mem.get("pct"),

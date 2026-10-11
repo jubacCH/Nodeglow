@@ -39,7 +39,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
-from routers.settings._helpers import require_admin
+# The licence is installation-level: the operator's (in the core: the admin).
+from routers.settings._helpers import require_operator
 
 from nodeglow_ee import licensing
 from nodeglow_ee.licensing import (
@@ -260,7 +261,7 @@ def _env_conflict() -> JSONResponse:
 
 @router.get("/license", summary="License status (admin)")
 async def get_license(request: Request, db: AsyncSession = Depends(get_db)):
-    if err := require_admin(request):
+    if err := require_operator(request):
         return err
     install_id = await _ensure_install_id(db)
     status = await manager.refresh()
@@ -269,7 +270,7 @@ async def get_license(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/license", summary="Install or replace the license (admin)")
 async def upload_license(request: Request, db: AsyncSession = Depends(get_db)):
-    if err := require_admin(request):
+    if err := require_operator(request):
         return err
     if _env_license():
         return _env_conflict()
@@ -302,7 +303,7 @@ async def upload_license(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/license", summary="Remove the license (admin)")
 async def remove_license(request: Request, db: AsyncSession = Depends(get_db)):
-    if err := require_admin(request):
+    if err := require_operator(request):
         return err
     if _env_license():
         return _env_conflict()

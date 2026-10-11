@@ -9,6 +9,12 @@ from services import channel_secrets as cs
 TG = "123456:ABC-DEF_secret"
 DC = "https://discord.com/api/webhooks/1/secret"
 
+def _notify(*args, **kwargs):
+    import notifications
+    kwargs.setdefault("tenant_id", 1)
+    return notifications.notify(*args, **kwargs)
+
+
 
 def _factory(db):
     return async_sessionmaker(db.bind, expire_on_commit=False)
@@ -94,6 +100,6 @@ async def test_notify_decrypts_legacy_secrets():
          patch.object(notifications, "_log_notification", new_callable=AsyncMock):
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        await notifications.notify("Secrets", "m")
+        await _notify("Secrets", "m")
     assert tg.await_args.args[0] == TG
     assert dc.await_args.args[0] == DC

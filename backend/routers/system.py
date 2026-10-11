@@ -184,8 +184,9 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
 
     # App logs (journald tail) can contain secrets — only collect them for
     # admins. Readonly/editor users get an empty list.
-    _user = getattr(request.state, "current_user", None)
-    _is_admin = getattr(_user, "role", None) == "admin"
+    # (Installation logs: the operator's, which in the core is the admin.)
+    from services.tenancy import request_is_operator
+    _is_admin = request_is_operator(request)
     logs_fut = loop.run_in_executor(None, _collect_logs) if _is_admin else None
 
     # ── Database stats + top tables (single query) ───────────────────────

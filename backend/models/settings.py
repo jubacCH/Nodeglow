@@ -32,10 +32,16 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     username = Column(String(64), unique=True, nullable=False)
     password_hash = Column(String(128), nullable=False)
+    # Mirror of the membership role in the default tenant, kept in sync for
+    # one release so a rollback to before the auth binding (revision 043)
+    # still finds every user's role. tenant_memberships is the source of truth.
     role = Column(String(16), default="admin")   # admin | editor | readonly
     auth_source = Column(String(16), default="local")  # local | ldap
     display_name = Column(String(128), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Installation operator: manages providers and installation settings. No
+    # implicit access to tenant data (that takes a membership).
+    is_operator = Column(Boolean, nullable=False, default=False, server_default="false")
 
 
 class Session(Base):
@@ -43,6 +49,13 @@ class Session(Base):
     token = Column(String(64), primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     expires_at = Column(DateTime, nullable=False)
+    # The tenant this browser session works in (set at login, changed via
+    # POST /api/auth/tenant). Re-checked against the memberships on every
+    # request; NULL = the user's only membership.
+    active_tenant_id = Column(
+        Integer, ForeignKey("tenants.id", ondelete="SET NULL", name="fk_sessions_active_tenant"),
+        nullable=True,
+    )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -70,6 +83,11 @@ async def get_current_user(request, db: AsyncSession):
         # Migrate legacy hash to HMAC
         session.token = token_hash
         await db.commit()
+    # What the tenant resolution needs from the session (services.tenancy).
+    state = getattr(request, "state", None)
+    if state is not None:
+        state.session_active_tenant_id = session.active_tenant_id
+        state.session_token_hash = session.token
     result = await db.execute(select(User).where(User.id == session.user_id))
     return result.scalar_one_or_none()
 

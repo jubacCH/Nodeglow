@@ -8,6 +8,12 @@ def _clear_rate_limit():
     """Clear the rate limit cache between tests."""
     notifications._recent.clear()
 
+def _notify(*args, **kwargs):
+    """notify() for tenant 1 (notifications are per tenant since phase 4)."""
+    kwargs.setdefault("tenant_id", 1)
+    return notifications.notify(*args, **kwargs)
+
+
 
 async def test_notify_disabled_skips_all():
     """When notify_enabled is '0', no channels should be called."""
@@ -21,7 +27,7 @@ async def test_notify_disabled_skips_all():
         mock_db = AsyncMock()
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        await notifications.notify("Test", "Message")
+        await _notify("Test", "Message")
         mock_tg.assert_not_called()
 
 
@@ -49,7 +55,7 @@ async def test_notify_sends_telegram():
         mock_db = AsyncMock()
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        await notifications.notify("Host offline", "Server1 is down", severity="critical")
+        await _notify("Host offline", "Server1 is down", severity="critical")
         mock_tg.assert_called_once()
         mock_dc.assert_not_called()
 
@@ -77,7 +83,7 @@ async def test_notify_sends_discord():
         mock_db = AsyncMock()
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        await notifications.notify("Test discord", "Message")
+        await _notify("Test discord", "Message")
         mock_tg.assert_not_called()
         mock_dc.assert_called_once()
 
@@ -108,7 +114,7 @@ async def test_notify_channel_failure_doesnt_crash():
         mock_db = AsyncMock()
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        await notifications.notify("Test failure", "Message")
+        await _notify("Test failure", "Message")
         mock_dc.assert_called_once()
 
 
@@ -135,12 +141,12 @@ async def test_notify_severity_color():
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        await notifications.notify("Critical alert", "Down", severity="critical")
+        await _notify("Critical alert", "Down", severity="critical")
         color_critical = mock_dc.call_args[0][3]
 
         _clear_rate_limit()
         mock_dc.reset_mock()
-        await notifications.notify("Info alert", "Up", severity="info")
+        await _notify("Info alert", "Up", severity="info")
         color_info = mock_dc.call_args[0][3]
 
         assert color_critical == 0xe74c3c  # red
@@ -170,6 +176,6 @@ async def test_rate_limiting():
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        await notifications.notify("Duplicate alert", "First")
-        await notifications.notify("Duplicate alert", "Second")  # Should be rate-limited
+        await _notify("Duplicate alert", "First")
+        await _notify("Duplicate alert", "Second")  # Should be rate-limited
         assert mock_tg.call_count == 1  # Only first call went through
