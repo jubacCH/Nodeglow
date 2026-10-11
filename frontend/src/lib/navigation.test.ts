@@ -47,6 +47,16 @@ describe('navigation registry', () => {
     expect(admin?.items.map((i) => i.id)).toEqual(['credentials', 'system']);
   });
 
+  it('shows the Tenants page only to operators of an installation with multi-tenancy', () => {
+    const items = (admin: boolean, audience = {}) =>
+      visibleSections(admin, audience).find((s) => s.id === 'admin')?.items.map((i) => i.id) ?? [];
+    expect(items(true)).not.toContain('tenants');
+    expect(items(true, { isOperator: true })).not.toContain('tenants');
+    expect(items(true, { isOperator: false, installed: { multi_tenancy: true } })).not.toContain('tenants');
+    expect(items(true, { isOperator: true, installed: { multi_tenancy: true } })).toContain('tenants');
+    expect(findActive('/tenants')?.item.id).toBe('tenants');
+  });
+
   it('puts five sections in the mobile tab bar', () => {
     expect(NAV_SECTIONS.filter((s) => s.mobile)).toHaveLength(5);
   });

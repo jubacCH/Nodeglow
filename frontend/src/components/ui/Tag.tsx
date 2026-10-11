@@ -10,7 +10,7 @@ interface TagProps extends HTMLAttributes<HTMLSpanElement> {
 }
 
 /**
- * Outline tag for meta information ("Multi-tenant · Planned", "Prototype",
+ * Outline tag for meta information ("Sites · Planned", "Prototype",
  * source labels). `planned` draws it dashed: the convention for features that
  * are announced but not usable yet.
  */
