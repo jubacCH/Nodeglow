@@ -15,16 +15,14 @@ def _factory(db):
 
 
 async def _seed(db, **values):
-    from database import Setting
-    for k, v in values.items():
-        db.add(Setting(key=k, value=v))
-    await db.commit()
+    from tests.conftest import put_settings
+    await put_settings(db, **values)
 
 
 async def _raw(factory, key):
-    from database import Setting
+    from tests.conftest import setting_row
     async with factory() as s:
-        row = await s.get(Setting, key)
+        row = await setting_row(s, key)
         return row.value if row else None
 
 
@@ -86,7 +84,7 @@ async def test_notify_decrypts_legacy_secrets():
         "discord_webhook_url": DC,  # legacy plaintext row still works
     }
 
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     with patch("database.AsyncSessionLocal") as mock_cls, \

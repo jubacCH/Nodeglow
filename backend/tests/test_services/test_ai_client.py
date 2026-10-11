@@ -215,7 +215,8 @@ async def test_upgrade_with_existing_key_enables_once_and_audits(db):
     assert [a.action for a in audit] == ["settings.ai_enabled"]
 
     # Later the admin switches AI off: a restart must not switch it back on.
-    row = await db.get(Setting, "ai_enabled")
+    from models.tenant import TenantSetting
+    row = await db.get(TenantSetting, (1, "ai_enabled"))
     row.value = "0"
     await db.commit()
     assert await migrate_ai_opt_in(_factory(db)) is False

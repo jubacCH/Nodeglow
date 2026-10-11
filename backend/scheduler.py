@@ -16,7 +16,7 @@ from models.integration import IntegrationConfig
 from services import integration as int_svc
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
-from services.tenancy import per_tenant_job, system_job
+from services.tenancy import per_tenant_job, system_job, system_scope
 
 logger = logging.getLogger(__name__)
 
@@ -1297,14 +1297,26 @@ async def run_backup_compliance():
 async def start_scheduler():
     """Read intervals from DB, then register and start all jobs."""
     from database import get_setting
+    from services.tenancy import backend as _tenancy_backend
 
-    async with AsyncSessionLocal() as db:
-        ping_interval = int(await get_setting(db, "ping_interval", "60"))
-        integration_interval = int(await get_setting(db, "proxmox_interval", "60"))
-        # Read here, inside the session: these used to be read further down
-        # through `db` after its context had already closed.
-        digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
-        digest_hour = int(await get_setting(db, "digest_hour", "9"))
+    # The cadence settings are per tenant, the jobs are global (per-tenant
+    # cadence is phase 5): ping and integration jobs run at the fastest
+    # tenant's interval, the digest cron at the first tenant's schedule.
+    # With one tenant this is exactly that tenant's setting.
+    with system_scope("scheduler start: read every tenant's job cadence"):
+        tenant_ids = await _tenancy_backend().active_tenant_ids()
+        async with AsyncSessionLocal() as db:
+            ping_interval = min([
+                int(await get_setting(db, "ping_interval", "60", tenant_id=t))
+                for t in tenant_ids
+            ] or [60])
+            integration_interval = min([
+                int(await get_setting(db, "proxmox_interval", "60", tenant_id=t))
+                for t in tenant_ids
+            ] or [60])
+            first = tenant_ids[0] if tenant_ids else None
+            digest_day = int(await get_setting(db, "digest_day", "0", tenant_id=first)) if first else 0
+            digest_hour = int(await get_setting(db, "digest_hour", "9", tenant_id=first)) if first else 9
 
     scheduler.add_job(run_ping_checks, "interval", seconds=ping_interval,
                       id="ping_checks", replace_existing=True)

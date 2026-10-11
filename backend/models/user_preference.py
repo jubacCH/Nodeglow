@@ -8,7 +8,7 @@ must treat a missing row as "no preference recorded yet".
 """
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text
 
 from models.base import Base
 from models.tenant import TenantScoped
@@ -26,4 +26,7 @@ class UserPreference(TenantScoped, Base):
     # When the user last acknowledged the dashboard ("seen"), naive UTC. The
     # dashboard's "since your last visit" counts everything after it.
     dashboard_seen_at = Column(DateTime, nullable=True)
+    # The user's dashboard widget layout (JSON list), NULL = the default
+    # layout. Was one installation-wide setting until revision 042.
+    dashboard_layout = Column(Text, nullable=True)
     updated_at = Column(DateTime, nullable=True, default=datetime.utcnow, onupdate=datetime.utcnow)

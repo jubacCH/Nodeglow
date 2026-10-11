@@ -212,19 +212,42 @@ async def metrics():
 
 # ── Nav counts cache (60s TTL, single GROUP BY query) ────────────────────────
 
-_nav_cache: dict = {"counts": {}, "ts": 0.0}
-_settings_cache: dict = {"site_name": "NODEGLOW", "timezone": "UTC", "ts": 0.0}
+# Both keyed by tenant id: the counts and the name are the tenant's own.
+_nav_cache: dict[int, dict] = {}       # tenant_id -> {"counts": {...}, "ts": float}
+_settings_cache: dict[int, dict] = {}  # tenant_id -> {"site_name", "timezone", "ts"}
 _NAV_CACHE_TTL = 60
 
 
-def invalidate_settings_cache():
-    """Call after saving settings to force refresh on next request."""
-    _settings_cache["ts"] = 0.0
+def _cache_tenant(tenant_id: int | None) -> int | None:
+    if tenant_id is not None:
+        return tenant_id
+    ctx = _tenancy.current()
+    return ctx.tenant_id if ctx is not None and not ctx.system else None
 
 
-def invalidate_nav_cache():
-    """Call after adding/removing integrations to force refresh on next request."""
-    _nav_cache["ts"] = 0.0
+def invalidate_settings_cache(tenant_id: int | None = None):
+    """Call after saving settings to force refresh on next request.
+
+    ``tenant_id`` defaults to the current tenant; without one (system scope,
+    no context) every tenant's entry is dropped.
+    """
+    tid = _cache_tenant(tenant_id)
+    if tid is None:
+        _settings_cache.clear()
+    else:
+        _settings_cache.pop(tid, None)
+
+
+def invalidate_nav_cache(tenant_id: int | None = None):
+    """Call after adding/removing integrations to force refresh on next request.
+
+    Same tenant rule as :func:`invalidate_settings_cache`.
+    """
+    tid = _cache_tenant(tenant_id)
+    if tid is None:
+        _nav_cache.clear()
+    else:
+        _nav_cache.pop(tid, None)
 
 _NAV_KEYS = (
     "proxmox", "unifi", "unas", "pihole", "adguard", "portainer",
@@ -236,8 +259,10 @@ _NAV_KEYS = (
 
 async def _get_nav_counts(db) -> dict:
     now = time.time()
-    if now - _nav_cache["ts"] < _NAV_CACHE_TTL and _nav_cache["counts"]:
-        return _nav_cache["counts"]
+    tenant_id = _tenancy.session_tenant_id(db)
+    entry = _nav_cache.get(tenant_id)
+    if entry and now - entry["ts"] < _NAV_CACHE_TTL and entry["counts"]:
+        return entry["counts"]
 
     from services.integration import count_all_by_type
     from sqlalchemy import func
@@ -256,8 +281,7 @@ async def _get_nav_counts(db) -> dict:
     )).scalar() or 0
     counts["tasks"] = new_ports + new_ssl
 
-    _nav_cache["counts"] = counts
-    _nav_cache["ts"] = now
+    _nav_cache[tenant_id] = {"counts": counts, "ts": now}
     return counts
 
 

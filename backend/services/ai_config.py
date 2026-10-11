@@ -277,44 +277,52 @@ async def migrate_ai_opt_in(session_factory=None) -> bool:
     AI was enabled by this call.
     """
     from database import Setting
+    from models.tenant import DEFAULT_TENANT_ID, TenantSetting
     from services.audit import log_action
+    from services.tenancy import tenant_scope
 
     if session_factory is None:
         from database import AsyncSessionLocal as session_factory
 
-    async with session_factory() as db:
-        if await db.get(Setting, MIGRATION_MARKER) is not None:
-            return False
-        key_row = await db.get(Setting, "claude_api_key")
-        enabled_row = await db.get(Setting, "ai_enabled")
-        now = datetime.utcnow().isoformat(timespec="seconds")
-        db.add(Setting(key=MIGRATION_MARKER, value=now))
-        try:
-            await db.flush()
-        except IntegrityError:
-            await db.rollback()
-            return False  # another worker got there first
+    # The marker and the key are installation settings; the opt-in is the
+    # tenant's. An installation from before the opt-in existed has exactly one
+    # tenant (the default one), and that is the tenant whose AI stays on.
+    tenant_id = DEFAULT_TENANT_ID
+    with tenant_scope(tenant_id):
+        async with session_factory() as db:
+            if await db.get(Setting, MIGRATION_MARKER) is not None:
+                return False
+            key_row = await db.get(Setting, "claude_api_key")
+            enabled_row = await db.get(TenantSetting, (tenant_id, "ai_enabled"))
+            now = datetime.utcnow().isoformat(timespec="seconds")
+            db.add(Setting(key=MIGRATION_MARKER, value=now))
+            try:
+                await db.flush()
+            except IntegrityError:
+                await db.rollback()
+                return False  # another worker got there first
 
-        enabled = False
-        if key_row is not None and key_row.value and enabled_row is None:
-            who = "system: upgrade (existing Claude API key)"
-            for k, v in (
-                ("ai_enabled", "1"), ("ai_enabled_by", who), ("ai_enabled_at", now),
-                ("ai_provider", PROVIDER_ANTHROPIC),
-            ):
-                row = await db.get(Setting, k)
-                if row is None:
-                    db.add(Setting(key=k, value=v))
-                else:
-                    row.value = v
-            await log_action(
-                db, None, "settings.ai_enabled", "setting", None, "ai_enabled",
-                {"by": who, "provider": PROVIDER_ANTHROPIC,
-                 "reason": "A Claude API key was configured before AI became opt-in; "
-                           "enabled once so existing AI features keep working."},
-            )
-            enabled = True
-        await db.commit()
+            enabled = False
+            if key_row is not None and key_row.value and enabled_row is None:
+                who = "system: upgrade (existing Claude API key)"
+                for model, k, v in (
+                    (TenantSetting, "ai_enabled", "1"), (TenantSetting, "ai_enabled_by", who),
+                    (TenantSetting, "ai_enabled_at", now), (Setting, "ai_provider", PROVIDER_ANTHROPIC),
+                ):
+                    pk = (tenant_id, k) if model is TenantSetting else k
+                    row = await db.get(model, pk)
+                    if row is None:
+                        db.add(model(key=k, value=v, encrypted=False))
+                    else:
+                        row.value = v
+                await log_action(
+                    db, None, "settings.ai_enabled", "setting", None, "ai_enabled",
+                    {"by": who, "provider": PROVIDER_ANTHROPIC,
+                     "reason": "A Claude API key was configured before AI became opt-in; "
+                               "enabled once so existing AI features keep working."},
+                )
+                enabled = True
+            await db.commit()
 
     if enabled:
         log.warning(

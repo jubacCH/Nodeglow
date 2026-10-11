@@ -12,7 +12,7 @@ def _clear_rate_limit():
 async def test_notify_disabled_skips_all():
     """When notify_enabled is '0', no channels should be called."""
     _clear_rate_limit()
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return {"notify_enabled": "0"}.get(key, default)
 
     with patch("database.AsyncSessionLocal") as mock_cls, \
@@ -38,7 +38,7 @@ async def test_notify_sends_telegram():
         "smtp_password": "", "smtp_from": "", "smtp_to": "",
     }
 
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     with patch("database.AsyncSessionLocal") as mock_cls, \
@@ -66,7 +66,7 @@ async def test_notify_sends_discord():
         "smtp_password": "", "smtp_from": "", "smtp_to": "",
     }
 
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     with patch("database.AsyncSessionLocal") as mock_cls, \
@@ -94,7 +94,7 @@ async def test_notify_channel_failure_doesnt_crash():
         "smtp_password": "", "smtp_from": "", "smtp_to": "",
     }
 
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     async def failing_telegram(*args, **kwargs):
@@ -124,7 +124,7 @@ async def test_notify_severity_color():
         "smtp_password": "", "smtp_from": "", "smtp_to": "",
     }
 
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     with patch("database.AsyncSessionLocal") as mock_cls, \
@@ -159,7 +159,7 @@ async def test_rate_limiting():
         "smtp_password": "", "smtp_from": "", "smtp_to": "",
     }
 
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     with patch("database.AsyncSessionLocal") as mock_cls, \

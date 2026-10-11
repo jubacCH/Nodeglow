@@ -256,7 +256,7 @@ async def test_load_config_decrypts_secrets():
         "slack_webhook_url": "https://legacy-plaintext.example/hook",
     }
 
-    async def get_setting(db, key, default=""):
+    async def get_setting(db, key, default="", **_kw):
         return stored.get(key, default)
 
     cfg = await nc.load_config(None, get_setting, decrypt_value)
@@ -271,7 +271,7 @@ async def test_load_config_decrypts_secrets():
 # ── Dispatcher integration (notifications.notify) ────────────────────────────
 
 def _patched_notify_env(settings):
-    async def fake_get_setting(db, key, default=""):
+    async def fake_get_setting(db, key, default="", **_kw):
         return settings.get(key, default)
 
     mock_cls = patch("database.AsyncSessionLocal")

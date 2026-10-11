@@ -132,6 +132,42 @@ def tenant_bound_sessionmaker(engine, tenant_id: int = 1):
     )
 
 
+def _setting_model(key: str, tenant_id: int):
+    """(model, primary key) of a settings key's row, as the registry routes it."""
+    from models.settings import Setting
+    from models.tenant import TenantSetting
+    from services.settings_registry import lookup
+
+    if lookup(key).is_tenant:
+        return TenantSetting, (tenant_id, key)
+    return Setting, key
+
+
+async def setting_row(db, key: str, tenant_id: int = 1):
+    """The stored row of a settings key (installation or tenant table), or None."""
+    from services.tenancy import system_scope
+
+    model, pk = _setting_model(key, tenant_id)
+    with system_scope("test: read a raw settings row"):
+        return await db.get(model, pk)
+
+
+async def put_settings(db, tenant_id: int = 1, **values) -> None:
+    """Store raw values (no encryption) where the registry puts each key; commits."""
+    from services.tenancy import system_scope
+
+    with system_scope("test: seed settings"):
+        for key, value in values.items():
+            model, pk = _setting_model(key, tenant_id)
+            row = await db.get(model, pk)
+            if row is None:
+                kw = {"tenant_id": tenant_id} if isinstance(pk, tuple) else {}
+                db.add(model(key=key, value=value, encrypted=False, **kw))
+            else:
+                row.value = value
+        await db.commit()
+
+
 async def seed_default_tenant(engine) -> None:
     """Provider 1, tenant 1 and site 1, as migration 039 / init_db create them."""
     from models.tenant import ensure_default_tenant

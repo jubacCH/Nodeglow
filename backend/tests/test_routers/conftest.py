@@ -20,7 +20,7 @@ from starlette.responses import HTMLResponse
 from models.base import Base as ModelsBase
 from database import Base as DbBase
 from tests.conftest import (
-    install_naive_datetime_guard, seed_default_tenant, tenant_bound_sessionmaker,
+    install_naive_datetime_guard, put_settings, seed_default_tenant, tenant_bound_sessionmaker,
 )
 
 
@@ -83,12 +83,8 @@ async def make_client(fake_user=_AUTH_DISABLED):
 
     # Seed minimal settings
     async with session_factory() as seed_db:
-        from database import Setting
-        seed_db.add(Setting(key="setup_complete", value="true"))
-        seed_db.add(Setting(key="site_name", value="NODEGLOW"))
-        seed_db.add(Setting(key="timezone", value="UTC"))
-        seed_db.add(Setting(key="syslog_port", value="1514"))
-        await seed_db.commit()
+        await put_settings(seed_db, setup_complete="true", site_name="NODEGLOW",
+                           timezone="UTC", syslog_port="1514")
 
     @asynccontextmanager
     async def fake_session():
