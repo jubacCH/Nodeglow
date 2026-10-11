@@ -437,6 +437,13 @@ HOST_PROJECT_DIR=$INSTALL_DIR
 POSTGRES_DB=nodeglow
 POSTGRES_USER=nodeglow
 POSTGRES_PASSWORD=$(random_hex 24)
+# The app connects as its own role, which owns no table and is subject to
+# row-level security; migrations run as POSTGRES_USER. migrate.py creates
+# the role with this password on the first start (docs/OPERATIONS.md,
+# "Row-level security").
+POSTGRES_APP_USER=nodeglow_app
+POSTGRES_APP_PASSWORD=$(random_hex 24)
+NODEGLOW_RLS=on
 UPDATE_SIDECAR_TOKEN=$(random_hex 32)
 SECRET_KEY=$(random_hex 32)
 

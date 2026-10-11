@@ -324,13 +324,18 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     ping_stats = {}
     try:
         window_1h = now - timedelta(hours=1)
-        row = (await db.execute(text("""
-            SELECT count(*) AS total,
-                   count(*) FILTER (WHERE success) AS ok,
-                   round(avg(latency_ms)::numeric, 2) AS avg_lat,
-                   round(max(latency_ms)::numeric, 2) AS max_lat
-            FROM ping_results WHERE timestamp >= :since
-        """).bindparams(since=window_1h))).one()
+        # ping_results was dropped in revision 026 (ClickHouse now). In a
+        # savepoint: on PostgreSQL the failing statement aborted the
+        # transaction, and every later section of this page (SSL expiry,
+        # notification channels, retention) silently came back empty.
+        async with db.begin_nested():
+            row = (await db.execute(text("""
+                SELECT count(*) AS total,
+                       count(*) FILTER (WHERE success) AS ok,
+                       round(avg(latency_ms)::numeric, 2) AS avg_lat,
+                       round(max(latency_ms)::numeric, 2) AS max_lat
+                FROM ping_results WHERE timestamp >= :since
+            """).bindparams(since=window_1h))).one()
         if row.total:
             ping_stats = {
                 "checks_1h": row.total,

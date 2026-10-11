@@ -42,11 +42,65 @@ async def make_client(fake_user=_AUTH_DISABLED):
     (auth enabled), or any user-like object to be "logged in" as it.
     Yields ``(client, session_factory)``.
     """
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:", echo=False,
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
+    async with _test_database() as engine:
+        async with _make_client(engine, fake_user) as pair:
+            yield pair
+
+
+# ── PostgreSQL mode ──────────────────────────────────────────────────────────
+# tests/test_migrations_tenancy_pg.py runs a subset of these router tests
+# against PostgreSQL with row-level security on: it builds a template
+# database with migrate.py and sets these variables. Each client then gets a
+# copy of the template and connects as the app role, so RLS applies.
+PG_TEMPLATE = os.environ.get("NODEGLOW_TEST_PG_TEMPLATE", "")
+PG_ADMIN_URL = os.environ.get("NODEGLOW_TEST_PG_ADMIN_URL", "")
+PG_APP_URL = os.environ.get("NODEGLOW_TEST_PG_APP_URL", "")  # database part is replaced
+
+
+@asynccontextmanager
+async def _test_database():
+    if not PG_TEMPLATE:
+        engine = create_async_engine(
+            "sqlite+aiosqlite:///:memory:", echo=False,
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        try:
+            yield engine
+        finally:
+            await engine.dispose()
+        return
+    import uuid
+
+    import asyncpg
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.pool import NullPool
+
+    from services import pg_rls
+
+    name = f"ng_rt_{uuid.uuid4().hex[:12]}"
+    admin_dsn = PG_ADMIN_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
+    admin = await asyncpg.connect(admin_dsn)
+    try:
+        await admin.execute(f'CREATE DATABASE "{name}" TEMPLATE "{PG_TEMPLATE}"')
+    finally:
+        await admin.close()
+    url = make_url(PG_APP_URL).set(drivername="postgresql+asyncpg", database=name)
+    engine = create_async_engine(url, poolclass=NullPool)
+    pg_rls.install_engine_hooks(engine)
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+        admin = await asyncpg.connect(admin_dsn)
+        try:
+            await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        finally:
+            await admin.close()
+
+
+@asynccontextmanager
+async def _make_client(engine, fake_user):
 
     # Ensure all models are registered with metadata before create_all
     import models.agent  # noqa: F401
@@ -70,9 +124,10 @@ async def make_client(fake_user=_AUTH_DISABLED):
                 and 'gin' not in str(getattr(idx, 'kwargs', {}))
             }
 
-    async with engine.begin() as conn:
-        await conn.run_sync(DbBase.metadata.create_all)
-        await conn.run_sync(ModelsBase.metadata.create_all)
+    if engine.dialect.name == "sqlite":  # PostgreSQL: the template is migrated
+        async with engine.begin() as conn:
+            await conn.run_sync(DbBase.metadata.create_all)
+            await conn.run_sync(ModelsBase.metadata.create_all)
 
     # The app's sessions carry no tenant binding: every route has to get its
     # tenant from the middleware (or an explicit scope), exactly as in
@@ -90,6 +145,19 @@ async def make_client(fake_user=_AUTH_DISABLED):
         fake = FakeUser() if fake_user is _AUTH_DISABLED else fake_user
         if fake is not None and getattr(fake, "id", None) is not None:
             from models.tenant import TenantMembership
+            if engine.dialect.name == "postgresql":
+                # PostgreSQL enforces the membership's user FK; SQLite does
+                # not, so the fake user never needed a row there.
+                from sqlalchemy import text as _text
+                from models.settings import User
+                if await seed_db.get(User, fake.id) is None:
+                    seed_db.add(User(id=fake.id, username=getattr(fake, "username", "admin"),
+                                     password_hash="x", role=getattr(fake, "role", None) or "admin",
+                                     auth_source="local"))
+                    await seed_db.flush()
+                    await seed_db.execute(_text(
+                        "SELECT setval(pg_get_serial_sequence('users', 'id'), "
+                        "(SELECT MAX(id) FROM users))"))
             seed_db.add(TenantMembership(user_id=fake.id, tenant_id=1,
                                          role=getattr(fake, "role", None) or "admin"))
             await seed_db.commit()
@@ -158,8 +226,6 @@ async def make_client(fake_user=_AUTH_DISABLED):
             ac.cookies.set("ng_csrf", _csrf)
             ac.headers["x-csrf-token"] = _csrf
             yield ac, session_factory
-
-    await engine.dispose()
 
 
 @pytest.fixture

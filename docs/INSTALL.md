@@ -95,7 +95,7 @@ What it does:
    cosign is installed — the signature of `SHA256SUMS`;
 3. writes `/opt/nodeglow/docker-compose.yml` and `clickhouse/`, and generates
    `.env` (mode 600) with fresh random `POSTGRES_PASSWORD`,
-   `UPDATE_SIDECAR_TOKEN` and `SECRET_KEY`;
+   `POSTGRES_APP_PASSWORD`, `UPDATE_SIDECAR_TOKEN` and `SECRET_KEY`;
 4. pulls the images (and verifies their cosign signatures if cosign is there);
 5. starts the stack, waits for the backend to report healthy, and prints the
    URL.
@@ -341,6 +341,13 @@ requires it — `curl | sh` is convenient, not auditable.
   `NODEGLOW_BACKEND_IMAGE` (edition), `NODEGLOW_REGISTRY`, `HOST_PROJECT_DIR`;
 - fresh random `POSTGRES_PASSWORD`, `UPDATE_SIDECAR_TOKEN` and `SECRET_KEY` —
   **back up `.env`**;
+- two database users: `POSTGRES_USER` owns the schema and runs the
+  migrations, the app connects as `POSTGRES_APP_USER=nodeglow_app` (fresh
+  random `POSTGRES_APP_PASSWORD`), and `NODEGLOW_RLS=on` switches on
+  PostgreSQL row-level security
+  ([OPERATIONS.md → Row-level security](OPERATIONS.md#row-level-security)).
+  The first start creates the role. An upgrade with `install.sh` keeps the
+  existing `.env`, so an older install stays on one user until you switch it;
 - `NODEGLOW_UPDATE_CHANNEL=stable`, `NODEGLOW_RELEASES_URL` (`off` for offline
   installs) and `NODEGLOW_VERIFY_SIGNATURES=1`;
 - commented examples for `UI_BIND`, `SYSLOG_BIND`, `BACKUP_SCHEDULE` and
