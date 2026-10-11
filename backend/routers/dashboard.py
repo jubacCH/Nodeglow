@@ -836,15 +836,8 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     # ── Disk-full predictions (cached for 5 minutes) ────────────────────────
     disk_predictions = {}
     try:
-        import time as _cache_time
-        _PRED_CACHE = getattr(pred_svc, '_disk_pred_cache', None)
-        _PRED_CACHE_TS = getattr(pred_svc, '_disk_pred_cache_ts', 0)
-        if _PRED_CACHE is not None and (_cache_time.time() - _PRED_CACHE_TS) < 300:
-            disk_predictions = _PRED_CACHE
-        else:
-            disk_predictions = await pred_svc.predict_disk_full(db)
-            pred_svc._disk_pred_cache = disk_predictions
-            pred_svc._disk_pred_cache_ts = _cache_time.time()
+        # This tenant's predictions (cached per tenant for 5 minutes).
+        disk_predictions = await pred_svc.integration_predictions(db)
 
         for pool in storage_pools:
             pred = disk_predictions.get(pool.get("_pred_key"))

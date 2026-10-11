@@ -40,10 +40,25 @@ from services.topology import build_topology, filter_upstream_failures
 log = logging.getLogger("nodeglow.correlation")
 
 # ── Consecutive-failure state (in-memory, resets on restart) ────────────────
-# Key = (rule_name, host_ids_hash), value = consecutive cycle count
-_rule_hit_counts: dict[tuple[str, str], int] = {}
+# Key = (tenant_id, rule_name, host_ids_hash), value = consecutive cycle count.
+# Per tenant: the end of one tenant's cycle prunes only that tenant's streaks
+# (pruning everybody's would reset every other tenant's counters each run).
+_rule_hit_counts: dict[tuple[int | None, str, str], int] = {}
 # Tracks which keys were seen in the current correlation cycle
-_current_cycle_hits: set[tuple[str, str]] = set()
+_current_cycle_hits: set[tuple[int | None, str, str]] = set()
+
+
+def _hit_tenant(db=None) -> int | None:
+    """Tenant the streak counters are kept for: the current tenant, else the
+    session's binding. None (no tenant at all) only outside the scheduler."""
+    from services import tenancy
+
+    ctx = tenancy.current()
+    if ctx is not None and not ctx.system and ctx.tenant_id is not None:
+        return ctx.tenant_id
+    if db is not None:
+        return db.info.get(tenancy.SESSION_TENANT_KEY)
+    return None
 
 
 def _host_ids_hash(host_ids: list[int]) -> str:
@@ -51,25 +66,35 @@ def _host_ids_hash(host_ids: list[int]) -> str:
     return hashlib.sha256(",".join(str(i) for i in sorted(host_ids)).encode()).hexdigest()[:16]
 
 
-def _track_rule_hit(rule: str, host_ids: list[int], min_cycles: int) -> bool:
+def _track_rule_hit(db, rule: str, host_ids: list[int], min_cycles: int) -> bool:
     """Track consecutive correlation cycles where a rule matches.
 
     Returns True if the rule has matched for >= min_cycles consecutive runs.
     Counters for combos not seen in a cycle are reset automatically via
     _prune_stale_hits() at end of each correlation run.
     """
-    key = (rule, _host_ids_hash(host_ids))
+    key = (_hit_tenant(db), rule, _host_ids_hash(host_ids))
     _current_cycle_hits.add(key)
     _rule_hit_counts[key] = _rule_hit_counts.get(key, 0) + 1
     return _rule_hit_counts[key] >= min_cycles
 
 
 def _prune_stale_hits():
-    """Remove hit counters for combos that didn't match this cycle."""
-    stale = [k for k in _rule_hit_counts if k not in _current_cycle_hits]
+    """Remove the current tenant's hit counters for combos that didn't match
+    this cycle (without a tenant: everybody's)."""
+    tid = _hit_tenant()
+    stale = [k for k in _rule_hit_counts
+             if (tid is None or k[0] == tid) and k not in _current_cycle_hits]
     for k in stale:
         del _rule_hit_counts[k]
-    _current_cycle_hits.clear()
+    _clear_cycle_hits(tid)
+
+
+def _clear_cycle_hits(tid: int | None = None) -> None:
+    if tid is None:
+        _current_cycle_hits.clear()
+    else:
+        _current_cycle_hits.difference_update({k for k in _current_cycle_hits if k[0] == tid})
 
 
 async def cleanup_incident_events(db, retention_days: int) -> int:
@@ -218,22 +243,25 @@ async def _get_offline_hosts(db, min_failures: int = 3) -> list[PingHost]:
 
 # ── Topology cache (refreshed once per correlation run) ────────────────────
 
-_topo_cache: dict[int, int | None] = {}
-_topo_cache_ts: datetime | None = None
+# Per tenant: one tenant's topology must never stand in for another's within
+# the cache window (tenants' correlation runs follow each other closely).
+_topo_cache: dict[int | None, tuple[datetime, dict[int, int | None]]] = {}
 
 
 async def _get_topology(db) -> dict[int, int | None]:
-    """Get topology with 60s cache."""
-    global _topo_cache, _topo_cache_ts
+    """Get the tenant's topology with 60s cache."""
+    tid = _hit_tenant(db)
     now = datetime.utcnow()
-    if _topo_cache_ts and (now - _topo_cache_ts).total_seconds() < 60:
-        return _topo_cache
+    hit = _topo_cache.get(tid)
+    if hit and (now - hit[0]).total_seconds() < 60:
+        return hit[1]
     try:
-        _topo_cache = await build_topology(db)
-        _topo_cache_ts = now
+        topo = await build_topology(db)
+        _topo_cache[tid] = (now, topo)
+        return topo
     except Exception:
         log.debug("Failed to build topology", exc_info=True)
-    return _topo_cache
+    return hit[1] if hit else {}
 
 
 # ── Rule 1: Host Down + Syslog Errors ───────────────────────────────────────
@@ -267,7 +295,7 @@ async def _rule_host_down_syslog(
         syslog_count = error_counts.get(host.id, 0)
 
         if syslog_count > 0:
-            if not _track_rule_hit("host_down_syslog", [host.id], min_cycles):
+            if not _track_rule_hit(db, "host_down_syslog", [host.id], min_cycles):
                 continue
             await _find_or_create_incident(
                 db,
@@ -299,7 +327,7 @@ async def _rule_host_down_syslog(
             names += f" (+{len(cascade_hosts) - 5} more)"
         upstream_label = ", ".join(parent_names) if parent_names else "upstream device"
 
-        if not _track_rule_hit("upstream_failure", list(cascaded_ids), min_cycles):
+        if not _track_rule_hit(db, "upstream_failure", list(cascaded_ids), min_cycles):
             return
         await _find_or_create_incident(
             db,
@@ -348,7 +376,7 @@ async def _rule_multi_host_down(
     for subnet, hosts in subnets.items():
         if len(hosts) >= 3:
             host_ids = [h.id for h in hosts]
-            if not _track_rule_hit("multi_host_down", host_ids, min_cycles):
+            if not _track_rule_hit(db, "multi_host_down", host_ids, min_cycles):
                 continue
             names = ", ".join(h.name for h in hosts[:5])
             if len(hosts) > 5:
@@ -369,7 +397,7 @@ async def _rule_multi_host_down(
     if remaining >= 3:
         uncovered = [h for s, hosts in subnets.items() if len(hosts) < 3 for h in hosts]
         host_ids = [h.id for h in uncovered]
-        if not _track_rule_hit("multi_host_down", host_ids, min_cycles):
+        if not _track_rule_hit(db, "multi_host_down", host_ids, min_cycles):
             return
         names = ", ".join(h.name for h in uncovered[:5])
         if len(uncovered) > 5:
@@ -423,7 +451,7 @@ async def _rule_integration_host(
 
         if cfg_host and cfg_host in offline_hostnames:
             ping_host = offline_by_hostname[cfg_host]
-            if not _track_rule_hit("integration_host", [ping_host.id], min_cycles):
+            if not _track_rule_hit(db, "integration_host", [ping_host.id], min_cycles):
                 continue
             await _find_or_create_incident(
                 db,
@@ -468,7 +496,7 @@ async def _rule_port_error(db, min_cycles: int = 2):
                 reasons = {}
         failed_label = ", ".join(failed_checks) if failed_checks else "service check"
         why = "; ".join(f"{k}: {reasons[k]}" for k in failed_checks if reasons.get(k))
-        if not _track_rule_hit("port_error", [host.id], min_cycles):
+        if not _track_rule_hit(db, "port_error", [host.id], min_cycles):
             continue
         await _find_or_create_incident(
             db,
@@ -515,7 +543,7 @@ async def _rule_syslog_spike(db, min_cycles: int = 2):
     baseline_5m = max(1, prior_errors / 11)
 
     if recent_errors >= baseline_5m * 5:
-        if not _track_rule_hit("syslog_spike", [0], min_cycles):
+        if not _track_rule_hit(db, "syslog_spike", [0], min_cycles):
             return
         await _find_or_create_incident(
             db,
@@ -588,7 +616,7 @@ async def _rule_log_anomaly(db, min_cycles: int = 2):
         # Per-source discriminator: every source-keyed baseline maps to host 0,
         # so a shared key let two anomalous sources reach min_cycles within a
         # single cycle.
-        if not _track_rule_hit(f"log_anomaly_{bl.host_key}", [host_id or 0], min_cycles):
+        if not _track_rule_hit(db, f"log_anomaly_{bl.host_key}", [host_id or 0], min_cycles):
             continue
 
         host = hosts_by_id.get(host_id) if host_id is not None else None
@@ -632,7 +660,7 @@ async def _rule_fleet_wide(db, min_cycles: int = 2):
         # Per-template discriminator so each template tracks its own consecutive
         # count — sharing one key would let min_cycles be reached within a single
         # cycle when multiple templates match.
-        if not _track_rule_hit(f"fleet_wide_issue_{th[:8]}", [0], min_cycles):
+        if not _track_rule_hit(db, f"fleet_wide_issue_{th[:8]}", [0], min_cycles):
             continue
         await _find_or_create_incident(
             db,
@@ -664,7 +692,7 @@ async def _rule_severity_trend(db, min_cycles: int = 2):
     for tpl in rising:
         # Per-template discriminator so each rising template tracks its own
         # consecutive count rather than sharing one key.
-        if not _track_rule_hit(f"severity_trend_{tpl.template_hash[:8]}", [0], min_cycles):
+        if not _track_rule_hit(db, f"severity_trend_{tpl.template_hash[:8]}", [0], min_cycles):
             continue
         await _find_or_create_incident(
             db,
@@ -688,7 +716,7 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
         if anomaly["type"] == "template_diversity_spike":
             # Per-source discriminator so each source_ip tracks its own
             # consecutive count rather than collapsing into one shared key.
-            if not _track_rule_hit(
+            if not _track_rule_hit(db, 
                 f"content_anomaly_diversity_{anomaly['source_ip']}", [0], min_cycles
             ):
                 continue
@@ -706,7 +734,7 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
             # Per-template discriminator so each upgraded template tracks its own
             # consecutive count rather than collapsing into one shared key.
             _sev_th = anomaly.get("template_hash", "")[:8]
-            if not _track_rule_hit(
+            if not _track_rule_hit(db, 
                 f"content_anomaly_severity_{_sev_th}", [0], min_cycles
             ):
                 continue
@@ -792,7 +820,7 @@ async def _rule_precursor_observed(
         for pp, tpl_text in by_hash.get(observed_hash, []):
             # De-dup: don't fire repeatedly for the same template+host
             dedup_id = host_id if host_id is not None else 0
-            if not _track_rule_hit(
+            if not _track_rule_hit(db, 
                 f"precursor_{pp.precedes_event}_{observed_hash[:8]}",
                 [dedup_id],
                 min_cycles,
@@ -1021,7 +1049,7 @@ async def run_correlation():
             min_failures, min_cycles = await _load_correlation_settings(db)
     except Exception as e:
         log.error("Correlation engine error: %s", e, exc_info=True)
-        _current_cycle_hits.clear()
+        _clear_cycle_hits(_hit_tenant())
         return
 
     # Offline hosts once per cycle, shared by every rule that needs them. They
@@ -1080,7 +1108,7 @@ async def run_correlation():
     else:
         # A partial cycle cannot tell "stopped matching" from "did not run";
         # keep the streak counters and let the next complete cycle prune.
-        _current_cycle_hits.clear()
+        _clear_cycle_hits(_hit_tenant())
 
     # Run incident-resolved hooks (e.g. the enterprise AI postmortem) only after
     # the transaction has committed, so the background task (fresh session)

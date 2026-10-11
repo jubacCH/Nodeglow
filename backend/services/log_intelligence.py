@@ -23,7 +23,7 @@ from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
 from services._stats import wilson_lower_bound
 from services.clickhouse_client import query as ch_query
 from services.predictor_config import get_blacklist_regexes, is_template_blacklisted
-from services.tenancy import session_tenant_id
+from services.tenancy import current_tenant_id, session_tenant_id
 
 log = logging.getLogger("nodeglow.intelligence")
 
@@ -313,86 +313,123 @@ def compute_noise_score(
 
 
 # ── In-Memory Template Cache (for fast per-message extraction) ────────────────
+#
+# All of it per tenant: the same template hash in two customers' logs is two
+# templates with two counts, two noise scores and two examples (a real log
+# line of that customer). A tenant's state is created on first use.
 
-_template_cache: dict[str, int] = {}  # hash -> template_id
-_template_counts: dict[str, int] = defaultdict(int)  # hash -> count since last flush
-_new_templates: dict[str, tuple[str, str, list[str]]] = {}  # hash -> (template, example, tags)
 _FLUSH_INTERVAL = 30  # seconds
 _last_flush: float = 0.0
 
 # ── Burst Detection (sliding 5-min window per template) ───────────────────────
 _BURST_WINDOW = 300  # 5 minutes
 _BURST_THRESHOLD = 50  # messages in 5 min to count as burst
-_burst_timestamps: dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
-_active_bursts: set[str] = set()  # hashes currently in burst state
-
-
-_burst_last_cleanup: float = 0.0
 _BURST_CLEANUP_INTERVAL = 600  # prune stale entries every 10 min
 
-def _check_burst(h: str, now: float) -> bool:
+
+class _TenantLogState:
+    """The in-process log-intelligence state of one tenant."""
+
+    __slots__ = (
+        "template_cache", "template_counts", "new_templates",
+        "burst_timestamps", "active_bursts", "burst_last_cleanup", "baseline_done_through",
+    )
+
+    def __init__(self) -> None:
+        self.template_cache: dict[str, int] = {}  # hash -> template_id
+        self.template_counts: dict[str, int] = defaultdict(int)  # hash -> count since last flush
+        self.new_templates: dict[str, tuple[str, str, list[str]]] = {}  # hash -> (template, example, tags)
+        self.burst_timestamps: dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+        self.active_bursts: set[str] = set()  # hashes currently in burst state
+        self.burst_last_cleanup: float = 0.0
+        self.baseline_done_through: Optional[datetime] = None
+
+
+_states: dict[int, _TenantLogState] = {}
+
+
+def _tenant_state(tenant_id: int | None = None) -> _TenantLogState:
+    """State of ``tenant_id`` (default: the current tenant; raises without one)."""
+    if tenant_id is None:
+        tenant_id = current_tenant_id()
+    st = _states.get(tenant_id)
+    if st is None:
+        st = _states[tenant_id] = _TenantLogState()
+    return st
+
+
+def reset_state() -> None:
+    """Forget every tenant's in-process state (tests, tooling)."""
+    _states.clear()
+
+
+def _check_burst(st: _TenantLogState, h: str, now: float) -> bool:
     """Track template occurrence and detect bursts (>50 msgs in 5 min)."""
-    global _burst_last_cleanup
-    dq = _burst_timestamps[h]
+    dq = st.burst_timestamps[h]
     dq.append(now)
     # Evict old entries outside window
     while dq and dq[0] < now - _BURST_WINDOW:
         dq.popleft()
     count = len(dq)
     if count >= _BURST_THRESHOLD:
-        if h not in _active_bursts:
-            _active_bursts.add(h)
+        if h not in st.active_bursts:
+            st.active_bursts.add(h)
             return True  # new burst detected
-    elif h in _active_bursts and count < _BURST_THRESHOLD // 2:
-        _active_bursts.discard(h)  # burst ended
+    elif h in st.active_bursts and count < _BURST_THRESHOLD // 2:
+        st.active_bursts.discard(h)  # burst ended
     # Periodic cleanup: remove hashes with no recent activity
-    if now - _burst_last_cleanup > _BURST_CLEANUP_INTERVAL:
-        _burst_last_cleanup = now
+    if now - st.burst_last_cleanup > _BURST_CLEANUP_INTERVAL:
+        st.burst_last_cleanup = now
         cutoff = now - _BURST_WINDOW
-        stale = [k for k, v in _burst_timestamps.items() if not v or v[-1] < cutoff]
+        stale = [k for k, v in st.burst_timestamps.items() if not v or v[-1] < cutoff]
         for k in stale:
-            del _burst_timestamps[k]
-            _active_bursts.discard(k)
+            del st.burst_timestamps[k]
+            st.active_bursts.discard(k)
     return False
 
 
-def get_active_bursts() -> list[dict]:
-    """Return currently active burst templates for display."""
+def get_active_bursts(tenant_id: int | None = None) -> list[dict]:
+    """Return the tenant's (default: current tenant's) active burst templates."""
+    st = _tenant_state(tenant_id)
     now = time.time()
     bursts = []
-    for h in list(_active_bursts):
-        dq = _burst_timestamps.get(h)
+    for h in list(st.active_bursts):
+        dq = st.burst_timestamps.get(h)
         if not dq:
             continue
         count = sum(1 for t in dq if t >= now - _BURST_WINDOW)
         if count < _BURST_THRESHOLD // 2:
-            _active_bursts.discard(h)
+            st.active_bursts.discard(h)
             continue
         bursts.append({"template_hash": h, "count_5m": count, "rate_per_min": round(count / 5, 1)})
     return bursts
 
 
-def process_message(message: str, severity: Optional[int] = None) -> dict:
+def process_message(
+    message: str, severity: Optional[int] = None, *, tenant_id: int | None = None,
+) -> dict:
     """
-    Process a single message through the intelligence pipeline.
-    Called for every incoming syslog message (must be fast).
+    Process a single message of ``tenant_id`` (default: the current tenant)
+    through the intelligence pipeline. Called for every incoming syslog
+    message (must be fast).
 
     Returns enrichment dict: {template_hash, tags, is_new_template, noise_score, is_burst}
     """
+    st = _tenant_state(tenant_id)
     template, h = extract_template(message)
     tags = auto_tag(message)
 
-    is_new = h not in _template_cache and h not in _new_templates
+    is_new = h not in st.template_cache and h not in st.new_templates
 
-    _template_counts[h] += 1
+    st.template_counts[h] += 1
 
     if is_new:
-        _new_templates[h] = (template, message, tags)
+        st.new_templates[h] = (template, message, tags)
 
     # Burst detection (sliding window)
     now = time.time()
-    new_burst = _check_burst(h, now)
-    is_burst = h in _active_bursts
+    _check_burst(st, h, now)
+    is_burst = h in st.active_bursts
 
     # Rough noise estimate for immediate use (refined later by periodic job)
     noise = 50
@@ -400,8 +437,8 @@ def process_message(message: str, severity: Optional[int] = None) -> dict:
         noise = 10  # new templates are interesting
     elif is_burst:
         noise = 85  # bursting templates are noise
-    elif h in _template_cache:
-        count = _template_counts.get(h, 0)
+    elif h in st.template_cache:
+        count = st.template_counts.get(h, 0)
         if count > 100:
             noise = 80
 
@@ -425,16 +462,17 @@ def process_message(message: str, severity: Optional[int] = None) -> dict:
 # ── Periodic DB Flush (called by scheduler or flush loop) ─────────────────────
 
 async def flush_templates(db: AsyncSession):
-    """Flush accumulated template counts and new templates to DB."""
-    global _template_counts, _new_templates
+    """Flush the session's tenant's accumulated template counts and new
+    templates to DB."""
+    st = _tenant_state(session_tenant_id(db))
 
-    if not _template_counts and not _new_templates:
+    if not st.template_counts and not st.new_templates:
         return
 
-    counts = dict(_template_counts)
-    new_tpls = dict(_new_templates)
-    _template_counts = defaultdict(int)
-    _new_templates = {}
+    counts = dict(st.template_counts)
+    new_tpls = dict(st.new_templates)
+    st.template_counts = defaultdict(int)
+    st.new_templates = {}
 
     try:
         await _write_template_batch(db, counts, new_tpls, datetime.utcnow())
@@ -443,9 +481,9 @@ async def flush_templates(db: AsyncSession):
         # Hand the batch back so a transient database error delays these
         # counts instead of losing them.
         for h, c in counts.items():
-            _template_counts[h] += c
+            st.template_counts[h] += c
         for h, v in new_tpls.items():
-            _new_templates.setdefault(h, v)
+            st.new_templates.setdefault(h, v)
         raise
 
 
@@ -470,6 +508,7 @@ async def _write_template_batch(
     # ORM-enabled INSERTs and Core UPDATEs bypass the session's tenant stamping
     # and filter, so the tenant goes in explicitly.
     tenant_id = session_tenant_id(db)
+    st = _tenant_state(tenant_id)
     if new_tpls:
         insert, dialect = _dialect_insert(db)
         greatest = func.greatest if dialect == "postgresql" else func.max
@@ -501,7 +540,7 @@ async def _write_template_batch(
                 },
             ).returning(LogTemplate.id, LogTemplate.template_hash, LogTemplate.first_seen)
             for tpl_id, tpl_hash, first_seen in (await db.execute(stmt)).all():
-                _template_cache[tpl_hash] = tpl_id
+                st.template_cache[tpl_hash] = tpl_id
                 if first_seen == now:
                     inserted += 1
                     template, _, tags = new_tpls[tpl_hash]
@@ -524,11 +563,11 @@ async def _write_template_batch(
 
 
 async def load_template_cache(db: AsyncSession):
-    """Load all template hashes into memory cache on startup."""
-    global _template_cache
+    """Load the session's tenant's template hashes into its memory cache."""
+    st = _tenant_state(session_tenant_id(db))
     rows = (await db.execute(select(LogTemplate.template_hash, LogTemplate.id))).all()
-    _template_cache = {row.template_hash: row.id for row in rows}
-    log.info("Loaded %d log templates into cache", len(_template_cache))
+    st.template_cache = {row.template_hash: row.id for row in rows}
+    log.info("Loaded %d log templates into cache", len(st.template_cache))
 
 
 # ── Baseline Computation (periodic) ──────────────────────────────────────────
@@ -572,7 +611,6 @@ _UPSERT_CHUNK = 1000
 
 # In-memory mirror of the persisted progress, so the 30 s tick costs nothing
 # until the next hour completes.
-_baseline_done_through: Optional[datetime] = None
 
 
 def ewma_update(
@@ -671,9 +709,9 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
     Cheap no-op until an hour completes. Returns the number of hours folded in.
     Uses source_ip as host_key.
     """
-    global _baseline_done_through
+    st = _tenant_state(session_tenant_id(db))
     now = now or datetime.utcnow()
-    if _baseline_done_through is not None and not baseline_hours_due(_baseline_done_through, now):
+    if st.baseline_done_through is not None and not baseline_hours_due(st.baseline_done_through, now):
         return 0
 
     # Re-read the persisted progress whenever there is work: another instance
@@ -682,7 +720,7 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
     hours = baseline_hours_due(done_through, now)
     if not hours:
         if done_through is not None:
-            _baseline_done_through = done_through
+            st.baseline_done_through = done_through
         return 0
 
     from services import clickhouse_client as ch
@@ -777,7 +815,7 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
     # set_setting commits: the baseline rows and the progress marker land in
     # the same transaction, so an hour is never folded in twice.
     await set_setting(db, BASELINE_STATE_KEY, hours[-1].isoformat())
-    _baseline_done_through = hours[-1]
+    st.baseline_done_through = hours[-1]
     log.info(
         "Baselines: folded %d hour(s) up to %s into %d slot rows",
         len(hours), hours[-1].isoformat(), written,
@@ -999,6 +1037,7 @@ async def _learn_precursors_for_event(
     template_before: dict[int, int] = defaultdict(int)
     template_lead_times: dict[int, list[float]] = defaultdict(list)
     total_events = 0
+    template_cache = _tenant_state(session_tenant_id(db)).template_cache
 
     candidates = await _fetch_precursor_messages(events)
     stamps = {hid: [m[0] for m in msgs] for hid, msgs in candidates.items()}
@@ -1024,7 +1063,7 @@ async def _learn_precursors_for_event(
             if h is None:
                 _, h = extract_template(message)
                 hash_of[message] = h
-            tpl_id = _template_cache.get(h)
+            tpl_id = template_cache.get(h)
             if tpl_id and tpl_id not in seen_templates:
                 seen_templates.add(tpl_id)
                 template_before[tpl_id] += 1

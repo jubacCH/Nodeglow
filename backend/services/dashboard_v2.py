@@ -32,6 +32,7 @@ from services import host_state as hs
 from services import incident_view as iv
 from services import maintenance as maint_svc
 from services import probes as probe_svc
+from services.tenancy import session_tenant_id
 
 log = logging.getLogger("nodeglow.dashboard_v2")
 
@@ -55,7 +56,8 @@ def _epoch(dt: datetime) -> float:
 # ── Short TTL cache for the heavy ClickHouse aggregates ─────────────────────
 # The 30-day availability scan reads a month of ping_checks and the 24 h syslog
 # histogram a day of syslog_messages; both move slowly compared to how often a
-# dashboard polls. Keyed by the database bind (held, so its id is not reused).
+# dashboard polls. Keyed by the database bind (held, so its id is not reused)
+# and the tenant.
 
 AVAILABILITY_TTL = 300.0
 SYSLOG_TTL = 60.0
@@ -67,7 +69,8 @@ async def _cached(db, name: str, ttl: float, fn):
         bind = db.get_bind()
     except Exception:  # noqa: BLE001
         bind = None
-    key = (id(bind), name)
+    # The tenant is part of the key: two tenants share the engine, never an entry.
+    key = (id(bind), session_tenant_id(db), name)
     hit = _ttl_cache.get(key)
     now = time.monotonic()
     if bind is not None and hit and hit[0] is bind and now - hit[1] < ttl:

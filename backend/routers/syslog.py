@@ -179,11 +179,15 @@ async def syslog_stream(
     app: str = Query(""),
 ):
     from services.syslog import subscribe, unsubscribe
+    from services.tenancy import current_tenant_id
 
     sev_filter = int(severity) if severity not in ("", None) else None
+    # Resolved now, in the request's tenant scope: the stream only ever
+    # carries this tenant's messages (raises without a tenant).
+    tenant_id = current_tenant_id()
 
     async def event_generator():
-        q = subscribe()
+        q = subscribe(tenant_id)
         try:
             while True:
                 try:
