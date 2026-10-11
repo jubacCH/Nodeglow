@@ -226,7 +226,9 @@ async def ensure_default_tenant(db, *, name: str | None = None) -> None:
     """
     from services.tenancy import system_scope
 
-    with system_scope("startup: ensure the default tenant exists"):
+    # Not audited: this is the bootstrap that creates the tenant the audit
+    # log itself belongs to.
+    with system_scope("startup: ensure the default tenant exists", audit=False):
         if await db.get(Provider, DEFAULT_PROVIDER_ID) is None:
             db.add(Provider(id=DEFAULT_PROVIDER_ID, name="Default", slug="default"))
             await db.flush()

@@ -32,7 +32,7 @@ async def registered_jobs(db, monkeypatch):
     """Register the real job set without starting the scheduler."""
     import scheduler as sched
 
-    async def fake_get_setting(_db, key, default=None):
+    async def fake_get_setting(_db, key, default=None, **_kw):
         return default
 
     monkeypatch.setattr("database.get_setting", fake_get_setting, raising=False)

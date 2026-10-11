@@ -110,6 +110,13 @@ async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) 
                 )
                 api_key = result.scalar_one_or_none()
             if api_key:
+                # A key belongs to one tenant: a request naming another one
+                # gets 404 (as for sessions), a suspended tenant's keys stop.
+                requested = tenancy.requested_tenant(request)
+                if requested is not None and requested != api_key.tenant_id:
+                    raise HTTPException(status_code=404, detail="Not found")
+                if not await tenancy.tenant_is_active(db, api_key.tenant_id):
+                    raise HTTPException(status_code=401, detail="Invalid or disabled API key.")
                 # The rest of the request — this dependency's commit, the
                 # route, its background tasks — runs in the key's tenant. The
                 # middleware set no context for API-key requests, and the
@@ -145,9 +152,12 @@ async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) 
     user = getattr(request.state, "current_user", None)
     if user:
         # Create a virtual ApiKey-like object from the session user
-        role = getattr(user, "role", "admin") or "admin"
+        # The session user's role in the request's tenant (membership).
+        role = tenancy.request_role(request)
+        if role is None:
+            raise HTTPException(status_code=404, detail="Not found")
         return ApiKey(id=0, name=f"session:{user.username}", key_hash="", prefix="session",
-                      role=role, enabled=True)
+                      role=role, enabled=True, tenant_id=getattr(request.state, "tenant_id", None))
 
     raise HTTPException(status_code=401, detail="API key or session required.")
 

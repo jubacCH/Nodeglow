@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -167,9 +168,12 @@ async def build_topology(
 # Keyed by the session's engine, so two databases (tests) never share entries.
 
 TOPOLOGY_CACHE_TTL = 60.0
-# id(bind) -> (bind, monotonic ts, topology, provenance, gateways). The bind is
+# (id(bind), tenant) -> (bind, monotonic ts, topology, provenance, gateways). The bind is
 # held so its id cannot be reused by another engine while the entry exists.
-_topology_cache: dict[int, tuple] = {}
+# A bounded LRU, not "clear when full": with a key per tenant, clearing at a
+# handful of entries made every tenant beyond that rebuild on every request.
+TOPOLOGY_CACHE_MAX = 512
+_topology_cache: "OrderedDict[tuple[int, int], tuple]" = OrderedDict()
 
 
 async def cached_topology(db: AsyncSession, ttl: float = TOPOLOGY_CACHE_TTL):
@@ -180,17 +184,23 @@ async def cached_topology(db: AsyncSession, ttl: float = TOPOLOGY_CACHE_TTL):
         bind = db.get_bind()
     except Exception:  # noqa: BLE001 — unbound session: just do not cache
         bind = None
+    from services.tenancy import session_tenant_id
+
+    # Per tenant: the topology is built from the tenant's own hosts and
+    # integrations; another tenant on the same engine gets its own entry.
+    key = (id(bind), session_tenant_id(db))
     now = time.monotonic()
-    hit = _topology_cache.get(id(bind)) if bind is not None else None
+    hit = _topology_cache.get(key) if bind is not None else None
     if hit and hit[0] is bind and now - hit[1] < ttl:
         return hit[2], hit[3], hit[4]
     provenance: dict[int, str] = {}
     gateways: set[int] = set()
     topo = await build_topology(db, provenance, gateways)
     if bind is not None:
-        if len(_topology_cache) > 8:
-            _topology_cache.clear()
-        _topology_cache[id(bind)] = (bind, now, topo, provenance, gateways)
+        _topology_cache[key] = (bind, now, topo, provenance, gateways)
+        _topology_cache.move_to_end(key)
+        while len(_topology_cache) > TOPOLOGY_CACHE_MAX:
+            _topology_cache.popitem(last=False)
     return topo, provenance, gateways
 
 

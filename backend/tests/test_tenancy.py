@@ -33,7 +33,7 @@ async def sf():
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
-        with system_scope("test: seed two tenants"):
+        with system_scope("test: seed two tenants", audit=False):
             s.add(Provider(id=1, name="P", slug="p"))
             s.add_all([
                 Tenant(id=A, provider_id=1, name="A", slug="a"),
@@ -350,8 +350,9 @@ async def test_system_job_runs_in_system_scope():
 async def test_single_tenancy_backend_defaults():
     b = tenancy.backend()
     assert isinstance(b, tenancy.SingleTenancy)
-    assert await b.resolve_request_tenant(None, object()) == 1
+    # Membership-based since phase 4 (see test_tenant_auth_binding.py).
     assert await b.resolve_request_tenant(None, None) is None
+    assert await b.resolve_access(None, object()) is None  # no id, no access
     assert await b.active_tenant_ids() == [1]
     assert b.can_create_tenant() is False
 

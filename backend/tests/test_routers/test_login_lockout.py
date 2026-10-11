@@ -23,8 +23,12 @@ def _reset_limits():
 async def _seed_admin(sf):
     from database import User
     async with sf() as db:
-        db.add(User(username="admin", password_hash=bcrypt.hashpw(PW.encode(), bcrypt.gensalt(4)).decode(),
-                    role="admin", auth_source="local"))
+        from models.tenant import TenantMembership
+        user = User(username="admin", password_hash=bcrypt.hashpw(PW.encode(), bcrypt.gensalt(4)).decode(),
+                    role="admin", auth_source="local")
+        db.add(user)
+        await db.flush()
+        db.add(TenantMembership(user_id=user.id, tenant_id=1, role="admin"))
         await db.commit()
 
 

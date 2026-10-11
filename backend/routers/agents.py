@@ -50,9 +50,8 @@ def _shared_enrollment_allowed() -> bool:
 
 def _require_admin(request: Request):
     """Return None on admin, or a 403 JSONResponse otherwise."""
-    user = getattr(request.state, "current_user", None)
-    role = getattr(user, "role", None)
-    if not user or role != "admin":
+    # The role in the request's tenant (membership), never users.role.
+    if not getattr(request.state, "current_user", None) or not tenancy.request_is_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     return None
 
@@ -143,6 +142,8 @@ async def _consume_install_token(
         row = result.scalar_one_or_none()
     if not row:
         return False, "unknown", None
+    if not await tenancy.tenant_is_active(db, row.tenant_id):
+        return False, "tenant_inactive", None
     if row.revoked:
         return False, "revoked", None
     if row.expires_at <= datetime.utcnow():
@@ -178,6 +179,8 @@ async def _find_agent_by_token(db, token: str) -> Agent | None:
             agent = result.scalar_one_or_none()
             if agent is not None:
                 agent.token = token_hash  # migrate to HMAC
+    if agent is not None and not await tenancy.tenant_is_active(db, agent.tenant_id):
+        return None  # the agent's tenant is suspended: its token stops working
     return agent
 
 
@@ -248,7 +251,12 @@ async def agent_enroll(request: Request):
             hostname,
         )
         # A shared key cannot carry a tenant: it only ever enrols into the
-        # default tenant (and is to be refused once there is more than one).
+        # default tenant, and is refused once there is more than one.
+        with system_scope("agent enrolment: count tenants for the shared key"):
+            tenant_count = len(await tenancy.backend().active_tenant_ids())
+        if tenant_count > 1:
+            logger.warning("Rejected shared-key enrollment from %s: several tenants", client_ip_log)
+            return generic_403
         tenant_id = DEFAULT_TENANT_ID
         site_id = tenancy.backend().default_site_id(tenant_id)
 
@@ -447,8 +455,8 @@ async def _handle_report(db, agent: Agent, body: dict):
     except Exception as ch_exc:
         logger.error("ClickHouse insert (agent_metrics) failed: %s", ch_exc)
 
-    # Broadcast to all WebSocket clients (global hub)
-    await broadcast_agent_metric(agent.id, agent.name, {
+    # Broadcast to the agent's tenant's WebSocket clients
+    await broadcast_agent_metric(agent.id, agent.name, tenant_id=agent.tenant_id, metrics={
         "hostname": body.get("hostname"),
         "cpu_pct": body.get("cpu_pct"),
         "mem_pct": mem.get("pct"),
@@ -526,11 +534,23 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
     if not results:
         return
 
+    # Only hosts assigned to this probe count — the probe names host ids, and
+    # an id of a host it does not check (or of another tenant: the query runs
+    # in the probe's tenant scope) must not get its results written.
+    async with AsyncSessionLocal() as db:
+        assigned = set((await db.execute(
+            select(PingHost.id).where(PingHost.probe_id == probe_id)
+        )).scalars().all())
+
     rows = []
+    dropped = 0
     for r in results:
         try:
             host_id = int(r["host_id"])
         except (KeyError, TypeError, ValueError):
+            continue
+        if host_id not in assigned:
+            dropped += 1
             continue
         ts = r.get("ts")
         if isinstance(ts, str):
@@ -547,6 +567,9 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
             "probe_id": probe_id,
         })
 
+    if dropped:
+        logger.warning("Probe %d reported %d result(s) for hosts not assigned to it; dropped",
+                       probe_id, dropped)
     if rows:
         # Deliberately not wrapped in a bare except: a probe whose results never
         # land must surface as a failure, not as a quiet gap that reads as
@@ -563,6 +586,7 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
         int(r["host_id"]): r.get("detail")
         for r in results
         if isinstance(r, dict) and r.get("host_id") is not None and r.get("detail")
+        and str(r.get("host_id")).isdigit() and int(r["host_id"]) in assigned
     }
     if details:
         async with AsyncSessionLocal() as db:
@@ -642,12 +666,12 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
     try:
         from services.syslog import _resolve_host_id, _refresh_host_cache
         await _refresh_host_cache()
-        host_id = _resolve_host_id(source_ip, hostname)
+        host_id = _resolve_host_id(source_ip, hostname, agent.tenant_id)
     except Exception:
         host_id = None
 
     # Feed logs through the syslog pipeline (_enqueue handles ClickHouse write + live tail)
-    from services.syslog import _enqueue
+    from services.syslog import TENANT_KEY, _enqueue
     count = 0
     for entry in logs[:500]:
         ts_str = entry.get("timestamp", "")
@@ -666,6 +690,7 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
             "app_name": entry.get("app_name", ""),
             "message": entry.get("message", "")[:2000],
             "host_id": host_id,
+            TENANT_KEY: agent.tenant_id,
         }
         await _enqueue(parsed)
         count += 1

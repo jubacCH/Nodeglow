@@ -1,4 +1,4 @@
-"""Tenancy migrations (039–041) against a real PostgreSQL.
+"""Tenancy migrations (039–043) against a real PostgreSQL.
 
 The migration chain cannot run on SQLite (revision 022 uses a PostgreSQL
 regex), so these tests need a server: set ``NODEGLOW_PG_TEST_URL`` to an
@@ -13,7 +13,13 @@ Covered:
   deleting a probe clears only ``probe_id`` (``SET NULL (probe_id)``);
 * downgrade back to 038 restores the old shape with the data intact;
 * a fresh install built from the models (``migrate.py``) has the default
-  tenant rows and agrees with the migration chain (``alembic check``).
+  tenant rows and agrees with the migration chain (``alembic check``);
+* 042 (settings split): tenant keys move to tenant 1 with their encrypted
+  flag, installation keys stay, the dashboard layout becomes every user's;
+  the downgrade puts them back;
+* 043 (auth binding): memberships for users created after 039, admins
+  become operators, audit rows get their tenant's provider, sessions gain
+  ``active_tenant_id``; the downgrade refreshes ``users.role``.
 """
 from __future__ import annotations
 
@@ -91,6 +97,10 @@ def q(dsn: str, sql: str, *params):
 
 SEED_038 = """
 INSERT INTO settings (key, value, encrypted) VALUES ('site_name', 'ACME Monitoring', false);
+INSERT INTO settings (key, value, encrypted) VALUES ('notify_enabled', '1', false),
+  ('smtp_password', 'gAAAAA-ciphertext', true), ('syslog_port', '5514', false),
+  ('dashboard_layout', '[{"id": "hosts", "x": 0, "y": 0, "w": 12, "h": 4}]', false),
+  ('_lockout:admin', '[]', false);
 INSERT INTO users (id, username, password_hash, role, auth_source, created_at)
   VALUES (1, 'admin', 'x', 'admin', 'local', now()), (2, 'viewer', 'x', 'readonly', 'local', now()),
          (3, 'legacy', 'x', NULL, 'local', now());
@@ -173,6 +183,151 @@ def test_upgrade_from_038_with_data(pg_db):
     assert q(pg_db, "SELECT count(*) FROM snmp_host_configs")[0][0] == 0
 
     _alembic(pg_db, "check")
+
+
+def test_settings_split_and_auth_binding(pg_db):
+    _alembic(pg_db, "upgrade", "038")
+    _seed(pg_db)
+    _alembic(pg_db, "upgrade", "041")
+    # A user created between 039 and 043 (setup wizard, users API, LDAP) got
+    # no membership; neither did a session row know its tenant.
+    q(pg_db, "INSERT INTO users (id, username, password_hash, role, auth_source, created_at) "
+             "VALUES (4, 'late', 'x', 'editor', 'ldap', now())")
+    q(pg_db, "INSERT INTO sessions (token, user_id, expires_at) VALUES ('t1', 1, now() + interval '1 day')")
+    # ...and a role changed through the users API wrote only users.role.
+    q(pg_db, "UPDATE users SET role = 'editor' WHERE id = 3")
+    assert q(pg_db, "SELECT role FROM tenant_memberships WHERE user_id = 3")[0][0] == "admin"
+    _alembic(pg_db, "upgrade", "head")
+
+    # 042: tenant keys moved (encrypted flag kept), installation keys stayed.
+    ts = {r[0]: (r[1], r[2]) for r in q(pg_db, "SELECT key, value, encrypted FROM tenant_settings "
+                                             "WHERE tenant_id = 1")}
+    assert ts["site_name"] == ("ACME Monitoring", False)
+    assert ts["notify_enabled"] == ("1", False)
+    assert ts["smtp_password"] == ("gAAAAA-ciphertext", True)
+    remaining = {r[0] for r in q(pg_db, "SELECT key FROM settings")}
+    assert {"syslog_port", "_lockout:admin"} <= remaining
+    assert not remaining & {"site_name", "notify_enabled", "smtp_password", "dashboard_layout"}
+    # The layout is now every user's (user 1 already had a preferences row).
+    layouts = q(pg_db, "SELECT user_id, dashboard_layout FROM user_preferences ORDER BY user_id")
+    assert [r[0] for r in layouts] == [1, 2, 3, 4]
+    assert all('"hosts"' in (r[1] or "") for r in layouts)
+
+    # 043: memberships for everybody, admins are operators, audit provider.
+    members = q(pg_db, "SELECT user_id, role FROM tenant_memberships ORDER BY user_id")
+    # users.role won over the stale 039 copy of user 3.
+    assert [tuple(r) for r in members] == [(1, "admin"), (2, "readonly"), (3, "editor"), (4, "editor")]
+    ops = q(pg_db, "SELECT id FROM users WHERE is_operator ORDER BY id")
+    assert [r[0] for r in ops] == [1]
+    assert q(pg_db, "SELECT active_tenant_id FROM sessions")[0][0] is None
+    assert [tuple(r) for r in q(pg_db, "SELECT tenant_id, provider_id, acting_via FROM audit_logs")] \
+        == [(1, 1, None)]
+    # A session pointing at a tenant that goes away loses only the pointer.
+    q(pg_db, "INSERT INTO tenants (provider_id, name, slug, status, created_at) "
+             "VALUES (1, 'B', 'b', 'active', now())")
+    q(pg_db, "UPDATE sessions SET active_tenant_id = 2")
+    q(pg_db, "DELETE FROM tenants WHERE id = 2")
+    assert q(pg_db, "SELECT active_tenant_id FROM sessions")[0][0] is None
+    _alembic(pg_db, "check")
+
+    # Downgrade: the settings come back, users.role reflects the memberships.
+    q(pg_db, "UPDATE tenant_memberships SET role = 'readonly' WHERE user_id = 3")
+    q(pg_db, "UPDATE users SET role = 'admin' WHERE id = 3")
+    _alembic(pg_db, "downgrade", "041")
+    back = {r[0]: (r[1], r[2]) for r in q(pg_db, "SELECT key, value, encrypted FROM settings")}
+    assert back["site_name"] == ("ACME Monitoring", False)
+    assert back["smtp_password"] == ("gAAAAA-ciphertext", True)
+    assert '"hosts"' in back["dashboard_layout"][0]
+    assert q(pg_db, "SELECT count(*) FROM tenant_settings")[0][0] == 0
+    assert q(pg_db, "SELECT role FROM users WHERE id = 3")[0][0] == "readonly"
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name IN ('users', 'sessions', 'audit_logs', 'user_preferences')")}
+    assert not cols & {"is_operator", "active_tenant_id", "provider_id", "acting_via", "dashboard_layout"}
+    _alembic(pg_db, "upgrade", "head")
+    _alembic(pg_db, "check")
+
+
+RESTORE_SCRIPT = r"""
+import asyncio, json, sys
+from models.base import AsyncSessionLocal, engine
+from services import backup
+from services.tenancy import tenant_scope
+
+async def main():
+    data = json.loads(sys.argv[1])
+    with tenant_scope(1):
+        async with AsyncSessionLocal() as db:
+            print(json.dumps(await backup.import_backup(db, data)))
+    await engine.dispose()
+
+asyncio.run(main())
+"""
+
+
+def test_restoring_a_pre_042_backup_takes_its_settings_and_roles(pg_db):
+    """A backup from before the settings split / auth binding: its tenant
+    settings land in tenant 1 and replace the current ones; users.role wins
+    over memberships (none in the backup) and decides is_operator."""
+    import json
+
+    _run(["migrate.py"], pg_db)  # a current installation
+    q(pg_db, "INSERT INTO tenant_settings (tenant_id, key, value, encrypted) VALUES "
+             "(1, 'site_name', 'Current', false), (1, 'notify_enabled', '1', false)")
+    old = {
+        "_meta": {"format": "nodeglow-backup", "version": "1.0"},
+        "tables": {
+            "settings": [{"key": "site_name", "value": "Restored", "encrypted": False},
+                         {"key": "syslog_port", "value": "5514", "encrypted": False}],
+            "users": [{"id": 1, "username": "root", "password_hash": "x", "role": "admin",
+                       "auth_source": "local"},
+                      {"id": 2, "username": "eve", "password_hash": "x", "role": "readonly",
+                       "auth_source": "local"}],
+        },
+    }
+    _run(["-c", RESTORE_SCRIPT, json.dumps(old)], pg_db)
+    ts = {r[0]: r[1] for r in q(pg_db, "SELECT key, value FROM tenant_settings WHERE tenant_id = 1")}
+    assert ts == {"site_name": "Restored"}
+    assert {r[0] for r in q(pg_db, "SELECT key FROM settings")} >= {"syslog_port"}
+    assert q(pg_db, "SELECT count(*) FROM settings WHERE key = 'site_name'")[0][0] == 0
+    members = q(pg_db, "SELECT user_id, role FROM tenant_memberships ORDER BY user_id")
+    assert [tuple(r) for r in members] == [(1, "admin"), (2, "readonly")]
+    assert [r[0] for r in q(pg_db, "SELECT id FROM users WHERE is_operator ORDER BY id")] == [1]
+
+
+def test_restoring_a_current_backup_keeps_its_memberships(pg_db):
+    """TRUNCATE users CASCADE wipes memberships and preferences; a current
+    backup brings them back as they were (the membership role wins over
+    users.role), and a user without one gets one."""
+    import json
+
+    _run(["migrate.py"], pg_db)
+    backup = {
+        "_meta": {"format": "nodeglow-backup", "version": "1.0"},
+        "tables": {
+            "settings": [{"key": "syslog_port", "value": "1514", "encrypted": False}],
+            "users": [{"id": 1, "username": "root", "password_hash": "x", "role": "admin",
+                       "auth_source": "local", "is_operator": True},
+                      {"id": 2, "username": "ed", "password_hash": "x", "role": "admin",
+                       "auth_source": "local", "is_operator": False},
+                      {"id": 3, "username": "new", "password_hash": "x", "role": "readonly",
+                       "auth_source": "local", "is_operator": False}],
+            "tenant_memberships": [
+                {"user_id": 1, "tenant_id": 1, "role": "admin", "created_at": None},
+                {"user_id": 2, "tenant_id": 1, "role": "editor", "created_at": None}],
+            "tenant_settings": [{"tenant_id": 1, "key": "site_name", "value": "Backup", "encrypted": False}],
+            "user_preferences": [{"user_id": 2, "tenant_id": 1, "dashboard_layout": "[]"}],
+        },
+    }
+    # As an export writes them: timestamps are ISO strings.
+    for m in backup["tables"]["tenant_memberships"]:
+        m["created_at"] = "2026-10-01T12:00:00"
+    for u in backup["tables"]["users"]:
+        u["created_at"] = "2026-01-01T00:00:00.123456"
+    _run(["-c", RESTORE_SCRIPT, json.dumps(backup)], pg_db)
+    members = q(pg_db, "SELECT user_id, role FROM tenant_memberships ORDER BY user_id")
+    assert [tuple(r) for r in members] == [(1, "admin"), (2, "editor"), (3, "readonly")]
+    assert q(pg_db, "SELECT count(*) FROM user_preferences")[0][0] == 1
+    assert q(pg_db, "SELECT value FROM tenant_settings WHERE key = 'site_name'")[0][0] == "Backup"
 
 
 def test_downgrade_to_038_keeps_data(pg_db):

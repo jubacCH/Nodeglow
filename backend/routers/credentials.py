@@ -20,8 +20,8 @@ def _require_admin(request: Request) -> bool:
     be admin-only. The middleware only blocks readonly *writes*, so editors
     could otherwise create/update/delete and list secrets.
     """
-    user = getattr(request.state, "current_user", None)
-    return getattr(user, "role", None) != "admin"
+    from services.tenancy import request_is_admin
+    return not request_is_admin(request)
 
 
 # Credential type definitions for the UI

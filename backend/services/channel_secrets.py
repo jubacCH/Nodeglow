@@ -66,22 +66,31 @@ async def encrypt_plaintext_channel_secrets(session_factory=None) -> int:
     as well. The marker records when the first pass completed. Returns the
     number of values encrypted by this call.
     """
+    from sqlalchemy import select
+
     from database import Setting
     from models.base import encrypt_value
+    from models.tenant import TenantSetting
+    from services.tenancy import system_scope
 
     if session_factory is None:
         from database import AsyncSessionLocal as session_factory
 
     changed = 0
     async with session_factory() as db:
-        for key in LEGACY_SECRET_KEYS:
-            row = await db.get(Setting, key)
-            if row is None or not row.value or row.encrypted:
-                continue  # row.encrypted: get_setting already decrypts it
-            if is_encrypted(row.value):
-                continue
-            row.value = encrypt_value(row.value)
-            changed += 1
+        # The secrets are tenant settings: one pass over every tenant's rows.
+        with system_scope("startup: encrypt plaintext notification channel secrets"):
+            rows = (await db.execute(
+                select(TenantSetting).where(TenantSetting.key.in_(LEGACY_SECRET_KEYS))
+            )).scalars().all()
+            for row in rows:
+                if not row.value or row.encrypted:
+                    continue  # row.encrypted: get_setting already decrypts it
+                if is_encrypted(row.value):
+                    continue
+                row.value = encrypt_value(row.value)
+                changed += 1
+            await db.flush()
         if await db.get(Setting, MIGRATION_MARKER) is None:
             db.add(Setting(key=MIGRATION_MARKER,
                            value=datetime.utcnow().isoformat(timespec="seconds")))

@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import delete, select
 
@@ -16,7 +17,7 @@ from models.integration import IntegrationConfig
 from services import integration as int_svc
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
-from services.tenancy import per_tenant_job, system_job
+from services.tenancy import current_tenant_id, per_tenant_job, system_job, system_scope
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,47 @@ AUTHORITATIVE_ADDRESS_SOURCES = frozenset({"proxmox", "unifi"})
 # cron jobs get an hour of grace where they are registered.
 JOB_DEFAULTS = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 60}
 CRON_MISFIRE_GRACE_SECONDS = 3600
-scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS)
+class ContextFreeExecutor(AsyncIOExecutor):
+    """Runs every job in an **empty** ``contextvars`` context.
+
+    APScheduler wakes its job loop through the event loop, which carries the
+    context of whoever last added or rescheduled a job — typically a request,
+    with that request's tenant context set. Jobs then ran inside that one
+    tenant's scope: ``per_tenant_job`` saw "already in a tenant" and served
+    only it, and nothing else ran. A job must decide its own scope
+    (``per_tenant_job`` / ``system_job``), so it starts from nothing.
+    """
+
+    def _do_submit_job(self, job, run_times):
+        import contextvars
+        import sys
+
+        from apscheduler.executors.base import run_coroutine_job, run_job
+        from apscheduler.util import iscoroutinefunction_partial
+
+        def callback(f):
+            self._pending_futures.discard(f)
+            try:
+                events = f.result()
+            except BaseException:
+                self._run_job_error(job.id, *sys.exc_info()[1:])
+            else:
+                self._run_job_success(job.id, events)
+
+        empty = contextvars.Context()
+        if iscoroutinefunction_partial(job.func):
+            coro = run_coroutine_job(job, job._jobstore_alias, run_times, self._logger.name)
+            f = self._eventloop.create_task(coro, context=empty)
+        else:
+            f = self._eventloop.run_in_executor(
+                None, empty.run, run_job, job, job._jobstore_alias, run_times, self._logger.name,
+            )
+        f.add_done_callback(callback)
+        self._pending_futures.add(f)
+
+
+scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS,
+                             executors={"default": ContextFreeExecutor()})
 
 # ── Scheduler leadership (multi-worker / HA safety) ──────────────────────────
 # The core runs single-instance: this process is always the leader and runs
@@ -422,12 +463,13 @@ def reset_port_error_state(host_id: int) -> None:
     _port_pass_streak.pop(host_id, None)
 
 
-async def _broadcast_ping_updates(updates: list[tuple]) -> None:
-    """Send (host_id, name, online, latency_ms) updates to WebSocket clients."""
+async def _broadcast_ping_updates(updates: list[tuple], tenant_id: int) -> None:
+    """Send (host_id, name, online, latency_ms) updates to the WebSocket
+    clients of ``tenant_id`` (the tenant whose hosts were checked)."""
     from services.websocket import broadcast_ping_update
     for host_id, name, online, latency in updates:
         try:
-            await broadcast_ping_update(host_id, name, online, latency)
+            await broadcast_ping_update(host_id, name, online, latency, tenant_id=tenant_id)
         except Exception:
             logger.debug("WebSocket ping broadcast failed", exc_info=True)
 
@@ -512,7 +554,7 @@ async def run_ping_checks():
                 "latency_ms": 0 if success else None,
             })
             agent_updates.append((host.id, host.name, success, 0 if success else None))
-        _asyncio.create_task(_broadcast_ping_updates(agent_updates))
+        _asyncio.create_task(_broadcast_ping_updates(agent_updates, current_tenant_id()))
 
         try:
             await insert_ping_checks(agent_ping_rows)
@@ -633,7 +675,7 @@ async def run_ping_checks():
     # Broadcast live updates via WebSocket — one task for the whole cycle
     # rather than one per host.
     if ws_updates:
-        _asyncio.create_task(_broadcast_ping_updates(ws_updates))
+        _asyncio.create_task(_broadcast_ping_updates(ws_updates, current_tenant_id()))
 
     # ClickHouse is the authoritative store for ping check time-series.
     if icmp_rows:
@@ -1297,14 +1339,26 @@ async def run_backup_compliance():
 async def start_scheduler():
     """Read intervals from DB, then register and start all jobs."""
     from database import get_setting
+    from services.tenancy import backend as _tenancy_backend
 
-    async with AsyncSessionLocal() as db:
-        ping_interval = int(await get_setting(db, "ping_interval", "60"))
-        integration_interval = int(await get_setting(db, "proxmox_interval", "60"))
-        # Read here, inside the session: these used to be read further down
-        # through `db` after its context had already closed.
-        digest_day = int(await get_setting(db, "digest_day", "0"))  # 0=Mon
-        digest_hour = int(await get_setting(db, "digest_hour", "9"))
+    # The cadence settings are per tenant, the jobs are global (per-tenant
+    # cadence is phase 5): ping and integration jobs run at the fastest
+    # tenant's interval, the digest cron at the first tenant's schedule.
+    # With one tenant this is exactly that tenant's setting.
+    with system_scope("scheduler start: read every tenant's job cadence"):
+        tenant_ids = await _tenancy_backend().active_tenant_ids()
+        async with AsyncSessionLocal() as db:
+            ping_interval = min([
+                int(await get_setting(db, "ping_interval", "60", tenant_id=t))
+                for t in tenant_ids
+            ] or [60])
+            integration_interval = min([
+                int(await get_setting(db, "proxmox_interval", "60", tenant_id=t))
+                for t in tenant_ids
+            ] or [60])
+            first = tenant_ids[0] if tenant_ids else None
+            digest_day = int(await get_setting(db, "digest_day", "0", tenant_id=first)) if first else 0
+            digest_hour = int(await get_setting(db, "digest_hour", "9", tenant_id=first)) if first else 9
 
     scheduler.add_job(run_ping_checks, "interval", seconds=ping_interval,
                       id="ping_checks", replace_existing=True)

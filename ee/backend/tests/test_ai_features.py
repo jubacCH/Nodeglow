@@ -4,20 +4,15 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import notification_channels as nc
-from database import Setting, encrypt_value
+from database import encrypt_value
 from models.incident import Incident
 from tests.test_routers.conftest import make_client
 
 
 async def _set(sf, **values):
+    from tests.conftest import put_settings
     async with sf() as db:
-        for k, v in values.items():
-            row = await db.get(Setting, k)
-            if row:
-                row.value = v
-            else:
-                db.add(Setting(key=k, value=v))
-        await db.commit()
+        await put_settings(db, **values)
 
 
 def _factory(db):
@@ -57,7 +52,7 @@ async def test_daily_summary_hook_schedules_the_job(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from nodeglow_ee.ai import daily_summary
 
-    async def fake_get_setting(_db, key, default=None):
+    async def fake_get_setting(_db, key, default=None, **_kw):
         return "7" if key == "daily_ai_summary_hour" else default
 
     monkeypatch.setattr("database.get_setting", fake_get_setting)
@@ -66,6 +61,26 @@ async def test_daily_summary_hook_schedules_the_job(monkeypatch):
     job = sched.get_job("daily_ai_summary")
     assert job is not None and job.func is daily_summary.run_daily_ai_summary
     assert "hour='7'" in str(job.trigger)
+
+
+async def test_daily_summary_hook_reads_the_tenant_setting_without_context(db):
+    """Regression: the hook runs at scheduler start with no tenant; reading the
+    tenant-scoped hour raised, and the job was never registered."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from models.tenant import TenantSetting
+    from nodeglow_ee.ai import daily_summary
+
+    db.add(TenantSetting(key="daily_ai_summary_enabled", value="1"))
+    db.add(TenantSetting(key="daily_ai_summary_hour", value="6"))
+    await db.commit()
+    plain = async_sessionmaker(db.bind, expire_on_commit=False)  # no tenant binding
+    sched = AsyncIOScheduler()
+    with patch.object(daily_summary, "AsyncSessionLocal", plain):
+        await daily_summary.schedule(sched)
+    job = sched.get_job("daily_ai_summary")
+    assert job is not None and "hour='6'" in str(job.trigger)
 
 
 async def test_resolving_an_incident_fires_the_postmortem_hook():

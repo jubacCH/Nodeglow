@@ -132,7 +132,8 @@ async def test_export_is_encrypted_and_restorable(client):
     assert "tables" not in env and "site_name" not in resp.text
     data = decrypt_backup(env, PASS)
     assert data["_meta"]["format"] == "nodeglow-backup"
-    assert any(r["key"] == "site_name" for r in data["tables"]["settings"])
+    assert any(r["key"] == "syslog_port" for r in data["tables"]["settings"])
+    assert any(r["key"] == "site_name" for r in data["tables"]["tenant_settings"])
 
     with patch("services.backup.import_backup", new_callable=AsyncMock,
                return_value={"imported": {}, "total_rows": 7}) as imp:

@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 EXPORT_TABLES: list[str] = [
     "settings",
     "users",
+    "tenant_memberships",
+    "tenant_settings",
+    "user_preferences",
     "ping_hosts",
     "ping_results",
     "integration_configs",
@@ -138,13 +141,22 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
 
         # Get valid column names for each table from the DB schema
         _valid_columns: dict[str, set[str]] = {}
+        # Timestamp columns: the export writes them as ISO strings, and
+        # asyncpg refuses a str for a TIMESTAMP parameter of raw SQL.
+        _time_columns: dict[str, dict[str, type]] = {}
         conn = await db.connection()
+        from sqlalchemy import Date, DateTime
         for t in EXPORT_TABLES:
             try:
                 col_info = await conn.run_sync(lambda sc, tn=t: inspect(sc).get_columns(tn))
                 _valid_columns[t] = {c["name"] for c in col_info}
+                _time_columns[t] = {
+                    c["name"]: (DateTime if isinstance(c["type"], DateTime) else Date)
+                    for c in col_info if isinstance(c["type"], (DateTime, Date))
+                }
             except Exception:
                 _valid_columns[t] = set()
+                _time_columns[t] = {}
 
         # Insert in forward order (parents first)
         for table_name in EXPORT_TABLES:
@@ -180,33 +192,68 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
             placeholders = ", ".join(f":{c}" for c in cols)
             col_names = ", ".join(f'"{c}"' for c in cols)
 
+            time_cols = _time_columns.get(table_name, {})
             for row in rows:
                 # Only include validated columns
                 safe_row = {c: row.get(c) for c in cols}
+                for c, kind in time_cols.items():
+                    if isinstance(safe_row.get(c), str):
+                        safe_row[c] = _parse_time(safe_row[c], kind)
                 safe_row.update(defaults)
                 await db.execute(
                     text(f"INSERT INTO {_safe_table(table_name)} ({col_names}) VALUES ({placeholders})"),
                     safe_row,
                 )
 
-            # Reset sequence
-            try:
-                safe = _safe_table(table_name)
-                await db.execute(
-                    text(
-                        f"SELECT setval(pg_get_serial_sequence(:tn, 'id'), "
-                        f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
-                    ),
-                    {"tn": table_name},
-                )
-            except Exception:
-                pass
+            # Reset sequence — only where there is a serial id, and in a
+            # savepoint: on PostgreSQL a failing statement (``settings`` has
+            # no ``id``) aborts the whole transaction, which the except below
+            # cannot undo, and every later INSERT of the restore failed.
+            if "id" in allowed:
+                try:
+                    safe = _safe_table(table_name)
+                    async with db.begin_nested():
+                        await db.execute(
+                            text(
+                                f"SELECT setval(pg_get_serial_sequence(:tn, 'id'), "
+                                f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
+                            ),
+                            {"tn": table_name},
+                        )
+                except Exception:
+                    pass
 
             imported[table_name] = len(rows)
 
         await db.commit()
     finally:
         await db.execute(text("SET session_replication_role = 'origin'"))
+
+    # A backup from before the settings split (revision 042) carries the
+    # tenant's settings in ``settings``: they belong to the importing tenant.
+    from models.settings import adopt_legacy_tenant_settings
+
+    # A restore replaces the data: the backup's values win, and the tenant's
+    # current settings go (the backup had no tenant_settings to truncate them).
+    tenant_id = tenancy.session_tenant_id(db)
+    pre_042 = "settings" in tables_data and "tenant_settings" not in tables_data
+    moved = await adopt_legacy_tenant_settings(db, tenant_id, replace=pre_042)
+    # ...and from before the auth binding (043) only users.role was kept up
+    # to date — it wins over whatever memberships came along (039's stale
+    # copies) and decides is_operator; users without one get one, else
+    # nobody could sign in after the restore.
+    from services.memberships import backfill_memberships, sync_from_users_role
+
+    user_rows = tables_data.get("users") or []
+    pre_043 = bool(user_rows) and (
+        "is_operator" not in user_rows[0] or not tables_data.get("tenant_memberships")
+    )
+    if pre_043:
+        granted = await sync_from_users_role(db, tenant_id)
+    else:
+        granted = await backfill_memberships(db, tenant_id)
+    if moved or granted:
+        await db.commit()
 
     result = {"imported": imported, "total_rows": sum(imported.values())}
     if key_warning:
@@ -334,6 +381,20 @@ def _key_fingerprint() -> str | None:
     except Exception:  # never let bookkeeping break a backup or restore
         logger.debug("could not compute the key fingerprint", exc_info=True)
         return None
+
+
+def _parse_time(value: str, kind):
+    """ISO string from an export back to datetime/date (naive UTC, as stored)."""
+    from datetime import date
+    from sqlalchemy import DateTime
+
+    try:
+        if kind is DateTime:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return value
 
 
 def _serialize(value):

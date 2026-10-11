@@ -9,7 +9,7 @@ from database import encrypt_value, get_db, set_setting
 from ratelimit import rate_limit
 from services.audit import log_action
 
-from ._helpers import require_admin
+from ._helpers import require_operator
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,7 +37,8 @@ async def save_ldap_settings(
     db: AsyncSession = Depends(get_db),
 ):
     """Save LDAP configuration. Admin only."""
-    if err := require_admin(request):
+    # LDAP is installation-level in the core: the operator's (= the admin).
+    if err := require_operator(request):
         return err
 
     await set_setting(db, "ldap_enabled", "1" if ldap_enabled in ("1", "true") else "0")
@@ -92,7 +93,8 @@ def ldap_transport_warnings(server: str, use_ssl: bool, start_tls: bool) -> list
 @rate_limit(max_requests=10, window_seconds=60)
 async def test_ldap(request: Request, db: AsyncSession = Depends(get_db)):
     """Test LDAP connection with currently saved settings. Admin only."""
-    if err := require_admin(request):
+    # LDAP is installation-level in the core: the operator's (= the admin).
+    if err := require_operator(request):
         return err
 
     from routers.auth import LdapConfigError, _get_ldap_config
