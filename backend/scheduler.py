@@ -759,14 +759,21 @@ async def update_ssl_expiry():
 @instrument_job("cleanup_old_results")
 @per_tenant_job
 async def cleanup_old_results():
-    """Delete old integration snapshots and SNMP results from Postgres.
+    """Delete old integration snapshots and SNMP results from Postgres, and
+    apply the tenant's retention to ClickHouse.
 
     Time-series data (ping_checks, agent_metrics, bandwidth_metrics, syslog)
-    lives in ClickHouse and is reaped by table-level TTL — no cleanup needed.
+    lives in ClickHouse; its table TTLs are the installation's ceiling. A
+    tenant that keeps less (``ping_retention_days`` below the 30-day TTL) has
+    its older rows deleted here (``clickhouse_client.RETENTION_RULES``).
     """
     from database import get_setting
+    from services import clickhouse_client as ch
 
     async with AsyncSessionLocal() as db:
+        ch_retention = {
+            "ping_checks": int(await get_setting(db, "ping_retention_days", "30")),
+        }
         int_ret = int(await get_setting(db, "integration_retention_days", "7"))
         ev_ret = int(await get_setting(db, "incident_event_retention_days", "30"))
         tpl_ret = int(await get_setting(db, "template_retention_days", "90"))
@@ -792,6 +799,12 @@ async def cleanup_old_results():
             # template seen again would count as known, its counts would go
             # to an UPDATE matching nothing, and it would never be re-created.
             await load_template_cache(db)
+
+    for table, days in ch_retention.items():
+        try:
+            await ch.enforce_retention(table, days)
+        except Exception:
+            logger.warning("ClickHouse retention for %s failed", table, exc_info=True)
 
     logger.info(
         "Cleanup done (integrations: %dd, incident events: %dd/%d pruned, "
@@ -1016,6 +1029,21 @@ async def cleanup_clickhouse_logs():
                 logger.info("Truncated system.%s (was %.0f MB)", row["table"], size_mb)
     except Exception:
         logger.debug("ClickHouse log cleanup skipped", exc_info=True)
+
+
+@instrument_job("clickhouse_tenant_rebuild")
+@system_job("ClickHouse tenancy step B: sort-key rebuild (installation)")
+async def run_clickhouse_tenant_rebuild():
+    """Rebuild the ClickHouse tables with tenant_id leading the sort key.
+
+    Resumable and bounded per run (services/clickhouse_rebuild.py); a no-op
+    once every table is rebuilt, and with NODEGLOW_CH_TENANT_REBUILD=off.
+    """
+    from services import clickhouse_rebuild
+
+    states = await clickhouse_rebuild.run()
+    if states:
+        logger.debug("ClickHouse tenant rebuild: %s", states)
 
 
 # ── Scheduler lifecycle ──────────────────────────────────────────────────────
@@ -1421,6 +1449,12 @@ async def start_scheduler():
     scheduler.add_job(cleanup_clickhouse_logs, "cron", hour=4, minute=0,
                       id="ch_cleanup", replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
+    # Multi-tenancy step B; first run a few minutes after start, then hourly
+    # (each run is bounded and resumes where the last one stopped).
+    scheduler.add_job(run_clickhouse_tenant_rebuild, "interval", hours=1,
+                      id="ch_tenant_rebuild", replace_existing=True,
+                      max_instances=1, coalesce=True,
+                      next_run_time=datetime.now() + timedelta(minutes=5))
 
     # DNS resolution + host dedup (every 30 minutes)
     scheduler.add_job(resolve_host_dns, "interval", minutes=30,
