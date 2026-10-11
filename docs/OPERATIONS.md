@@ -62,6 +62,7 @@ from that experience, not from a load test.
 | 8000 | tcp | inbound | Web UI and API (frontend, proxies to the backend) | Users and agents; put TLS in front |
 | 514 | udp | inbound | Syslog (mapped to container 1514) | Devices that send logs |
 | 1514 | tcp | inbound | Syslog over TCP | Devices that send logs |
+| 514 (configurable) | udp + tcp | inbound **on a probe host** | [Probe syslog relay](#probe-syslog-relay), only where switched on | Devices in the probe's network |
 | 8000 (backend), 5432, 8123, 9100 | tcp | internal only | Backend, Postgres, ClickHouse, updater | Docker network only — never publish |
 | varies | icmp/tcp/udp | outbound | Checks, integrations (HTTPS APIs), SNMP 161/udp | Monitored networks |
 | 443 | tcp | outbound | Notifications (Telegram, Discord, Teams, Slack, ntfy, webhooks), the AI provider if AI is enabled, GeoIP updates, GitHub / GHCR for updates | Internet |
@@ -508,6 +509,77 @@ RLS. The backend logs a warning saying so.
 
 ---
 
+## Probe syslog relay
+
+Syslog from network devices normally goes straight to the server (514/udp,
+1514/tcp). When the devices cannot reach the server — a remote site, a
+customer network, a hosted (SaaS) installation — a **probe** can receive it
+instead: the probe listens for syslog inside that network and forwards the
+lines over its own agent connection (HTTPS to the UI port, nothing inbound on
+the server). Every relayed message belongs to the probe's tenant and site; the
+sending device's address travels with each message and is matched against the
+hosts **of that site**.
+
+### Setting it up
+
+1. Enrol an agent in the network the devices are in and make it a probe
+   (**Infrastructure → Agents & Probes**, or `PATCH /api/v1/agents/{id}` with
+   `{"is_probe": true}`).
+2. Switch the relay on (admin):
+   `PATCH /api/v1/agents/{id}` with `{"syslog_relay_enabled": true}`, and
+   optionally `"syslog_relay_port": 1514` (default 514, the same port for UDP
+   and TCP). The probe picks it up with its next heartbeat (≤ its report
+   interval) and starts listening on all interfaces of the probe host.
+3. Point the devices' syslog at the probe's address and port. UDP (one message
+   per datagram) and TCP (newline-terminated or octet-counted, RFC 6587) both
+   work; at most 64 KiB per message, 64 TCP connections.
+4. Check `GET /api/v1/agents/{id}` → `syslog_relay.status`: `listening`,
+   `received`, `forwarded`, `dropped`, `buffered`, `send_failures` and, if the
+   port could not be opened, `error`.
+
+Ports below 1024 need privileges on Linux: the agent installed by the install
+script runs as root and can use 514. An agent running as an ordinary user
+reports `cannot listen on port 514: permission denied` in `status.error` and
+retries every minute — use a port ≥ 1024 then. Open the port in the probe
+host's firewall for the devices (Windows: an inbound rule for the agent's
+executable or the port).
+
+While the server is unreachable the probe keeps listening and buffers up to
+20 000 messages / 16 MiB in memory, then drops the oldest (counted in
+`dropped`); a restart of the agent loses what is buffered. Switching the relay
+off (or the probe role) closes the port within one heartbeat.
+
+### How messages are attributed
+
+- Tenant and site come from the probe's token. Nothing in a message — its
+  host name, any field the probe sends — can move it into another tenant.
+- The device's host is looked up among the hosts of the probe's site first
+  (host name, then address). Outside the site only a **host name** or a
+  **public address** is matched, and only when exactly one site of the tenant
+  knows it: `192.168.1.1` at branch A is never branch B's `192.168.1.1`.
+  Reverse DNS is not used for relayed addresses — the server's resolver knows
+  nothing about the customer's network.
+- The per-tenant "only accept syslog from known hosts" setting applies with
+  the same site rule.
+- An agent that is not a probe cannot relay; it only sends its own logs, which
+  are attributed to its own host by name.
+
+### The direct listener
+
+`NODEGLOW_SYSLOG_LISTENER` (backend environment, see [Advanced backend
+settings](#advanced-backend-settings)) controls the server's own syslog ports:
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | Listens. Messages go to the default tenant as long as the installation has **one** tenant — every community install, nothing changes. With more than one tenant it refuses messages (it cannot tell whose a datagram is), logs a warning every five minutes and counts them as `nodeglow_syslog_messages_dropped_total{reason="listener_disabled"}`; use probe relays. |
+| `on` | Listens and always files messages under the default tenant. |
+| `off` | Does not open the ports at all. Hosted (SaaS) installations: syslog is probe-only. Agent logs and probe relays keep working. |
+
+With `off` you can also remove the 514/1514 port mappings from the compose
+file.
+
+---
+
 ## When something looks wrong
 
 ### Nodeglow tells you first
@@ -840,6 +912,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `NODEGLOW_INTEGRATION_TIMEOUT` | `nodeglow` | `60` | Seconds per integration collect |
 | `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |
 | `NODEGLOW_PING_LOOKBACK_HOURS` | `nodeglow` | `24` | How far back the "latest check" lookup searches |
+| `NODEGLOW_SYSLOG_LISTENER` | `nodeglow` | `auto` | The server's own syslog listener: `auto` (default tenant while there is one tenant), `on`, `off` (probe-only, SaaS) — [Probe syslog relay](#the-direct-listener) |
 | `NODEGLOW_SYSLOG_CLOCK_SKEW_HOURS` | `nodeglow` | `24` | How far a sender's clock may lag and its messages still show up in time-window queries |
 | `NODEGLOW_CLICKHOUSE_COMPRESSION` | `nodeglow` | `lz4` | ClickHouse client compression |
 | `DNS_CACHE_TTL` | `nodeglow` | `60` | Seconds DNS lookups of check targets are cached; `0` disables |
