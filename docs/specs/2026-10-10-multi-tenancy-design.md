@@ -1774,29 +1774,54 @@ code in `services/tenant_keys.py`, `models/tenant.py` (`TenantKey`),
   (`wrapped_dek = NULL`, `destroyed_at` — the row stays as a tombstone so the
   error says "destroyed", not "unknown key"). Afterwards every decrypt of the
   tenant's secrets raises `TenantKeyDestroyed`, nothing can be encrypted or
-  rotated for it, and `get_setting` of an encrypted key raises.
+  rotated for it, and `get_setting` of an encrypted key raises. A tenant
+  that never had a key gets a tombstone row (`wrapped_dek` NULL,
+  `destroyed_at` set), so a later encrypt fails closed instead of quietly
+  creating a fresh key.
+- **A key that does not unwrap** (another `SECRET_KEY`, a copied row) fails
+  on use with `TenantKeyUnavailable` — the cipher, `get_dek` and
+  `create_tenant_key` alike, never a fresh key behind the caller's back.
+  `rotate_tenant_key` retires it with the other previous keys.
 - **046** creates `tenant_keys` (policy + RLS state like `tenant_settings`;
-  `migrate.py` re-applies from the live classification), a key for tenant 1
-  and for every tenant with secrets, and re-encrypts in place every value
-  under the installation key (guarded `UPDATE … WHERE value = :old`). `v2`
-  values are skipped (idempotent; the whole chain is one transaction, so an
-  interrupted run leaves nothing half-done); values that do not decrypt
-  (another `SECRET_KEY`, plaintext) are left exactly as they are and logged
-  with a count. Plaintext secret settings are left for the startup pass. The
+  `migrate.py` re-applies from the live classification) and a key for
+  tenant 1 — and **rewrites no secret**. The updater runs migrations with the
+  new image while the old backend still serves (`step_migrate` before
+  `step_restart`), and a rollback by `NODEGLOW_VERSION` alone runs old code
+  on the migrated database; old code reads every secret with
+  `decrypt_value`. (A first version converted in place; review found the
+  old backend then failed every integration check and sent `v2:…` as the
+  Discord URL until the restart, or for good if the restart failed.) The
   downgrade re-encrypts every readable `v2` value under the installation key
-  and drops the table.
-- **Startup** (`main.py`): `upgrade_legacy_secrets` moves values still under
-  the installation key — e.g. written by the old backend while the update's
-  migrate step ran — and the plaintext channel secrets of old installs
-  (`encrypt_plaintext_channel_secrets` now encrypts with the tenant key).
-- **Backups.** `tenant_keys` is not exported. The export decrypts every
-  tenant secret and carries it as `{"$nodeglow_secret": "plain", "value": …}`
-  (`_meta.tenant_secrets = "plaintext"`, version 1.1) — only ever inside the
-  passphrase envelope, which the route requires. The restore encrypts each
-  under the key of the tenant its row lands in (created as needed), and then
-  moves old-format values (a pre-046 backup) to the tenant key. A restore
-  into an installation with another `SECRET_KEY` therefore keeps the tenant
-  secrets; installation secrets still need the original key (warning).
+  and drops the table — needed before going back to an older version once
+  the new backend has run (OPERATIONS.md).
+- **Startup** (`main.py`): `upgrade_legacy_secrets` moves every value still
+  under the installation key to its tenant's key (keys created as needed;
+  idempotent, one tenant per transaction) — after an upgrade, rows written
+  by the old backend during it, restored pre-046 backups — and the plaintext
+  channel secrets of old installs (`encrypt_plaintext_channel_secrets` now
+  encrypts with the tenant key). Values that do not decrypt (another
+  `SECRET_KEY`) are left exactly as they are and logged with a count.
+- **Backups.** The export decrypts nothing: tenant secrets go out as stored
+  (`v2`), together with the `tenant_keys` rows (wrapped DEKs) — like a
+  `pg_dump`, the file needs `SECRET_KEY` as well as its passphrase. (A first
+  version exported tenant secrets in plaintext inside the passphrase
+  envelope; review: that handed every tenant's credentials to any operator
+  API key with a passphrase of its choosing, against decision 8, and kept a
+  purged tenant's secrets readable without `SECRET_KEY`.) The restore
+  inserts `tenant_keys` with the other tables, then moves old-format values
+  (a pre-046 backup) to the tenant key — only for tenants that exist in the
+  target: `tenants` is not part of a backup, and a key for a missing tenant
+  would violate the foreign key and abort the restore. Rows of missing
+  tenants are restored as before (foreign keys off) and named in the
+  result's `warning`. A restore under another `SECRET_KEY` warns; its
+  tenant secrets do not decrypt (as before 046), `rotate --tenant N` lets
+  credentials be entered again.
+- **Notifications.** Channel secrets are read one by one
+  (`notification_channels.ChannelSecrets`): one that does not decrypt fails
+  only its own channel (logged as a failed notification; a webhook is not
+  sent unsigned, ntfy not without its token) — the other channels still go
+  out. Same in the ee daily summary and the test-send route (which reports
+  only the tested channel's own secret).
 - **CLI.** `python -m services.tenant_keys verify` (owner connection, system
   scope, read-only): keys per tenant and state, counts per column and format
   (`v2:<key_id>`, `legacy`, `plaintext`, `undecryptable`, failing `v2`),
@@ -1808,16 +1833,27 @@ installation key, formats, fail closed, per-tenant cache, a tenant context
 cannot reach another tenant's key, B's ciphertext and even B's wrapped key
 copied into A give A nothing, rotation incl. rollback, destroy incl. the next
 transaction of another session, settings layer, startup pass, scan without
-secrets, export opens / restore seals, 046's data step on SQLite: idempotent,
-reversible, frozen key list = registry), `tests/test_tenant_keys_pg.py`
+secrets, the export decrypts nothing and carries the wrapped keys, 046
+rewrites no secret (old code reads every value) and the startup pass then
+moves them, reversible, frozen key list = registry, destroy without a key
+leaves a tombstone, a key that does not unwrap fails `get_dek` and is
+retired by rotation), `tests/test_routers/test_legacy_channel_secrets.py`
+(one undecryptable channel secret: Discord still sent, webhook and ntfy
+not, both logged failed; the test route reports only the tested channel),
+`tests/test_tenant_keys_pg.py`
 (PostgreSQL: an install at 044 with RLS on and two users, secrets in every
 secret-bearing table — Discord webhook, SMTP, Teams, integration tokens, SNMP
 community, plaintext Telegram token of an old install, a value under a previous
-key, installation secrets; after 046 everything reads the same through the
-app's paths as `nodeglow_app` with RLS on, `tenant_keys` is under RLS, re-run
-changes nothing, `alembic check`, `verify` counts without secrets, downgrade
-back under the installation key, upgrade again; backup export → restore into
-an install with a different `SECRET_KEY`). The isolation walk seeds a
+key, installation secrets; after 046 not one value has changed and
+everything reads the same through the app's paths as `nodeglow_app` with RLS
+on; the startup pass (as `nodeglow_app`) moves them, then everything still
+reads the same, `tenant_keys` is under RLS, re-run changes nothing, `alembic
+check`, `verify` counts without secrets, downgrade back under the
+installation key, upgrade again; backups: a two-tenant export — before and
+after the startup pass — restores into a fresh install with tenant 1 only,
+warning about tenant 2, the opened envelope holds no secret, the restored
+wrapped keys equal the source's, and under another `SECRET_KEY` the restore
+warns and nothing decrypts). The isolation walk seeds a
 `tenant_keys` row per tenant (key id with the canary) and encrypts the seeded
 configs and credentials under it.
 
@@ -1856,8 +1892,10 @@ Deviations / limits:
   (otherwise the first secret creates it lazily); the purge calls
   `destroy_tenant_key(db, tenant_id)` in system scope **before** deleting the
   rows and commits it (a later failure of the purge then still leaves the
-  data shredded). Per-tenant export/import (phase 12) can reuse
-  `open_for_export` / `seal_for_restore`.
+  data shredded). Per-tenant export/import (phase 12) needs its own answer
+  for tenant secrets: re-wrap the tenant's DEKs for the target, or an
+  explicit, host-level, audited plaintext export documented as outside
+  crypto-shred — not a plaintext export behind an API key.
 - Still true from phase 2: work spawned with `asyncio.create_task` inherits
   the context; a task started in `system_scope` that writes must set its
   tenant itself (notifications and WebSocket broadcasts now take the

@@ -402,10 +402,19 @@ password, AI provider keys, licence, GeoIP key) keep the `SECRET_KEY`
 directly. Nothing changes for escrow: `SECRET_KEY` still opens everything,
 and a `pg_dump` contains the wrapped keys.
 
-- The upgrade to 046 moves every existing credential to the tenant key in
-  place; the backend's start moves anything written in the old format later
-  (for example by the old backend while an update ran). Values that do not
-  decrypt with the current `SECRET_KEY` are left exactly as they are.
+- The migration 046 rewrites no credential: the old backend keeps serving
+  while the updater migrates, and it can read only the old format. The new
+  backend moves every credential to the tenant key when it starts, and does
+  so again on every start for anything written in the old format later.
+  Values that do not decrypt with the current `SECRET_KEY` are left exactly
+  as they are.
+- **Going back to an older version after the new one has started** needs
+  the downgrade first, while the new version still runs:
+  `docker compose exec nodeglow python -m alembic downgrade 044`. It puts every
+  credential back under `SECRET_KEY`. Switching `NODEGLOW_VERSION` back alone
+  leaves the credentials under tenant keys, which the old version cannot
+  read (integrations fail, notifications do not go out). Restoring the
+  updater's pre-update dump works as well.
 - Check the state at any time (read-only, prints counts, never a secret;
   exit code 1 when something does not decrypt):
 
@@ -417,12 +426,23 @@ and a `pg_dump` contains the wrapped keys.
   tenant a new data key and re-encrypts its secrets (the old key stays
   readable as "retired").
 - Deleting a tenant (ee) destroys its data keys: its credentials are then
-  unreadable everywhere — database, replicas, dumps — even with `SECRET_KEY`
-  (crypto-shred).
-- The JSON export carries tenant credentials in plaintext **inside** the
-  passphrase-encrypted file and the restore encrypts them under the target's
-  tenant key, so they survive a restore into an installation with a
-  different `SECRET_KEY` (installation secrets do not; the restore warns).
+  unreadable in the database, replicas and every dump or export taken
+  afterwards, even with `SECRET_KEY` (crypto-shred). A dump or JSON export
+  taken **before** the deletion contains the wrapped keys along with the
+  data, so it stays readable with `SECRET_KEY` until it is deleted: keep
+  backup retention within what you promise customers for deleted data.
+- The JSON export decrypts nothing. It carries the credentials as stored
+  and the `tenant_keys` rows (data keys wrapped by `SECRET_KEY`), so opening
+  a credential from it needs the escrowed `SECRET_KEY` as well as the
+  passphrase. Holding an operator API key and choosing a passphrase is not
+  enough. A restore into an installation with a different `SECRET_KEY`
+  warns, and its credentials do not decrypt until the original key is
+  configured. To enter credentials again there instead, give each tenant a
+  new key with `rotate --tenant N`.
+- A backup holds no `tenants` table. Rows of a tenant that the target
+  installation does not have are restored as they are, and no key is
+  created for that tenant. The restore result names those tenants in
+  `warning`.
 
 ### Changing it
 
