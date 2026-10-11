@@ -1,7 +1,7 @@
 import { type ClassValue, clsx } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 
-// Teach tailwind-merge the design-system scale (tailwind.config.ts) so that
+// Teach tailwind-merge the design-system scale (@theme in app/globals.css) so that
 // e.g. `text-meta` (size) and `text-fg-2` (colour) do not cancel each other.
 const twMerge = extendTailwindMerge({
   extend: {

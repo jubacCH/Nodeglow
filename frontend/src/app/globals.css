@@ -1,14 +1,205 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 /*
  * Nodeglow design system (concept E3, accent Glow Violet).
  * All colours, glows, radii and fonts come from design-tokens/tokens.json via
  * the generated tokens.gen.css. Never hardcode hex values here or in
  * components; reference: docs/design/04-design-system.md.
+ *
+ * Tailwind CSS 4, CSS-first: the semantic utilities (bg-surface, text-fg-2,
+ * text-down, shadow-glow-crit, rounded-card, text-micro …) are declared in the
+ * @theme block below. There is no tailwind.config.ts any more.
  */
-@import './../styles/tokens.gen.css';
+
+/* `@import 'tailwindcss'` spelled out, because the utilities are emitted
+   further down (see "Cascade" below) instead of at the top. */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import '../styles/tokens.gen.css';
+
+/* Class names are scanned in src/ only (set on @tailwind utilities below);
+   the generated token files hold none. */
+@source not '../styles';
+
+/* The theme lives in data-theme on <html> (set before first paint, see
+   lib/theme.ts), so dark:/light: follow it instead of prefers-color-scheme. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+@custom-variant light (&:where([data-theme='light'], [data-theme='light'] *));
+
+/* Tailwind 4 wraps hover: in @media (hover: hover). Keep the Tailwind 3
+   behaviour (hover styles also apply on tap) so nothing changes on touch. */
+@custom-variant hover (&:hover);
+
+/*
+ * Semantic design-system classes. `inline` makes every utility reference the
+ * --ng-* variable directly (bg-surface -> var(--ng-surface)) instead of a
+ * --color-* copy resolved once on :root, so the same class follows a nested
+ * [data-theme] (tooltips, toasts) exactly like before. Opacity modifiers work
+ * on every colour (bg-down/20, border-accent/40) via color-mix.
+ *
+ * Migration table slate-* -> semantic: docs/design/04-design-system.md.
+ */
+@theme inline {
+  /* Only the semantic palette exists; Tailwind's default colours are off. */
+  --color-*: initial;
+
+  --color-bg: var(--ng-bg);
+  --color-rail: var(--ng-rail);
+  --color-surface: var(--ng-surface);
+  --color-surface-2: var(--ng-surface-2);
+  --color-surface-3: var(--ng-surface-3);
+  --color-border: var(--ng-border);
+  --color-border-2: var(--ng-border-2);
+  --color-line: var(--ng-line);
+  --color-hover: var(--ng-hover);
+  --color-fg: var(--ng-text);
+  --color-fg-2: var(--ng-text-2);
+  --color-fg-3: var(--ng-text-3);
+  --color-accent: var(--ng-accent);
+  --color-accent-text: var(--ng-accent-text);
+  --color-accent-hover: var(--ng-accent-hover);
+  --color-accent-btn: var(--ng-accent-btn);
+  --color-accent-btn-hover: var(--ng-accent-btn-hover);
+  --color-accent-soft: var(--ng-accent-soft);
+  --color-on-accent: var(--ng-on-accent);
+  --color-focus: var(--ng-focus);
+
+  /* Status: graphic colours (fills, borders, dots, bars). */
+  --color-ok: var(--ng-st-ok);
+  --color-ok-soft: var(--ng-st-ok-soft);
+  --color-ok-text: var(--ng-st-ok-text);
+  --color-degraded: var(--ng-st-degraded);
+  --color-degraded-soft: var(--ng-st-degraded-soft);
+  --color-degraded-text: var(--ng-st-degraded-text);
+  --color-warning: var(--ng-st-warning);
+  --color-warning-soft: var(--ng-st-warning-soft);
+  --color-warning-text: var(--ng-st-warning-text);
+  --color-down: var(--ng-st-down);
+  --color-down-soft: var(--ng-st-down-soft);
+  --color-down-text: var(--ng-st-down-text);
+  --color-maint: var(--ng-st-maint);
+  --color-maint-soft: var(--ng-st-maint-soft);
+  --color-maint-text: var(--ng-st-maint-text);
+  --color-unknown: var(--ng-st-unknown);
+  --color-unknown-soft: var(--ng-st-unknown-soft);
+  --color-unknown-text: var(--ng-st-unknown-text);
+
+  --color-hatch: var(--ng-hatch-2);
+  --color-grid: var(--ng-grid);
+  --color-scrim: var(--ng-scrim);
+  --color-tip: var(--ng-tip-bg);
+  --color-tip-fg: var(--ng-tip-text);
+
+  /* `text-ok`, `text-accent` … resolve to the AA-checked text variants
+     (text-* reads --text-color-* before --color-*). */
+  --text-color-ok: var(--ng-st-ok-text);
+  --text-color-degraded: var(--ng-st-degraded-text);
+  --text-color-warning: var(--ng-st-warning-text);
+  --text-color-down: var(--ng-st-down-text);
+  --text-color-maint: var(--ng-st-maint-text);
+  --text-color-unknown: var(--ng-st-unknown-text);
+  --text-color-accent: var(--ng-accent-text);
+
+  /* Type scale (rem, 1rem = user font size, default 14px). Names do not
+     collide with Tailwind's xs/sm/base. */
+  --text-micro: var(--ng-fs-micro);
+  --text-micro--line-height: 1.35;
+  --text-meta: var(--ng-fs-meta);
+  --text-meta--line-height: 1.4;
+  --text-ui: var(--ng-fs-ui);
+  --text-ui--line-height: 1.45;
+  --text-body: var(--ng-fs-body);
+  --text-body--line-height: 1.45;
+  --text-lead: var(--ng-fs-lead);
+  --text-lead--line-height: 1.3;
+  --text-h3: var(--ng-fs-h3);
+  --text-h3--line-height: 1.25;
+  --text-h1: var(--ng-fs-h1);
+  --text-h1--line-height: 1.2;
+  --text-num-sm: var(--ng-fs-num-sm);
+  --text-num-sm--line-height: 1.1;
+  --text-num: var(--ng-fs-num);
+  --text-num--line-height: 1.05;
+  --text-num-lg: var(--ng-fs-num-lg);
+  --text-num-lg--line-height: 1.05;
+
+  --font-sans: var(--ng-font-ui);
+  --font-display: var(--ng-font-display);
+  --font-mono: var(--ng-font-mono);
+
+  --radius-card: var(--ng-radius);
+  --radius-ctl: var(--ng-radius-ctl);
+  --radius-chip: var(--ng-radius-chip);
+  --radius-ng-sm: var(--ng-radius-sm);
+  --radius-ng-lg: var(--ng-radius-lg);
+  --radius-pill: var(--ng-radius-pill);
+
+  --shadow-overlay: var(--ng-shadow);
+  --shadow-ng-sm: var(--ng-shadow-sm);
+  --shadow-glow-crit: var(--ng-glow-crit);
+  --shadow-glow-warn: var(--ng-glow-warn);
+  --shadow-glow-dot-crit: var(--ng-glow-dot-crit);
+  --shadow-glow-dot-warn: var(--ng-glow-dot-warn);
+  --shadow-accent-glow: var(--ng-accent-glow);
+
+  --animate-breathe: var(--ng-breathe);
+
+  --spacing-rail: var(--ng-rail-w);
+  --spacing-topbar: var(--ng-topbar-h);
+  --spacing-tabbar: var(--ng-tabbar-h);
+  --spacing-gutter: var(--ng-gutter);
+
+  --container-content: var(--ng-content-max);
+
+  --z-index-topbar: 20;
+  --z-index-rail: 30;
+  --z-index-scrim: 60;
+  --z-index-popover: 65;
+  --z-index-panel: 70;
+  --z-index-palette: 75;
+  --z-index-tooltip: 80;
+  --z-index-toast: 90;
+
+  --ease-ng: var(--ng-ease-out);
+
+  /* Shell breakpoint: below 760px the rail becomes a bottom tab bar. Use the
+     arbitrary variants `max-[759px]:` / `min-[760px]:` for it, so the default
+     sm/md/lg ordering stays intact. */
+}
+
+/* ── Tailwind 3 preflight parity ──────────────────────────────────────────
+   Tailwind 4 changed a few preflight defaults; these keep the v3 look. */
+@layer base {
+  /* v3 default border colour (gray-200); v4 uses currentColor. Elements with
+     a bare `border`/`divide-y` and no colour class rely on it. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: rgb(229 231 235);
+  }
+  /* v4 sets cursor: default on buttons. */
+  button,
+  [role='button'] {
+    cursor: pointer;
+  }
+  :disabled {
+    cursor: default;
+  }
+  /* v4 resets padding on every element; v3 kept the UA 1px on table cells. */
+  td,
+  th {
+    padding: 1px;
+  }
+  /* v3 preflight colour for input/textarea placeholders. Its selector is more
+     specific than the ::placeholder rule below, so this is what v3 rendered.
+     (Dropping it would let the intended --ng-text-3 apply.) */
+  input::placeholder,
+  textarea::placeholder {
+    opacity: 1;
+    color: rgb(156 163 175);
+  }
+}
 
 /* ── Base ─────────────────────────────────────────────────────────────── */
 @layer base {
@@ -35,64 +226,16 @@
   }
 }
 
-/* ── Focus: one visible ring everywhere (keyboard only) ────────────────── */
-:focus-visible {
-  outline: 2px solid var(--ng-focus);
-  outline-offset: 2px;
-}
-/* Elements that draw their own focus treatment opt out explicitly. */
-.ng-focus-inset:focus-visible {
-  outline-offset: -2px;
-}
-
-/* ── Glow (signature) ──────────────────────────────────────────────────
-   Only critical and warning glow. Healthy, maintenance and unknown never do
-   ("no light = no data"). Critical breathes slowly in dark mode only; the
-   --ng-breathe token is `none` in light mode and reduced motion stops it. */
-@keyframes ng-breathe {
-  0%, 100% { opacity: 0.62; }
-  50% { opacity: 1; }
-}
-.ng-glow-crit,
-.ng-glow-warn {
-  position: relative;
-}
-.ng-glow-crit::after,
-.ng-glow-warn::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-}
-.ng-glow-crit::after {
-  box-shadow: var(--ng-glow-crit);
-  animation: var(--ng-breathe);
-}
-.ng-glow-warn::after {
-  box-shadow: var(--ng-glow-warn);
-}
-/* Acknowledged: the halo stays at half strength but stops breathing. */
-.ng-glow-acked::after {
-  animation: none;
-  opacity: 0.5;
-}
-
-/* Hatched "no data" fill (graphics only, always paired with a text label). */
-.ng-hatch {
-  background-color: var(--ng-hatch-2);
-  background-image: var(--ng-hatch);
-}
-
-/* Tabular figures for numbers that update in place. */
-.num,
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
-}
+/* ── Cascade ─────────────────────────────────────────────────────────────
+   Tailwind 3 emitted components, then utilities, then the plain rules of
+   this file, all in one cascade where specificity decided (e.g.
+   `.ng-input:focus-visible` beats the global `:focus-visible`). Tailwind 4
+   uses native cascade layers, where a later layer always wins and unlayered
+   CSS beats every layer. To keep the v3 result exactly, all three share the
+   utilities layer, in the v3 order. */
 
 /* ── Shared component classes ─────────────────────────────────────────── */
-@layer components {
+@layer utilities {
   /* Form controls. The <Input>/<Select>/<Textarea> components use these. */
   .ng-input {
     display: block;
@@ -145,173 +288,236 @@
   }
 }
 
-/* Enterprise table defaults (the <Table> primitives set the same values). */
-table thead th {
-  text-align: left;
-  font-size: 0.8571rem;
-  font-weight: 500;
-  color: var(--ng-text-2);
-}
-table tbody tr {
-  transition: background-color var(--ng-dur) ease-out;
-}
-table tbody tr:hover {
-  background: var(--ng-hover);
-}
-table tbody td {
-  color: var(--ng-text);
+@layer utilities {
+  @tailwind utilities source('../');
 }
 
-/* ── Scrollbars ────────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: var(--ng-border-2);
-  border-radius: 4px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--ng-line);
-  background-clip: padding-box;
-}
-::-webkit-scrollbar-corner { background: transparent; }
-* { scrollbar-width: thin; scrollbar-color: var(--ng-border-2) transparent; }
+/* ── Global rules (plain CSS after the utilities, as in v3) ─────────────── */
+@layer utilities {
+  /* ── Focus: one visible ring everywhere (keyboard only) ────────────────── */
+  :focus-visible {
+    outline: 2px solid var(--ng-focus);
+    outline-offset: 2px;
+  }
+  /* Elements that draw their own focus treatment opt out explicitly. */
+  .ng-focus-inset:focus-visible {
+    outline-offset: -2px;
+  }
 
-/* ── Motion ────────────────────────────────────────────────────────────── */
-@keyframes page-enter {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.animate-page-enter { animation: page-enter 0.18s ease-out; }
-
-@keyframes ng-shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-.ng-shimmer {
-  background-color: var(--ng-surface-2);
-  background-image: linear-gradient(90deg, transparent 0%, var(--ng-hover) 50%, transparent 100%);
-  background-size: 200% 100%;
-  background-repeat: no-repeat;
-  animation: ng-shimmer 1.6s ease-in-out infinite;
-}
-
-/* Only for real state changes, never on every render. */
-@keyframes ng-just-changed {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ng-accent) 45%, transparent); }
-  60% { box-shadow: 0 0 0 6px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-.ng-just-changed { animation: ng-just-changed 1.6s ease-out; }
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+  /* ── Glow (signature) ──────────────────────────────────────────────────
+     Only critical and warning glow. Healthy, maintenance and unknown never do
+     ("no light = no data"). Critical breathes slowly in dark mode only; the
+     --ng-breathe token is `none` in light mode and reduced motion stops it. */
+  @keyframes ng-breathe {
+    0%, 100% { opacity: 0.62; }
+    50% { opacity: 1; }
+  }
+  .ng-glow-crit,
+  .ng-glow-warn {
+    position: relative;
   }
   .ng-glow-crit::after,
-  .animate-breathe {
-    animation: none !important;
+  .ng-glow-warn::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
   }
-}
+  .ng-glow-crit::after {
+    box-shadow: var(--ng-glow-crit);
+    animation: var(--ng-breathe);
+  }
+  .ng-glow-warn::after {
+    box-shadow: var(--ng-glow-warn);
+  }
+  /* Acknowledged: the halo stays at half strength but stops breathing. */
+  .ng-glow-acked::after {
+    animation: none;
+    opacity: 0.5;
+  }
 
-/* Glow (AI) panel markdown */
-.glow-heading { color: var(--ng-accent-text); }
-.glow-bold { color: var(--ng-text); }
-.glow-code { background: var(--ng-surface-2); color: var(--ng-accent-text); }
-.glow-bullet { color: var(--ng-text-3); }
+  /* Hatched "no data" fill (graphics only, always paired with a text label). */
+  .ng-hatch {
+    background-color: var(--ng-hatch-2);
+    background-image: var(--ng-hatch);
+  }
 
-/* ── Command palette (cmdk) ────────────────────────────────────────────── */
-[cmdk-overlay] {
-  position: fixed;
-  inset: 0;
-  background: var(--ng-scrim);
-  z-index: 74;
-}
-.cmdk-dialog {
-  position: fixed;
-  top: 12vh;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(620px, calc(100% - 32px));
-  z-index: 75;
-  animation: page-enter 0.14s ease-out;
-}
-.cmdk-shell {
-  background: var(--ng-surface);
-  border: 1px solid var(--ng-border-2);
-  border-radius: var(--ng-radius-lg);
-  box-shadow: var(--ng-shadow);
-  overflow: hidden;
-}
-.cmdk-input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 52px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--ng-border);
-  color: var(--ng-text-3);
-}
-.cmdk-input {
-  flex: 1;
-  min-width: 0;
-  background: transparent;
-  border: 0;
-  outline: 0;
-  font-size: 1.0714rem;
-  color: var(--ng-text);
-}
-.cmdk-input:focus-visible { outline: none; }
-.cmdk-list {
-  max-height: min(420px, 60vh);
-  overflow-y: auto;
-  padding: 8px;
-  scroll-padding: 8px;
-}
-.cmdk-empty,
-[cmdk-loading] {
-  display: block;
-  padding: 18px 10px;
-  font-size: 0.9286rem;
-  color: var(--ng-text-3);
-}
-.cmdk-group [cmdk-group-heading] {
-  padding: 8px 10px 4px;
-  font-size: 0.7857rem;
-  font-weight: 500;
-  color: var(--ng-text-3);
-}
-.cmdk-item {
-  display: grid;
-  grid-template-columns: 22px 1fr auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--ng-radius-sm);
-  font-size: 0.9286rem;
-  color: var(--ng-text);
-  cursor: pointer;
-  user-select: none;
-}
-.cmdk-item svg { color: var(--ng-text-2); }
-.cmdk-item[data-selected="true"] { background: var(--ng-accent-soft); }
-.cmdk-item[data-selected="true"] svg { color: var(--ng-accent-text); }
-.cmdk-meta {
-  font-size: 0.8571rem;
-  color: var(--ng-text-3);
-}
-.cmdk-footer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  padding: 10px 16px;
-  border-top: 1px solid var(--ng-border);
-  font-size: 0.8571rem;
-  color: var(--ng-text-3);
+  /* Tabular figures for numbers that update in place. */
+  .num,
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* Enterprise table defaults (the <Table> primitives set the same values). */
+  table thead th {
+    text-align: left;
+    font-size: 0.8571rem;
+    font-weight: 500;
+    color: var(--ng-text-2);
+  }
+  table tbody tr {
+    transition: background-color var(--ng-dur) ease-out;
+  }
+  table tbody tr:hover {
+    background: var(--ng-hover);
+  }
+  table tbody td {
+    color: var(--ng-text);
+  }
+
+  /* ── Scrollbars ────────────────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--ng-border-2);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--ng-line);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  * { scrollbar-width: thin; scrollbar-color: var(--ng-border-2) transparent; }
+
+  /* ── Motion ────────────────────────────────────────────────────────────── */
+  @keyframes page-enter {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-page-enter { animation: page-enter 0.18s ease-out; }
+
+  @keyframes ng-shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .ng-shimmer {
+    background-color: var(--ng-surface-2);
+    background-image: linear-gradient(90deg, transparent 0%, var(--ng-hover) 50%, transparent 100%);
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: ng-shimmer 1.6s ease-in-out infinite;
+  }
+
+  /* Only for real state changes, never on every render. */
+  @keyframes ng-just-changed {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ng-accent) 45%, transparent); }
+    60% { box-shadow: 0 0 0 6px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  .ng-just-changed { animation: ng-just-changed 1.6s ease-out; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+    .ng-glow-crit::after,
+    .animate-breathe {
+      animation: none !important;
+    }
+  }
+
+  /* Glow (AI) panel markdown */
+  .glow-heading { color: var(--ng-accent-text); }
+  .glow-bold { color: var(--ng-text); }
+  .glow-code { background: var(--ng-surface-2); color: var(--ng-accent-text); }
+  .glow-bullet { color: var(--ng-text-3); }
+
+  /* ── Command palette (cmdk) ────────────────────────────────────────────── */
+  [cmdk-overlay] {
+    position: fixed;
+    inset: 0;
+    background: var(--ng-scrim);
+    z-index: 74;
+  }
+  .cmdk-dialog {
+    position: fixed;
+    top: 12vh;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(620px, calc(100% - 32px));
+    z-index: 75;
+    animation: page-enter 0.14s ease-out;
+  }
+  .cmdk-shell {
+    background: var(--ng-surface);
+    border: 1px solid var(--ng-border-2);
+    border-radius: var(--ng-radius-lg);
+    box-shadow: var(--ng-shadow);
+    overflow: hidden;
+  }
+  .cmdk-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 52px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--ng-border);
+    color: var(--ng-text-3);
+  }
+  .cmdk-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    outline: 0;
+    font-size: 1.0714rem;
+    color: var(--ng-text);
+  }
+  .cmdk-input:focus-visible { outline: none; }
+  .cmdk-list {
+    max-height: min(420px, 60vh);
+    overflow-y: auto;
+    padding: 8px;
+    scroll-padding: 8px;
+  }
+  .cmdk-empty,
+  [cmdk-loading] {
+    display: block;
+    padding: 18px 10px;
+    font-size: 0.9286rem;
+    color: var(--ng-text-3);
+  }
+  .cmdk-group [cmdk-group-heading] {
+    padding: 8px 10px 4px;
+    font-size: 0.7857rem;
+    font-weight: 500;
+    color: var(--ng-text-3);
+  }
+  .cmdk-item {
+    display: grid;
+    grid-template-columns: 22px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--ng-radius-sm);
+    font-size: 0.9286rem;
+    color: var(--ng-text);
+    cursor: pointer;
+    user-select: none;
+  }
+  .cmdk-item svg { color: var(--ng-text-2); }
+  .cmdk-item[data-selected="true"] { background: var(--ng-accent-soft); }
+  .cmdk-item[data-selected="true"] svg { color: var(--ng-accent-text); }
+  .cmdk-meta {
+    font-size: 0.8571rem;
+    color: var(--ng-text-3);
+  }
+  .cmdk-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--ng-border);
+    font-size: 0.8571rem;
+    color: var(--ng-text-3);
+  }
 }

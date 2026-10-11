@@ -64,7 +64,7 @@ function TopoNode({ glyph, name, sub, state, tone, glow, acknowledged, onClick, 
       type="button"
       onClick={onClick}
       className={cn(
-        'relative z-[1] flex min-w-0 items-center gap-2.5 rounded-[9px] border py-2 pl-2 pr-3 text-left transition-colors hover:border-border-2',
+        'relative z-1 flex min-w-0 items-center gap-2.5 rounded-[9px] border py-2 pl-2 pr-3 text-left transition-colors hover:border-border-2',
         NODE_TONE[tone],
         glow === 'crit' && 'ng-glow-crit',
         glow === 'warn' && 'ng-glow-warn',
@@ -73,7 +73,7 @@ function TopoNode({ glyph, name, sub, state, tone, glow, acknowledged, onClick, 
     >
       <span className={cn('relative grid h-9 w-9 shrink-0 place-items-center rounded-ctl bg-surface', tone === 'unknown' ? 'text-fg-3' : 'text-fg')}>
         <DeviceGlyph glyph={glyph} className={tone === 'unknown' ? 'opacity-70' : undefined} />
-        <span className="absolute -bottom-[3px] -right-[3px] grid place-items-center rounded-full bg-surface-2 p-[2px]">
+        <span className="absolute bottom-[-3px] right-[-3px] grid place-items-center rounded-full bg-surface-2 p-[2px]">
           <StatusDot status={state} size="lg" label="" glow={state === 'down' || state === 'warning'} />
         </span>
       </span>
@@ -408,7 +408,7 @@ export function TopologyCard({ topology, groups, internet, incidents, loading, e
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5 border-t border-border pt-3 text-meta text-fg-3">
             <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="w-[18px] border-t-2 border-line" />Uplink</span>
             <span className="inline-flex items-center gap-1.5">
-              <i aria-hidden="true" className="w-[18px] border-t-2 border-down [filter:var(--ng-wire-glow)]" />Affected · glows
+              <i aria-hidden="true" className="w-[18px] border-t-2 border-down filter-(--ng-wire-glow)" />Affected · glows
             </span>
             <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="w-[18px] border-t-2 border-dashed border-unknown" />Via probe · no light = no data</span>
             <span className="ml-auto max-[759px]:ml-0">

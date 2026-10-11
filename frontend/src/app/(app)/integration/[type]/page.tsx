@@ -299,7 +299,7 @@ export default function IntegrationListPage() {
                         </Td>
                         <Td className="max-w-[420px] py-2 align-top">
                           {int.error && int.enabled ? (
-                            <p className="line-clamp-2 break-words font-mono text-meta text-down" title={int.error}>{int.error}</p>
+                            <p className="line-clamp-2 wrap-break-word font-mono text-meta text-down" title={int.error}>{int.error}</p>
                           ) : (
                             <span className="text-meta text-fg-3">{h.status === 'unknown' ? h.reason : '—'}</span>
                           )}

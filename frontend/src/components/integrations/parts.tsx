@@ -155,7 +155,7 @@ export function KV({ label, children, mono }: { label: ReactNode; children: Reac
   return (
     <div className="min-w-0">
       <dt className="text-meta text-fg-3">{label}</dt>
-      <dd className={cn('mt-1 text-ui text-fg', mono ? 'break-all font-mono' : 'break-words')}>
+      <dd className={cn('mt-1 text-ui text-fg', mono ? 'break-all font-mono' : 'wrap-break-word')}>
         <Val>{children}</Val>
       </dd>
     </div>
@@ -171,7 +171,7 @@ export function KVRow({ label, children, mono }: { label: ReactNode; children: R
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3 text-ui">
       <dt className="shrink-0 text-fg-3">{label}</dt>
-      <dd className={cn('min-w-0 text-right text-fg', mono ? 'break-all font-mono' : 'break-words')}>
+      <dd className={cn('min-w-0 text-right text-fg', mono ? 'break-all font-mono' : 'wrap-break-word')}>
         <Val>{children}</Val>
       </dd>
     </div>
