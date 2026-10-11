@@ -290,6 +290,10 @@ def test_step_a_adds_tenant_column_to_every_table():
 def test_fresh_tables_lead_their_sort_key_with_tenant():
     ddl = " ".join(" ".join(s.split()) for s in ch._PHASE2_SCHEMAS)
     assert "ORDER BY (tenant_id, host_id, timestamp)" in ddl
+    # The app creates syslog_messages too (init.sql may not have run in the
+    # database the app uses).
+    assert "CREATE TABLE IF NOT EXISTS syslog_messages" in ddl
+    assert "ORDER BY (tenant_id, severity, source_ip, timestamp)" in ddl
     assert "ORDER BY (tenant_id, agent_id, timestamp)" in ddl
     assert "ORDER BY (tenant_id, source_type, source_id, interface_name, timestamp)" in ddl
     init_sql = (ROOT / "clickhouse" / "init.sql").read_text(encoding="utf-8")

@@ -112,7 +112,7 @@ async def _rows(client, sql, params=None):
 
 async def _scalar(client, sql, params=None):
     rows = await _rows(client, sql, params)
-    return next(iter(rows[0].values()))
+    return next(iter(rows[0].values())) if rows else None
 
 
 async def _sorting_key(client, table):
@@ -158,8 +158,8 @@ async def test_fresh_tables_lead_with_tenant(ch):
     client = await ch.get_client()  # applies the schema
     for table in ("ping_checks", "agent_metrics", "bandwidth_metrics", "syslog_messages"):
         key = await _sorting_key(client, table)
-        if key is None:  # syslog_messages only exists where init.sql ran
-            continue
+        # The app creates every table itself, syslog_messages included.
+        assert key is not None, table
         assert key.startswith("tenant_id, "), (table, key)
 
 
@@ -295,8 +295,7 @@ async def test_table_filters_confine_a_read_on_the_server(ch):
 
 async def test_syslog_insert_carries_tenant_and_site(ch):
     client = await ch.get_client()
-    if await _sorting_key(client, "syslog_messages") is None:
-        pytest.skip("syslog_messages is created by init.sql, which this server did not run")
+    assert await _sorting_key(client, "syslog_messages") is not None
     marker = f"live-{_uid()}"
     now = datetime.utcnow()
     await ch.insert_batch([

@@ -153,6 +153,47 @@ def _row_tenant(row: dict) -> int:
 # tenant_id has no DEFAULT there: every insert path stamps it, and a writer that
 # forgets would land in tenant 0, which no tenant can read.
 _PHASE2_SCHEMAS = [
+    # syslog_messages is also in init.sql, which only runs when the server's
+    # data directory is first created and, depending on the image's
+    # entrypoint, in its default database. The app creates it as well so an
+    # install never lacks it in the database it actually uses.
+    """
+    CREATE TABLE IF NOT EXISTS syslog_messages
+    (
+        tenant_id       UInt32,
+        site_id         UInt32 DEFAULT 0,
+        timestamp       DateTime64(3, 'UTC') NOT NULL,
+        received_at     DateTime64(3, 'UTC') NOT NULL DEFAULT now64(),
+        source_ip       LowCardinality(String) NOT NULL,
+        hostname        LowCardinality(String) DEFAULT '',
+        host_id         Nullable(Int32),
+        facility        Nullable(Int8),
+        severity        Int8 DEFAULT 6,
+        app_name        LowCardinality(String) DEFAULT '',
+        message         String NOT NULL,
+        template_hash   LowCardinality(String) DEFAULT '',
+        tags            String DEFAULT '',
+        noise_score     Int8 DEFAULT 50,
+        extracted_fields Map(String, String) DEFAULT map(),
+        geo_country     LowCardinality(String) DEFAULT '',
+        geo_city        LowCardinality(String) DEFAULT '',
+        INDEX idx_message_bloom message TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 4,
+        INDEX idx_hostname_bloom hostname TYPE bloom_filter(0.01) GRANULARITY 4
+    )
+    ENGINE = MergeTree()
+    PARTITION BY toYYYYMM(timestamp)
+    ORDER BY (tenant_id, severity, source_ip, timestamp)
+    TTL
+        toDateTime(timestamp) + INTERVAL 1  DAY  WHERE severity = 7  AND noise_score >= 80,
+        toDateTime(timestamp) + INTERVAL 2  DAY  WHERE severity = 7,
+        toDateTime(timestamp) + INTERVAL 2  DAY  WHERE severity = 6  AND noise_score >= 80,
+        toDateTime(timestamp) + INTERVAL 3  DAY  WHERE severity = 6,
+        toDateTime(timestamp) + INTERVAL 7  DAY  WHERE severity = 5,
+        toDateTime(timestamp) + INTERVAL 30 DAY  WHERE severity = 4,
+        toDateTime(timestamp) + INTERVAL 90 DAY  WHERE severity IN (0, 1, 2, 3),
+        toDateTime(timestamp) + INTERVAL 180 DAY WHERE noise_score <= 10
+    SETTINGS index_granularity = 8192, ttl_only_drop_parts = 0
+    """,
     """
     CREATE TABLE IF NOT EXISTS ping_checks
     (
