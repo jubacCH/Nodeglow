@@ -534,11 +534,23 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
     if not results:
         return
 
+    # Only hosts assigned to this probe count — the probe names host ids, and
+    # an id of a host it does not check (or of another tenant: the query runs
+    # in the probe's tenant scope) must not get its results written.
+    async with AsyncSessionLocal() as db:
+        assigned = set((await db.execute(
+            select(PingHost.id).where(PingHost.probe_id == probe_id)
+        )).scalars().all())
+
     rows = []
+    dropped = 0
     for r in results:
         try:
             host_id = int(r["host_id"])
         except (KeyError, TypeError, ValueError):
+            continue
+        if host_id not in assigned:
+            dropped += 1
             continue
         ts = r.get("ts")
         if isinstance(ts, str):
@@ -555,6 +567,9 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
             "probe_id": probe_id,
         })
 
+    if dropped:
+        logger.warning("Probe %d reported %d result(s) for hosts not assigned to it; dropped",
+                       probe_id, dropped)
     if rows:
         # Deliberately not wrapped in a bare except: a probe whose results never
         # land must surface as a failure, not as a quiet gap that reads as
@@ -571,6 +586,7 @@ async def _record_probe_results(probe_id: int, results: list) -> None:
         int(r["host_id"]): r.get("detail")
         for r in results
         if isinstance(r, dict) and r.get("host_id") is not None and r.get("detail")
+        and str(r.get("host_id")).isdigit() and int(r["host_id"]) in assigned
     }
     if details:
         async with AsyncSessionLocal() as db:
