@@ -14,6 +14,8 @@ from sqlalchemy import select
 
 from models.base import AsyncSessionLocal
 from models.ping import PingHost
+from models.tenant import DEFAULT_TENANT_ID
+from services.tenancy import system_scope as _system_scope, tenant_scope as _tenant_scope
 
 log = logging.getLogger("nodeglow.syslog")
 
@@ -332,7 +334,9 @@ async def _refresh_host_cache():
         return
     try:
         from database import get_setting
-        async with AsyncSessionLocal() as db:
+        # One listener serves the installation, so its host cache spans every
+        # tenant. (Keyed by IP/hostname only: tenant-keying it is phase 4.)
+        async with AsyncSessionLocal() as db, _system_scope("syslog: host cache"):
             hosts = (await db.execute(select(PingHost))).scalars().all()
             _allowlist_only = (await get_setting(db, "syslog_allowlist_only", "0")) == "1"
         cache: dict[str, int] = {}
@@ -743,7 +747,9 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
     # Load log intelligence template cache
     try:
         from services.log_intelligence import load_template_cache
-        async with AsyncSessionLocal() as db:
+        # The direct listener feeds the default tenant (single-tenant
+        # behaviour, see the spec's "Syslog ingestion"); so does the cache.
+        async with AsyncSessionLocal() as db, _tenant_scope(DEFAULT_TENANT_ID):
             await load_template_cache(db)
     except Exception as e:
         log.warning("Failed to load template cache: %s", e)

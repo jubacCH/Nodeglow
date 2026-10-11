@@ -4,10 +4,13 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from models.base import Base
+from models.tenant import TenantScoped
 
 
-class AuditLog(Base):
+class AuditLog(TenantScoped, Base):
     __tablename__ = "audit_logs"
+    # NULL = installation-level entry (no tenant), visible only in system scope.
+    __tenant_nullable__ = True
     id          = Column(Integer, primary_key=True, autoincrement=True)
     timestamp   = Column(DateTime, default=datetime.utcnow, index=True)
     user_id     = Column(Integer, nullable=True)

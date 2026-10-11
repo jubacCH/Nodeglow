@@ -2,11 +2,12 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Index,
+    Boolean, Column, DateTime, Index,
     Integer, String, Text,
 )
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk
 
 
 class SnmpMib(Base):
@@ -32,14 +33,14 @@ class SnmpOid(Base):
     is_table    = Column(Boolean, default=False)                     # table entry (indexed)
 
 
-class SnmpHostConfig(Base):
+class SnmpHostConfig(TenantScoped, Base):
     """Per-host SNMP configuration – links a PingHost to credentials + OIDs to poll."""
     __tablename__ = "snmp_host_configs"
     id            = Column(Integer, primary_key=True, autoincrement=True)
-    host_id       = Column(Integer, ForeignKey("ping_hosts.id", ondelete="CASCADE"),
-                           nullable=False, unique=True)
-    credential_id = Column(Integer, ForeignKey("credentials.id", ondelete="SET NULL"),
-                           nullable=True)
+    # Host ids are unique across the installation, so "one config per host"
+    # stays a global constraint.
+    host_id       = Column(Integer, nullable=False, unique=True)
+    credential_id = Column(Integer, nullable=True)
     port          = Column(Integer, default=161)
     oids_json       = Column(Text)    # JSON list of OIDs to poll (or null = use defaults)
     thresholds_json = Column(Text)    # JSON {oid_name: {warn: N, crit: N, op: ">"|"<"}, ...}
@@ -48,16 +49,22 @@ class SnmpHostConfig(Base):
     last_poll     = Column(DateTime, nullable=True)
     last_ok       = Column(Boolean, nullable=True)
 
+    __table_args__ = (
+        tenant_fk("host_id", "ping_hosts", name="fk_snmp_host_configs_host", ondelete="CASCADE"),
+        tenant_fk("credential_id", "credentials", name="fk_snmp_host_configs_credential",
+                  ondelete="SET NULL"),
+    )
 
-class SnmpResult(Base):
+
+class SnmpResult(TenantScoped, Base):
     """Time-series SNMP metric data per host."""
     __tablename__ = "snmp_results"
     id        = Column(Integer, primary_key=True, autoincrement=True)
-    host_id   = Column(Integer, ForeignKey("ping_hosts.id", ondelete="CASCADE"),
-                       nullable=False)
+    host_id   = Column(Integer, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     data_json = Column(Text)     # {oid: value, ...} or {name: value, ...}
 
     __table_args__ = (
         Index("ix_snmp_results_host_ts", "host_id", timestamp.desc()),
+        tenant_fk("host_id", "ping_hosts", name="fk_snmp_results_host", ondelete="CASCADE"),
     )

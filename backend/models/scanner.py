@@ -1,13 +1,15 @@
 """Scheduled subnet scan model and scan log."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk, tenant_parent_unique
 
 
-class SubnetScanSchedule(Base):
+class SubnetScanSchedule(TenantScoped, Base):
     __tablename__ = "subnet_scan_schedules"
+    __tenant_index__ = False  # covered by uq_subnet_scan_schedules_tenant_id_id
     id          = Column(Integer, primary_key=True, autoincrement=True)
     name        = Column(String(128), nullable=False)
     cidr        = Column(String(64), nullable=False)
@@ -19,13 +21,20 @@ class SubnetScanSchedule(Base):
     last_total  = Column(Integer, nullable=True)         # total count from last scan
     last_added  = Column(Integer, default=0)             # hosts added in last scan
     created_at  = Column(DateTime, default=datetime.utcnow)
+    # Where discovered hosts land (the tenant's default site when not set).
+    site_id     = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        tenant_parent_unique("subnet_scan_schedules"),
+        tenant_fk("site_id", "sites", name="fk_subnet_scan_schedules_site"),
+    )
 
 
-class SubnetScanLog(Base):
+class SubnetScanLog(TenantScoped, Base):
     """Log entry for each scheduled scan run, including which hosts were added."""
     __tablename__ = "subnet_scan_logs"
     id          = Column(Integer, primary_key=True, autoincrement=True)
-    schedule_id = Column(Integer, ForeignKey("subnet_scan_schedules.id", ondelete="CASCADE"), nullable=False)
+    schedule_id = Column(Integer, nullable=False)
     timestamp   = Column(DateTime, nullable=False, default=datetime.utcnow)
     cidr        = Column(String(64), nullable=False)
     alive       = Column(Integer, nullable=False, default=0)
@@ -36,4 +45,6 @@ class SubnetScanLog(Base):
 
     __table_args__ = (
         Index("ix_scan_log_schedule_ts", "schedule_id", timestamp.desc()),
+        tenant_fk("schedule_id", "subnet_scan_schedules", name="fk_subnet_scan_logs_schedule",
+                  ondelete="CASCADE"),
     )

@@ -2,19 +2,21 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey,
+    Boolean, Column, DateTime,
     Index, Integer, String,
 )
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk
 
 
-class DiscoveredPort(Base):
+class DiscoveredPort(TenantScoped, Base):
     """A port found open on a monitored host."""
     __tablename__ = "discovered_ports"
+    __tenant_index__ = False  # covered by ix_disc_port_host_port
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    host_id = Column(Integer, ForeignKey("ping_hosts.id", ondelete="CASCADE"), nullable=False)
+    host_id = Column(Integer, nullable=False)
     port = Column(Integer, nullable=False)
     protocol = Column(String(8), default="tcp")          # tcp | udp
     service = Column(String(64), nullable=True)           # guessed service name
@@ -31,5 +33,6 @@ class DiscoveredPort(Base):
 
     __table_args__ = (
         Index("ix_disc_port_host", "host_id"),
-        Index("ix_disc_port_host_port", "host_id", "port", unique=True),
+        Index("ix_disc_port_host_port", "tenant_id", "host_id", "port", unique=True),
+        tenant_fk("host_id", "ping_hosts", name="fk_discovered_ports_host", ondelete="CASCADE"),
     )

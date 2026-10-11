@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from models.base import Base
+from models.tenant import TenantScoped
 
 
 # RFC 5424 severity levels
@@ -50,7 +51,7 @@ RETENTION_DAYS = {
 }
 
 
-class SyslogView(Base):
+class SyslogView(TenantScoped, Base):
     """Saved syslog filter views (stored in PostgreSQL)."""
     __tablename__ = "syslog_views"
 

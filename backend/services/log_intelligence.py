@@ -23,6 +23,7 @@ from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
 from services._stats import wilson_lower_bound
 from services.clickhouse_client import query as ch_query
 from services.predictor_config import get_blacklist_regexes, is_template_blacklisted
+from services.tenancy import session_tenant_id
 
 log = logging.getLogger("nodeglow.intelligence")
 
@@ -466,11 +467,15 @@ async def _write_template_batch(
       run) already inserted just has its count added — no lookup needed.
     * known templates: one executemany UPDATE per chunk.
     """
+    # ORM-enabled INSERTs and Core UPDATEs bypass the session's tenant stamping
+    # and filter, so the tenant goes in explicitly.
+    tenant_id = session_tenant_id(db)
     if new_tpls:
         insert, dialect = _dialect_insert(db)
         greatest = func.greatest if dialect == "postgresql" else func.max
         rows = [
             {
+                "tenant_id": tenant_id,
                 "template_hash": h,
                 "template": template,
                 "example": example,
@@ -489,7 +494,7 @@ async def _write_template_batch(
         for chunk in _chunks(rows, _UPSERT_CHUNK):
             stmt = insert(LogTemplate).values(chunk)
             stmt = stmt.on_conflict_do_update(
-                index_elements=["template_hash"],
+                index_elements=["tenant_id", "template_hash"],
                 set_={
                     "count": LogTemplate.count + stmt.excluded.count,
                     "last_seen": greatest(LogTemplate.last_seen, stmt.excluded.last_seen),
@@ -509,7 +514,7 @@ async def _write_template_batch(
         tbl = LogTemplate.__table__
         stmt = (
             update(tbl)
-            .where(tbl.c.template_hash == bindparam("b_hash"))
+            .where(tbl.c.tenant_id == tenant_id, tbl.c.template_hash == bindparam("b_hash"))
             .values(count=tbl.c.count + bindparam("b_count"), last_seen=bindparam("b_now"))
         )
         for chunk in _chunks(known, _UPSERT_CHUNK):
@@ -632,10 +637,12 @@ async def _upsert_baselines(db: AsyncSession, values: list[dict]) -> None:
     if not values:
         return
     insert, _ = _dialect_insert(db)
+    tenant_id = session_tenant_id(db)  # ORM INSERT: not stamped by the session
+    values = [{**v, "tenant_id": tenant_id} for v in values]
     for chunk in _chunks(values, _UPSERT_CHUNK):
         stmt = insert(HostBaseline).values(chunk)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["host_key", "hour_of_day", "day_of_week"],
+            index_elements=["tenant_id", "host_key", "hour_of_day", "day_of_week"],
             set_={
                 "avg_rate": stmt.excluded.avg_rate,
                 "std_rate": stmt.excluded.std_rate,

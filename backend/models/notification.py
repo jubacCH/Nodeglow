@@ -4,9 +4,10 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 
 from models.base import Base
+from models.tenant import TenantScoped
 
 
-class NotificationLog(Base):
+class NotificationLog(TenantScoped, Base):
     __tablename__ = "notification_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)

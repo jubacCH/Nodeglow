@@ -1,14 +1,16 @@
 """Incident and IncidentEvent models for the correlation engine."""
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from models.base import Base
+from models.tenant import TenantScoped, tenant_fk, tenant_parent_unique
 
 
-class Incident(Base):
+class Incident(TenantScoped, Base):
     __tablename__ = "incidents"
+    __tenant_index__ = False  # covered by uq_incidents_tenant_id_id
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     rule = Column(String(64), nullable=False)            # rule that created it
@@ -39,18 +41,19 @@ class Incident(Base):
                           cascade="all, delete-orphan", order_by="IncidentEvent.timestamp")
 
     __table_args__ = (
-        Index("ix_incident_status", "status"),
-        Index("ix_incident_rule_hash", "rule", "host_ids_hash"),
+        Index("ix_incident_status", "tenant_id", "status"),
+        Index("ix_incident_rule_hash", "tenant_id", "rule", "host_ids_hash"),
         Index("ix_incident_updated", "updated_at"),
         Index("ix_incident_feedback", "feedback"),
+        tenant_parent_unique("incidents"),
     )
 
 
-class IncidentEvent(Base):
+class IncidentEvent(TenantScoped, Base):
     __tablename__ = "incident_events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    incident_id = Column(Integer, ForeignKey("incidents.id"), nullable=False)
+    incident_id = Column(Integer, nullable=False)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
     event_type = Column(String(32), nullable=False)  # created | host_down | host_up | syslog_error | integration_error | resolved | acknowledged
     summary = Column(Text, nullable=False)
@@ -61,4 +64,5 @@ class IncidentEvent(Base):
     __table_args__ = (
         Index("ix_incident_event_ts", "incident_id", timestamp.desc()),
         Index("ix_incident_event_type_ts", "incident_id", "event_type", timestamp.desc()),
+        tenant_fk("incident_id", "incidents", name="fk_incident_events_incident"),
     )
