@@ -996,8 +996,12 @@ Migration `042`; code in `services/settings_registry.py`,
   for the default tenant only (a pre-opt-in install has no other), the
   channel-secret encryption walks every tenant's rows.
 - Backups export `tenant_memberships`, `tenant_settings`,
-  `user_preferences`; restoring a pre-042 backup moves its tenant keys into
-  the importing tenant (`adopt_legacy_tenant_settings`).
+  `user_preferences`. Restoring a pre-042 backup replaces the tenant's
+  settings with the backup's (`adopt_legacy_tenant_settings(replace=True)`);
+  a pre-043 backup lets `users.role` win over memberships and decides
+  `is_operator` (`memberships.sync_from_users_role`). The sequence reset of
+  the restore now runs only for tables with an `id`, in a savepoint — on
+  PostgreSQL the failing `setval` on `settings` aborted the transaction.
 - Settings API shapes are unchanged. `site_name` also renames the tenant.
 
 Deviations / not done:
@@ -1016,8 +1020,10 @@ Deviations / not done:
 Migration `043`; code in `services/memberships.py`, `services/tenancy.py`,
 `services/audit.py`, `services/websocket.py`, `notifications.py`.
 
-- **Memberships are the source of truth.** `043` backfills memberships for
-  users created after 039; the setup wizard, the users API (and its form
+- **Memberships are the source of truth.** `043` first re-syncs tenant 1's
+  memberships from `users.role` (between 039 and 043 only that column was
+  written, so 039's copies were stale where a role had changed), then
+  backfills memberships for users created after 039; the setup wizard, the users API (and its form
   twins), LDAP login and backup restore write them. `users.role` mirrors
   the default tenant's role for one release (rollback; `043` downgrade
   refreshes it from the memberships) and is no longer read for
@@ -1044,9 +1050,11 @@ Migration `043`; code in `services/memberships.py`, `services/tenancy.py`,
 - **Operator**: `users.is_operator` (043: every admin; setup: the first
   user). Installation settings (LDAP, GeoIP, syslog port, agent URL,
   updates, app logs, the ee licence) require `is_operator()`.
-  *Deviation:* `SingleTenancy.is_operator` is "flag **or** admin of the
-  request's tenant" — in the core the one tenant's admin administers the
-  installation, so nobody loses a right; an ee backend must use the flag.
+  In the core the operator **is** the admin of the default tenant
+  (`SingleTenancy.is_operator` = role in tenant 1 == admin), so a demoted
+  admin loses the rights with the role; `users.is_operator` is kept equal
+  to that by every role change (`memberships.grant`) for an ee backend,
+  which decides by the flag.
 - **API keys / tokens**: a key's tenant decides; a header naming another
   tenant → 404. API keys, agent tokens and install tokens of a tenant that
   is not active stop working. The shared enrolment key is refused once
@@ -1084,6 +1092,15 @@ Migration `043`; code in `services/memberships.py`, `services/tenancy.py`,
   the host cache stayed empty since phase 2 (no host attribution, no
   allowlist).
 
+Long-lived streams (`/ws/live`, the syslog live tail) re-run the
+authentication and tenant resolution every `STREAM_REVALIDATE_SECONDS`
+(30 s, `tenancy.revalidate_access`) and end when the session is gone, the
+membership revoked, the role changed or the session switched tenant. The
+per-tenant topology and dashboard TTL caches are bounded LRUs (512 / 2048
+entries) instead of "clear when more than 8 / 32". The ee daily AI summary
+hook reads every active tenant's hour in system scope (it read a tenant
+key without a tenant and the job was never scheduled).
+
 Not keyed, on purpose: the rDNS cache (what this installation's resolver
 says about an address — no tenant data; the host match is per tenant), the
 per-IP syslog rate limiter (listener-level; per-tenant buckets are phase
@@ -1104,7 +1121,8 @@ memberships joined with `tenants`); unchanged statement counts otherwise.
 
 ### Open items for phases 5–8
 
-- **Phase 5 (scheduler):** per-tenant cadence (`ping_interval`,
+- **Phase 5 (scheduler):** the daily AI summary fires at every tenant's
+  hour and relies on its 20 h duplicate protection; per-tenant cadence (`ping_interval`,
   `proxmox_interval`, digest day/hour, daily AI summary hour) instead of
   "fastest / first tenant"; installation floors and retention caps; the
   fair-share queue and the global data-plane pass; a `tenant` label on job
@@ -1131,6 +1149,8 @@ memberships joined with `tenants`); unchanged statement counts otherwise.
   the context; a task started in `system_scope` that writes must set its
   tenant itself (notifications and WebSocket broadcasts now take the
   tenant explicitly).
+- WebSocket/SSE revocation is polled (≤ 30 s), not pushed; an ee tenant
+  switcher or membership revoke could push a close via the hub.
 - Later / ee: drop `users.role` after one release; manage `is_operator`
   (no API yet — set by 043 and the setup wizard only); the AI provider
   settings (installation keys) are still saved through the tenant admin's
