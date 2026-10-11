@@ -344,6 +344,44 @@ def test_digest_mismatch_after_pull_fails_before_migrate(tmp_path):
     assert iu.read_env_value(os.path.join(ctx.repo_path, ".env"), "NODEGLOW_VERSION") == "1.0.0"
 
 
+class MultiArchDocker(Docker):
+    """Release images are manifest lists (linux/amd64 + linux/arm64).
+
+    The tag points at the list; release.yml signs the list digest
+    (``cosign sign --recursive``), so ``cosign verify <tag>`` reports the list
+    digest, possibly once per signature (a re-run signs again). A pull by tag
+    records that same list digest in RepoDigests, not the platform manifest.
+    """
+
+    PLATFORM_DIGEST = "sha256:" + "9" * 64
+
+    def __call__(self, argv, timeout=60, cwd=None):
+        if argv[0] == "cosign" and not self.cosign_rc:
+            self.calls.append(argv)
+            repo = argv[2].rsplit("/", 1)[1].split(":")[0]
+            sig = {"critical": {"image": {"docker-manifest-digest": DIGESTS[repo]}}}
+            return CmdResult(0, json.dumps([sig, sig]), "")
+        return super().__call__(argv, timeout, cwd)
+
+
+def test_multi_arch_manifest_list_digest_is_verified_and_pinned(tmp_path):
+    docker = MultiArchDocker()
+    ctx = make_ctx(tmp_path, docker)
+    state = run_update(ctx, steps=steps())
+    assert state.status == "done", state.error
+    assert ctx.plan["digests"] == {f"{REG}/{repo}:1.1.0": digest for repo, digest in DIGESTS.items()}
+
+
+def test_platform_manifest_digest_does_not_satisfy_the_list_signature(tmp_path):
+    # Only the list digest the tag pointed to at verify time counts.
+    docker = MultiArchDocker(pull_digest_override=MultiArchDocker.PLATFORM_DIGEST)
+    ctx = make_ctx(tmp_path, docker)
+    state = run_update(ctx, steps=steps())
+    assert state.status == "failed"
+    assert state.by_name("pull").status == "failed"
+    assert "does not match the verified digest" in state.error
+
+
 def test_updater_image_without_deploy_files_is_refused(tmp_path):
     ctx = make_ctx(tmp_path, Docker(deploy_files={}))
     state = run_update(ctx, steps=steps())

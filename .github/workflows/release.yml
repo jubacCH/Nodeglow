@@ -4,21 +4,36 @@ name: Release
 #
 #   1. prepare  VERSION must equal the tag; release notes from CHANGELOG.md
 #   2. test     the full CI workflow, against the tagged commit
-#   3. images   per image: Trivy gate (CRITICAL, fixable) on an amd64 build,
-#               then a multi-arch push to GHCR with SBOM + provenance,
-#               cosign keyless signature and a GitHub build attestation
-#   4. bundle   offline bundle for air-gapped installs (amd64, enterprise image)
-#   5. release  GitHub Release with notes, agent binaries, compose file,
+#   3. build    per image and platform, on a native runner (amd64 on
+#               ubuntu-24.04, arm64 on ubuntu-24.04-arm, no QEMU): Trivy gate
+#               (CRITICAL, fixable), then a push by digest with SBOM + provenance
+#   4. images   per image: merge the platform digests into one manifest list
+#               with the version tags, cosign keyless signature (recursive) and
+#               a GitHub build attestation on the manifest list digest
+#   5. bundle   offline bundle for air-gapped installs (amd64, enterprise image)
+#   6. release  GitHub Release with notes, agent binaries, compose file,
 #               install.sh, deploy archive, bundle and cosign-signed SHA256SUMS
 #
 # Cut a release with scripts/release.sh X.Y.Z, then push the tag. Manual runs
 # (workflow_dispatch) must be started on the tag: "Use workflow from → Tags".
+#
+# Dry run (workflow_dispatch with dry_run = true, on any branch): runs CI,
+# builds and pushes every platform image and the manifest lists, but only under
+# the throwaway tag dryrun-<run id>. No version tags move, no bundle, no GitHub
+# Release; the VERSION/tag check is skipped. Dry-run signatures carry a branch
+# identity, which the updater and install.sh never accept.
+#
 # See docs/INSTALL.md, "For maintainers".
 
 on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build and push all platform images as dryrun-<run id> only (no version tags, no release)"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -28,10 +43,6 @@ concurrency:
 
 env:
   IMAGE_PREFIX: ghcr.io/jubacch
-  # amd64 only for now: the Next.js build under QEMU emulation did not finish
-  # within the 6 h job limit (v2.0.0-rc.5). arm64 returns with native arm
-  # runners (ubuntu-24.04-arm) and a per-platform build + manifest merge.
-  PLATFORMS: linux/amd64
   # Pinned like in security.yml; bump deliberately.
   TRIVY_IMAGE: aquasec/trivy:0.58.1
   COSIGN_VERSION: v3.1.3
@@ -47,6 +58,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       minor: ${{ steps.meta.outputs.minor }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
 
@@ -55,8 +67,23 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -eu
+          file_version=$(sed -n '/^[[:space:]]*[^#[:space:]]/{p;q;}' VERSION | tr -d '[:space:]')
+          if [ "$DRY_RUN" = "true" ]; then
+            # Images only, under a throwaway tag; the version is what VERSION says.
+            echo "::notice::Dry run on $REF_TYPE $TAG: images go to dryrun-$RUN_ID only, no release"
+            {
+              echo "version=$file_version"
+              echo "tag=dryrun-$RUN_ID"
+              echo "minor="
+              echo "prerelease=true"
+              echo "dry_run=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$REF_TYPE" != "tag" ]; then
             echo "::error::Run this workflow on a tag (Use workflow from → Tags → vX.Y.Z), not on $REF_TYPE $TAG"
             exit 1
@@ -66,7 +93,6 @@ jobs:
             exit 1
           fi
           version="${TAG#v}"
-          file_version=$(sed -n '/^[[:space:]]*[^#[:space:]]/{p;q;}' VERSION | tr -d '[:space:]')
           if [ "$file_version" != "$version" ]; then
             echo "::error file=VERSION::VERSION says '$file_version' but the tag is $TAG — use scripts/release.sh"
             exit 1
@@ -80,9 +106,11 @@ jobs:
             echo "tag=$TAG"
             echo "minor=$(printf '%s' "$version" | cut -d. -f1,2)"
             echo "prerelease=$prerelease"
+            echo "dry_run=false"
           } >> "$GITHUB_OUTPUT"
 
       - name: Release notes from CHANGELOG.md
+        if: steps.meta.outputs.dry_run != 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
@@ -99,6 +127,7 @@ jobs:
           cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
+        if: steps.meta.outputs.dry_run != 'true'
         with:
           name: release-notes
           path: release-notes.md
@@ -111,20 +140,28 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci.yml
 
-  images:
-    name: Image ${{ matrix.name }}
+  # One job per image and platform, each on a native runner. The result is an
+  # untagged image (platform manifest + its SBOM/provenance) pushed by digest;
+  # the images job below merges and tags it.
+  build:
+    name: Build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
     needs: [prepare, test]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
-      packages: write       # push to GHCR
-      id-token: write       # cosign keyless + attestation signing (OIDC)
-      attestations: write   # GitHub build provenance attestation
+      packages: write       # push the platform image by digest
     strategy:
       fail-fast: true
       matrix:
-        include:
+        platform:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+        image:
           # Default backend: includes ee/ (Nodeglow Enterprise License). The
           # enterprise features are inactive without a valid license; the rest
           # is the AGPL core. See docs/INSTALL.md, "Editions".
@@ -159,7 +196,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Stage deploy files for the updater image
-        if: matrix.name == 'updater'
+        if: matrix.image.name == 'updater'
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
@@ -177,8 +214,6 @@ jobs:
             echo "commit=$(git rev-parse --short=12 HEAD)"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v3
-
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -188,47 +223,50 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Image tags and labels
+      - name: Image labels and annotations
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
-          flavor: latest=false
-          tags: |
-            type=raw,value=${{ needs.prepare.outputs.version }}
-            type=raw,value=${{ needs.prepare.outputs.minor }},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
-            type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image.image }}
           labels: |
-            org.opencontainers.image.title=${{ matrix.image }}
-            org.opencontainers.image.description=${{ matrix.description }}
-            org.opencontainers.image.licenses=${{ matrix.licenses }}
+            org.opencontainers.image.title=${{ matrix.image.image }}
+            org.opencontainers.image.description=${{ matrix.image.description }}
+            org.opencontainers.image.licenses=${{ matrix.image.licenses }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.vendor=Nodeglow
+          # Mirrors the labels; without it the action annotates with repository defaults.
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.image.image }}
+            org.opencontainers.image.description=${{ matrix.image.description }}
+            org.opencontainers.image.licenses=${{ matrix.image.licenses }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.vendor=Nodeglow
 
-      # Gate first: an amd64 build loaded into the runner's Docker for Trivy.
-      # Nothing is pushed if it fails. The cache makes the push build cheap.
-      - name: Build for scanning (amd64)
+      # Gate first: a build for this runner's own platform, loaded into its
+      # Docker for Trivy. Nothing is pushed if it fails. The cache makes the
+      # push build below cheap.
+      - name: Build for scanning (${{ matrix.platform.arch }})
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          build-contexts: ${{ matrix.build-contexts }}
-          platforms: linux/amd64
+          context: ${{ matrix.image.context }}
+          build-contexts: ${{ matrix.image.build-contexts }}
+          platforms: ${{ matrix.platform.platform }}
           load: true
           push: false
-          tags: nodeglow-scan:${{ matrix.name }}
+          tags: nodeglow-scan:${{ matrix.image.name }}
           build-args: |
             APP_VERSION=${{ needs.prepare.outputs.version }}
             GIT_COMMIT=${{ steps.build.outputs.commit }}
             BUILD_DATE=${{ steps.build.outputs.date }}
             BUNDLE_OOKLA=0
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
 
       # Same scanner and pin as security.yml, but blocking and CRITICAL only.
       # Accepted findings go into .trivyignore, each with a reason.
       - name: Trivy gate (CRITICAL, fixable)
         env:
-          IMAGE: nodeglow-scan:${{ matrix.name }}
+          IMAGE: nodeglow-scan:${{ matrix.image.name }}
         run: |
           set -eu
           ignore=""
@@ -242,15 +280,14 @@ jobs:
             --scanners vuln $ignore \
             "$IMAGE"
 
-      - name: Build and push (${{ env.PLATFORMS }})
+      - name: Build and push by digest (${{ matrix.platform.platform }})
         id: push
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          build-contexts: ${{ matrix.build-contexts }}
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          context: ${{ matrix.image.context }}
+          build-contexts: ${{ matrix.image.build-contexts }}
+          platforms: ${{ matrix.platform.platform }}
+          outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.image.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           build-args: |
@@ -260,8 +297,144 @@ jobs:
             BUNDLE_OOKLA=0
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          PLATFORM: ${{ matrix.platform.platform }}
+        run: |
+          set -eu
+          case "$DIGEST" in
+            sha256:*) ;;
+            *) echo "::error::the push reported no digest"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+          echo "$PLATFORM: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.platform.arch }}-${{ matrix.image.name }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Per image: one manifest list from the platform digests, tagged, signed and
+  # attested. The tag points at this list; its digest is what cosign signs and
+  # what the updater and install.sh verify and pin.
+  images:
+    name: Image ${{ matrix.name }}
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write       # push the manifest list, signatures, attestations
+      id-token: write       # cosign keyless + attestation signing (OIDC)
+      attestations: write   # GitHub build provenance attestation
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: backend
+            image: nodeglow-backend
+            licenses: AGPL-3.0-only AND LicenseRef-Nodeglow-Enterprise
+            description: Nodeglow backend (core + enterprise features, license-gated)
+          - name: backend-community
+            image: nodeglow-backend-community
+            licenses: AGPL-3.0-only
+            description: Nodeglow backend, community edition (AGPL only, no ee/)
+          - name: frontend
+            image: nodeglow-frontend
+            licenses: AGPL-3.0-only
+            description: Nodeglow web UI
+          - name: updater
+            image: nodeglow-updater
+            licenses: AGPL-3.0-only
+            description: Nodeglow update and backup sidecar
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          # Arch first: digests-backend-* would also match backend-community.
+          pattern: digests-*-${{ matrix.name }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and annotations
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.tag }},enable=${{ needs.prepare.outputs.dry_run == 'true' }}
+            type=raw,value=${{ needs.prepare.outputs.version }},enable=${{ needs.prepare.outputs.dry_run != 'true' }}
+            type=raw,value=${{ needs.prepare.outputs.minor }},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+          # Index annotations; without this input the action would annotate
+          # the list with the repository defaults.
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=${{ matrix.licenses }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.vendor=Nodeglow
+
+      - name: Create manifest list
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          count=$(find . -maxdepth 1 -type f | wc -l)
+          if [ "$count" -ne 2 ]; then
+            echo "::error::expected 2 platform digests for $IMAGE, got $count"
+            exit 1
+          fi
+          args=()
+          while IFS= read -r tag; do args+=(--tag "$tag"); done \
+            < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          while IFS= read -r annotation; do args+=(--annotation "$annotation"); done \
+            < <(jq -r '.annotations[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          for digest in *; do args+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${args[@]}"
+
+      - name: Inspect manifest list
+        id: list
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          TAG: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$TAG"
+          digest=$(docker buildx imagetools inspect "$TAG" --format '{{json .Manifest}}' | jq -r .digest)
+          platforms=$(docker buildx imagetools inspect "$TAG" --raw \
+            | jq -r '.manifests[] | select(.platform.os != "unknown") | .platform.os + "/" + .platform.architecture' \
+            | sort | tr '\n' ' ')
+          echo "manifest list $TAG → $digest, platforms: $platforms"
+          for want in linux/amd64 linux/arm64; do
+            case " $platforms" in
+              *" $want "*) ;;
+              *) echo "::error::$TAG has no $want manifest"; exit 1 ;;
+            esac
+          done
+          case "$digest" in
+            sha256:*) echo "digest=$digest" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::no digest for $TAG"; exit 1 ;;
+          esac
 
       - uses: sigstore/cosign-installer@v4.1.2
         with:
@@ -269,37 +442,53 @@ jobs:
 
       # Keyless: the certificate binds the signature to this workflow file and
       # the tag ref (identity .../release.yml@refs/tags/vX.Y.Z). The updater and
-      # install.sh verify exactly that identity.
+      # install.sh verify exactly that identity, on the manifest list the tag
+      # points to; --recursive also signs each platform manifest.
+      # Retried: when Rekor answers slowly, cosign's own HTTP retry of an entry
+      # that did get logged fails with 409 createLogEntryConflict. A new
+      # attempt uses fresh ephemeral keys, so its entries never conflict.
       - name: Sign with cosign
         env:
-          REF: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@${{ steps.push.outputs.digest }}
-        run: cosign sign --yes --recursive "$REF"
+          REF: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@${{ steps.list.outputs.digest }}
+        run: |
+          set -eu
+          for attempt in 1 2 3; do
+            if cosign sign --yes --recursive "$REF"; then exit 0; fi
+            echo "::warning::cosign sign attempt $attempt failed"
+            sleep $((attempt * 15))
+          done
+          echo "::error::cosign sign failed 3 times for $REF"
+          exit 1
 
       - name: Build provenance attestation
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.list.outputs.digest }}
           push-to-registry: true
 
       - name: Summary
         env:
+          DIGEST: ${{ steps.list.outputs.digest }}
           IMAGE: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
-          DIGEST: ${{ steps.push.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           {
             echo "### $IMAGE"
             echo '```'
             echo "$TAGS"
-            echo "digest: $DIGEST"
+            echo "digest: $DIGEST (linux/amd64 + linux/arm64)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Release only: a dry run has no release tag whose signatures could be
+  # verified for the bundle.
   bundle:
     name: Offline bundle
     needs: [prepare, images]
+    if: needs.prepare.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: read
@@ -358,6 +547,7 @@ jobs:
   release:
     name: GitHub Release
     needs: [prepare, images, bundle]
+    if: needs.prepare.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the release and upload assets
@@ -427,14 +617,14 @@ jobs:
             echo "sudo sh install.sh --version $VERSION"
             echo '```'
             echo
-            echo "Images (linux/amd64, cosign-signed, SBOM + provenance):"
+            echo "Images (linux/amd64 + linux/arm64, cosign-signed, SBOM + provenance):"
             echo
             for img in nodeglow-backend nodeglow-backend-community nodeglow-frontend nodeglow-updater; do
               echo "- \`$IMAGE_PREFIX/$img:$VERSION\`"
             done
             echo
             if [ "$BUNDLED" = "true" ]; then
-              echo "Air-gapped: \`nodeglow-$VERSION-offline-amd64.tar.gz\` → \`sh install.sh --offline <bundle>\`."
+              echo "Air-gapped: \`nodeglow-$VERSION-offline-amd64.tar.gz\` → \`sh install.sh --offline <bundle>\`; for arm64 build it with \`scripts/make-offline-bundle.sh --version $VERSION --platform linux/arm64\`."
             else
               echo "Air-gapped: build the offline bundle with \`scripts/make-offline-bundle.sh --version $VERSION\`."
             fi
