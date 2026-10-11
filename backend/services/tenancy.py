@@ -549,9 +549,21 @@ def _on_orm_execute(state) -> None:
         return  # text() / Core: out of scope for this layer (RLS, phase 7)
     if state.is_column_load:
         return  # refreshing attributes of an object already loaded by identity
+    ctx = _effective_context(state.session)
+    if not (ctx is not None and ctx.system):
+        if state.is_from_statement or _is_from_statement(state):
+            # select(Model).from_statement(text(...)): the SQL is the caller's,
+            # nothing can be added to it. Fail closed unless the caller states
+            # that its SQL carries the tenant predicate itself.
+            if _from_statement_tenant_entities(state.statement) and \
+                    not state.execution_options.get("nodeglow_tenant_filtered"):
+                raise TenantContextError(
+                    "from_statement() on a tenant-owned model is not tenant-filtered — add the "
+                    "tenant predicate to the SQL and pass execution_options(nodeglow_tenant_filtered=True)"
+                )
+            return
     if not (state.is_select or state.is_update or state.is_delete or state.is_insert):
         return
-    ctx = _effective_context(state.session)
     if ctx is not None and ctx.system:
         if not state.is_select:
             names = [n for n in _touched_tenant_tables(state.statement) if n != "audit_logs"]
@@ -560,14 +572,15 @@ def _on_orm_execute(state) -> None:
                 _audit_system_write(state.session, ctx, set(names), {None})
         return
     if state.is_insert:
-        # ORM-enabled insert(Model).values(...) bypasses before_flush; the
-        # caller has to put tenant_id into the rows (from current_tenant_id()).
+        # ORM-enabled insert(Model).values(...) bypasses before_flush.
+        names = _touched_tenant_tables(state.statement)
+        if not names:
+            return
         if ctx is None:
-            names = _touched_tenant_tables(state.statement)
-            if names:
-                raise TenantContextError(
-                    f"INSERT into tenant-owned table(s) {', '.join(names)} without tenant context"
-                )
+            raise TenantContextError(
+                f"INSERT into tenant-owned table(s) {', '.join(names)} without tenant context"
+            )
+        _check_orm_insert(state, ctx.tenant_id, names)
         return
     if ctx is None:
         names = _touched_tenant_tables(state.statement)
@@ -578,6 +591,19 @@ def _on_orm_execute(state) -> None:
             )
         return
     tenant_id = ctx.tenant_id
+    if state.is_update:
+        if _update_sets_tenant(state):
+            raise TenantContextError(
+                "an UPDATE cannot change tenant_id outside system scope (rows would move tenant)"
+            )
+        if state.is_executemany:
+            # session.execute(update(Model), [{"id": ...}, ...]) — "bulk UPDATE
+            # by primary key" — is not covered by with_loader_criteria: every
+            # row named by id would be written, whichever tenant owns it.
+            raise TenantContextError(
+                "ORM bulk UPDATE by primary key is not tenant-filtered — use a Core update "
+                "with an explicit tenant_id predicate"
+            )
     state.statement = state.statement.options(
         with_loader_criteria(
             TenantScoped,
@@ -585,6 +611,82 @@ def _on_orm_execute(state) -> None:
             include_aliases=True,
         )
     )
+
+
+def _bind_value(v):
+    return getattr(v, "value", v)
+
+
+def _row_keys(row: dict) -> dict:
+    return {getattr(k, "key", k): v for k, v in row.items()}
+
+
+def _update_sets_tenant(state) -> bool:
+    stmt = state.statement
+    keys = {getattr(k, "key", k) for k in (getattr(stmt, "_values", None) or {})}
+    keys |= {getattr(k, "key", k) for k, _ in (getattr(stmt, "_ordered_values", None) or ())}
+    params = state.parameters
+    rows = params if isinstance(params, list) else ([params] if isinstance(params, dict) else [])
+    for row in rows:
+        keys |= set(_row_keys(row))
+    return "tenant_id" in keys
+
+
+def _check_orm_insert(state, tenant_id: int, names: list[str]) -> None:
+    """ORM INSERT in a tenant scope: every row must belong to the tenant.
+
+    ``tenant_id`` missing in execute-time parameter rows is filled in; a
+    different tenant anywhere is refused, as is ``insert().from_select()``
+    (its rows are whatever the SELECT returns, unfiltered).
+    """
+    stmt = state.statement
+    if getattr(stmt, "select", None) is not None:
+        raise TenantContextError(
+            f"INSERT ... FROM SELECT into {', '.join(names)} is not tenant-filtered outside system scope"
+        )
+
+    def check(rows: list[dict]) -> None:
+        for row in rows:
+            row = _row_keys(row)
+            if "tenant_id" in row and _bind_value(row["tenant_id"]) != tenant_id:
+                raise TenantContextError(
+                    f"INSERT into {', '.join(names)} carries tenant {_bind_value(row['tenant_id'])!r}, "
+                    f"context is tenant {tenant_id}"
+                )
+
+    embedded: list[dict] = []
+    if getattr(stmt, "_values", None):
+        embedded.append(dict(stmt._values))
+    for group in getattr(stmt, "_multi_values", None) or ():
+        embedded.extend(group)
+    check(embedded)
+    if embedded and any("tenant_id" not in _row_keys(r) for r in embedded):
+        if getattr(stmt, "_values", None) and not getattr(stmt, "_multi_values", None):
+            state.statement = stmt.values(tenant_id=tenant_id)
+        else:
+            raise TenantContextError(
+                f"multi-row INSERT into {', '.join(names)} needs tenant_id in every row"
+            )
+    params = state.parameters
+    rows = params if isinstance(params, list) else ([params] if isinstance(params, dict) else [])
+    check(rows)
+    for row in rows:
+        if isinstance(row, dict) and "tenant_id" not in _row_keys(row) and not embedded:
+            row["tenant_id"] = tenant_id
+
+
+def _is_from_statement(state) -> bool:
+    from sqlalchemy.orm.context import FromStatement
+
+    return isinstance(state.statement, FromStatement)
+
+
+def _from_statement_tenant_entities(stmt) -> bool:
+    tables = tenant_tables()
+    for col in getattr(stmt, "_raw_columns", None) or ():
+        if col in tables or getattr(col, "table", None) in tables:
+            return True
+    return False
 
 
 def _system_writes(session: Session) -> tuple[set[str], set[int | None]]:
@@ -635,13 +737,29 @@ def _before_flush(session: Session, flush_context, instances) -> None:
             obj.site_id = backend().default_site_id(tid)
     if ctx is not None and ctx.system:
         return
-    for obj in session.dirty:
-        if isinstance(obj, TenantScoped):
-            hist = _tenant_history(obj)
-            if hist is not None and hist.deleted and hist.deleted[0] is not None:
-                raise TenantContextError(
-                    f"{type(obj).__name__} cannot move between tenants outside system scope"
-                )
+    for obj in list(session.dirty) + list(session.deleted):
+        if not isinstance(obj, TenantScoped):
+            continue
+        insp = sa_inspect(obj)
+        if insp.persistent and insp.attrs.tenant_id.history.has_changes():
+            # Also when the old value was never loaded (expired/deferred):
+            # outside system scope an existing row never changes tenant.
+            raise TenantContextError(
+                f"{type(obj).__name__} cannot move between tenants outside system scope"
+            )
+        if obj in session.dirty and not session.is_modified(obj, include_collections=False):
+            continue
+        if ctx is None:
+            raise TenantContextError(
+                f"changing a {type(obj).__name__} without tenant context"
+            )
+        tid = obj.tenant_id  # loads it if expired (flush runs in the session's greenlet)
+        if tid is not None and tid != ctx.tenant_id:
+            # Loaded in another scope (system scope, another tenant) and
+            # changed or deleted here.
+            raise TenantContextError(
+                f"{type(obj).__name__} of tenant {tid} changed in the context of tenant {ctx.tenant_id}"
+            )
 
 
 def _tenant_history(obj):
@@ -652,6 +770,17 @@ def _tenant_history(obj):
 _installed = False
 
 
+def _on_pending(session: Session, obj) -> None:
+    """Stamp the tenant when an object is added, not when it is flushed: a
+    row created for tenant A and flushed while B's context is active must be
+    refused (before_flush compares), not land in B."""
+    if not isinstance(obj, TenantScoped) or obj.tenant_id is not None:
+        return
+    ctx = _effective_context(session)
+    if ctx is not None and not ctx.system and ctx.tenant_id is not None:
+        obj.tenant_id = ctx.tenant_id
+
+
 def install() -> None:
     """Install the filter on every SQLAlchemy session. Idempotent."""
     global _installed
@@ -659,4 +788,5 @@ def install() -> None:
         return
     event.listen(Session, "do_orm_execute", _on_orm_execute)
     event.listen(Session, "before_flush", _before_flush)
+    event.listen(Session, "transient_to_pending", _on_pending)
     _installed = True

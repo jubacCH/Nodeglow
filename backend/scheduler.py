@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import delete, select
 
@@ -32,7 +33,47 @@ AUTHORITATIVE_ADDRESS_SOURCES = frozenset({"proxmox", "unifi"})
 # cron jobs get an hour of grace where they are registered.
 JOB_DEFAULTS = {"coalesce": True, "max_instances": 1, "misfire_grace_time": 60}
 CRON_MISFIRE_GRACE_SECONDS = 3600
-scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS)
+class ContextFreeExecutor(AsyncIOExecutor):
+    """Runs every job in an **empty** ``contextvars`` context.
+
+    APScheduler wakes its job loop through the event loop, which carries the
+    context of whoever last added or rescheduled a job — typically a request,
+    with that request's tenant context set. Jobs then ran inside that one
+    tenant's scope: ``per_tenant_job`` saw "already in a tenant" and served
+    only it, and nothing else ran. A job must decide its own scope
+    (``per_tenant_job`` / ``system_job``), so it starts from nothing.
+    """
+
+    def _do_submit_job(self, job, run_times):
+        import contextvars
+        import sys
+
+        from apscheduler.executors.base import run_coroutine_job, run_job
+        from apscheduler.util import iscoroutinefunction_partial
+
+        def callback(f):
+            self._pending_futures.discard(f)
+            try:
+                events = f.result()
+            except BaseException:
+                self._run_job_error(job.id, *sys.exc_info()[1:])
+            else:
+                self._run_job_success(job.id, events)
+
+        empty = contextvars.Context()
+        if iscoroutinefunction_partial(job.func):
+            coro = run_coroutine_job(job, job._jobstore_alias, run_times, self._logger.name)
+            f = self._eventloop.create_task(coro, context=empty)
+        else:
+            f = self._eventloop.run_in_executor(
+                None, empty.run, run_job, job, job._jobstore_alias, run_times, self._logger.name,
+            )
+        f.add_done_callback(callback)
+        self._pending_futures.add(f)
+
+
+scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS,
+                             executors={"default": ContextFreeExecutor()})
 
 # ── Scheduler leadership (multi-worker / HA safety) ──────────────────────────
 # The core runs single-instance: this process is always the leader and runs
