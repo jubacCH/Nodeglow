@@ -34,8 +34,9 @@ updates:
       npm-minor-patch:
         update-types: [minor, patch]
     ignore:
-      # Planned migrations, not weekly bumps: Tailwind 4 rewrites the config,
-      # and eslint-config-next has to match the Next.js major.
+      # Planned migrations, not weekly bumps: a Tailwind major changes the
+      # generated CSS (v4 needed a pixel-diffed migration), and
+      # eslint-config-next has to match the Next.js major.
       - dependency-name: tailwindcss
         update-types: ["version-update:semver-major"]
       - dependency-name: next
