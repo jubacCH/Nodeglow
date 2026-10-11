@@ -133,8 +133,20 @@ class Tenant(Base):
     name = Column(String(128), nullable=False)
     slug = Column(String(64), nullable=False)
     status = Column(String(16), nullable=False, default="active")  # active | suspended | deleting
+    # Retention plan tier (ee: nodeglow_ee.tenancy.plans); NULL = no plan cap.
     plan = Column(String(32), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    # Lifecycle (ee, revision 045). A tenant is suspended (status
+    # suspended | deleting) since ``suspended_at``; a scheduled deletion
+    # (status deleting) is purged once ``delete_after`` has passed.
+    # ``purge_started_at`` / ``purge_state`` (JSON) record a purge in
+    # progress, so a restart resumes it.
+    suspended_at = Column(DateTime, nullable=True)
+    delete_after = Column(DateTime, nullable=True)
+    deletion_requested_at = Column(DateTime, nullable=True)
+    deletion_requested_by = Column(Integer, nullable=True)  # user id; no FK (users may be purged)
+    purge_started_at = Column(DateTime, nullable=True)
+    purge_state = Column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("provider_id", "slug", name="uq_tenants_provider_slug"),
@@ -199,6 +211,31 @@ class ProviderMembership(Base):
     )
     role = Column(String(16), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SupportGrant(TenantScoped, Base):
+    """Time-limited support access a tenant admin grants to the installation
+    operators (owner decision 8, ee). Without an active grant an operator
+    has no access to the tenant's data.
+
+    Schema only in the core (like ``provider_memberships``); the ee tenancy
+    backend reads it to resolve access ``via = support``.
+    """
+
+    __tablename__ = "support_grants"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    role = Column(String(16), nullable=False, default="readonly")  # admin | editor | readonly
+    reason = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    granted_by = Column(Integer, nullable=True)  # user id (no FK: users may be purged)
+    granted_by_name = Column(String(64), nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(Integer, nullable=True)
+    revoked_by_name = Column(String(64), nullable=True)
+    # Set by the expiry job once the end of the grant has been audited.
+    ended_audited_at = Column(DateTime, nullable=True)
 
 
 class TenantSetting(TenantScoped, Base):
