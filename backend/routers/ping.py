@@ -180,7 +180,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
 async def test_ping(host_id: int, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
     if not host:
-        return {"success": False, "error": "Host not found"}
+        return JSONResponse({"error": "Host not found"}, status_code=404)
     res = await check_host(host)
     ok, port_error, latency, detail = res
     return {"success": ok, "port_error": port_error, "latency_ms": latency, "check_detail": detail,
@@ -195,7 +195,7 @@ async def ping_check_now(host_id: int, db: AsyncSession = Depends(get_db)):
     """Run an immediate ping check for a single host and store the result."""
     host = await db.get(PingHost, host_id)
     if not host:
-        return RedirectResponse(url="/hosts", status_code=303)
+        return JSONResponse({"error": "Host not found"}, status_code=404)
 
     # For agent-sourced hosts, check agent heartbeat instead of ICMP
     if host.source == "agent":
@@ -308,38 +308,48 @@ async def edit_ping_host(
     parent_id: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
+    from urllib.parse import quote
+
     from routers.integrations import validate_host_async
+    host = await db.get(PingHost, host_id)
+    if not host:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
     host_err = await validate_host_async(hostname.strip())
     if host_err:
-        from urllib.parse import quote
         return RedirectResponse(url=f"/hosts/{host_id}?tab=info&error={quote(host_err)}", status_code=303)
-    host = await db.get(PingHost, host_id)
-    if host:
-        host.name = name.strip()
-        host.hostname = hostname.strip()
-        host.check_type = ",".join(t.strip() for t in check_types if t.strip()) or "icmp"
-        host.port = int(port) if port.strip() else None
-        host.latency_threshold_ms = float(latency_threshold_ms) if latency_threshold_ms.strip() else None
-        host.parent_id = int(parent_id) if parent_id.strip() else None
-        await db.commit()
+    new_parent = int(parent_id) if parent_id.strip() else None
+    # The parent must be another host of this tenant (the lookup is
+    # tenant-filtered): an id of another tenant's host is refused, not stored.
+    if new_parent is not None and (new_parent == host_id or await db.get(PingHost, new_parent) is None):
+        return RedirectResponse(url=f"/hosts/{host_id}?tab=info&error={quote('Unknown parent host')}",
+                                status_code=303)
+    host.name = name.strip()
+    host.hostname = hostname.strip()
+    host.check_type = ",".join(t.strip() for t in check_types if t.strip()) or "icmp"
+    host.port = int(port) if port.strip() else None
+    host.latency_threshold_ms = float(latency_threshold_ms) if latency_threshold_ms.strip() else None
+    host.parent_id = new_parent
+    await db.commit()
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info&saved=1", status_code=303)
 
 
 @router.post("/api/{host_id}/delete", dependencies=_EDITOR)
 async def delete_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
-    if host:
-        await db.delete(host)
-        await db.commit()
+    if not host:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
+    await db.delete(host)
+    await db.commit()
     return RedirectResponse(url="/hosts", status_code=303)
 
 
 @router.post("/{host_id}/toggle", dependencies=_EDITOR)
 async def toggle_ping_host(host_id: int, db: AsyncSession = Depends(get_db)):
     host = await db.get(PingHost, host_id)
-    if host:
-        host.enabled = not host.enabled
-        await db.commit()
+    if not host:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
+    host.enabled = not host.enabled
+    await db.commit()
     return RedirectResponse(url=f"/hosts/{host_id}?tab=info", status_code=303)
 
 
@@ -351,7 +361,7 @@ async def toggle_maintenance(
 ):
     host = await db.get(PingHost, host_id)
     if not host:
-        return RedirectResponse(url="/hosts", status_code=303)
+        return JSONResponse({"error": "Host not found"}, status_code=404)
 
     form = await request.form()
     duration = form.get("duration", "")
@@ -454,6 +464,8 @@ async def api_search_hosts(q: str = "", db: AsyncSession = Depends(get_db)):
 @router.get("/api/{host_id}/discovered-ports")
 async def get_discovered_ports(host_id: int, db: AsyncSession = Depends(get_db)):
     """Return discovered ports for a host."""
+    if await db.get(PingHost, host_id) is None:
+        return JSONResponse({"error": "Host not found"}, status_code=404)
     ports = (await db.execute(
         select(DiscoveredPort)
         .where(DiscoveredPort.host_id == host_id)
