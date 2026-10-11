@@ -880,6 +880,37 @@ Deviations from the text above:
   of a new tenant-owned object. In `system_scope` reads are unfiltered and a
   new row must carry `tenant_id` explicitly (NULL only where the model allows
   it). Global tables need no context. Same behaviour in tests and production.
+- **What is enforced in a tenant scope** (state after the phase-1/2 review,
+  2026-10-11 — the first version covered less):
+  - SELECT / UPDATE / DELETE: `with_loader_criteria`, as above.
+  - ORM **bulk UPDATE by primary key** (`session.execute(update(M), rows)`)
+    is not covered by the criteria → refused; code uses Core updates with an
+    explicit `tenant_id` predicate (`log_intelligence._update_templates_by_id`).
+  - An UPDATE that **sets `tenant_id`** (in `.values()` or the parameters)
+    is refused outside system scope.
+  - ORM **INSERT**: a row naming another tenant is refused, a missing
+    `tenant_id` is filled from the context (single-row `.values()` and
+    execute-time parameter rows; a multi-row `.values()` must name it);
+    `insert().from_select()` is refused.
+  - `select(M).from_statement(text(...))` on a tenant-owned model is
+    refused unless marked `execution_options(nodeglow_tenant_filtered=True)`
+    (the caller's SQL carries the predicate) — with or without a context.
+  - Flush: new objects are stamped with the tenant **when added**
+    (`transient_to_pending`), so a row created for A and flushed in B's
+    scope is refused; changed or deleted objects must belong to the
+    context's tenant (an object loaded in system scope cannot be changed
+    from a tenant scope); an existing row's `tenant_id` never changes
+    outside system scope, also when the old value was not loaded.
+  - Not covered: `text()` and Core statements on `Model.__table__` (they
+    must add the predicate themselves; RLS in phase 7).
+- **Scheduled jobs start without a context**: APScheduler wakes its loop
+  through the event loop, which carried the context of whoever last added
+  or rescheduled a job (a request, with its tenant) — jobs then ran for that
+  tenant only. `scheduler.ContextFreeExecutor` runs every job in an empty
+  `contextvars.Context`; every job declares `per_tenant_job` or `system_job`
+  (also the runtime-added phpIPAM sync).
+- **Probe results** are stored only for hosts assigned to the reporting
+  probe (in its tenant); others are dropped and logged.
 - Extension point: `extensions.TenancyBackend` (protocol:
   `resolve_request_tenant`, `list_tenants_for`, `active_tenant_ids`,
   `effective_role`, `can_create_tenant`, `default_site_id`), registered with
@@ -998,6 +1029,8 @@ Migration `042`; code in `services/settings_registry.py`,
 - Backups export `tenant_memberships`, `tenant_settings`,
   `user_preferences`. Restoring a pre-042 backup replaces the tenant's
   settings with the backup's (`adopt_legacy_tenant_settings(replace=True)`);
+  export timestamps (ISO strings) are parsed back on restore — asyncpg
+  refused them, so restores on PostgreSQL failed;
   a pre-043 backup lets `users.role` win over memberships and decides
   `is_operator` (`memberships.sync_from_users_role`). The sequence reset of
   the restore now runs only for tables with an `id`, in a savepoint — on
