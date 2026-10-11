@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import zlib
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from sqlalchemy import inspect, text
@@ -53,6 +54,32 @@ def _safe_table(name: str) -> str:
     return f'"{name}"'
 
 
+# The backup is installation-wide: every table, every tenant (operator-only,
+# see routers/api_v1.py). The statements are raw SQL, which the session
+# filter does not see; with row-level security on (services/pg_rls.py) they
+# would return only the request's tenant — so they run in system scope.
+_EXPORT_SCOPE = "backup: export every table of the installation"
+_RESTORE_SCOPE = "backup: restore every table of the installation"
+
+
+@asynccontextmanager
+async def _restore_session(db: AsyncSession):
+    """The session the restore's raw SQL runs in.
+
+    TRUNCATE and ``session_replication_role`` are the owner's (the app role
+    ``nodeglow_app`` has neither): with a separate owner connection
+    (``DATABASE_OWNER_URL``) the restore uses it; with one database user,
+    the request's own session, as before.
+    """
+    from models import base
+
+    if base.DATABASE_OWNER_URL == base.DATABASE_URL:
+        yield db
+        return
+    async with AsyncSession(base.owner_engine(), expire_on_commit=False) as owner_db:
+        yield owner_db
+
+
 async def export_backup(db: AsyncSession) -> dict:
     """Export all PostgreSQL tables as a JSON dict."""
     backup = {
@@ -68,17 +95,22 @@ async def export_backup(db: AsyncSession) -> dict:
         "tables": {},
     }
 
-    for table_name in EXPORT_TABLES:
-        try:
-            result = await db.execute(text(f"SELECT * FROM {_safe_table(table_name)}"))
-            rows = result.mappings().all()
-            backup["tables"][table_name] = [
-                {k: _serialize(v) for k, v in dict(row).items()}
-                for row in rows
-            ]
-        except Exception as e:
-            logger.warning("Skipping table %s: %s", table_name, e)
-            backup["tables"][table_name] = []
+    with tenancy.system_scope(_EXPORT_SCOPE):
+        for table_name in EXPORT_TABLES:
+            try:
+                # In a savepoint: on PostgreSQL a missing legacy table
+                # (ping_results) would abort the transaction, and every
+                # later table would be exported empty.
+                async with db.begin_nested():
+                    result = await db.execute(text(f"SELECT * FROM {_safe_table(table_name)}"))
+                    rows = result.mappings().all()
+                backup["tables"][table_name] = [
+                    {k: _serialize(v) for k, v in dict(row).items()}
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.warning("Skipping table %s: %s", table_name, e)
+                backup["tables"][table_name] = []
 
     return backup
 
@@ -86,13 +118,15 @@ async def export_backup(db: AsyncSession) -> dict:
 async def get_backup_info(db: AsyncSession) -> dict:
     """Get database statistics for the backup UI."""
     tables = {}
-    for table_name in EXPORT_TABLES:
-        try:
-            result = await db.execute(text(f"SELECT COUNT(*) FROM {_safe_table(table_name)}"))
-            count = result.scalar()
-            tables[table_name] = count
-        except Exception:
-            tables[table_name] = 0
+    with tenancy.system_scope(_EXPORT_SCOPE):
+        for table_name in EXPORT_TABLES:
+            try:
+                async with db.begin_nested():
+                    result = await db.execute(text(f"SELECT COUNT(*) FROM {_safe_table(table_name)}"))
+                    count = result.scalar()
+                tables[table_name] = count
+            except Exception:
+                tables[table_name] = 0
 
     # Total database size
     try:
@@ -117,7 +151,6 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
         raise ValueError("Invalid backup format")
 
     tables_data = data.get("tables", {})
-    imported = {}
 
     key_warning = None
     backup_fp = meta.get("secret_key_fingerprint")
@@ -130,21 +163,75 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
         )
         logger.error(key_warning)
 
+    # Rows of a backup from before multi-tenancy (revision < 040) belong to
+    # the importing tenant and its default site.
+    tenant_id = tenancy.session_tenant_id(db)
+    site_id = tenancy.backend().default_site_id(tenant_id)
+    async with _restore_session(db) as raw:
+        with tenancy.system_scope(_RESTORE_SCOPE):
+            imported = await _restore_tables(raw, tables_data, tenant_id, site_id)
+
+    # A backup from before the settings split (revision 042) carries the
+    # tenant's settings in ``settings``: they belong to the importing tenant.
+    from models.settings import adopt_legacy_tenant_settings
+
+    # A restore replaces the data: the backup's values win, and the tenant's
+    # current settings go (the backup had no tenant_settings to truncate them).
+    tenant_id = tenancy.session_tenant_id(db)
+    pre_042 = "settings" in tables_data and "tenant_settings" not in tables_data
+    moved = await adopt_legacy_tenant_settings(db, tenant_id, replace=pre_042)
+    # ...and from before the auth binding (043) only users.role was kept up
+    # to date — it wins over whatever memberships came along (039's stale
+    # copies) and decides is_operator; users without one get one, else
+    # nobody could sign in after the restore.
+    from services.memberships import backfill_memberships, sync_from_users_role
+
+    user_rows = tables_data.get("users") or []
+    pre_043 = bool(user_rows) and (
+        "is_operator" not in user_rows[0] or not tables_data.get("tenant_memberships")
+    )
+    if pre_043:
+        granted = await sync_from_users_role(db, tenant_id)
+    else:
+        granted = await backfill_memberships(db, tenant_id)
+    if moved or granted:
+        await db.commit()
+
+    result = {"imported": imported, "total_rows": sum(imported.values())}
+    if key_warning:
+        result["warning"] = key_warning
+    return result
+
+
+async def _table_exists(db: AsyncSession, table_name: str) -> bool:
+    if db.get_bind().dialect.name != "postgresql":
+        return True
+    found = await db.execute(text("SELECT to_regclass(:t)"), {"t": f"public.{table_name}"})
+    return found.scalar() is not None
+
+
+async def _restore_tables(raw: AsyncSession, tables_data: dict, tenant_id: int,
+                          site_id: int | None) -> dict:
+    """TRUNCATE and re-insert every table of the backup (raw SQL, system
+    scope, owner connection — see :func:`_restore_session`)."""
+    imported: dict = {}
     # Disable FK checks during import
-    await db.execute(text("SET session_replication_role = 'replica'"))
+    await raw.execute(text("SET session_replication_role = 'replica'"))
 
     try:
-        # Truncate in reverse order (children first)
+        # Truncate in reverse order (children first) — tables that exist:
+        # an export lists the dropped legacy tables (ping_results) as empty,
+        # and on PostgreSQL a failing TRUNCATE aborts the whole restore.
         for table_name in reversed(EXPORT_TABLES):
-            if table_name in tables_data:
-                await db.execute(text(f"TRUNCATE TABLE {_safe_table(table_name)} CASCADE"))
+            if table_name in tables_data and await _table_exists(raw, table_name):
+                await raw.execute(text(f"TRUNCATE TABLE {_safe_table(table_name)} CASCADE"))
 
         # Get valid column names for each table from the DB schema
         _valid_columns: dict[str, set[str]] = {}
         # Timestamp columns: the export writes them as ISO strings, and
         # asyncpg refuses a str for a TIMESTAMP parameter of raw SQL.
         _time_columns: dict[str, dict[str, type]] = {}
-        conn = await db.connection()
+        conn = await raw.connection()
         from sqlalchemy import Date, DateTime
         for t in EXPORT_TABLES:
             try:
@@ -180,10 +267,9 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
             # its default site. Raw SQL is not stamped by the session filter.
             defaults: dict[str, int | None] = {}
             if "tenant_id" in allowed and "tenant_id" not in rows[0]:
-                defaults["tenant_id"] = tenancy.session_tenant_id(db)
+                defaults["tenant_id"] = tenant_id
             if "site_id" in allowed and "site_id" not in rows[0]:
-                tid = defaults.get("tenant_id") or tenancy.session_tenant_id(db)
-                defaults["site_id"] = tenancy.backend().default_site_id(tid)
+                defaults["site_id"] = site_id
             cols += list(defaults)
             rejected = set(rows[0].keys()) - allowed
             if rejected:
@@ -200,7 +286,7 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
                     if isinstance(safe_row.get(c), str):
                         safe_row[c] = _parse_time(safe_row[c], kind)
                 safe_row.update(defaults)
-                await db.execute(
+                await raw.execute(
                     text(f"INSERT INTO {_safe_table(table_name)} ({col_names}) VALUES ({placeholders})"),
                     safe_row,
                 )
@@ -212,8 +298,8 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
             if "id" in allowed:
                 try:
                     safe = _safe_table(table_name)
-                    async with db.begin_nested():
-                        await db.execute(
+                    async with raw.begin_nested():
+                        await raw.execute(
                             text(
                                 f"SELECT setval(pg_get_serial_sequence(:tn, 'id'), "
                                 f"COALESCE((SELECT MAX(id) FROM {safe}), 1))"
@@ -225,40 +311,10 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
 
             imported[table_name] = len(rows)
 
-        await db.commit()
+        await raw.commit()
     finally:
-        await db.execute(text("SET session_replication_role = 'origin'"))
-
-    # A backup from before the settings split (revision 042) carries the
-    # tenant's settings in ``settings``: they belong to the importing tenant.
-    from models.settings import adopt_legacy_tenant_settings
-
-    # A restore replaces the data: the backup's values win, and the tenant's
-    # current settings go (the backup had no tenant_settings to truncate them).
-    tenant_id = tenancy.session_tenant_id(db)
-    pre_042 = "settings" in tables_data and "tenant_settings" not in tables_data
-    moved = await adopt_legacy_tenant_settings(db, tenant_id, replace=pre_042)
-    # ...and from before the auth binding (043) only users.role was kept up
-    # to date — it wins over whatever memberships came along (039's stale
-    # copies) and decides is_operator; users without one get one, else
-    # nobody could sign in after the restore.
-    from services.memberships import backfill_memberships, sync_from_users_role
-
-    user_rows = tables_data.get("users") or []
-    pre_043 = bool(user_rows) and (
-        "is_operator" not in user_rows[0] or not tables_data.get("tenant_memberships")
-    )
-    if pre_043:
-        granted = await sync_from_users_role(db, tenant_id)
-    else:
-        granted = await backfill_memberships(db, tenant_id)
-    if moved or granted:
-        await db.commit()
-
-    result = {"imported": imported, "total_rows": sum(imported.values())}
-    if key_warning:
-        result["warning"] = key_warning
-    return result
+        await raw.execute(text("SET session_replication_role = 'origin'"))
+    return imported
 
 
 # ── Encrypted export envelope ────────────────────────────────────────────────

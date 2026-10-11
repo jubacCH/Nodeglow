@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-from config import DATABASE_URL, SECRET_KEY
+from config import DATABASE_OWNER_URL, DATABASE_URL, SECRET_KEY
 
 
 # Engine kwargs differ between SQLite and PostgreSQL
@@ -23,6 +23,36 @@ if DATABASE_URL.startswith("postgresql"):
 
 engine = create_async_engine(DATABASE_URL, **_engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+def create_owner_engine():
+    """A new engine on the owner connection (``DATABASE_OWNER_URL``), for
+    migrations and other installation-wide work: no pool, and on PostgreSQL
+    it starts in the row-level-security system scope (services.pg_rls).
+    The caller disposes it."""
+    from sqlalchemy.pool import NullPool
+
+    from services.pg_rls import system_connect_args
+
+    return create_async_engine(
+        DATABASE_OWNER_URL, poolclass=NullPool,
+        connect_args=system_connect_args(DATABASE_OWNER_URL),
+    )
+
+
+_owner_engine = None
+
+
+def owner_engine():
+    """The owner connection for runtime work that the app role may not do
+    (the backup restore: TRUNCATE, ``session_replication_role``). The app's
+    own engine when there is only one database user."""
+    global _owner_engine
+    if DATABASE_OWNER_URL == DATABASE_URL:
+        return engine
+    if _owner_engine is None:
+        _owner_engine = create_owner_engine()
+    return _owner_engine
 
 
 class Base(DeclarativeBase):
