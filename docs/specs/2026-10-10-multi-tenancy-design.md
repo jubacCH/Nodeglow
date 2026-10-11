@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10 — phases 1–4 implemented 2026-10-11 (see "Implementation status")
+Status: design · 2026-10-10 — phases 1–4 and 7 implemented 2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -788,7 +788,7 @@ is user-visible until phase 7.
 | 4 ✅ | Auth binding: memberships replace `users.role`, API keys/install tokens/agents bound, audit fields, WebSocket/SSE scoping, notifications per tenant, in-process state table above | core | L |
 | 5 | Scheduler: per-tenant analysis loops, fair-share queue for data-plane jobs, per-tenant metrics | core | M |
 | 6 | ClickHouse: step A + helper filtering + row policies + two users; step B rebuild job | core | M + M |
-| 7 | Postgres RLS + role split; CI job on Postgres asserting policies | core | M |
+| 7 ✅ | Postgres RLS + role split; CI job on Postgres asserting policies | core | M |
 | 8 | Tenant-isolation test suite (built from phase 2 on, gating from phase 4) | core | M |
 | 9 | `ee/` skeleton, licence verification, tenant lifecycle incl. purge, tenant switcher | ee | L |
 | 10 | Probe syslog relay (agent) + `/api/agent/logs` per-entry source + site-scoped resolution | core (agent + backend) | M + S |
@@ -1152,6 +1152,141 @@ covers 042/043 up and down.
 Performance: one more query per authenticated request (the user's
 memberships joined with `tenants`); unchanged statement counts otherwise.
 
+### Phase 7 — PostgreSQL row-level security (done)
+
+Revision `044`; code in `services/pg_rls.py`, `migrate.py`,
+`alembic/env.py`, `models/base.py` (owner engine), `services/backup.py`.
+
+- **Policies.** Every tenant-owned table (the 29 of the classification;
+  `tenant_settings` and `user_preferences` included, `settings`, `users`,
+  `sessions`, memberships, providers, tenants and the SNMP catalogue stay
+  global) gets `ENABLE` + `FORCE ROW LEVEL SECURITY` and one policy
+  `tenant_isolation`, `FOR ALL`, the same expression for `USING` and
+  `WITH CHECK`:
+
+  ```sql
+  current_setting('nodeglow.system', true) = 'on'
+  OR tenant_id = NULLIF(current_setting('nodeglow.tenant_id', true), '')::integer
+  ```
+
+  `audit_logs` rows with `tenant_id` NULL are visible in system scope only.
+- **Settings per transaction.** A `before_cursor_execute` hook on the app's
+  engine compares the tenant context (`tenancy.current()`, else the
+  session's `bind_session` binding, carried to the connection by
+  `after_begin`) with what the current transaction last got and, if it
+  differs, runs `SELECT set_config('nodeglow.tenant_id', …, true),
+  set_config('nodeglow.system', …, true)` on a separate cursor first. The
+  state lives in the pooled connection's `info` and is reset at
+  begin/commit/rollback, marked unknown at `ROLLBACK TO SAVEPOINT`, dropped
+  at check-in. Cost: one round trip per transaction plus one per context
+  change; nothing for SQLite.
+- **Roles.** `nodeglow_app` (`NOLOGIN` until the app uses it,
+  `NOSUPERUSER NOBYPASSRLS`, owns nothing) is created if missing, with the
+  privileges of the connecting owner; it gets SELECT/INSERT/UPDATE/DELETE
+  on all tables and USAGE/SELECT/UPDATE on all sequences (plus default
+  privileges), not TRUNCATE, and only SELECT on `alembic_version`. When
+  `DATABASE_URL` names its own user, that login is created or updated with
+  the password from the URL — as a SCRAM verifier computed client-side, so
+  the password never appears in the server log. Without CREATEROLE every
+  role statement fails in a savepoint and is logged; the upgrade goes on.
+- **Owner connection.** `DATABASE_OWNER_URL` (alias
+  `MIGRATION_DATABASE_URL`, default `DATABASE_URL`) is used by `migrate.py`,
+  `alembic/env.py` and the backup restore (TRUNCATE,
+  `session_replication_role`). Owner connections start with
+  `nodeglow.system=on` (asyncpg `server_settings`) so a data migration run by
+  a non-superuser owner under FORCE still sees every row.
+- **The switch.** `NODEGLOW_RLS` (`config.RLS_ENABLED`). `044` and
+  `migrate.py` always create role, grants and policies; ENABLE + FORCE only
+  with the flag on, and with the flag off they are switched off again. The
+  app installs the hook only with the flag on. `migrate.py` re-applies the
+  whole setup after every upgrade or stamp (a fresh install never runs
+  044; later tables get their policy from the live classification; DDL only
+  where the state differs — policies carry a version comment). A failure
+  there is fatal only with the flag on.
+- **Diagnostics.** At start the backend logs whether RLS protects its
+  connection: error when RLS is on in the database but the flag is off
+  (everything would look empty) or the tables are not all enabled; warning
+  when the app user is a superuser or BYPASSRLS.
+- **Raw SQL inventory.** `routers/system.py` counts run in the request's
+  tenant and are now per tenant under RLS. The backup export/info/restore run
+  in `system_scope` (installation-wide), the restore's raw part on the owner
+  connection, and the three backup routes require the installation operator
+  (`require_operator`; in the core the admin of tenant 1 — unchanged).
+  Found on the way: on PostgreSQL the export read the dropped legacy table
+  `ping_results`, which aborted the transaction, so every later table was
+  exported empty, and a restore of such an export failed on its
+  `TRUNCATE ping_results`; each table now reads in a savepoint and only
+  existing tables are truncated.
+- **Compose / install / updater.** The compose files build `DATABASE_URL`
+  from `POSTGRES_APP_USER` / `POSTGRES_APP_PASSWORD` (falling back to
+  `POSTGRES_USER` / `POSTGRES_PASSWORD` — an existing `.env` renders exactly
+  the old URL) and `DATABASE_OWNER_URL` from `POSTGRES_USER`, and pass
+  `NODEGLOW_RLS` (default `off`). `install.sh` writes
+  `POSTGRES_APP_USER=nodeglow_app`, a random `POSTGRES_APP_PASSWORD` and
+  `NODEGLOW_RLS=on` for new installs; its upgrade path keeps `.env`. The
+  updater's migrate step runs `python migrate.py` (owner, plus the RLS
+  setup) instead of bare `alembic upgrade head`, with `SKIP_MIGRATIONS=1`
+  so the entrypoint does not run it twice.
+
+Deviations:
+
+- **No separate `nodeglow_owner` role.** The owner is the role that owns the
+  schema today (the Compose stack's `POSTGRES_USER`, or whoever
+  `DATABASE_OWNER_URL` names). Creating a `NOLOGIN nodeglow_owner` and
+  moving ownership to it was rejected: it buys nothing RLS needs (the app
+  role is neither owner nor BYPASSRLS either way), and every `pg_dump`
+  would then carry `OWNER TO nodeglow_owner`, which fails to restore into a
+  fresh cluster.
+- **No `nodeglow_system` (BYPASSRLS) role.** System scope sets
+  `nodeglow.system = on`, which the app role can set itself: RLS is the net
+  for a forgotten predicate, not a boundary against SQL injection. A
+  BYPASSRLS role would need a second connection pool for system scope —
+  phase 14 material.
+- **`NULLIF(…, '')` in the policy.** A custom setting reads `''` (not
+  NULL) in a connection that set it in an earlier transaction, and
+  `''::integer` raises.
+- **Settings per statement, not once at `BEGIN`.** One transaction may
+  change context (look a token up in system scope, continue in its
+  tenant). `SAVEPOINT` statements never carry settings: SQLAlchemy emits
+  them lazily with the first statement inside, possibly already in another
+  context, and `ROLLBACK TO` would restore that.
+- **RLS on without the role split** (CREATEROLE missing, or one user): the
+  flag still enables and forces RLS; it protects a non-superuser owner
+  connection, and the start logs that it cannot protect a superuser.
+- **Downgrade of 044** drops the policies and switches RLS off but keeps the
+  role and its grants, so an app already running as `nodeglow_app` keeps
+  working.
+
+Rollout (recommendation, documented in OPERATIONS.md "Switching an
+existing install on"): new installs start with two users and RLS on.
+Existing installs — production CT 116 included — upgrade with the flag off
+and one user, i.e. no behaviour change, then switch deliberately in two
+steps: (1) `POSTGRES_APP_USER` / `POSTGRES_APP_PASSWORD` with
+`NODEGLOW_RLS=off` (app as `nodeglow_app`, no RLS) for a few days, (2)
+`NODEGLOW_RLS=on`. Back out by setting the flag off (and removing the app
+user) and restarting.
+
+Tests: `tests/test_pg_rls.py` (SQLite suite: the hook with a fake
+connection — contexts, transaction boundaries, savepoints, session binding,
+pool check-in; URL parsing, SCRAM verifier, diagnostics; 044 covers the
+classification). `tests/test_migrations_tenancy_pg.py` (PostgreSQL, CI
+`migrations` job): fresh install and upgrade from 043 end with RLS enabled
+and forced on every tenant-owned table; as `nodeglow_app` a raw select
+without setting returns nothing, with a tenant only its rows, system scope
+all; WITH CHECK refuses foreign-tenant rows; composite FKs still reject
+cross-tenant references; the app role cannot TRUNCATE, disable RLS or write
+`alembic_version`; flag off → RLS off again; downgrade removes the
+policies; the single-user upgrade is unchanged; an owner without
+CREATEROLE upgrades with a warning; the app's own hook (contexts in one
+transaction, savepoint rollback, ORM insert, pool reuse); and three router
+test modules (isolation smoke, auth binding, smoke) run against PostgreSQL
+as `nodeglow_app` with RLS on (`tests/test_routers/conftest.py`, PostgreSQL
+mode). Two test seeds needed an extra flush there: the unit of work does not
+order inserts by foreign keys without a `relationship()` (a system-scope
+audit row before its new tenant, a host before its new site) — irrelevant
+in the core, but the ee tenant creation (phase 9) must flush the tenant
+before writing rows of it in the same session.
+
 ### Open items for phases 5–8
 
 - **Phase 5 (scheduler):** the daily AI summary fires at every tenant's
@@ -1169,11 +1304,10 @@ memberships joined with `tenants`); unchanged statement counts otherwise.
   fleet-pattern queries, the dashboard syslog histogram and agent/ping
   series: correct with one tenant, a leak with two. ee must not allow a
   second tenant before phase 6.
-- **Phase 7 (RLS):** add `tenant_settings` and `user_preferences` to the
-  policies; `settings`, `users`, `sessions`, memberships stay global. The
-  `system_scope` write audit does not see raw SQL (backup import,
-  `text()` counts) — those stay operator-only. Backups now also export the
-  tenancy tables of every tenant (installation-level, operator-only).
+- **Phase 7 (RLS):** done, see below. Still open from it: production runs
+  with `NODEGLOW_RLS=off` until switched deliberately; a `BYPASSRLS` role for
+  system scope (the bypass is a setting today); the `system_scope` write
+  audit still does not see raw SQL (backup restore).
 - **Phase 8 (isolation suite):** the route walker (every route with B's
   ids → 404, every response without B's canary, with session, API key and
   header) is still the smoke subset plus targeted tests; job isolation per
