@@ -18,14 +18,11 @@ key of A:
 * with ``X-Nodeglow-Tenant: 2`` (A's user is no member of B) → 404.
 
 Routes outside the tenant model are listed in ``INSTALLATION_ROUTES`` /
-``TENANTLESS_ROUTES`` with a reason per entry. ClickHouse has no tenant
-column before phase 6: responses built from ClickHouse cannot leak here
-(ClickHouse is faked), so their *queries* are checked instead — every
-ClickHouse call made while serving A must be scoped to A
-(:func:`ch_call_is_scoped`). The routes that are not yet are listed in
-``PHASE6_CH_ROUTES`` and run as ``xfail(strict=True, reason="phase 6")``:
-once phase 6 scopes a route, its xfail turns into a failure and the entry is
-removed from the list. Jobs: ``test_tenant_job_isolation.py``.
+``TENANTLESS_ROUTES`` with a reason per entry. ClickHouse (phase 6): a
+recording fake client checks that every ClickHouse call made while serving
+A is scoped to A
+(:func:`ch_call_is_scoped`, which encodes phase 6's contract). Jobs:
+``test_tenant_job_isolation.py``.
 """
 from __future__ import annotations
 
@@ -61,6 +58,8 @@ TAG = {A: "CANARY-A", B: CANARY}
 # The real ClickHouse entry points, captured before any test patches them.
 _REAL_CH_QUERY = _ch.query
 _REAL_CH_SCALAR = _ch.query_scalar
+_REAL_CH_INSERTS = {name: getattr(_ch, name) for name in (
+    "insert_batch", "insert_ping_checks", "insert_agent_metrics", "insert_bandwidth_metrics")}
 
 
 # ── Seeds: one row of every tenant-owned table per tenant ───────────────────
@@ -340,7 +339,7 @@ TENANTLESS_ROUTES = {
 # Path keys that are content, not row ids: the same log template (same text,
 # same hash) can exist in both tenants, so B's hash is no secret of B's and
 # the route need not 404. Their Postgres part is tenant-filtered (walked for
-# the canary); their ClickHouse part is phase 6 (PHASE6_CH_ROUTES).
+# the canary); their ClickHouse reads are scoped like every other.
 CONTENT_KEYED_ROUTES = {
     ("GET", "/syslog/api/root-cause/{template_hash}"): "template_hash is a content hash",
     ("GET", "/syslog/api/reverse-cause/{template_hash}"): "template_hash is a content hash",
@@ -482,8 +481,7 @@ def test_route_classification_is_complete_and_not_stale():
     for name, listing in (("INSTALLATION_ROUTES", INSTALLATION_ROUTES),
                           ("TENANTLESS_ROUTES", TENANTLESS_ROUTES),
                           ("STREAM_ROUTES", STREAM_ROUTES),
-                          ("CONTENT_KEYED_ROUTES", CONTENT_KEYED_ROUTES),
-                          ("PHASE6_CH_ROUTES", dict.fromkeys(PHASE6_CH_ROUTES, ""))):
+                          ("CONTENT_KEYED_ROUTES", CONTENT_KEYED_ROUTES)):
         stale = sorted(set(listing) - routes)
         assert not stale, f"{name} lists routes that do not exist: {stale}"
     stale = sorted({p for p, _ in PARAM_OVERRIDES} - {p for _, p in routes})
@@ -532,54 +530,131 @@ class ChCall:
     kind: str = "query"
     table: str | None = None
     column_names: list | None = None
+    data: list | None = None
+    tenant: int | None = None  # the tenant context the call was made in
 
 
 class _Result:
-    column_names: list = []
-    result_rows: list = []
-    named_results = staticmethod(lambda: [])
+    def __init__(self, rows: list[dict] | None = None):
+        rows = rows or []
+        self.column_names = list(rows[0]) if rows else []
+        self.result_rows = [tuple(r.values()) for r in rows]
+
+
+def _ctx_tenant() -> int | None:
+    from services.tenancy import current
+
+    ctx = current()
+    return ctx.tenant_id if ctx is not None and not ctx.system else None
 
 
 class FakeClickHouse:
-    """Stands in for the clickhouse-connect async client; records every call."""
+    """Stands in for the clickhouse-connect async client; records every call.
+
+    ``responders`` give a scoped read canned rows of *its* tenant: a list of
+    ``(regex on the SQL, fn(tenant_id, parameters) -> rows)``. A read that is
+    not scoped gets nothing — like the row policy, it cannot see any tenant.
+    """
 
     def __init__(self):
         self.calls: list[ChCall] = []
+        self.responders: list[tuple[str, Any]] = []
 
     async def query(self, sql, parameters=None, settings=None, **kw):
-        self.calls.append(ChCall(sql, dict(parameters or {}), dict(settings or {})))
+        call = ChCall(sql, dict(parameters or {}), dict(settings or {}), tenant=_ctx_tenant())
+        self.calls.append(call)
+        tid = call.parameters.get(_ch.TENANT_PARAM)
+        if tid is not None and ch_call_is_scoped(call, int(tid)):
+            for pattern, fn in self.responders:
+                if re.search(pattern, sql, re.S | re.I):
+                    return _Result(fn(int(tid), call.parameters))
         return _Result()
 
     async def command(self, sql, parameters=None, settings=None, **kw):
-        self.calls.append(ChCall(sql, dict(parameters or {}), dict(settings or {}), kind="command"))
+        self.calls.append(ChCall(sql, dict(parameters or {}), dict(settings or {}), kind="command",
+                                 tenant=_ctx_tenant()))
         return None
 
     async def insert(self, table, data=None, column_names=None, settings=None, **kw):
         self.calls.append(ChCall("", {}, dict(settings or {}), kind="insert", table=table,
-                                 column_names=list(column_names or [])))
+                                 column_names=list(column_names or []),
+                                 data=[list(r) for r in (data or [])], tenant=_ctx_tenant()))
         return None
 
 
-def ch_call_is_scoped(call: ChCall, tenant_id: int) -> bool:
-    """Whether a ClickHouse call is confined to ``tenant_id``.
+def _owner_of(column: str, value) -> int | None:
+    """The seeded tenant of a host / agent / probe id in an inserted row."""
+    if column not in ("host_id", "agent_id", "probe_id") or not isinstance(value, int):
+        return None
+    for tid, base in BASE.items():
+        if value in (base, base + 1):
+            return tid
+    return None
 
-    Phase 6 (spec "Data isolation — ClickHouse"): the helpers add
-    ``tenant_id = {tenant_id:UInt32}`` and the client passes the custom
-    setting ``SQL_nodeglow_tenant`` for the row policy. Either signal counts;
-    a query against a system table (``system.*``) is installation-level.
-    Phase 6: adjust here if the mechanism differs — this is the one place the
-    suite encodes it.
+
+def ch_call_is_scoped(call: ChCall, tenant_id: int) -> bool:
+    """Whether a ClickHouse call is confined to ``tenant_id`` — phase 6's
+    contract (services/clickhouse_client.py):
+
+    * a read names every tenant table it reads (``tenant_tables_read``) with
+      ``tenant_id = {nodeglow_tenant:UInt32}`` — at least one placeholder per
+      read — and binds ``nodeglow_tenant`` to the tenant; or
+    * it runs with the row-policy setting ``SQL_nodeglow_tenant`` = tenant;
+    * a read of no tenant table (``system.*``, metadata) is installation-level;
+    * an insert stamps every row with the tenant, and a row naming a seeded
+      host / agent / probe stamps that row's owner.
+
+    ``additional_table_filters`` is phase 6's server-side net; it is checked
+    in addition (when present it must name the same tenant), not instead.
     """
     if call.kind == "insert":
-        return "tenant_id" in (call.column_names or [])
-    if re.search(r"\bFROM\s+system\.", call.sql, re.I) or re.match(r"\s*(TRUNCATE|OPTIMIZE)\b",
-                                                                    call.sql, re.I):
+        cols = call.column_names or []
+        if "tenant_id" not in cols:
+            return False
+        i = cols.index("tenant_id")
+        for row in call.data or []:
+            if row[i] != tenant_id:
+                return False
+            for col, value in zip(cols, row):
+                owner = _owner_of(col, value)
+                if owner is not None and owner != tenant_id:
+                    return False
         return True
-    setting = call.settings.get("SQL_nodeglow_tenant")
+    reads = _ch.tenant_tables_read(call.sql)
+    if not reads:
+        return True
+    filters = call.settings.get("additional_table_filters")
+    if filters is not None:
+        for table in set(reads):
+            if f"'{table}': 'tenant_id = {tenant_id}'" not in str(filters):
+                return False
+    setting = call.settings.get(_ch.ROW_POLICY_SETTING)
     if setting is not None and str(setting) == str(tenant_id):
         return True
-    return "tenant_id" in call.sql and any(
-        k.startswith("tenant") and str(v) == str(tenant_id) for k, v in call.parameters.items())
+    placeholders = call.sql.count("{" + _ch.TENANT_PARAM + ":")
+    return placeholders >= len(reads) and str(call.parameters.get(_ch.TENANT_PARAM)) == str(tenant_id)
+
+
+def test_the_clickhouse_matcher_knows_phase_6s_contract():
+    """Self-test: a mechanism change must break here, loudly."""
+    p6 = ChCall(f"SELECT count() FROM ping_checks WHERE {_ch.TENANT_FILTER}",
+                {_ch.TENANT_PARAM: 1}, _ch.tenant_query_settings(1, row_policy=False))
+    assert ch_call_is_scoped(p6, 1) and not ch_call_is_scoped(p6, 2)
+    unscoped = ChCall("SELECT count() FROM ping_checks", {"tenant": 1}, {})
+    assert not ch_call_is_scoped(unscoped, 1)
+    tricky = ChCall("SELECT tenant_id FROM ping_checks WHERE host_id = {tenant_host:UInt32}",
+                    {"tenant_host": 1}, {})
+    assert not ch_call_is_scoped(tricky, 1)
+    join = ChCall(f"SELECT 1 FROM ping_checks p JOIN agent_metrics a ON 1 WHERE p.{_ch.TENANT_FILTER}",
+                  {_ch.TENANT_PARAM: 1}, {})
+    assert not ch_call_is_scoped(join, 1)  # two reads, one predicate
+    policy = ChCall("SELECT count() FROM syslog_messages", {}, {_ch.ROW_POLICY_SETTING: "1"})
+    assert ch_call_is_scoped(policy, 1)
+    assert ch_call_is_scoped(ChCall("SELECT 1 FROM system.parts", {}, {}), 1)
+    ins = ChCall("", {}, {}, kind="insert", column_names=["tenant_id", "host_id"], data=[[1, BASE[A]]])
+    assert ch_call_is_scoped(ins, 1)
+    wrong = ChCall("", {}, {}, kind="insert", column_names=["tenant_id", "host_id"], data=[[1, BASE[B]]])
+    assert not ch_call_is_scoped(wrong, 1)
 
 
 @asynccontextmanager
@@ -592,6 +667,8 @@ async def _real_clickhouse_path(fake: FakeClickHouse):
     patches = [patch("services.clickhouse_client.get_client", new=_async_return(fake)),
                patch("services.clickhouse_client.query", new=_REAL_CH_QUERY),
                patch("services.clickhouse_client.query_scalar", new=_REAL_CH_SCALAR)]
+    patches += [patch(f"services.clickhouse_client.{name}", new=fn)
+                for name, fn in _REAL_CH_INSERTS.items()]
     for name, mod in list(sys.modules.items()):
         if not name.startswith(("routers", "services", "scheduler", "nodeglow_ee", "main",
                                 "notifications")):
@@ -783,18 +860,20 @@ async def test_a_cannot_reference_b_objects(env):
 
 
 async def test_the_reference_check_sees_a_cross_tenant_reference(env):
-    """Self-test of _foreign_refs: one A row pointing at B is reported."""
-    from models import AlertRule, PingHost
+    """Self-test of _foreign_refs: A rows pointing at B are reported. (Soft
+    references: a real foreign key such as ping_hosts.parent_id is refused
+    by PostgreSQL's composite keys before the check could see it.)"""
+    from models import AlertRule, MaintenanceWindow
 
     assert not await _foreign_refs(env.sf)
     async with env.sf() as s:
-        (await s.get(PingHost, BASE[A])).parent_id = BASE[B]
         s.add(AlertRule(name="x", source_type="ping", source_id=BASE[B], field_path="f",
                         operator="gt"))
+        (await s.get(MaintenanceWindow, BASE[A])).host_ids = f"[{BASE[A]}, {BASE[B]}]"
         await s.commit()
     found = await _foreign_refs(env.sf)
-    assert any("ping_hosts.parent_id" in f for f in found)
-    assert any("alert_rules.source_id" in f for f in found)
+    assert any("alert_rules.source_id" in f for f in found), found
+    assert any("maintenance_windows.host_ids" in f for f in found), found
 
 
 @pytest.fixture
@@ -1030,37 +1109,6 @@ async def test_syslog_live_tail_of_a_receives_nothing_of_b(env):
 
 # ── ClickHouse: every query made for A is scoped to A ───────────────────────
 
-# Routes whose ClickHouse queries are not tenant-scoped yet: ClickHouse has no
-# tenant_id before phase 6. Each entry runs as xfail(strict=True, reason=
-# "phase 6"); phase 6 removes the entries it fixes.
-PHASE6_CH_ROUTES: set[tuple[str, str]] = {
-    ("GET", "/api/dashboard"),
-    ("GET", "/hosts/api/status"),
-    ("GET", "/syslog/api/templates"),
-    ("GET", "/syslog/api/root-cause/{template_hash}"),
-    ("GET", "/syslog/api/reverse-cause/{template_hash}"),
-    ("GET", "/syslog/api/smart-feed"),
-    ("GET", "/api/system/status"),
-    ("GET", "/api/v1/hosts"),
-    ("GET", "/api/v1/hosts/{host_id}"),
-    ("GET", "/api/v1/hosts/{host_id}/history"),
-    ("GET", "/api/v1/hosts/{host_id}/timeline"),
-    ("GET", "/api/v1/agents"),
-    ("GET", "/api/v1/agents/{agent_id}"),
-    ("GET", "/api/v1/incidents"),
-    ("GET", "/api/v1/incidents/{incident_id}"),
-    ("GET", "/api/v1/syslog/stats"),
-    ("GET", "/api/v1/syslog"),
-    ("GET", "/api/v1/topology"),
-    ("GET", "/api/v2/dashboard"),
-    ("GET", "/api/v2/summary"),
-    ("GET", "/api/v1/digest"),
-    ("GET", "/api/bandwidth"),
-    ("GET", "/api/bandwidth/history"),
-    ("GET", "/api/bandwidth/interfaces"),
-}
-
-
 async def _ch_unscoped(e: Env, method: str, path: str, auth: dict) -> list[str]:
     fake = FakeClickHouse()
     async with _real_clickhouse_path(fake):
@@ -1070,25 +1118,34 @@ async def _ch_unscoped(e: Env, method: str, path: str, auth: dict) -> list[str]:
                         body=_bodies(_ids_of(A)).get((method, path)))
         except Exception:  # noqa: BLE001 — crashes are the walk's business; queries count
             pass
-    return [c.sql.strip().split("\n")[0][:120] or f"insert {c.table}"
-            for c in fake.calls if not ch_call_is_scoped(c, A)]
+    bad = [c.sql.strip().split("\n")[0][:120] or f"insert {c.table}"
+           for c in fake.calls if not ch_call_is_scoped(c, A)]
+    return bad, fake.calls
 
 
-async def test_clickhouse_reads_are_scoped_or_listed_for_phase_6(env):
-    """Walk every route as A (A's ids) with a recording ClickHouse client.
-    A route with an unscoped ClickHouse call must be on PHASE6_CH_ROUTES —
-    a new route reading ClickHouse without the tenant fails here."""
+async def test_clickhouse_calls_are_tenant_scoped(env):
+    """Walk every route as A (A's ids, mutating routes included) with a
+    recording ClickHouse client: every ClickHouse read and insert made while
+    serving A is scoped to A (ch_call_is_scoped). A new route reading
+    ClickHouse without the tenant fails here."""
     from main import app
 
-    unlisted = []
-    for method, path in _walkable(app):
-        if method in MUTATING and (method, path) not in _READ_LIKE_MUTATIONS:
-            continue
-        bad = await _ch_unscoped(env, method, path, _session_auth(env))
-        if bad and (method, path) not in PHASE6_CH_ROUTES:
-            unlisted.append(f"{method} {path}: {bad[0]}")
-    assert not unlisted, "routes with ClickHouse queries not scoped to the tenant:\n  " + \
-        "\n  ".join(unlisted)
+    bad_routes, with_calls = [], 0
+    # Reads first: the mutating routes act on A's own rows (they may delete
+    # the very hosts the reads would report on, or the caller's user).
+    routes = sorted(_walkable(app), key=lambda r: r[0] in MUTATING)
+    for method, path in routes:
+        auth = _session_auth(env)
+        if method in MUTATING:  # a fresh session each time (a route may end the old one)
+            auth = {"cookies": {"nodeglow_session": await _session(env.sf, BASE[A], A)},
+                    "headers": {}}
+        bad, calls = await _ch_unscoped(env, method, path, auth)
+        with_calls += bool(calls)
+        if bad:
+            bad_routes.append(f"{method} {path}: {bad[0]}")
+    assert with_calls > 20, f"only {with_calls} routes reached ClickHouse — the fake is not wired"
+    assert not bad_routes, "routes with ClickHouse calls not scoped to the tenant:\n  " + \
+        "\n  ".join(bad_routes)
 
 
 # Mutating routes that read ClickHouse for their answer.
@@ -1098,10 +1155,3 @@ _READ_LIKE_MUTATIONS: set[tuple[str, str]] = {
     ("POST", "/api/v1/incidents/{incident_id}/postmortem"),
     ("POST", "/settings/ai/test-summary"),
 }
-
-
-@pytest.mark.parametrize("route", sorted(PHASE6_CH_ROUTES), ids=lambda r: f"{r[0]} {r[1]}")
-@pytest.mark.xfail(strict=True, reason="phase 6")
-async def test_phase6_clickhouse_route_is_tenant_scoped(env, route):
-    method, path = route
-    assert not await _ch_unscoped(env, method, path, _session_auth(env))

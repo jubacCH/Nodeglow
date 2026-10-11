@@ -1485,14 +1485,11 @@ Deviations / not done:
   (phase 10).
 - ee does not call `clickhouse_rebuild.complete()` yet — there is no tenant
   creation in ee (phase 9 must gate on it).
-- The phase-8 isolation suite is to mark ClickHouse-backed leaks
-  `xfail(strict=True, reason="phase 6")`. Its branch
-  (`feat/tenancy-phase5-8`) had no such markers yet and was not merged
-  when this was written: remove them when both branches meet (with
-  `strict=True` they fail as XPASS once this phase is in).
-  Merging the two branches conflicts in `scheduler.cleanup_old_results`
-  only: keep both, reading `ping_retention_days` through phase 5's
-  `tenant_jobs.retention_days(db, "ping_retention_days", 30)`.
+- Integration with phases 5 and 8 (`integrate/tenancy-5-8`): every phase-6
+  xfail of the isolation suite passed and was removed;
+  `cleanup_old_results` reads `ping_retention_days` through phase 5's
+  `tenant_jobs.retention_days` (installation cap), clamped to the table
+  TTL.
 
 ### Phase 5 — scheduler (done)
 
@@ -1641,11 +1638,16 @@ Gating, enumerating tests (no migration):
   `/ws/live` and `/syslog/stream` are driven over raw ASGI: a foreign
   `?tenant=` is closed with 4404; A's socket and tail receive A's events
   and nothing of B's.
-- ClickHouse: a recording fake client (behind `get_client`) checks that
-  every ClickHouse call made while serving A is scoped to A
-  (`ch_call_is_scoped`). The 24 routes that are not yet are
-  `PHASE6_CH_ROUTES`, each an `xfail(strict=True, reason="phase 6")`; a
-  route with an unscoped query that is not on the list fails.
+- ClickHouse: a recording fake client (behind `get_client`, with the real
+  query and insert helpers) checks that every ClickHouse call made while
+  serving A — every route, mutating ones included — is scoped to A
+  (`ch_call_is_scoped`, phase 6's contract: one
+  `{nodeglow_tenant:UInt32}` per tenant-table read with the parameter
+  bound to the tenant, or the row-policy setting; `additional_table_filters`
+  must name the same tenant; inserts stamp every row with the tenant that
+  owns its host / agent / probe), with a self-test of the matcher and a
+  guard that more than 20 routes reached ClickHouse at all. (Before the
+  integration these were 24 strict xfails "phase 6"; all passed.)
 - `tests/test_tenant_job_isolation.py`: every per-tenant job (16; the ee
   daily summary in `ee/backend/tests/test_daily_summary_isolation.py`)
   runs with data in both tenants and triggers that make it act (a firing
@@ -1656,11 +1658,14 @@ Gating, enumerating tests (no migration):
   daily summary) mentions nothing of the other, and the job logged no
   ERROR; positive checks that alert rules, host-down, same-named
   clusters, the disk incident and the digest act in both tenants. The
-  network is blocked (`httpx` transport, sockets). ClickHouse calls:
-  `PHASE6_CH_JOBS` (7) strict xfail "phase 6".
+  network is blocked (`httpx` transport, sockets). Every ClickHouse call
+  of a job is scoped to the tenant whose iteration made it (the seven
+  jobs that must reach ClickHouse here are required to); scoped reads get
+  canned rows of their own tenant (`FakeClickHouse.responders`: ten days
+  of agent disk metrics, so the disk predictions act per tenant).
 - `tests/test_tenant_fail_closed.py`: every tenant-owned model raises on
   read and on write without a tenant, every tenant settings key raises
-  without a tenant; ClickHouse without a tenant: strict xfail "phase 6".
+  without a tenant; a ClickHouse query without a tenant raises.
 - Kept: `test_tenant_isolation_smoke.py`, `test_tenant_auth_binding.py`,
   `test_tenant_inprocess_state.py` (one test per row of the in-process
   state table), `test_tenancy*.py`.
@@ -1698,16 +1703,20 @@ Deviations / limits:
   id.
 - Job tests require an effect in *both* tenants (a row changed, a message
   sent, a prompt built, or the tenant named in the job's report), except
-  the three jobs that act only on ClickHouse data. In-memory SQLite is one
+  log analytics and the self-check (they need ClickHouse series the fake
+  does not serve). In-memory SQLite is one
   shared connection, so data-plane passes run one tenant at a time there.
-- The walk runs on SQLite: layer 1 and the explicit predicates; RLS is
-  phase 7's CI job.
+- The walk runs on SQLite in the main suite and, since the integration,
+  also on PostgreSQL as `nodeglow_app` with RLS on (phase 7's router mode,
+  `ROUTER_TESTS_ON_PG` in `tests/test_migrations_tenancy_pg.py`, CI
+  `migrations` job) — there a real foreign key pointing at another
+  tenant is already refused by the composite keys.
 - API-key mode walks the routes that accept a key (`/api/v1`, `/api/v2`);
   the others answer 401/302 to a key and are skipped.
 
-Tests: 1643 passed, 8 skipped, 33 xfailed (with ee); 1563 passed, 8
-skipped, 32 xfailed (`NODEGLOW_DISABLE_EE=1`). The isolation files add
-about 45 s to the suite on SQLite.
+Tests (integration branch): 1734 passed, 27 skipped, no xfail (with ee);
+1652 passed, 28 skipped (`NODEGLOW_DISABLE_EE=1`); PostgreSQL module 36
+passed. The isolation files add about 50 s to the suite on SQLite.
 
 ### Open items (after phases 5–8)
 
@@ -1719,23 +1728,12 @@ about 45 s to the suite on SQLite.
   with `NODEGLOW_RLS=off` until switched deliberately; a `BYPASSRLS` role for
   system scope (the bypass is a setting today); the `system_scope` write
   audit still does not see raw SQL (backup restore).
-- **Phase 6 — the suite's targets:** the ClickHouse targets are strict
-  xfails (reason `"phase 6"`): `PHASE6_CH_ROUTES` in
-  `tests/test_routers/test_tenant_isolation.py` (24 routes),
-  `PHASE6_CH_JOBS` in `tests/test_tenant_job_isolation.py` (7 jobs), the
-  ee daily summary (`ee/backend/tests/test_daily_summary_isolation.py`)
-  and the fail-closed `query()` test in `tests/test_tenant_fail_closed.py`.
-  A fixed route or job XPASSes and fails the run — remove its entry. The
-  mechanism is encoded once, in `ch_call_is_scoped` (custom setting
-  `SQL_nodeglow_tenant`, or a `tenant_id` predicate with a `tenant*`
-  parameter; inserts need a `tenant_id` column; `system.*` is
-  installation-level); adjust it there if phase 6 differs. The fake
-  client replaces `clickhouse_client.get_client`, so whatever the helpers
-  add reaches it.
-- **Phase 7 — from phase 8:** `system_status` now names the tenant in
-  its raw counts (table above); the backup routes are operator-only. The isolation walk
-  runs on SQLite, i.e. without RLS — it tests layer 1 and the explicit
-  predicates; the Postgres CI job remains the place for layer 2.
+- **Isolation suite:** the ClickHouse mechanism is encoded once, in
+  `ch_call_is_scoped` (tests/test_routers/test_tenant_isolation.py) —
+  a change of phase 6's contract must change it (its self-test breaks
+  otherwise). Log analytics and the self-check still have no required
+  effect in the job tests (they need ClickHouse series the fake does not
+  serve).
 - Still true from phase 2: work spawned with `asyncio.create_task` inherits
   the context; a task started in `system_scope` that writes must set its
   tenant itself (notifications and WebSocket broadcasts now take the
