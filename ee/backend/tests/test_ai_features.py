@@ -63,6 +63,26 @@ async def test_daily_summary_hook_schedules_the_job(monkeypatch):
     assert "hour='7'" in str(job.trigger)
 
 
+async def test_daily_summary_hook_reads_the_tenant_setting_without_context(db):
+    """Regression: the hook runs at scheduler start with no tenant; reading the
+    tenant-scoped hour raised, and the job was never registered."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from models.tenant import TenantSetting
+    from nodeglow_ee.ai import daily_summary
+
+    db.add(TenantSetting(key="daily_ai_summary_enabled", value="1"))
+    db.add(TenantSetting(key="daily_ai_summary_hour", value="6"))
+    await db.commit()
+    plain = async_sessionmaker(db.bind, expire_on_commit=False)  # no tenant binding
+    sched = AsyncIOScheduler()
+    with patch.object(daily_summary, "AsyncSessionLocal", plain):
+        await daily_summary.schedule(sched)
+    job = sched.get_job("daily_ai_summary")
+    assert job is not None and "hour='6'" in str(job.trigger)
+
+
 async def test_resolving_an_incident_fires_the_postmortem_hook():
     async with make_client() as (client, sf):
         async with sf() as db:

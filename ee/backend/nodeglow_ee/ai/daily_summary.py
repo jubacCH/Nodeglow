@@ -463,11 +463,28 @@ async def run_daily_ai_summary():
 
 
 async def schedule(scheduler) -> None:
-    """Scheduler hook: add the daily job at the configured hour (default 08:00)."""
-    import database  # looked up at call time, like the core start_scheduler()
+    """Scheduler hook: add the daily job at the configured hour (default 08:00).
 
-    async with AsyncSessionLocal() as db:
-        hour = int(await database.get_setting(db, "daily_ai_summary_hour", "8") or "8")
+    The hour is a tenant setting and the hook runs at scheduler start, with
+    no tenant: it reads every active tenant's hour (system scope, explicit
+    tenant) and fires at each of them. The job runs per tenant; its 20-hour
+    duplicate protection keeps it to one summary a day per tenant. With one
+    tenant this is exactly that tenant's hour (per-tenant cron: phase 5).
+    """
+    import database  # looked up at call time, like the core start_scheduler()
+    from services.tenancy import backend, system_scope
+
+    hours: set[int] = set()
+    with system_scope("daily AI summary: read every tenant's hour"):
+        tenant_ids = await backend().active_tenant_ids()
+        async with AsyncSessionLocal() as db:
+            for tid in tenant_ids:
+                raw = await database.get_setting(db, "daily_ai_summary_hour", "8", tenant_id=tid)
+                try:
+                    hours.add(max(0, min(23, int(raw or "8"))))
+                except (TypeError, ValueError):
+                    hours.add(8)
+    hour = ",".join(str(h) for h in sorted(hours or {8}))
     scheduler.add_job(run_daily_ai_summary, "cron",
                       hour=hour, minute=0,
                       id=JOB_ID, replace_existing=True,
