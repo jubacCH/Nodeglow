@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10
+Status: design · 2026-10-10 — phases 1–2 implemented 2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -782,8 +782,8 @@ is user-visible until phase 7.
 | # | Step | Where | Effort |
 |---|---|---|---|
 | 0 | Spikes: CH row policy with custom setting on 24.8 via clickhouse-connect; RLS + `set_config` per transaction with asyncpg/SQLAlchemy; column-based TTL | — | S |
-| 1 | Schema foundation: new tables, `tenant_id` + backfill + composite uniques/FKs, `TenantScoped` mixin; static test "every table classified" | core | L |
-| 2 | Tenant context: middleware resolution, `system_scope()`, session filter fail-closed; every router passes in single-tenant mode | core | L |
+| 1 ✅ | Schema foundation: new tables, `tenant_id` + backfill + composite uniques/FKs, `TenantScoped` mixin; static test "every table classified" | core | L |
+| 2 ✅ | Tenant context: middleware resolution, `system_scope()`, session filter fail-closed; every router passes in single-tenant mode | core | L |
 | 3 | Settings split + registry; `main.py` caches keyed; per-user dashboard layout | core | M |
 | 4 | Auth binding: memberships replace `users.role`, API keys/install tokens/agents bound, audit fields, WebSocket/SSE scoping, notifications per tenant, in-process state table above | core | L |
 | 5 | Scheduler: per-tenant analysis loops, fair-share queue for data-plane jobs, per-tenant metrics | core | M |
@@ -801,6 +801,178 @@ S ≈ days, M ≈ 1–2 weeks, L ≈ 3–5 weeks for one developer. Phases 1–8
 core foundation) are roughly three months; a first sellable MSP install (9–11)
 another one and a half; SaaS readiness depends on probe-side integrations,
 which are outside this plan.
+
+## Implementation status
+
+### Phase 1 — schema foundation (done)
+
+Migrations `039`–`041` (the series starts at 039, not 035: 035–038 were
+taken by other work in the meantime).
+
+- **039** creates `providers`, `tenants`, `sites`, `tenant_memberships`,
+  `provider_memberships` (schema only, `ee`) and `tenant_settings` (empty
+  until phase 3); inserts provider 1, tenant 1 (name from `site_name`), site 1
+  and advances the serial sequences; every existing user becomes a member of
+  tenant 1 with `users.role`.
+- **040** adds `tenant_id` to the 26 pre-existing tenant-owned tables,
+  backfills 1, `NOT NULL` without server default (`audit_logs` stays
+  nullable); `site_id` (backfilled 1) on `ping_hosts`, `agents`,
+  `agent_install_tokens`, `subnet_scan_schedules`; `user_preferences` gets
+  `tenant_id` and the primary key `(user_id, tenant_id)`.
+- **041** adds `UNIQUE (tenant_id, id)` on the seven parents, turns the 10
+  existing references between tenant-owned tables (plus the 4 new `site_id`
+  references) into composite FKs, makes the global
+  uniques per tenant and puts `tenant_id` first in the hot-path indexes of
+  `snapshots` and `incidents`.
+- Fresh installs (`create_all` in `migrate.py`) get the default rows from
+  `models.tenant.ensure_default_tenant`, called by `init_db`.
+- Classification: **29 tenant-owned, 9 global** tables
+  (`models.tenant.GLOBAL_TABLES`, enforced by
+  `tests/test_tenancy_classification.py`, which also checks the shape: index
+  leading with `tenant_id`, composite references, per-tenant uniqueness).
+- Verified on PostgreSQL 16 (`tests/test_migrations_tenancy_pg.py`, runs when
+  `NODEGLOW_PG_TEST_URL` is set): upgrade from 038 with seeded data,
+  cross-tenant FK rejection, `SET NULL (probe_id)`, downgrade to 038 and back,
+  fresh install vs. chain with `alembic check`. The chain itself cannot run on
+  SQLite (revision 022 uses a PostgreSQL regex) — that predates this work.
+
+Deviations from the text above:
+
+- `maintenance_windows` (not in the table) is tenant-owned; so are `sites`,
+  `tenant_settings` and `user_preferences`.
+- `user_preferences` keeps its column-per-preference shape (revision 038):
+  primary key `(user_id, tenant_id)`, not `(user_id, tenant_id, key)`.
+- `site_id` is **nullable**. The session filter stamps the tenant's default
+  site (`TenancyBackend.default_site_id`) on new rows; NOT NULL can follow once
+  site-scoped resolution (phase 10) sets it everywhere.
+- The `SET NULL` references (`ping_hosts.probe_id`,
+  `snmp_host_configs.credential_id`) are `ON DELETE SET NULL (column)` and
+  therefore PostgreSQL-only DDL (`ddl_if`); SQLite does not enforce foreign
+  keys in this code base anyway.
+- Not added yet, because nothing reads them before phase 4:
+  `sessions.active_tenant_id`, `users.is_operator`, `audit_logs.provider_id` /
+  `acting_via`.
+- Memberships are written once by 039. Users created afterwards (setup,
+  users API, LDAP auto-provisioning) get no membership row; phase 4 must
+  backfill again (`INSERT … WHERE NOT EXISTS`, as in 039) before switching
+  auth over.
+- `host_baselines` has no `site_id`; its unique key is
+  `(tenant_id, host_key, hour, dow)`.
+
+### Phase 2 — tenant context (done)
+
+`services/tenancy.py`:
+
+- `TenantContext` in a `ContextVar`; `tenant_scope(id)`, `system_scope(reason)`
+  (reason mandatory), `current_tenant_id()`, `session_tenant_id(db)`,
+  `bind_session(db, id)` (a session acting for one tenant when no context is
+  set — used by the test fixtures).
+- The filter is installed on SQLAlchemy's `Session` class (`models/__init__`),
+  so it covers every session, including ones tests build themselves.
+  `do_orm_execute` adds `with_loader_criteria(TenantScoped, tenant_id == ctx)`
+  to ORM SELECT/UPDATE/DELETE (verified for joins, subqueries, `EXISTS`,
+  aliases, unions, CTEs, relationship loads, bulk UPDATE/DELETE, `get()`).
+  `before_flush` stamps `tenant_id` and the default `site_id`, refuses a
+  different tenant and refuses moving a row between tenants.
+- **Fail closed:** without a context, any ORM statement that touches a
+  tenant-owned table raises `TenantContextError` (found by walking the
+  statement, so `select_from`, joins and subqueries count), as does a flush
+  of a new tenant-owned object. In `system_scope` reads are unfiltered and a
+  new row must carry `tenant_id` explicitly (NULL only where the model allows
+  it). Global tables need no context. Same behaviour in tests and production.
+- Extension point: `extensions.TenancyBackend` (protocol:
+  `resolve_request_tenant`, `list_tenants_for`, `active_tenant_ids`,
+  `effective_role`, `can_create_tenant`, `default_site_id`), registered with
+  `registry.set_tenancy_backend()`; without a plugin
+  `services.tenancy.SingleTenancy` (always tenant 1). This replaces the
+  `ee.register(app)` sketch in "Code structure" — it follows the existing
+  `ee_loader` / `extensions.registry` mechanism.
+
+Wiring:
+
+- **Middleware** (`inject_globals`): after the user, the backend resolves the
+  tenant (`None` → 404), the role comes from `effective_role`, and the
+  downstream app runs in `tenant_scope`; the context is reset afterwards.
+- **Login/logout** (`/api/auth/`, skipped by the middleware): the audit row is
+  written in the user's tenant (`user_tenant_scope`).
+- **API keys** (`require_api_key`): key lookup in `system_scope`, then the
+  request runs in the key's tenant.
+- **Agents** (`/api/agent/*`, `/install/*`): token lookups (agent token,
+  install token) in `system_scope`; the rest of report/logs/enrol runs in the
+  agent's / token's tenant. Enrolment takes tenant and site from the install
+  token (the legacy shared key enrols into tenant 1), and the re-enrolment
+  hostname match and the PingHost match are now tenant-scoped.
+- **WebSocket** `/ws/live`: tenant resolved like HTTP; broadcast scoping is
+  phase 4.
+- **Scheduler**: every job declares its tenancy (asserted by
+  `test_every_scheduled_job_declares_its_tenancy`, and the job smoke test now
+  hands jobs unbound sessions). `per_tenant_job` (one iteration per
+  `active_tenant_ids()` in `tenant_scope`, one tenant's error does not stop the
+  others) for correlation, log intelligence/analytics, alert rules, backup
+  compliance, cleanup, weekly digest, self-check, disk predictions **and the
+  data-plane jobs** (ping, integrations, SNMP, SSL, DNS, port discovery,
+  MonitoringSource runners incl. subnet scans) and the `ee` daily AI summary.
+  `system_job` for installation jobs: ClickHouse log cleanup, GeoIP update,
+  legacy API-key cleanup (which writes one audit row per affected tenant).
+  `check_disk_space` records the installation sample, then raises the
+  incident per tenant.
+- **Syslog**: the host cache (one listener for the installation) is built in
+  `system_scope`; the template cache loads tenant 1's templates (the direct
+  listener feeds the default tenant).
+- **Startup**: `ensure_default_tenant` in `system_scope`.
+- **Backup restore**: rows from a pre-040 backup get the importing tenant and
+  its default site.
+
+Deviation: the spec has data-plane jobs as one global pass in `system_scope`
+with per-item tenant context. In phase 2 they run as per-tenant loops instead —
+identical with one tenant, stamping and filtering for free, and no unscoped
+insert path. Phase 5 replaces the loop with the global pass and the fair-share
+queue. `system_scope` entries are logged at DEBUG, not yet audited (phase 4).
+
+Performance: with a context the cost is one cached `with_loader_criteria`
+option per statement (the tenant id is a bound parameter); the statement walk
+runs only for context-less statements (in practice the global session/user/
+settings lookups). Statement counts are unchanged
+(`test_query_count_does_not_grow_with_hosts_or_incidents` passes). Rough
+timing of `tests/test_routers/test_dashboard_v2.py` on SQLite: 1.18 s →
+1.38 s for the module (best of 3, includes seeding the default tenant per
+client); the heaviest single test 0.17 s → 0.18 s.
+
+### Raw SQL and Core statements on tenant-owned tables (input for phase 7)
+
+The ORM filter does not see these. Each must get an explicit tenant predicate,
+become operator-only, or rely on RLS.
+
+| Where | Statement | Tables | Today | Phase 7 / before tenant #2 |
+|---|---|---|---|---|
+| `routers/system.py` `system_status` | 11 × `text()`: counts and sizes | `ping_hosts`, `integration_configs`, `snapshots` (incl. `LATERAL` latest per config, oldest snapshot), `incidents` (4 counts), `alert_rules`, `log_templates`, `host_baselines`, `precursor_patterns`; plus `settings`, `pg_class`/`pg_namespace`, legacy `ping_results` | installation-wide counts | installation health → operator-only, or tenant predicate per count; RLS makes the counts per tenant |
+| `services/backup.py` `export_backup` / `get_backup_info` | `SELECT * FROM <t>`, `SELECT COUNT(*)` over `EXPORT_TABLES` | the 17 tenant-owned tables of `EXPORT_TABLES` | whole database | operator-only in multi-tenant mode; tenants use the per-tenant export (phase 12) |
+| `services/backup.py` `import_backup` | `TRUNCATE … CASCADE`, `INSERT INTO <t>`, `setval`, `session_replication_role` | same | replaces every tenant's data | operator-only; must not run as `nodeglow_app` (needs RLS bypass anyway) |
+| `services/log_intelligence.py` `_write_template_batch` | Core `UPDATE log_templates` (`LogTemplate.__table__`, executemany) | `log_templates` | tenant predicate added explicitly | covered |
+| `services/log_intelligence.py` `_write_template_batch`, `_upsert_baselines` | ORM-enabled `INSERT … ON CONFLICT` | `log_templates`, `host_baselines` | `tenant_id` put into the rows explicitly, conflict target includes it; refused without context | covered |
+| `models/tenant.py` `ensure_default_tenant`, migration 039 | `setval` on serial sequences | `providers`, `tenants`, `sites` | owner/startup only | runs as owner |
+
+The `text()` statements the spec listed in `services/digest.py`,
+`services/postmortem.py`, `services/snmp.py` and `scheduler.py` no longer
+exist (grep 2026-10-11). `ee/` contains no raw SQL. ClickHouse is unchanged
+(phase 6).
+
+### Open items for phases 3–4
+
+- In-process caches are still keyed without tenant (table in "In-process
+  state"): syslog host cache, log-intelligence caches, `_nav_cache` /
+  `_settings_cache`, disk-prediction cache, notification cooldown.
+- `notify()` reads global settings; WebSocket and syslog live tail broadcast
+  to everyone.
+- Memberships for users created after 039 (see above); `users.role` remains
+  the source of truth.
+- Settings are untouched (`tenant_settings` is empty); `get_setting` has no
+  tenant awareness yet.
+- Subnet-scan auto-added hosts land in the tenant's default site, not the
+  schedule's `site_id`.
+- Code that spawns work outside the request (`asyncio.create_task`) inherits
+  the context by `contextvars` semantics; a task started in `system_scope`
+  that writes must set its tenant itself.
 
 ## Risks
 
