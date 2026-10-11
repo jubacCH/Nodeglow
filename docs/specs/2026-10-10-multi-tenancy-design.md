@@ -1278,8 +1278,8 @@ cross-tenant references; the app role cannot TRUNCATE, disable RLS or write
 `alembic_version`; flag off → RLS off again; downgrade removes the
 policies; the single-user upgrade is unchanged; an owner without
 CREATEROLE upgrades with a warning; the app's own hook (contexts in one
-transaction, savepoint rollback, ORM insert, pool reuse); and three router
-test modules (isolation smoke, auth binding, smoke) run against PostgreSQL
+transaction, savepoint rollback, ORM insert, pool reuse); and six router
+test modules (isolation smoke, auth binding, smoke, review fixes, API v1, dashboard) run against PostgreSQL
 as `nodeglow_app` with RLS on (`tests/test_routers/conftest.py`, PostgreSQL
 mode). Two test seeds needed an extra flush there: the unit of work does not
 order inserts by foreign keys without a `relationship()` (a system-scope
