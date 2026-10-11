@@ -317,8 +317,20 @@ async def test_plan_caps_the_tenants_retention_settings(env):
 
     # The operator moves the tenant to the 30-day tier: stored values above
     # it (and "keep forever") come down, values below stay.
+    # Lowering stored values (the cleanup then deletes history for good)
+    # needs an explicit confirmation; without it nothing changes.
     env.login_as(env.op_session)
     r = await env.client.patch("/api/tenants/2", json={"plan": "standard"})
+    assert r.status_code == 409 and r.json()["code"] == "retention_would_lower", r.text
+    assert r.json()["retention_lowered"] == {
+        "integration_retention_days": {"from": 80, "to": 30},
+        "incident_event_retention_days": {"from": 0, "to": 30},
+    }
+    async with env.sf() as s:
+        assert (await s.get(Tenant, 2)).plan == "professional"
+    assert await env.audit("tenant.update") == []
+    r = await env.client.patch("/api/tenants/2", json={"plan": "standard",
+                                                       "confirm_retention_lowering": True})
     assert r.status_code == 200 and r.json()["plan"] == "standard" and r.json()["retention_days"] == 30
     from models.settings import get_setting
     from services import tenant_jobs

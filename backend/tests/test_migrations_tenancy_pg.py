@@ -685,6 +685,9 @@ ROUTER_TESTS_ON_PG = [
     "../ee/backend/tests/test_tenancy_lifecycle.py",
     "../ee/backend/tests/test_tenancy_support.py",
     "../ee/backend/tests/test_tenancy_purge.py",
+    # Phase 9 hardening: shared identities, installation AI keys, support
+    # access without IAM, default tenant plan, fail-closed retention cap.
+    "../ee/backend/tests/test_tenancy_hardening.py",
 ]
 
 

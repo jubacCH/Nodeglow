@@ -60,11 +60,13 @@ _SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 class LifecycleError(Exception):
     """A refused lifecycle action: the message is for the operator."""
 
-    def __init__(self, message: str, status: int = 400, code: str | None = None):
+    def __init__(self, message: str, status: int = 400, code: str | None = None,
+                 extra: dict | None = None):
         super().__init__(message)
         self.message = message
         self.status = status
         self.code = code
+        self.extra = extra or {}
 
 
 # ── Preconditions ────────────────────────────────────────────────────────────
@@ -390,9 +392,20 @@ async def cancel_deletion(db, request, tenant: Tenant) -> Tenant:
 
 async def update_tenant(db, request, tenant: Tenant, body: dict) -> Tenant:
     """Rename and/or assign a plan (the operator's choice; tenant admins
-    choose retention within it)."""
+    choose retention within it).
+
+    ``plan``: a key of :data:`plans.PLANS`, or ``null`` for "no plan" (only
+    the installation caps — how a tenant can be taken back off a tier). The
+    default tenant (the installation's own production data) gets no plan:
+    only ``null`` is accepted there. A plan that would lower stored
+    retention values (and so make the nightly cleanup delete history for
+    good) is refused with ``409 retention_would_lower`` and the list of
+    what would change, unless ``confirm_retention_lowering`` is true.
+    """
     await require_licence()
     changes: dict = {}
+    if "plan" in body and body.get("plan") is not None:
+        _refuse_default(tenant, "given a plan")
     if "name" in body:
         name = body.get("name")
         name = name.strip() if isinstance(name, str) else ""
@@ -405,11 +418,23 @@ async def update_tenant(db, request, tenant: Tenant, body: dict) -> Tenant:
                 from models.settings import set_setting
 
                 await set_setting(db, "site_name", name, commit=False)
-    if "plan" in body:
+    if "plan" in body and body.get("plan") is None:
+        if tenant.plan is not None:
+            changes["plan"] = {"from": tenant.plan, "to": None}
+            tenant.plan = None
+    elif "plan" in body:
         plan = plans.get_plan(body.get("plan"))
         if plan is None:
             raise LifecycleError(f"Unknown plan {body.get('plan')!r}.")
         if plan.key != tenant.plan:
+            lowered = await plans.retention_reductions(db, tenant.id, plan)
+            if lowered and body.get("confirm_retention_lowering") is not True:
+                raise LifecycleError(
+                    f"The plan {plan.name} keeps data {plan.retention_days} days; "
+                    f"{len(lowered)} retention setting(s) of {tenant.name} are higher and would "
+                    "be lowered, and the nightly cleanup would then delete the older history "
+                    "for good. Confirm to go ahead.",
+                    409, "retention_would_lower", extra={"retention_lowered": lowered})
             changes["plan"] = {"from": tenant.plan, "to": plan.key}
             tenant.plan = plan.key
             clamped = await plans.clamp_tenant_retention(db, tenant.id, plan)

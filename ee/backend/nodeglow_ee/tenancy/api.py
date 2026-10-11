@@ -43,6 +43,7 @@ def _error(exc: lifecycle.LifecycleError) -> JSONResponse:
     body = {"error": exc.message}
     if exc.code:
         body["code"] = exc.code
+    body.update(exc.extra)
     return JSONResponse(body, status_code=exc.status)
 
 
@@ -94,6 +95,8 @@ async def _tenant_action(request: Request, db: AsyncSession, tenant_id: int, act
     except lifecycle.LifecycleError as exc:
         await db.rollback()
         return _error(exc)
+    # A suspended (or resumed) tenant's grants close (open) at once.
+    support.invalidate_grants()
     members = (await lifecycle.member_counts(db)).get(tenant.id, 0)
     return lifecycle.public(tenant, members=members)
 
@@ -186,6 +189,7 @@ async def grant_support_access(request: Request, db: AsyncSession = Depends(get_
                      details={"role": role, "hours": hours,
                               "expires_at": support.public(grant, now)["expires_at"]})
     await db.commit()
+    support.invalidate_grants()
     return JSONResponse(support.public(grant, now), status_code=201)
 
 
@@ -210,4 +214,5 @@ async def revoke_support_access(grant_id: int, request: Request, db: AsyncSessio
         await log_action(db, request, "support.revoke", "support_grant", grant.id,
                          grant.reason[:256], details={"was_active": was_active})
         await db.commit()
+        support.invalidate_grants()
     return support.public(grant, now)

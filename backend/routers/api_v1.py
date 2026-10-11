@@ -179,8 +179,17 @@ async def require_operator(request: Request, api_key: ApiKey = Depends(require_a
     reads and replaces every tenant's rows. In the core the operator is the
     admin of the default tenant, so this is ``require_admin`` there."""
     user = getattr(request.state, "current_user", None)
-    if not tenancy.backend().is_operator(user, api_key.role, api_key.tenant_id):
+    if not tenancy.backend().is_operator(user, api_key.role, api_key.tenant_id,
+                                         via=tenancy.request_acting_via(request)):
         raise HTTPException(status_code=403, detail="Installation operator required.")
+    return api_key
+
+
+async def require_access_admin(request: Request, api_key: ApiKey = Depends(require_admin)) -> ApiKey:
+    """Managing the tenant's API keys: an admin, but not through support
+    access (a key made by a support session would outlive its grant)."""
+    if tenancy.request_via_support(request):
+        raise HTTPException(status_code=403, detail=tenancy.SUPPORT_IAM_REFUSED)
     return api_key
 
 
@@ -228,7 +237,7 @@ def _extract_device_data(int_type: str, raw: dict, host: PingHost) -> dict | Non
 # ── API Key Management ───────────────────────────────────────────────────────
 
 
-@router.post("/keys", summary="Create API key", dependencies=[Depends(require_admin)])
+@router.post("/keys", summary="Create API key", dependencies=[Depends(require_access_admin)])
 async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
     body = await request.json()
     name = (body.get("name") or "").strip()
@@ -264,7 +273,7 @@ async def list_api_keys(db: AsyncSession = Depends(get_db)):
     ]
 
 
-@router.delete("/keys/{key_id}", summary="Delete API key", dependencies=[Depends(require_admin)])
+@router.delete("/keys/{key_id}", summary="Delete API key", dependencies=[Depends(require_access_admin)])
 async def delete_api_key(key_id: int, db: AsyncSession = Depends(get_db)):
     key = await db.get(ApiKey, key_id)
     if not key:

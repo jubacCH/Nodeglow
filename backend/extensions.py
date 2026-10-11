@@ -106,9 +106,11 @@ class TenancyBackend(Protocol):
     async def effective_role(self, user: Any, tenant_id: int) -> str | None:
         """The user's role (admin | editor | readonly) in that tenant, None without access."""
 
-    def is_operator(self, user: Any, role: str | None = None, tenant_id: int | None = None) -> bool:
+    def is_operator(self, user: Any, role: str | None = None, tenant_id: int | None = None,
+                    via: str | None = None) -> bool:
         """Whether the user may manage installation settings (``role``: the
-        user's role in the request's tenant ``tenant_id``)."""
+        user's role in the request's tenant ``tenant_id``, granted ``via``
+        — a role from support access never counts)."""
 
     def can_create_tenant(self) -> bool:
         """Whether a second tenant may be created on this installation."""
