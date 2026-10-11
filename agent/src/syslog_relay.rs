@@ -31,7 +31,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::client::ApiClient;
+use crate::client::{ApiClient, RelaySent};
 
 /// Port the relay listens on when the server names none.
 pub const DEFAULT_PORT: u16 = 514;
@@ -316,6 +316,9 @@ pub struct RelayStatus {
     pub port: u16,
     pub received: u64,
     pub forwarded: u64,
+    /// Forwarded, but refused by the backend (not on the allowlist, invalid,
+    /// oversized, or a whole batch refused for good).
+    pub rejected: u64,
     pub dropped: u64,
     pub buffered: u64,
     pub send_failures: u64,
@@ -327,6 +330,7 @@ struct Shared {
     buffer: Mutex<RelayBuffer>,
     received: AtomicU64,
     forwarded: AtomicU64,
+    rejected: AtomicU64,
     dropped: AtomicU64,
     send_failures: AtomicU64,
     tcp_connections: AtomicUsize,
@@ -339,6 +343,7 @@ impl Shared {
             buffer: Mutex::new(RelayBuffer::new(MAX_BUFFERED_ENTRIES, MAX_BUFFERED_BYTES)),
             received: AtomicU64::new(0),
             forwarded: AtomicU64::new(0),
+            rejected: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             send_failures: AtomicU64::new(0),
             tcp_connections: AtomicUsize::new(0),
@@ -525,10 +530,25 @@ async fn forward_loop(shared: Arc<Shared>, api: Arc<ApiClient>, hostname: String
             if batch.is_empty() {
                 break;
             }
-            let n = batch.len() as u64;
             match api.send_relay_logs(&hostname, &batch).await {
-                Ok(()) => {
-                    shared.forwarded.fetch_add(n, Ordering::Relaxed);
+                Ok(sent) => {
+                    match sent {
+                        RelaySent::Done { accepted, rejected } => {
+                            shared.forwarded.fetch_add(accepted, Ordering::Relaxed);
+                            if rejected > 0 {
+                                shared.rejected.fetch_add(rejected, Ordering::Relaxed);
+                                debug!("Syslog relay: backend refused {rejected} entr(ies)");
+                            }
+                        }
+                        RelaySent::Refused(status) => {
+                            // Resending cannot help: discard, do not loop.
+                            shared.rejected.fetch_add(batch.len() as u64, Ordering::Relaxed);
+                            warn!(
+                                "Syslog relay: backend refused a batch of {} ({status}); discarded",
+                                batch.len()
+                            );
+                        }
+                    }
                     if failing {
                         info!("Syslog relay: backend reachable again, forwarding");
                     }
@@ -640,6 +660,7 @@ impl SyslogRelay {
             port: self.current.map(|c| c.port).unwrap_or(0),
             received: self.shared.received.load(Ordering::Relaxed),
             forwarded: self.shared.forwarded.load(Ordering::Relaxed),
+            rejected: self.shared.rejected.load(Ordering::Relaxed),
             dropped: self.shared.dropped.load(Ordering::Relaxed),
             buffered: self.shared.buffer().len() as u64,
             send_failures: self.shared.send_failures.load(Ordering::Relaxed),
@@ -844,6 +865,7 @@ mod tests {
             port: 514,
             received: 3,
             forwarded: 2,
+            rejected: 0,
             dropped: 1,
             buffered: 0,
             send_failures: 0,
