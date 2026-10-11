@@ -26,7 +26,8 @@ hardening, backups, the encryption key, diagnosis — is in
 
 ## Editions and images
 
-Every release publishes four images, each for `linux/amd64` and `linux/arm64`:
+Every release publishes four images for `linux/amd64` (arm64 images are planned;
+until then, build from source on arm64 hosts):
 
 | Image | Contents | License |
 |---|---|---|
@@ -62,7 +63,7 @@ The release images never contain the proprietary Ookla speedtest CLI
 
 ## Requirements
 
-- Linux host (ICMP checks need `NET_RAW`), x86_64 or arm64
+- Linux host (ICMP checks need `NET_RAW`), x86_64 (arm64: build from source)
 - Docker Engine 20.10+ with the Compose v2 plugin (`docker compose`)
 - 2 vCPU / 4 GB RAM / 20 GB SSD minimum — details in
   [OPERATIONS.md](OPERATIONS.md#system-requirements-and-sizing)

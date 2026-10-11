@@ -28,7 +28,10 @@ concurrency:
 
 env:
   IMAGE_PREFIX: ghcr.io/jubacch
-  PLATFORMS: linux/amd64,linux/arm64
+  # amd64 only for now: the Next.js build under QEMU emulation did not finish
+  # within the 6 h job limit (v2.0.0-rc.5). arm64 returns with native arm
+  # runners (ubuntu-24.04-arm) and a per-platform build + manifest merge.
+  PLATFORMS: linux/amd64
   # Pinned like in security.yml; bump deliberately.
   TRIVY_IMAGE: aquasec/trivy:0.58.1
   COSIGN_VERSION: v3.1.3
@@ -112,6 +115,7 @@ jobs:
     name: Image ${{ matrix.name }}
     needs: [prepare, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write       # push to GHCR
@@ -423,7 +427,7 @@ jobs:
             echo "sudo sh install.sh --version $VERSION"
             echo '```'
             echo
-            echo "Images (multi-arch amd64/arm64, cosign-signed, SBOM + provenance):"
+            echo "Images (linux/amd64, cosign-signed, SBOM + provenance):"
             echo
             for img in nodeglow-backend nodeglow-backend-community nodeglow-frontend nodeglow-updater; do
               echo "- \`$IMAGE_PREFIX/$img:$VERSION\`"
