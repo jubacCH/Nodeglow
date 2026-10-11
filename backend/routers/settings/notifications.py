@@ -210,11 +210,8 @@ async def save_digest_settings(
     await set_setting(db, "digest_day", digest_day)
     await set_setting(db, "digest_hour", digest_hour)
 
-    from scheduler import scheduler
-    job = scheduler.get_job("weekly_digest")
-    if job:
-        job.reschedule(trigger="cron", day_of_week=int(digest_day),
-                       hour=int(digest_hour), minute=0)
+    # No reschedule: the digest job ticks hourly and decides per tenant
+    # (its day and hour in its time zone) when it runs.
 
     await log_action(db, request, "digest.settings.update")
     await db.commit()

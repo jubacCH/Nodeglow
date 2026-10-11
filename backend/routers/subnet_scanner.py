@@ -95,8 +95,12 @@ def _match_host(r: dict, idx: dict[str, PingHost]) -> PingHost | None:
     return host
 
 
-async def auto_add_hosts(db: AsyncSession, scan_results: list[dict]) -> tuple[int, list[str]]:
-    """Add alive, unmonitored hosts to PingHosts. Returns (count, list of added names)."""
+async def auto_add_hosts(db: AsyncSession, scan_results: list[dict],
+                         site_id: int | None = None) -> tuple[int, list[str]]:
+    """Add alive, unmonitored hosts to PingHosts. Returns (count, list of added names).
+
+    ``site_id``: the scan schedule's site — the hosts it finds live there
+    (None: the tenant's default site, stamped by the session filter)."""
     q = await db.execute(select(PingHost))
     all_hosts = q.scalars().all()
     idx = _build_monitored_index(all_hosts)
@@ -127,6 +131,7 @@ async def auto_add_hosts(db: AsyncSession, scan_results: list[dict]) -> tuple[in
             enabled=True,
             source="scanner",
             source_detail=f"Auto-scan ({dns_name})" if dns_name else "Auto-scan",
+            site_id=site_id,
         )
         db.add(host)
         existing_ips.add(ip)
@@ -348,7 +353,7 @@ async def api_run_schedule_now(schedule_id: int, db: AsyncSession = Depends(get_
         added_names: list[str] = []
 
         if schedule.auto_add:
-            added, added_names = await auto_add_hosts(db, scan_results)
+            added, added_names = await auto_add_hosts(db, scan_results, schedule.site_id)
 
         # Update schedule stats
         schedule.last_scan = datetime.utcnow()
@@ -450,7 +455,7 @@ async def run_scheduled_scans():
 
             if sched.auto_add:
                 async with AsyncSessionLocal() as db:
-                    added, added_names = await auto_add_hosts(db, scan_results)
+                    added, added_names = await auto_add_hosts(db, scan_results, sched.site_id)
 
             # Update schedule stats + write log entry
             async with AsyncSessionLocal() as db:

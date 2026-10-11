@@ -1,5 +1,6 @@
 """General settings: /json read endpoint, /save form, phpIPAM, GeoIP."""
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -16,6 +17,20 @@ from services.channel_secrets import LEGACY_SECRET_KEYS
 from services.tenancy import per_tenant_job
 
 from ._helpers import is_operator, require_admin, require_operator
+
+logger = logging.getLogger(__name__)
+
+
+async def _capped(db: AsyncSession, key: str, value: int) -> int:
+    """A retention value within the installation's cap (``<key>_max``)."""
+    raw = await get_setting(db, f"{key}_max")
+    try:
+        cap = int(raw) if raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        cap = 0
+    if cap <= 0:
+        return value
+    return cap if value <= 0 else min(value, cap)
 
 router = APIRouter()
 
@@ -146,29 +161,32 @@ async def save_settings(
         # when agents must reach the server on a different name than operators do.
         await set_setting(db, "agent_server_url", agent_server_url.strip().rstrip("/"))
 
-    try:
-        p_interval = max(10, min(3600, int(ping_interval)))
-    except ValueError:
-        p_interval = 60
+    # Intervals: the tenant's choice, never below the installation floor
+    # (ping_interval_min / proxmox_interval_min, default 10 s).
+    from services import tenant_jobs
+    p_interval = tenant_jobs.clamp_interval(
+        ping_interval, await tenant_jobs.interval_floor(db, tenant_jobs.PING_CADENCE),
+        tenant_jobs.PING_CADENCE)
     await set_setting(db, "ping_interval", str(p_interval))
 
-    try:
-        px_interval = max(10, min(3600, int(proxmox_interval)))
-    except ValueError:
-        px_interval = 60
+    px_interval = tenant_jobs.clamp_interval(
+        proxmox_interval, await tenant_jobs.interval_floor(db, tenant_jobs.INTEGRATION_CADENCE),
+        tenant_jobs.INTEGRATION_CADENCE)
     await set_setting(db, "proxmox_interval", str(px_interval))
 
+    # Retention: within the installation's cap (<key>_max), if one is set.
     try:
         p_ret = max(1, min(365, int(ping_retention)))
     except ValueError:
         p_ret = 30
-    await set_setting(db, "ping_retention_days", str(p_ret))
+    await set_setting(db, "ping_retention_days", str(await _capped(db, "ping_retention_days", p_ret)))
 
     try:
         px_ret = max(1, min(90, int(proxmox_retention)))
     except ValueError:
         px_ret = 7
-    await set_setting(db, "proxmox_retention_days", str(px_ret))
+    await set_setting(db, "proxmox_retention_days",
+                      str(await _capped(db, "proxmox_retention_days", px_ret)))
 
     try:
         threshold = max(1.5, min(10.0, float(anomaly_threshold)))
@@ -191,14 +209,16 @@ async def save_settings(
         int_ret = max(1, min(90, int(integration_retention)))
     except ValueError:
         int_ret = 7
-    await set_setting(db, "integration_retention_days", str(int_ret))
+    await set_setting(db, "integration_retention_days",
+                      str(await _capped(db, "integration_retention_days", int_ret)))
 
     # 0 disables incident event pruning entirely.
     try:
         ev_ret = max(0, min(365, int(incident_event_retention)))
     except ValueError:
         ev_ret = 30
-    await set_setting(db, "incident_event_retention_days", str(ev_ret))
+    await set_setting(db, "incident_event_retention_days",
+                      str(await _capped(db, "incident_event_retention_days", ev_ret)))
 
     for key, val, lo, hi, default in [
         ("proxmox_cpu_threshold",  cpu_threshold,  1, 100, 85),
@@ -230,13 +250,14 @@ async def save_settings(
         except Exception:
             pass
 
-    from scheduler import scheduler
-    ping_job = scheduler.get_job("ping_checks")
-    if ping_job:
-        ping_job.reschedule(trigger="interval", seconds=p_interval)
-    px_job = scheduler.get_job("proxmox_checks")
-    if px_job:
-        px_job.reschedule(trigger="interval", seconds=px_interval)
+    # The jobs tick at the fastest tenant's interval; this tenant's change
+    # may move the tick either way. (set_setting has committed, so the
+    # cadence query — its own session — sees the new values.)
+    from scheduler import reschedule_cadence_jobs
+    try:
+        await reschedule_cadence_jobs()
+    except Exception:
+        logger.warning("Could not reschedule the ping/integration jobs", exc_info=True)
 
     if predictor_min_confidence:
         try:
