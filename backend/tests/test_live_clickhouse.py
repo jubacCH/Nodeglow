@@ -443,13 +443,17 @@ async def test_step_b_rebuild_preserves_counts_and_resumes(ch, monkeypatch):
         assert await rb.copy_delta(admin, old, table, table) == 1
         assert await _scalar(admin, f"SELECT count() FROM {table} WHERE tenant_id = {B}") == 1
 
+        # A ClickHouse restart lifts the merge blockers on the old table;
+        # merges then rewrite its parts. That is not a reason for "attention".
+        await admin.command(f"SYSTEM START MERGES {old}")
+        await admin.command(f"OPTIMIZE TABLE {old} FINAL")
         assert await rb.rebuild_table(admin, table, waits=(0,), sleep=_nosleep) == "grace"
         monkeypatch.setattr(rb, "GRACE_HOURS", 0)
         assert await rb.rebuild_table(admin, table, waits=(0,), sleep=_nosleep) == "done"
         assert await rb.table_info(admin, old) is None
         assert await rb.rebuild_table(admin, table, waits=(0,), sleep=_nosleep) == "done"
     finally:
-        for name in (table, old, work):
+        for name in (table, old, work, table + rb.DELTA_SUFFIX):
             await admin.command(f"DROP TABLE IF EXISTS {name}")
         await _close(admin)
 
@@ -489,7 +493,7 @@ async def test_step_b_rebuild_keeps_syslog_ttl_and_indexes(ch):
             "SELECT name FROM system.data_skipping_indices WHERE database = currentDatabase() "
             "AND table = {t:String}"), {"t": table}) == [{"name": "idx_message_bloom"}]
     finally:
-        for name in (table, old, work):
+        for name in (table, old, work, table + rb.DELTA_SUFFIX):
             await admin.command(f"DROP TABLE IF EXISTS {name}")
         await _close(admin)
 
