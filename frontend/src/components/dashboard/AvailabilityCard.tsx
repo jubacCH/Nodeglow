@@ -48,8 +48,15 @@ export function AvailabilityCard({ availability: a, loading, error, className }:
           </div>
           <div aria-hidden="true" className="relative flex justify-between text-micro text-fg-3">
             <span className="num">{fmtPct(scale.lo)}</span>
-            <span className="absolute -translate-x-1/2 text-fg-2" style={{ left: `${scale.targetPct}%` }}>target</span>
-            <span className="num">100 %</span>
+            {/* Near the right end the target label would sit on top of "100 %":
+                anchor it to the marker's left instead and drop the end label. */}
+            <span
+              className={`absolute text-fg-2 ${scale.targetPct > 75 ? '-translate-x-full pr-1' : '-translate-x-1/2'}`}
+              style={{ left: `${scale.targetPct}%` }}
+            >
+              target
+            </span>
+            {scale.targetPct <= 75 && <span className="num">100 %</span>}
           </div>
           <KeyValues
             className="mt-auto"
