@@ -13,6 +13,7 @@ from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
 from ratelimit import rate_limit
 from services.audit import log_action
 from services.channel_secrets import LEGACY_SECRET_KEYS
+from services.tenancy import per_tenant_job
 
 from ._helpers import is_operator, require_admin, require_operator
 
@@ -302,28 +303,37 @@ async def save_phpipam(
     await set_setting(db, "phpipam_sync_hours", str(sync_h))
 
     from scheduler import scheduler
-    from integrations.phpipam import sync_phpipam_hosts
-    from services import integration as _int_svc
     job = scheduler.get_job("phpipam_sync")
     if sync_h > 0:
         if job:
             job.reschedule(trigger="interval", hours=sync_h)
         else:
-            async def _sync():
-                from database import AsyncSessionLocal
-                async with AsyncSessionLocal() as _db:
-                    cfgs = (await _db.execute(
-                        select(IntegrationConfig).where(IntegrationConfig.type == "phpipam")
-                    )).scalars().all()
-                    for cfg in cfgs:
-                        config_dict = _int_svc.decrypt_config(cfg.config_json)
-                        await sync_phpipam_hosts(_db, config_dict)
-            scheduler.add_job(_sync, "interval", hours=sync_h, id="phpipam_sync", replace_existing=True)
+            scheduler.add_job(run_phpipam_sync, "interval", hours=sync_h, id="phpipam_sync",
+                              replace_existing=True)
     else:
         if job:
             job.remove()
 
     return RedirectResponse(url="/settings?saved=1", status_code=303)
+
+
+@per_tenant_job
+async def run_phpipam_sync():
+    """Scheduled phpIPAM import: every tenant's phpIPAM integrations.
+
+    Declares its tenancy like the jobs in scheduler.py — scheduled jobs start
+    without any context (scheduler.ContextFreeExecutor)."""
+    from database import AsyncSessionLocal
+    from integrations.phpipam import sync_phpipam_hosts
+    from services import integration as _int_svc
+
+    async with AsyncSessionLocal() as _db:
+        cfgs = (await _db.execute(
+            select(IntegrationConfig).where(IntegrationConfig.type == "phpipam")
+        )).scalars().all()
+        for cfg in cfgs:
+            config_dict = _int_svc.decrypt_config(cfg.config_json)
+            await sync_phpipam_hosts(_db, config_dict)
 
 
 @router.post("/phpipam/sync")

@@ -562,6 +562,31 @@ async def _write_template_batch(
             )
 
 
+async def _update_templates_by_id(db: AsyncSession, rows: list[dict]) -> None:
+    """Per-row UPDATEs of log templates by id, in executemany chunks.
+
+    A Core statement with an explicit tenant predicate: the ORM "bulk UPDATE
+    by primary key" (session.execute(update(Model), rows)) is not covered by
+    the tenant filter, which therefore refuses it. Rows may carry different
+    column sets; each set is one statement.
+    """
+    if not rows:
+        return
+    tenant_id = session_tenant_id(db)
+    tbl = LogTemplate.__table__
+    groups: dict[tuple[str, ...], list[dict]] = defaultdict(list)
+    for row in rows:
+        groups[tuple(sorted(k for k in row if k != "id"))].append(row)
+    for cols, group in groups.items():
+        stmt = (
+            update(tbl)
+            .where(tbl.c.tenant_id == tenant_id, tbl.c.id == bindparam("b_id"))
+            .values({c: bindparam(f"b_{c}") for c in cols})
+        )
+        for chunk in _chunks(group, NOISE_UPDATE_CHUNK):
+            await db.execute(stmt, [{"b_id": r["id"], **{f"b_{c}": r[c] for c in cols}} for r in chunk])
+
+
 async def load_template_cache(db: AsyncSession):
     """Load the session's tenant's template hashes into its memory cache."""
     st = _tenant_state(session_tenant_id(db))
@@ -1297,14 +1322,7 @@ async def refresh_noise_scores(db: AsyncSession) -> int:
 
         changed.append({"id": tpl_id, "noise_score": score, "avg_rate_per_hour": rate})
 
-    for start in range(0, len(changed), NOISE_UPDATE_CHUNK):
-        await db.execute(
-            update(LogTemplate),
-            changed[start:start + NOISE_UPDATE_CHUNK],
-            # Nothing is loaded into the session, so there is no identity map to
-            # keep in sync — skipping it is the point of the bulk path.
-            execution_options={"synchronize_session": None},
-        )
+    await _update_templates_by_id(db, changed)
 
     await db.commit()
     log.info(
@@ -1411,11 +1429,7 @@ async def compute_severity_trends(db: AsyncSession):
 
     # Rows carry different key sets (severity_mode is optional); the ORM bulk
     # path groups them by keys itself.
-    for chunk in _chunks(changes, NOISE_UPDATE_CHUNK):
-        await db.execute(
-            update(LogTemplate), chunk,
-            execution_options={"synchronize_session": None},
-        )
+    await _update_templates_by_id(db, changes)
 
     await db.commit()
     if changes:
