@@ -299,8 +299,11 @@ async def create_tenant(db, request, body: dict) -> Tenant:
         db.add(site)
         await db.flush()
         if admin is None:
+            # users.role mirrors the role in the default tenant, of which
+            # this user is no member: the lowest role, never admin (a
+            # restore of a pre-043 backup re-derives memberships from it).
             admin = User(username=admin_username, password_hash=hash_password(body["admin_password"]),
-                         role="admin", auth_source="local")
+                         role="readonly", auth_source="local")
             db.add(admin)
             await db.flush()
         await ms.grant(db, admin, tenant.id, "admin", created_by=getattr(operator, "id", None))
