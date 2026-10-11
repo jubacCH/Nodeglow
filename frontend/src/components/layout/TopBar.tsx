@@ -1,7 +1,7 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, Keyboard, LogOut, Moon, Search, Sparkles, Sun } from 'lucide-react';
+import { Keyboard, LogOut, Moon, Search, Sparkles, Sun } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ColorMode } from '@/lib/theme';
 import { useResolvedTheme } from '@/lib/useResolvedTheme';
@@ -16,42 +16,9 @@ import { IconButton } from '@/components/ui/Button';
 import { Kbd } from '@/components/ui/Kbd';
 import { Popover, PopoverItem } from '@/components/ui/Popover';
 import { SegmentedControl } from '@/components/ui/Tabs';
-import { Tag } from '@/components/ui/Tag';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { formatAsOf } from '@/components/ui/QueryState';
-
-/** Tenant context. Multi-tenancy is planned; the control says so. */
-function TenantIndicator() {
-  return (
-    <Popover
-      label="Tenant"
-      placement="bottom-start"
-      trigger={(props) => (
-        <button
-          {...props}
-          type="button"
-          className="flex h-[36px] min-w-0 items-center gap-2 rounded-ctl pl-1.5 pr-2.5 hover:bg-surface-2"
-        >
-          <span aria-hidden="true" className="grid h-6 w-6 shrink-0 place-items-center rounded-[6px] bg-surface-3 text-micro font-semibold text-fg-2">
-            DT
-          </span>
-          <span className="truncate text-ui font-medium text-fg max-[420px]:max-w-[110px]">Default tenant</span>
-          <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-fg-3" />
-          <Tag planned className="max-[759px]:hidden">Multi-tenant · Planned</Tag>
-        </button>
-      )}
-    >
-      <div className="flex items-center gap-2.5 rounded-ng-sm bg-surface-2 px-2.5 py-[9px] text-ui">
-        <span aria-hidden="true" className="grid h-[22px] w-[22px] place-items-center rounded-[6px] bg-surface-3 text-[10px] font-semibold text-fg-2">DT</span>
-        <span className="flex-1">Default tenant</span>
-        <span className="text-meta text-fg-3">Current</span>
-      </div>
-      <p className="mt-1 border-t border-border px-2.5 pb-1.5 pt-2 text-meta text-fg-3">
-        Switching between customers (multi-tenant) is <b className="font-medium text-fg-2">planned</b> and not available yet.
-      </p>
-    </Popover>
-  );
-}
+import { TenantSwitcher } from './TenantSwitcher';
 
 function SearchButton() {
   const open = useUiStore((s) => s.setPaletteOpen);
@@ -208,11 +175,12 @@ function UserMenu() {
   );
 }
 
-/** E3 top bar: tenant, search (Ctrl+K), connection, Glow, theme, account. */
+/** E3 top bar: tenant switcher (only with several tenants), search (Ctrl+K),
+ *  connection, Glow, theme, account. */
 export function TopBar() {
   return (
     <header className="sticky top-0 z-topbar flex h-topbar items-center gap-2.5 border-b border-border bg-bg px-gutter max-[759px]:gap-1.5 max-[759px]:px-4">
-      <TenantIndicator />
+      <TenantSwitcher />
       <span className="flex-1" />
       <SearchButton />
       <ConnectionStatus />
