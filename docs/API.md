@@ -181,7 +181,7 @@ recorded).
 |---|---|---|
 | GET | `/agents` | All agents |
 | GET | `/agents/{id}` | Detail with latest metrics |
-| PATCH | `/agents/{id}` | `log_levels`, `log_channels`, `log_file_paths`, `agent_log_level`, `enabled`, and probe mode: `is_probe`, `probe_interval_seconds` |
+| PATCH | `/agents/{id}` | `log_levels`, `log_channels`, `log_file_paths`, `agent_log_level`, `enabled`, and probe mode: `is_probe`, `probe_interval_seconds`; probe syslog relay (admin, probes only): `syslog_relay_enabled`, `syslog_relay_port` (1–65535, `null` = 514). Agent responses carry `syslog_relay` (`enabled`, `port`, `status` with the probe's last reported counters; `null` for non-probes) |
 | DELETE | `/agents/{id}` | Delete / decommission |
 | POST | `/agents/{id}/uninstall` | Queue a remote uninstall |
 | GET / PUT | `/agents/{id}/services` | Watched services. PUT body `{"services": [...]}`; GET also returns the last reported states |

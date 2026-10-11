@@ -668,6 +668,22 @@ def test_app_sets_the_tenant_per_transaction(pg_db):
     }
 
 
+def test_047_probe_syslog_relay_up_and_down(pg_db):
+    _alembic(pg_db, "upgrade", "044")
+    q(pg_db, "INSERT INTO agents (name, hostname, token, enabled, is_probe, tenant_id, site_id, "
+             "created_at) VALUES ('probe', 'probe', 'tok-047', true, true, 1, 1, now())")
+    _alembic(pg_db, "upgrade", "047")
+    rows = q(pg_db, "SELECT syslog_relay_enabled, syslog_relay_port, syslog_relay_status FROM agents")
+    assert [tuple(r) for r in rows] == [(False, None, None)]
+    q(pg_db, "UPDATE agents SET syslog_relay_enabled = true, syslog_relay_port = 5514")
+    _alembic(pg_db, "downgrade", "044")
+    cols = {r["column_name"] for r in q(
+        pg_db, "SELECT column_name FROM information_schema.columns WHERE table_name = 'agents'")}
+    assert not cols & {"syslog_relay_enabled", "syslog_relay_port", "syslog_relay_status"}
+    assert [r["name"] for r in q(pg_db, "SELECT name FROM agents")] == ["probe"]
+    _alembic(pg_db, "upgrade", "head")
+
+
 # Router tests that run unchanged against PostgreSQL as nodeglow_app with RLS
 # on (tests/test_routers/conftest.py, "PostgreSQL mode").
 ROUTER_TESTS_ON_PG = [
@@ -688,6 +704,9 @@ ROUTER_TESTS_ON_PG = [
     # Phase 9 hardening: shared identities, installation AI keys, support
     # access without IAM, default tenant plan, fail-closed retention cap.
     "../ee/backend/tests/test_tenancy_hardening.py",
+    # Phase 10: probe syslog relay (a probe of A never writes into B, site
+    # scoping) with the composite site FKs and RLS of a real database.
+    "tests/test_routers/test_probe_syslog_relay_api.py",
 ]
 
 

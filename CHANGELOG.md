@@ -34,6 +34,20 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   the encrypted values and the wrapped keys, so restoring one needs
   `SECRET_KEY` as well as the passphrase. A channel secret that does not
   decrypt fails only its own notification channel.
+- Probe syslog relay: a probe can receive syslog (UDP/TCP, port 514 by
+  default) inside its network and forward it over its agent connection;
+  messages land in the probe's tenant and site and are matched against the
+  hosts of that site. Switched on per probe through the agent API
+  (`syslog_relay_enabled`, `syslog_relay_port`); needs the updated agent.
+  See docs/OPERATIONS.md "Probe syslog relay".
+- `NODEGLOW_SYSLOG_LISTENER` (`auto` / `on` / `off`) for the server's own
+  syslog listener; `off` for hosted installations where syslog is
+  probe-only.
+
+### Changed
+- An agent's own log entries are attributed to its own host by name, no
+  longer by the address the request came from (behind NAT that was the
+  customer's router).
 
 ## [2.0.0] - 2026-10-11
 
