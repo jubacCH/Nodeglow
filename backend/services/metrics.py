@@ -64,6 +64,30 @@ SCHEDULER_JOB_LAST_SUCCESS = Gauge(
 )
 
 
+# Per tenant (multi-tenancy phase 5): one series per job and tenant, recorded
+# by the tenant loops in services.tenant_jobs. The tenant label is bounded
+# (NODEGLOW_TENANT_METRIC_LABELS, default 100 distinct ids, the rest "other");
+# gauges and a counter, no histogram, so a tenant costs a handful of series.
+
+TENANT_JOB_RUNS = Counter(
+    "nodeglow_tenant_job_runs_total",
+    "Per-tenant iterations of scheduler jobs, by job, tenant and status.",
+    ["job", "tenant", "status"],
+)
+
+TENANT_JOB_LAST_DURATION = Gauge(
+    "nodeglow_tenant_job_last_duration_seconds",
+    "Wall-clock duration of the last per-tenant iteration, by job and tenant.",
+    ["job", "tenant"],
+)
+
+TENANT_JOB_LAST_SUCCESS = Gauge(
+    "nodeglow_tenant_job_last_success_timestamp",
+    "Unix timestamp of the last successful per-tenant iteration, by job and tenant.",
+    ["job", "tenant"],
+)
+
+
 # ── Syslog pipeline ──────────────────────────────────────────────────────────
 
 SYSLOG_BUFFER_SIZE = Gauge(
@@ -242,8 +266,10 @@ def instrument_job(name: str) -> Callable[[Callable[..., Awaitable[T]]], Callabl
         async def wrapper(*args, **kwargs):
             from services.tracing import tracer
             _ensure_collector()
+            from services.tenant_jobs import current_job
             start = time.time()
             token = _job_errors.set([])
+            job_token = current_job.set(name)
             with tracer.start_as_current_span(f"scheduler.{name}") as span:
                 try:
                     result = await fn(*args, **kwargs)
@@ -253,10 +279,12 @@ def instrument_job(name: str) -> Callable[[Callable[..., Awaitable[T]]], Callabl
                     span.set_attribute("error", True)
                     span.set_attribute("error.type", type(exc).__name__)
                     _job_errors.reset(token)
+                    current_job.reset(job_token)
                     raise
 
                 errors = _job_errors.get() or []
                 _job_errors.reset(token)
+                current_job.reset(job_token)
                 SCHEDULER_JOB_DURATION.labels(job=name).observe(time.time() - start)
 
                 if errors:

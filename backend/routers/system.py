@@ -174,6 +174,23 @@ def _collect_logs() -> list[str]:
     return []
 
 
+def _tenant_job_stats(request: Request) -> dict:
+    """Per-tenant job counters (multi-tenancy phase 5): the request's tenant
+    for its admins; every tenant's counters (no error texts) for operators."""
+    from services import tenant_jobs
+    from services.tenancy import request_is_admin, request_is_operator
+
+    out: dict = {}
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if request_is_admin(request) and tenant_id is not None:
+        out["tenant_jobs"] = tenant_jobs.stats.for_tenant(tenant_id)
+    if request_is_operator(request):
+        out["tenant_jobs_by_tenant"] = {
+            str(t): jobs for t, jobs in tenant_jobs.stats.by_tenant().items()
+        }
+    return out
+
+
 @router.get("/api/system/status")
 async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     now = datetime.utcnow()
@@ -194,14 +211,19 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     # lives in ClickHouse `ping_checks` since the Phase 3 cutover (Alembic 026).
     db_stats = {}
     top_tables = []
+    # Raw SQL is not seen by the tenant filter: every count of tenant-owned
+    # rows below names the request's tenant itself (sizes and planner
+    # statistics are installation-level numbers, not tenant data).
+    from services.tenancy import current_tenant_id
+    tid = {"t": current_tenant_id()}
     try:
         row = (await db.execute(text("""
             SELECT
-                (SELECT count(*) FROM ping_hosts) AS host_count,
-                (SELECT count(*) FROM integration_configs) AS config_count,
+                (SELECT count(*) FROM ping_hosts WHERE tenant_id = :t) AS host_count,
+                (SELECT count(*) FROM integration_configs WHERE tenant_id = :t) AS config_count,
                 (SELECT reltuples::bigint FROM pg_class WHERE relname = 'snapshots') AS snapshot_count,
                 (SELECT pg_size_pretty(pg_database_size(current_database()))) AS db_size
-        """))).one()
+        """), tid)).one()
 
         # Time-series stats come from ClickHouse now.
         result_count = 0
@@ -303,7 +325,6 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         # Raw SQL: the tenant predicate is explicit — it is also the leading
         # column of ix_snap_type_entity_ts since 041, so the LATERAL lookup
         # uses the index again.
-        from services.tenancy import current_tenant_id
         rows = (await db.execute(text("""
             SELECT c.type, c.name, s.ok, s.timestamp AS ts, s.error
             FROM integration_configs c
@@ -376,10 +397,10 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         rows = (await db.execute(text("""
             SELECT name, hostname, ssl_expiry_days
             FROM ping_hosts
-            WHERE ssl_expiry_days IS NOT NULL
+            WHERE ssl_expiry_days IS NOT NULL AND tenant_id = :t
             ORDER BY ssl_expiry_days ASC
             LIMIT 5
-        """))).all()
+        """), tid)).all()
         for r in rows:
             ssl_certs.append({
                 "name": r.name,
@@ -417,8 +438,8 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     retention_info = {}
     try:
         oldest_snap = (await db.execute(text(
-            "SELECT min(timestamp) FROM snapshots"
-        ))).scalar()
+            "SELECT min(timestamp) FROM snapshots WHERE tenant_id = :t"
+        ), tid)).scalar()
         # ping_age comes from ClickHouse ping_checks now (post-cutover). The
         # min/max timestamps were already fetched into db_stats.oldest_ping
         # and stored as a formatted string — parse it back for _format_age.
@@ -460,11 +481,13 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         row = (await db.execute(text("""
             SELECT
-                (SELECT count(*) FROM incidents WHERE status = 'open') AS open_count,
-                (SELECT count(*) FROM incidents WHERE status = 'acknowledged') AS ack_count,
-                (SELECT count(*) FROM incidents WHERE status = 'resolved') AS resolved_count,
-                (SELECT count(*) FROM incidents) AS total_count
-        """))).one()
+                (SELECT count(*) FROM incidents WHERE tenant_id = :t AND status = 'open') AS open_count,
+                (SELECT count(*) FROM incidents WHERE tenant_id = :t AND status = 'acknowledged')
+                    AS ack_count,
+                (SELECT count(*) FROM incidents WHERE tenant_id = :t AND status = 'resolved')
+                    AS resolved_count,
+                (SELECT count(*) FROM incidents WHERE tenant_id = :t) AS total_count
+        """), tid)).one()
         incident_stats = {
             "open": row.open_count or 0,
             "acknowledged": row.ack_count or 0,
@@ -483,8 +506,8 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
                 count(*) FILTER (WHERE enabled) AS enabled,
                 count(*) FILTER (WHERE source_type = 'syslog') AS syslog_rules,
                 max(last_triggered_at) AS last_triggered
-            FROM alert_rules
-        """))).one()
+            FROM alert_rules WHERE tenant_id = :t
+        """), tid)).one()
         alert_rule_stats = {
             "total": row.total or 0,
             "enabled": row.enabled or 0,
@@ -502,8 +525,8 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
                 count(*) FILTER (WHERE maintenance) AS active,
                 count(*) FILTER (WHERE maintenance AND maintenance_until IS NOT NULL) AS timed,
                 count(*) FILTER (WHERE maintenance AND maintenance_until IS NULL) AS indefinite
-            FROM ping_hosts
-        """))).one()
+            FROM ping_hosts WHERE tenant_id = :t
+        """), tid)).one()
         maintenance_stats = {
             "active": row.active or 0,
             "timed": row.timed or 0,
@@ -530,10 +553,11 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         row = (await db.execute(text("""
             SELECT
-                (SELECT count(*) FROM log_templates) AS templates,
-                (SELECT count(*) FROM host_baselines) AS baselines,
-                (SELECT count(*) FROM precursor_patterns WHERE confidence > 0.3) AS precursors
-        """))).one()
+                (SELECT count(*) FROM log_templates WHERE tenant_id = :t) AS templates,
+                (SELECT count(*) FROM host_baselines WHERE tenant_id = :t) AS baselines,
+                (SELECT count(*) FROM precursor_patterns WHERE tenant_id = :t AND confidence > 0.3)
+                    AS precursors
+        """), tid)).one()
         log_intelligence = {
             "templates": row.templates or 0,
             "baselines": row.baselines or 0,
@@ -594,6 +618,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         "dashboard_perf": _get_dashboard_perf(),
         "logs": log_lines,
     }
+    payload.update(_tenant_job_stats(request))
 
     from fastapi.responses import JSONResponse
     return JSONResponse(payload)

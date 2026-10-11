@@ -2,7 +2,7 @@
 
 Collects the last 24 hours, asks the configured AI provider for a short
 briefing and sends it to the selected notification channels. Scheduled daily
-(``daily_ai_summary_hour``, default 08:00) and triggerable once from the
+(``daily_ai_summary_hour``, UTC, default 08:00) and triggerable once from the
 settings tab (POST /settings/ai/test-summary).
 
 The settings it reads (``daily_ai_summary_enabled/_hour/_channels``) are
@@ -275,9 +275,30 @@ Max ~800 words."""
 # ── Scheduled job ─────────────────────────────────────────────────────────────
 
 
+async def _slot_due(db) -> bool:
+    """Whether the current tenant's daily slot is less than an hour old — the
+    old daily cron with an hour of misfire grace, per tenant.
+    ``daily_ai_summary_hour`` is **UTC** (the settings UI says "Send at
+    (UTC)", the old cron ran in the container's zone, UTC), not the
+    tenant's ``timezone``. The 20-hour duplicate protection below still
+    applies."""
+    from services import tenant_jobs
+
+    try:
+        hour = max(0, min(23, int(await get_setting(db, "daily_ai_summary_hour", "8") or "8")))
+    except (TypeError, ValueError):
+        hour = 8
+    zone = tenant_jobs.tenant_zone("UTC")
+    return tenant_jobs.slot_due(datetime.utcnow(), zone, hour,
+                                grace_seconds=CRON_MISFIRE_GRACE_SECONDS)
+
+
 @per_tenant_job
-async def run_daily_ai_summary():
-    """Build AI-powered daily summary and send via configured notification channels."""
+async def run_daily_ai_summary(*, force: bool = False):
+    """Build AI-powered daily summary and send via configured notification channels.
+
+    Scheduled hourly; runs for each tenant whose hour it is (``force`` skips
+    that check)."""
     from database import set_setting
     from notifications import (
         _send_telegram, _send_discord, _log_notification,
@@ -292,6 +313,10 @@ async def run_daily_ai_summary():
     async with AsyncSessionLocal() as db:
         enabled = await get_setting(db, "daily_ai_summary_enabled", "0")
         if enabled != "1":
+            return
+        # The job ticks hourly; this tenant's summary is due at its own hour
+        # in its own time zone (multi-tenancy phase 5).
+        if not force and not await _slot_due(db):
             return
 
         # ── Duplicate protection: skip if already sent today ──────────────
@@ -463,30 +488,14 @@ async def run_daily_ai_summary():
 
 
 async def schedule(scheduler) -> None:
-    """Scheduler hook: add the daily job at the configured hour (default 08:00).
+    """Scheduler hook: add the daily summary job.
 
-    The hour is a tenant setting and the hook runs at scheduler start, with
-    no tenant: it reads every active tenant's hour (system scope, explicit
-    tenant) and fires at each of them. The job runs per tenant; its 20-hour
-    duplicate protection keeps it to one summary a day per tenant. With one
-    tenant this is exactly that tenant's hour (per-tenant cron: phase 5).
+    It ticks at every full hour; each tenant's summary goes out at that
+    tenant's ``daily_ai_summary_hour`` in its own ``timezone`` (default
+    08:00), decided per tenant when the job runs — so a changed hour takes
+    effect without a restart and needs no setting at scheduler start.
     """
-    import database  # looked up at call time, like the core start_scheduler()
-    from services.tenancy import backend, system_scope
-
-    hours: set[int] = set()
-    with system_scope("daily AI summary: read every tenant's hour"):
-        tenant_ids = await backend().active_tenant_ids()
-        async with AsyncSessionLocal() as db:
-            for tid in tenant_ids:
-                raw = await database.get_setting(db, "daily_ai_summary_hour", "8", tenant_id=tid)
-                try:
-                    hours.add(max(0, min(23, int(raw or "8"))))
-                except (TypeError, ValueError):
-                    hours.add(8)
-    hour = ",".join(str(h) for h in sorted(hours or {8}))
-    scheduler.add_job(run_daily_ai_summary, "cron",
-                      hour=hour, minute=0,
+    scheduler.add_job(run_daily_ai_summary, "cron", minute=0,
                       id=JOB_ID, replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)
 

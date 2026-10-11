@@ -67,6 +67,13 @@ def _t(key: str, type: ValueType = "str", default: str | None = None, **kw) -> S
     return SettingDef(key, TENANT, type, default, **kw)
 
 
+# Tenant retention settings that an installation (or plan) may cap.
+RETENTION_KEYS: tuple[str, ...] = (
+    "ping_retention_days", "proxmox_retention_days", "integration_retention_days",
+    "incident_event_retention_days", "template_retention_days",
+    "template_singleton_retention_days",
+)
+
 _DEFS: tuple[SettingDef, ...] = (
     # ── Installation ─────────────────────────────────────────────────────────
     _i("setup_complete", "bool", note="the setup wizard has run"),
@@ -111,12 +118,17 @@ _DEFS: tuple[SettingDef, ...] = (
     _i("channel_secrets_encrypted_at", note="marker: legacy channel secrets encrypted"),
     _i("ee_license", note="ee licence file"),
     _i("ee_install_id", note="installation id the ee licence is bound to"),
+    # Limits on what a tenant may configure (phase 5): interval floors and
+    # retention caps. Empty cap = no cap. A plan (ee) may set them lower.
+    _i("ping_interval_min", "int", "10", note="floor of every tenant's ping_interval"),
+    _i("proxmox_interval_min", "int", "10", note="floor of every tenant's proxmox_interval"),
+    *(_i(f"{k}_max", "int", note=f"cap of every tenant's {k}") for k in RETENTION_KEYS),
 
     # ── Tenant ───────────────────────────────────────────────────────────────
     _t("site_name", default="NODEGLOW", note="the tenant's display name"),
     _t("timezone", default="UTC"),
-    _t("ping_interval", "int", "60", note="global job cadence = fastest tenant (phase 5)"),
-    _t("proxmox_interval", "int", "60", note="global job cadence = fastest tenant (phase 5)"),
+    _t("ping_interval", "int", "60", note="per-tenant cadence, floor ping_interval_min"),
+    _t("proxmox_interval", "int", "60", note="per-tenant cadence, floor proxmox_interval_min"),
     _t("latency_threshold_ms", "int", ""),
     _t("anomaly_threshold", "float", "2.0"),
     _t("proxmox_cpu_threshold", "int", "85"),
@@ -170,8 +182,9 @@ _DEFS: tuple[SettingDef, ...] = (
     _t("smtp_to"),
     # Digest and the (ee) daily AI summary
     _t("digest_enabled", "bool", "0"),
-    _t("digest_day", "int", "0", note="global cron = first tenant's (phase 5)"),
-    _t("digest_hour", "int", "9", note="global cron = first tenant's (phase 5)"),
+    _t("digest_day", "int", "0", note="Monday = 0, in the tenant's time zone"),
+    _t("digest_hour", "int", "9", note="in the tenant's time zone"),
+    _t("digest_last_sent", note="state: last weekly digest (naive UTC ISO), phase 5"),
     _t("daily_ai_summary_enabled", "bool", "0"),
     _t("daily_ai_summary_hour", "int", "8"),
     _t("daily_ai_summary_channels"),

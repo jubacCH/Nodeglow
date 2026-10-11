@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 import notification_channels as nc
 from database import encrypt_value
 from models.incident import Incident
@@ -48,39 +50,43 @@ def test_plugin_registers_everything_on_a_fresh_registry():
     assert len(reg.incident_resolved_hooks) == 1 and len(reg.scheduler_hooks) == 2
 
 
-async def test_daily_summary_hook_schedules_the_job(monkeypatch):
+async def test_daily_summary_hook_schedules_the_job():
+    """Hourly tick; the tenant's hour is decided per tenant when it runs (phase
+    5), so the hook reads no setting — at scheduler start there is no tenant."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from nodeglow_ee.ai import daily_summary
 
-    async def fake_get_setting(_db, key, default=None, **_kw):
-        return "7" if key == "daily_ai_summary_hour" else default
-
-    monkeypatch.setattr("database.get_setting", fake_get_setting)
     sched = AsyncIOScheduler()
     await daily_summary.schedule(sched)
     job = sched.get_job("daily_ai_summary")
     assert job is not None and job.func is daily_summary.run_daily_ai_summary
-    assert "hour='7'" in str(job.trigger)
+    assert str(job.trigger) == "cron[minute='0']"  # every hour on the hour
 
 
-async def test_daily_summary_hook_reads_the_tenant_setting_without_context(db):
-    """Regression: the hook runs at scheduler start with no tenant; reading the
-    tenant-scoped hour raised, and the job was never registered."""
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from sqlalchemy.ext.asyncio import async_sessionmaker
+@pytest.mark.parametrize("tz, utc_hour, expected", [
+    ("UTC", 6, True), ("UTC", 7, False),
+    # The hour is UTC whatever the tenant's time zone (UI: "Send at (UTC)"),
+    # exactly when the old daily cron fired — production: Zurich, hour 6.
+    ("Europe/Zurich", 6, True),
+    ("Europe/Zurich", 4, False),
+])
+async def test_daily_summary_fires_at_its_utc_hour(db, tz, utc_hour, expected, monkeypatch):
+    from datetime import datetime as real_dt
 
     from models.tenant import TenantSetting
     from nodeglow_ee.ai import daily_summary
 
-    db.add(TenantSetting(key="daily_ai_summary_enabled", value="1"))
     db.add(TenantSetting(key="daily_ai_summary_hour", value="6"))
+    db.add(TenantSetting(key="timezone", value=tz))
     await db.commit()
-    plain = async_sessionmaker(db.bind, expire_on_commit=False)  # no tenant binding
-    sched = AsyncIOScheduler()
-    with patch.object(daily_summary, "AsyncSessionLocal", plain):
-        await daily_summary.schedule(sched)
-    job = sched.get_job("daily_ai_summary")
-    assert job is not None and "hour='6'" in str(job.trigger)
+
+    class FakeDT(real_dt):
+        @classmethod
+        def utcnow(cls):
+            return real_dt(2026, 10, 12, utc_hour, 10)
+
+    monkeypatch.setattr(daily_summary, "datetime", FakeDT)
+    assert await daily_summary._slot_due(db) is expected
 
 
 async def test_resolving_an_incident_fires_the_postmortem_hook():

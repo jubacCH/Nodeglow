@@ -31,6 +31,10 @@ DYNAMIC_KEY_SITES: dict[tuple[str, str], str] = {
     ("models/settings.py", "key"): "get_setting/set_setting themselves",
     ("models/settings.py", "row.key"):
         "adopt_legacy_tenant_settings copies rows selected by tenant_keys()",
+    ("services/tenant_jobs.py", "key"):
+        "retention_days(): a key of RETENTION_KEYS and its declared '<key>_max' cap",
+    ("services/tenant_jobs.py", "spec.floor_key"):
+        "a CadenceSpec's floor (ping_interval_min / proxmox_interval_min, declared)",
 }
 
 _SETTING_FUNCS = {"get_setting", "set_setting"}
@@ -300,7 +304,10 @@ def test_migration_042_moved_exactly_the_tenant_keys():
     spec.loader.exec_module(m)
     # A tenant key added after 042 needs its own data migration (or no
     # existing rows); this pins the list 042 froze to today's registry.
-    assert set(m.TENANT_KEYS) == reg.tenant_keys()
+    added_later = {
+        "digest_last_sent",  # phase 5: new state, no rows before it existed
+    }
+    assert set(m.TENANT_KEYS) == reg.tenant_keys() - added_later
 
 
 def test_unknown_key_is_refused():
