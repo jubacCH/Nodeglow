@@ -311,8 +311,11 @@ _allowlist_only: dict[int, bool] = {}
 _allowlist_ips: dict[int, set[str]] = {}  # tenant_id -> resolved IPs of known hosts
 _site_allowlist_ips: dict[tuple[int, int], set[str]] = {}  # (tenant, site) -> IPs
 # Active tenants at the last cache refresh; the direct listener in "auto"
-# mode only accepts while there is one (see _listener_accepts).
-_active_tenant_count: int = 1
+# mode only accepts while there is one (see _listener_accepts). None until a
+# refresh has counted them: the listener fails closed until then, so a DB
+# that is unreachable at startup cannot turn a multi-tenant installation's
+# listener into "everything goes to the default tenant".
+_active_tenant_count: Optional[int] = None
 
 
 def reset_host_cache() -> None:
@@ -322,7 +325,7 @@ def reset_host_cache() -> None:
     _host_cache, _site_host_cache, _cross_site_keys = {}, {}, {}
     _allowlist_only, _allowlist_ips, _site_allowlist_ips = {}, {}, {}
     _host_cache_ts = 0.0
-    _active_tenant_count = 1
+    _active_tenant_count = None
 
 
 def _ip_or_none(value):
@@ -422,6 +425,9 @@ async def _refresh_host_cache():
             async with AsyncSessionLocal() as db:
                 hosts = (await db.execute(select(PingHost))).scalars().all()
                 active = set(await tenancy.active_tenant_ids())
+                # Stored at once: the listener's gate must not depend on the
+                # rest of the refresh (one tenant's failing setting) succeeding.
+                _active_tenant_count = len(active)
                 tenant_ids = active | {h.tenant_id for h in hosts}
                 allowlist_only = {
                     t: (await get_setting(db, "syslog_allowlist_only", "0", tenant_id=t)) == "1"
@@ -487,7 +493,6 @@ async def _refresh_host_cache():
         _allowlist_ips = allowed_ips
         _site_allowlist_ips = site_allowed
         _allowlist_only = allowlist_only
-        _active_tenant_count = len(active)
         _host_cache_ts = now
         log.debug("Syslog host cache refreshed: %d hosts in %d tenant(s), %d site(s) "
                   "(allowlist=%s)", len(hosts), len(tenant_ids), len(site_cache), allowlist_only)
@@ -553,6 +558,33 @@ def _resolve_host_id(
         return found
     return _lookup(_host_cache.get(tenant_id) or {}, source_ip, hostname, rdns,
                    accept=lambda key: _site_fallback_ok(key, tenant_id))
+
+
+def resolve_agent_host_id(
+    client_ip: Optional[str], hostname: Optional[str], tenant_id: int, site_id: Optional[int],
+) -> Optional[int]:
+    """The host an agent's own logs belong to.
+
+    By the agent's name inside its tenant and site first. Failing that, by
+    the request's address — but only inside the agent's own site (never the
+    tenant-wide fallback, never reverse DNS), and only where that address can
+    be the agent's own: a private address (the agent reached us over a LAN
+    or VPN), or any address when all of the tenant's hosts live in one site
+    (the single-site installation, where this was always the behaviour). A
+    public address of a multi-site tenant is the customer's NAT more often
+    than not, so it is not used.
+    """
+    found = _resolve_host_id(None, hostname, tenant_id, site_id, rdns=False)
+    if found is not None or not client_ip or site_id is None:
+        return found
+    ip = _ip_or_none(client_ip)
+    if ip is None:
+        return None
+    if ip.is_global:
+        sites = {s for (t, s) in _site_host_cache if t == tenant_id}
+        if len(sites) > 1:
+            return None
+    return _lookup(_site_host_cache.get((tenant_id, site_id)) or {}, client_ip, None, False)
 
 
 async def _rdns_resolve_loop():
@@ -932,7 +964,8 @@ def _listener_accepts() -> bool:
     global _listener_refused_logged
     if _listener_mode == "on":
         return True
-    if _listener_mode == "auto" and _active_tenant_count <= 1:
+    if (_listener_mode == "auto" and _active_tenant_count is not None
+            and _active_tenant_count <= 1):
         return True
     _count_drop("listener_disabled")
     import time
@@ -942,8 +975,10 @@ def _listener_accepts() -> bool:
         log.warning(
             "Direct syslog listener refuses messages: %s. Send syslog through a "
             "probe with the syslog relay instead (see OPERATIONS.md, 'Probe syslog relay').",
-            "the installation has more than one tenant"
-            if _listener_mode == "auto" else "NODEGLOW_SYSLOG_LISTENER=off",
+            "NODEGLOW_SYSLOG_LISTENER=off" if _listener_mode != "auto"
+            else "the tenant count is not known yet (host cache refresh failing)"
+            if _active_tenant_count is None
+            else "the installation has more than one tenant",
         )
     return False
 
@@ -1045,6 +1080,10 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514,
     if not listen:
         log.info("Direct syslog listener disabled (NODEGLOW_SYSLOG_LISTENER=off): "
                  "syslog only through agents and probe relays")
+    elif _listener_mode == "auto" and _active_tenant_count is None:
+        log.warning("Direct syslog listener on port %d/%d refuses messages until "
+                    "the tenant count is known (host cache refresh failed).",
+                    udp_port, tcp_port)
     elif _listener_mode == "auto" and _active_tenant_count > 1:
         log.warning("Direct syslog listener on port %d/%d refuses messages: the "
                     "installation has %d tenants. Use probe syslog relays, or set "

@@ -21,7 +21,7 @@ DEFAULT_RELAY_PORT = 514
 # Counters the agent reports (``syslog_relay`` in the heartbeat body). Only
 # these are kept, as non-negative integers — the agent is not trusted to
 # write arbitrary JSON into the row.
-_STATUS_COUNTERS = ("received", "forwarded", "dropped", "buffered", "send_failures")
+_STATUS_COUNTERS = ("received", "forwarded", "rejected", "dropped", "buffered", "send_failures")
 
 
 def relay_port(agent: Any) -> int:

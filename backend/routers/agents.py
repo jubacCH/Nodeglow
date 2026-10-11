@@ -689,15 +689,16 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
         pass
 
     # The agent's own logs: attributed to the agent's own host, matched by
-    # name inside its tenant and site — never via the request's address
-    # (for a remote agent that is the customer's NAT address). The column
-    # keeps the request's address for display.
+    # name inside its tenant and site; by the request's address only where
+    # that cannot be a customer's NAT (see resolve_agent_host_id). The
+    # column keeps the request's address for display.
     client_ip = request.client.host if request.client else "0.0.0.0"
     try:
-        own_host_id = syslog_svc._resolve_host_id(
-            None, hostname, agent.tenant_id, site_id, rdns=False,
+        own_host_id = syslog_svc.resolve_agent_host_id(
+            client_ip, hostname, agent.tenant_id, site_id,
         )
     except Exception:
+        logger.warning("Agent %d: resolving its own host failed", agent.id, exc_info=True)
         own_host_id = None
 
     # Feed logs through the syslog pipeline (_enqueue handles ClickHouse write + live tail)
@@ -712,9 +713,14 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
         if "raw" in entry:
             # Probe syslog relay: a device's line, with the device's address.
             # Only a probe may speak for other devices; tenant and site are
-            # the probe's whatever the entry says.
+            # the probe's whatever the entry says. The relay is the admin's
+            # (audited) switch per probe: a probe whose relay is off — or a
+            # tampered one ignoring its config — relays nothing.
             if not agent.is_probe:
                 reason = "relay_not_a_probe"
+                parsed = None
+            elif not agent.syslog_relay_enabled:
+                reason = "relay_disabled"
                 parsed = None
             else:
                 parsed, reason = syslog_svc.parse_relayed_entry(
