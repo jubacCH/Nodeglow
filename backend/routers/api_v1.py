@@ -31,6 +31,7 @@ from ratelimit import rate_limit
 from services import ping as ping_svc
 from services import snapshot as snap_svc
 from services import maintenance as maint_svc
+from services import tenancy
 from services.audit import log_action
 from services.agent_services import (
     apply_watch_list_change,
@@ -101,11 +102,19 @@ async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) 
         # Try HMAC hash first, fall back to legacy SHA256
         for hasher in (_hash_key, _hash_key_legacy):
             hashed = hasher(key)
-            result = await db.execute(
-                select(ApiKey).where(ApiKey.key_hash == hashed, ApiKey.enabled == True)
-            )
-            api_key = result.scalar_one_or_none()
+            # The key is looked up before the tenant is known; the row found
+            # names the tenant (key hashes are unique across the installation).
+            with tenancy.system_scope("API key auth: look up key"):
+                result = await db.execute(
+                    select(ApiKey).where(ApiKey.key_hash == hashed, ApiKey.enabled == True)
+                )
+                api_key = result.scalar_one_or_none()
             if api_key:
+                # The rest of the request — this dependency's commit, the
+                # route, its background tasks — runs in the key's tenant. The
+                # middleware set no context for API-key requests, and the
+                # route runs in its own task, so nothing leaks past it.
+                tenancy.set_context(tenancy.TenantContext(tenant_id=api_key.tenant_id))
                 # Migrate legacy key to HMAC on successful auth
                 dirty = False
                 hmac_hash = _hash_key(key)

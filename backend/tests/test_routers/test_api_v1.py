@@ -1,4 +1,5 @@
 """Tests for /api/v1/ endpoints — key routes for external API."""
+from services.tenancy import bind_session
 
 
 # ── System Status ────────────────────────────────────────────────────────────
@@ -159,6 +160,7 @@ async def test_host_timeline_includes_matching_incident(client):
 
     now = datetime.utcnow()
     async with AsyncSessionLocal() as s:
+        bind_session(s, 1)  # seed/assert as tenant 1
         inc = Incident(
             rule="host_down_syslog",
             title="incident-host unreachable",
@@ -282,6 +284,7 @@ async def test_list_incidents_summary_is_latest_meaningful_event(client):
 
     now = datetime.utcnow()
     async with AsyncSessionLocal() as s:
+        bind_session(s, 1)  # seed/assert as tenant 1
         inc = Incident(rule="host_down_syslog", title="host down", severity="critical", status="open")
         other = Incident(rule="syslog_spike", title="spike", severity="warning", status="open")
         s.add_all([inc, other])
@@ -417,6 +420,7 @@ async def test_host_update_is_audited_with_field_diff(client):
     assert resp.status_code == 200
 
     async with AsyncSessionLocal() as s:
+        bind_session(s, 1)  # seed/assert as tenant 1
         rows = (await s.execute(
             select(AuditLog).where(AuditLog.action == "host.update")
         )).scalars().all()
@@ -479,6 +483,7 @@ async def test_host_timeline_falls_back_to_created_at(client):
 
     # Drop the audit trail to mimic a host created before logging existed.
     async with AsyncSessionLocal() as s:
+        bind_session(s, 1)  # seed/assert as tenant 1
         await s.execute(delete(AuditLog).where(AuditLog.target_id == host_id))
         await s.commit()
 

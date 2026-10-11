@@ -1,4 +1,5 @@
 """Router tests for the incident feedback loop endpoint."""
+from services.tenancy import bind_session
 import json
 
 from unittest.mock import AsyncMock, patch
@@ -10,6 +11,7 @@ async def _seed_incident(rule="learned_precursor", precursor_template=None):
     from models.incident import Incident
 
     async with AsyncSessionLocal() as s:
+        bind_session(s, 1)  # seed/assert as tenant 1
         inc = Incident(
             rule=rule,
             title="Predicted: Host Down (90% confidence)",
@@ -26,6 +28,7 @@ async def _get_setting(key):
     from database import AsyncSessionLocal, get_setting
 
     async with AsyncSessionLocal() as s:
+        bind_session(s, 1)  # seed/assert as tenant 1
         return await get_setting(s, key, None)
 
 

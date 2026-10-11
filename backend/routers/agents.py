@@ -18,7 +18,10 @@ from database import AsyncSessionLocal, PingHost, get_setting, set_setting
 from ratelimit import rate_limit
 from models.agent import Agent
 from models.agent_install_token import AgentInstallToken
+from models.tenant import DEFAULT_TENANT_ID
 from services import agent_signing
+from services import tenancy
+from services.tenancy import system_scope, tenant_scope
 from services.agent_services import watched_list
 from services.websocket import broadcast_agent_metric
 
@@ -120,23 +123,30 @@ async def _get_enrollment_key() -> str:
         return key
 
 
-async def _consume_install_token(db, raw_token: str, hostname: str) -> tuple[bool, str]:
+async def _consume_install_token(
+    db, raw_token: str, hostname: str,
+) -> tuple[bool, str, AgentInstallToken | None]:
     """Validate and consume an install token. The `reason` in the return value
     is for server-side logging ONLY — the caller must not surface it to the
     client, otherwise the distinct error cases enable token-existence
-    enumeration via timing/response-body differences."""
+    enumeration via timing/response-body differences.
+
+    The token is looked up before any tenant is known (system scope); on
+    success the returned row is what decides the new agent's tenant and site.
+    """
     import fnmatch
     token_hash = _hash_install_token(raw_token)
-    result = await db.execute(
-        select(AgentInstallToken).where(AgentInstallToken.token_hash == token_hash)
-    )
-    row = result.scalar_one_or_none()
+    with system_scope("agent enrolment: look up install token"):
+        result = await db.execute(
+            select(AgentInstallToken).where(AgentInstallToken.token_hash == token_hash)
+        )
+        row = result.scalar_one_or_none()
     if not row:
-        return False, "unknown"
+        return False, "unknown", None
     if row.revoked:
-        return False, "revoked"
+        return False, "revoked", None
     if row.expires_at <= datetime.utcnow():
-        return False, "expired"
+        return False, "expired", None
     if row.hostname_pattern:
         # fnmatch is case-sensitive by default; lower() both sides so patterns
         # like "web-*.example.com" are host-case-insensitive but still anchored
@@ -144,10 +154,31 @@ async def _consume_install_token(db, raw_token: str, hostname: str) -> tuple[boo
         # accept evil.example.com.attacker.com).
         pat = row.hostname_pattern.strip().lower()
         if pat and not fnmatch.fnmatchcase(hostname.lower(), pat):
-            return False, "hostname_mismatch"
+            return False, "hostname_mismatch", None
     row.used_count = (row.used_count or 0) + 1
     row.last_used_at = datetime.utcnow()
-    return True, "ok"
+    return True, "ok", row
+
+
+async def _find_agent_by_token(db, token: str) -> Agent | None:
+    """The enabled agent holding this bearer token, or None.
+
+    Runs before the tenant is known — the token hash is unique across the
+    installation, and the row found names the tenant the rest of the request
+    runs in. A legacy plain-SHA256 hash is migrated to HMAC on the way (the
+    caller commits).
+    """
+    token_hash = _hash_agent_token(token)
+    with system_scope("agent auth: look up agent by token"):
+        result = await db.execute(select(Agent).where(Agent.token == token_hash, Agent.enabled == True))
+        agent = result.scalar_one_or_none()
+        if agent is None:
+            legacy_hash = _hash_agent_token_legacy(token)
+            result = await db.execute(select(Agent).where(Agent.token == legacy_hash, Agent.enabled == True))
+            agent = result.scalar_one_or_none()
+            if agent is not None:
+                agent.token = token_hash  # migrate to HMAC
+    return agent
 
 
 # ── API: Agent self-enrollment ────────────────────────────────────────────────
@@ -180,9 +211,14 @@ async def agent_enroll(request: Request):
 
     # Preferred path: per-install token (scoped, expiring, revocable).
     async with AsyncSessionLocal() as token_db:
-        token_ok, token_err = await _consume_install_token(token_db, enroll_key, hostname)
+        token_ok, token_err, token_row = await _consume_install_token(
+            token_db, enroll_key, hostname,
+        )
         if token_ok:
-            await token_db.commit()
+            # The token decides where the agent lands — never the request body.
+            tenant_id, site_id = token_row.tenant_id, token_row.site_id
+            with tenant_scope(tenant_id):
+                await token_db.commit()
         else:
             await token_db.rollback()
 
@@ -211,10 +247,29 @@ async def agent_enroll(request: Request):
             "Legacy shared-key enrollment accepted for %s — migrate to install tokens",
             hostname,
         )
+        # A shared key cannot carry a tenant: it only ever enrols into the
+        # default tenant (and is to be refused once there is more than one).
+        tenant_id = DEFAULT_TENANT_ID
+        site_id = tenancy.backend().default_site_id(tenant_id)
 
     # Use the client's real IP for PingHost (hostname may not be resolvable from server)
     client_ip = request.client.host if request.client else None
 
+    with tenant_scope(tenant_id):
+        return await _enroll_in_tenant(request, body, hostname, plat, arch, client_ip, site_id)
+
+
+async def _enroll_in_tenant(
+    request: Request, body: dict, hostname: str, plat: str, arch: str,
+    client_ip: str | None, site_id: int | None,
+):
+    """Create or re-enrol the agent inside the token's tenant (and site).
+
+    Runs in that tenant's scope, so the hostname match and the PingHost match
+    below only ever see this tenant's rows: two customers with a host called
+    ``srv01`` no longer meet.
+    """
+    client_ip_log = request.client.host if request.client else "unknown"
     async with AsyncSessionLocal() as db:
         # Check if agent with this hostname already exists → return existing token (case-insensitive)
         from sqlalchemy import func as sa_func
@@ -256,7 +311,8 @@ async def agent_enroll(request: Request):
         # Create new agent
         raw_token = secrets.token_hex(24)
         token_hash = _hash_agent_token(raw_token)
-        agent = Agent(name=hostname, hostname=hostname, token=token_hash, platform=plat, arch=arch)
+        agent = Agent(name=hostname, hostname=hostname, token=token_hash, platform=plat, arch=arch,
+                      site_id=site_id)
         db.add(agent)
 
         # Auto-create PingHost — try reverse DNS for FQDN, store IP separately
@@ -283,6 +339,7 @@ async def agent_enroll(request: Request):
                 check_type="icmp",
                 source="agent",
                 source_detail=f"auto-enrolled agent ({hostname})",
+                site_id=site_id,
             ))
 
         await db.commit()
@@ -310,59 +367,57 @@ async def agent_report(request: Request):
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     async with AsyncSessionLocal() as db:
-        token_hash = _hash_agent_token(token)
-        result = await db.execute(select(Agent).where(Agent.token == token_hash, Agent.enabled == True))
-        agent = result.scalar_one_or_none()
-        if not agent:
-            # Fallback: try legacy plain SHA256 hash and migrate if found
-            legacy_hash = _hash_agent_token_legacy(token)
-            result = await db.execute(select(Agent).where(Agent.token == legacy_hash, Agent.enabled == True))
-            agent = result.scalar_one_or_none()
-            if agent:
-                agent.token = token_hash  # migrate to HMAC
-            else:
-                return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
+        agent = await _find_agent_by_token(db, token)
+        if agent is None:
+            return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
+        # The rest of the request — service incidents, probe results and
+        # assignments, the audit row — belongs to the agent's tenant.
+        with tenant_scope(agent.tenant_id):
+            return await _handle_report(db, agent, body)
 
-        # Update agent metadata
-        agent.last_seen = datetime.utcnow()
-        agent.hostname = body.get("hostname", agent.hostname)
-        agent.platform = body.get("platform", agent.platform)
-        agent.arch = body.get("arch", agent.arch)
-        new_version = body.get("agent_version", agent.agent_version)
-        if agent.agent_version and new_version and new_version != agent.agent_version:
-            # The only record of an update: agents keep no version history,
-            # and the change feed ("agent updated") is derived from this row.
-            from services.audit import log_action
-            await log_action(db, None, "agent.version_change", "agent", agent.id, agent.name,
-                             details={"from": agent.agent_version, "to": new_version})
-        agent.agent_version = new_version
 
-        # Extract primary disk (highest usage or root)
-        disks = body.get("disks", [])
-        primary_disk_pct = None
-        if disks:
-            root = next((d for d in disks if d.get("mount") == "/"), None)
-            primary_disk_pct = root["pct"] if root else disks[0].get("pct")
+async def _handle_report(db, agent: Agent, body: dict):
+    """The heartbeat after authentication, inside the agent's tenant scope."""
+    # Update agent metadata
+    agent.last_seen = datetime.utcnow()
+    agent.hostname = body.get("hostname", agent.hostname)
+    agent.platform = body.get("platform", agent.platform)
+    agent.arch = body.get("arch", agent.arch)
+    new_version = body.get("agent_version", agent.agent_version)
+    if agent.agent_version and new_version and new_version != agent.agent_version:
+        # The only record of an update: agents keep no version history,
+        # and the change feed ("agent updated") is derived from this row.
+        from services.audit import log_action
+        await log_action(db, None, "agent.version_change", "agent", agent.id, agent.name,
+                         details={"from": agent.agent_version, "to": new_version})
+    agent.agent_version = new_version
 
-        mem = body.get("memory", {})
-        load = body.get("load", {})
+    # Extract primary disk (highest usage or root)
+    disks = body.get("disks", [])
+    primary_disk_pct = None
+    if disks:
+        root = next((d for d in disks if d.get("mount") == "/"), None)
+        primary_disk_pct = root["pct"] if root else disks[0].get("pct")
 
-        snap_ts = datetime.utcnow()
-        snap_data_json = json.dumps(body)
+    mem = body.get("memory", {})
+    load = body.get("load", {})
 
-        # Extract bandwidth samples from agent network data (writes to ClickHouse)
-        try:
-            from services.bandwidth import extract_agent_bandwidth
-            await extract_agent_bandwidth(agent.id, body, snap_ts, source_name=agent.name)
-        except Exception as bw_exc:
-            logger.warning("Bandwidth extraction failed for agent %d: %s", agent.id, bw_exc)
+    snap_ts = datetime.utcnow()
+    snap_data_json = json.dumps(body)
 
-        # Consume pending command (deliver once, then clear)
-        command = agent.pending_command
-        if command:
-            agent.pending_command = None
+    # Extract bandwidth samples from agent network data (writes to ClickHouse)
+    try:
+        from services.bandwidth import extract_agent_bandwidth
+        await extract_agent_bandwidth(agent.id, body, snap_ts, source_name=agent.name)
+    except Exception as bw_exc:
+        logger.warning("Bandwidth extraction failed for agent %d: %s", agent.id, bw_exc)
 
-        await db.commit()
+    # Consume pending command (deliver once, then clear)
+    command = agent.pending_command
+    if command:
+        agent.pending_command = None
+
+    await db.commit()
 
     # Watched services. Only agents that know the feature send the key; for
     # older agents nothing is evaluated and nothing is raised.
@@ -562,20 +617,19 @@ async def agent_logs(request: Request):
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     async with AsyncSessionLocal() as db:
-        token_hash = _hash_agent_token(token)
-        result = await db.execute(select(Agent).where(Agent.token == token_hash, Agent.enabled == True))
-        agent = result.scalar_one_or_none()
-        if not agent:
-            # Fallback: try legacy plain SHA256 hash and migrate if found
-            legacy_hash = _hash_agent_token_legacy(token)
-            result = await db.execute(select(Agent).where(Agent.token == legacy_hash, Agent.enabled == True))
-            agent = result.scalar_one_or_none()
-            if agent:
-                agent.token = token_hash  # migrate to HMAC
+        agent = await _find_agent_by_token(db, token)
+        if agent is None:
+            return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
+        if db.dirty:  # legacy token hash migrated
+            with tenant_scope(agent.tenant_id):
                 await db.commit()
-            else:
-                return JSONResponse({"error": "Invalid or disabled token"}, status_code=403)
 
+    with tenant_scope(agent.tenant_id):
+        return await _handle_logs(request, agent, body)
+
+
+async def _handle_logs(request: Request, agent: Agent, body: dict):
+    """Log submission after authentication, inside the agent's tenant scope."""
     hostname = body.get("hostname", agent.hostname or "unknown")
     logs = body.get("logs", [])
     if not logs:
@@ -740,12 +794,13 @@ async def _authorize_install_request(request: Request) -> tuple[bool, str | None
     if not qp_token:
         return False, None
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(AgentInstallToken).where(
-                AgentInstallToken.token_hash == _hash_install_token(qp_token)
+        with system_scope("agent installer: look up install token"):
+            result = await db.execute(
+                select(AgentInstallToken).where(
+                    AgentInstallToken.token_hash == _hash_install_token(qp_token)
+                )
             )
-        )
-        row = result.scalar_one_or_none()
+            row = result.scalar_one_or_none()
     if not row or row.revoked or row.expires_at <= datetime.utcnow():
         return False, None
     return True, qp_token
