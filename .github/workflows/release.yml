@@ -223,12 +223,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Image labels
+      - name: Image labels and annotations
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image.image }}
           labels: |
+            org.opencontainers.image.title=${{ matrix.image.image }}
+            org.opencontainers.image.description=${{ matrix.image.description }}
+            org.opencontainers.image.licenses=${{ matrix.image.licenses }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.vendor=Nodeglow
+          # Mirrors the labels; without it the action annotates with repository defaults.
+          annotations: |
             org.opencontainers.image.title=${{ matrix.image.image }}
             org.opencontainers.image.description=${{ matrix.image.description }}
             org.opencontainers.image.licenses=${{ matrix.image.licenses }}
@@ -377,7 +384,9 @@ jobs:
             type=raw,value=${{ needs.prepare.outputs.version }},enable=${{ needs.prepare.outputs.dry_run != 'true' }}
             type=raw,value=${{ needs.prepare.outputs.minor }},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
             type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease == 'false' }}
-          labels: |
+          # Index annotations; without this input the action would annotate
+          # the list with the repository defaults.
+          annotations: |
             org.opencontainers.image.title=${{ matrix.image }}
             org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.licenses=${{ matrix.licenses }}
@@ -435,10 +444,21 @@ jobs:
       # the tag ref (identity .../release.yml@refs/tags/vX.Y.Z). The updater and
       # install.sh verify exactly that identity, on the manifest list the tag
       # points to; --recursive also signs each platform manifest.
+      # Retried: when Rekor answers slowly, cosign's own HTTP retry of an entry
+      # that did get logged fails with 409 createLogEntryConflict. A new
+      # attempt uses fresh ephemeral keys, so its entries never conflict.
       - name: Sign with cosign
         env:
           REF: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@${{ steps.list.outputs.digest }}
-        run: cosign sign --yes --recursive "$REF"
+        run: |
+          set -eu
+          for attempt in 1 2 3; do
+            if cosign sign --yes --recursive "$REF"; then exit 0; fi
+            echo "::warning::cosign sign attempt $attempt failed"
+            sleep $((attempt * 15))
+          done
+          echo "::error::cosign sign failed 3 times for $REF"
+          exit 1
 
       - name: Build provenance attestation
         uses: actions/attest-build-provenance@v2
