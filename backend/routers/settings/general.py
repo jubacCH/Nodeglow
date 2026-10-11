@@ -22,15 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _capped(db: AsyncSession, key: str, value: int) -> int:
-    """A retention value within the installation's cap (``<key>_max``)."""
-    raw = await get_setting(db, f"{key}_max")
-    try:
-        cap = int(raw) if raw not in (None, "") else 0
-    except (TypeError, ValueError):
-        cap = 0
-    if cap <= 0:
-        return value
-    return cap if value <= 0 else min(value, cap)
+    """A retention value within the installation's cap (``<key>_max``) and
+    the tenant's plan (ee), whichever is lower."""
+    from services import tenant_jobs
+
+    return tenant_jobs.apply_retention_cap(value, await tenant_jobs.retention_cap(db, key))
 
 router = APIRouter()
 
@@ -114,6 +110,16 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
     for key in ldap_keys:
         result[key] = await get_setting(db, key, ldap_defaults.get(key, ""))
     result["ldap_has_bind_pw"] = bool(await get_setting(db, "ldap_bind_password", ""))
+    # The highest value the form may offer per retention key (installation
+    # cap and, ee, the tenant's plan tier); absent = no cap.
+    from services import tenant_jobs
+    from services.settings_registry import RETENTION_KEYS
+    caps = {}
+    for key in RETENTION_KEYS:
+        cap = await tenant_jobs.retention_cap(db, key)
+        if cap is not None:
+            caps[key] = cap
+    result["retention_caps"] = caps
     return JSONResponse(result)
 
 

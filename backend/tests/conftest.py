@@ -89,6 +89,29 @@ def _reset_tenant_job_state():
     tenant_jobs.reset_state()
 
 
+@pytest.fixture(autouse=True)
+def _core_tenancy_backend(request, monkeypatch):
+    """The core suite specifies the core's tenancy (``SingleTenancy``, no
+    retention policy) — also when the ee plugin is loaded and has registered
+    its own backend. The ee backend is covered by ``ee/backend/tests`` and by
+    core tests marked ``ee_tenancy`` (the isolation walk), which keep
+    whatever the plugin registered."""
+    if request.node.get_closest_marker("ee_tenancy"):
+        yield
+        return
+    import extensions
+
+    monkeypatch.setattr(extensions.registry, "tenancy_backend", None)
+    monkeypatch.setattr(extensions.registry, "retention_policy", None)
+    yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "ee_tenancy: run with the tenancy backend the ee plugin registered (if any)",
+    )
+
+
 @pytest.fixture
 async def db():
     """Provide a fresh in-memory SQLite database session per test."""

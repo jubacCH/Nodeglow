@@ -200,6 +200,8 @@ ACTING_VIA_OPERATOR = "operator"
 ACTING_VIA_API_KEY = "api_key"
 ACTING_VIA_AGENT = "agent"
 ACTING_VIA_SYSTEM = "system"
+# Time-limited support access a tenant admin granted (ee, owner decision 8).
+ACTING_VIA_SUPPORT = "support"
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,14 +293,26 @@ class SingleTenancy:
         access = await self.resolve_access(request, user)
         return access.tenant_id if access else None
 
+    async def resolve_login_access(self, request: Any, user: Any) -> TenantAccess | None:
+        """The tenant a new session starts in. The core: as for any request
+        (header, else the only membership); a backend with several tenants
+        may pick one for a user with several (ee: the last used)."""
+        return await self.resolve_access(request, user)
+
     async def list_tenants_for(self, user: Any) -> list[int]:
+        return [a.tenant_id for a in await self.list_access_for(user)]
+
+    async def list_access_for(self, user: Any) -> list[TenantAccess]:
+        """Every tenant the user may switch into, with the role there and how
+        the access is granted, ordered by tenant id."""
         if user is None or getattr(user, "id", None) is None:
             return []
         from models import base as _base
         from services.memberships import memberships_for
 
         async with _base.AsyncSessionLocal() as db:
-            return sorted(await memberships_for(db, user.id))
+            found = await memberships_for(db, user.id)
+        return [TenantAccess(tenant_id=t, role=r) for t, r in sorted(found.items())]
 
     async def active_tenant_ids(self) -> list[int]:
         return [DEFAULT_TENANT_ID]

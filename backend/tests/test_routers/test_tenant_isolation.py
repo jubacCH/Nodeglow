@@ -49,6 +49,10 @@ from services import clickhouse_client as _ch
 from services.tenancy import system_scope, tenant_scope, tenant_tables
 from tests.test_routers.conftest import make_client
 
+# The walk runs with the tenancy backend the ee plugin registered (if any):
+# the gating suite covers the backend that serves production.
+pytestmark = pytest.mark.ee_tenancy
+
 A, B = 1, 2
 CANARY = "CANARY-B"
 PW = "Corr3ct-Horse!"
@@ -149,6 +153,9 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
                             dict(key="telegram_chat_id", value=c("telegram_chat_id")),
                             dict(key="ntfy_topic", value=c("ntfy_topic")),
                             dict(key="smtp_to", value=c("smtp_to"))],
+        "support_grants": [dict(id=b, role="readonly", reason=c("support_grants"),
+                                created_at=datetime.utcnow(), expires_at=_later(),
+                                granted_by=b, granted_by_name=c("granted_by"))],
         "user_preferences": [dict(user_id=b, dashboard_layout=json.dumps(
             [{"i": c("user_preferences"), "x": 0, "y": 0, "w": 4, "h": 4}]))],
     }
@@ -279,6 +286,9 @@ PARAM_TABLE = {
     "port_id": "discovered_ports",
     "user_id": "users",
     "template_hash": "log_templates",
+    "grant_id": "support_grants",
+    # Tenant ids themselves: only the operator's installation routes take one.
+    "tenant_id": "tenants",
 }
 # Where a parameter name means another table on one route.
 PARAM_OVERRIDES = {
@@ -311,6 +321,29 @@ INSTALLATION_ROUTES = {
     ("POST", "/api/snmp/mibs/library/import"):
         "global MIB catalogue; operator-only with several tenants",
 }
+
+
+def _ee_loaded() -> bool:
+    import ee_loader
+
+    return not ee_loader.ee_disabled() and ee_loader._source_tree() is not None
+
+
+# ee tenant lifecycle (phase 9): the operator manages tenants — names, plans,
+# member counts and status of every tenant, no tenant data.
+EE_INSTALLATION_ROUTES = {
+    ("GET", "/api/tenants"): "operator-only list of the installation's tenants (ee lifecycle)",
+    ("POST", "/api/tenants"): "operator-only tenant creation (ee lifecycle)",
+    ("PATCH", "/api/tenants/{tenant_id}"): "operator-only rename / plan assignment (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/suspend"): "operator-only suspension (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/resume"): "operator-only resumption (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/delete"):
+        "operator-only scheduled deletion, typed confirmation (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/cancel-deletion"):
+        "operator-only cancellation of a scheduled deletion (ee lifecycle)",
+}
+if _ee_loaded():
+    INSTALLATION_ROUTES.update(EE_INSTALLATION_ROUTES)
 
 # Routes that never resolve a tenant from the session (public, token-authenticated
 # or authentication itself) — not walked here; the header check does not apply.
@@ -446,6 +479,7 @@ def _ids_of(tid: int) -> dict[str, Any]:
     ids = {t: b for t in PARAM_TABLE.values()}
     ids["snmp_host_configs"] = b
     ids["log_templates"] = _tpl_hash(tid)
+    ids["tenants"] = tid
     return ids
 
 
@@ -810,11 +844,22 @@ async def _walk(e: Env, auth: dict, *, accept_unauthenticated: bool,
             after = await _tenant_rows(e.sf, B)
             if after != before:
                 changed = [t for t in after if after[t] != before[t]]
-                failures.append(f"{method} {url} changed tenant B's rows in {changed}")
+                if not (allowed and _only_lifecycle_audit(before, after, changed)):
+                    failures.append(f"{method} {url} changed tenant B's rows in {changed}")
                 before = after
             for ref in await _foreign_refs(e.sf):
                 failures.append(f"{method} {url} left A referencing B: {ref}")
     return failures, checked
+
+
+def _only_lifecycle_audit(before: dict, after: dict, changed: list[str]) -> bool:
+    """The operator's lifecycle actions on B (ee: suspend, resume, …) are
+    recorded in B's own audit log on purpose — B's admins see who did it.
+    That, and nothing else, may change in B through an installation route."""
+    if changed != ["audit_logs"]:
+        return False
+    old, new = set(before["audit_logs"]), set(after["audit_logs"])
+    return old <= new and all(any(v.startswith("'tenant.") for v in row) for row in new - old)
 
 
 def _is_login_redirect(resp) -> bool:
@@ -974,7 +1019,8 @@ async def test_the_canaries_are_reachable_from_their_own_tenant(env):
                  "/api/credentials/list", "/api/v1/rules", "/api/backups", "/settings/json",
                  "/settings/notifications/history", "/api/v1/audit", "/api/users",
                  "/api/v1/maintenance-windows", "/api/subnet-scanner/page-data",
-                 "/syslog/api/templates", "/api/agents/install-tokens", "/api/v1/keys"):
+                 "/syslog/api/templates", "/api/agents/install-tokens", "/api/v1/keys",
+                 *(["/api/support-access"] if _ee_loaded() else [])):
         resp = await _call(env.client, "GET", path, auth=auth)
         assert resp.status_code == 200, f"{path}: {resp.status_code} {resp.text[:200]}"
         seen += CANARY in resp.text
