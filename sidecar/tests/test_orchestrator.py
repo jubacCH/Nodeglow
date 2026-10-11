@@ -507,7 +507,8 @@ def test_migrate_runs_migrate_py_in_throwaway_container(tmp_path):
     # migrate.py runs as the schema owner and sets up row-level security;
     # SKIP_MIGRATIONS keeps the entrypoint from doing it twice.
     assert seen["argv"] == ["docker", "compose", "-p", "vigil", "-f", ctx.compose_file,
-                            "run", "--rm", "--no-deps", "-e", "SKIP_MIGRATIONS=1", "nodeglow",
+                            "run", "--rm", "--no-deps", "-e", "SKIP_MIGRATIONS=1",
+                            "-e", "NODEGLOW_RLS_DEFER_ENABLE=1", "nodeglow",
                             "python", "migrate.py"]
     assert "031 -> 032" in detail
 

@@ -1226,7 +1226,18 @@ Revision `044`; code in `services/pg_rls.py`, `migrate.py`,
   `NODEGLOW_RLS=on` for new installs; its upgrade path keeps `.env`. The
   updater's migrate step runs `python migrate.py` (owner, plus the RLS
   setup) instead of bare `alembic upgrade head`, with `SKIP_MIGRATIONS=1`
-  so the entrypoint does not run it twice.
+  so the entrypoint does not run it twice, and with
+  `NODEGLOW_RLS_DEFER_ENABLE=1`: the old backend keeps serving until the
+  restart, maybe with the flag still off, so that step never switches RLS on
+  (only keeps it on where it is); the new backend's entrypoint does.
+- **Review fixes (2026-10-11).** The restore commits the request's session
+  before using the owner connection (its open transaction from the API-key
+  lookup held locks the owner's `TRUNCATE` waited on forever) and sets
+  `lock_timeout = 30s` there. Compose builds the owner URL only for a
+  two-user setup (`POSTGRES_APP_USER`), so an override of `DATABASE_URL`
+  alone keeps migrating the app's database; mismatching URLs are logged as
+  an error. `CREATE` on schema `public` is revoked from `nodeglow_app` and —
+  when the owner owns the schema — from `PUBLIC` (PostgreSQL < 15).
 
 Deviations:
 

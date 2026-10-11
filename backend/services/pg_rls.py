@@ -249,6 +249,20 @@ def grant_app_privileges(conn, report: SetupReport) -> None:
     ]
     for sql in statements:
         _try(conn, sql, report, f"cannot grant privileges to {APP_ROLE}")
+    # CREATE on the schema would let the RLS-bound role plant tables or
+    # functions that the owner later resolves (CVE-2018-1058 pattern). New
+    # PostgreSQL 15+ databases do not grant it to PUBLIC; older or upgraded
+    # clusters do. Revoked from PUBLIC only when this connection owns the
+    # schema — otherwise the owner itself might depend on it.
+    _try(conn, f"REVOKE CREATE ON SCHEMA public FROM {APP_ROLE}", report,
+         f"cannot revoke CREATE on schema public from {APP_ROLE}")
+    if _scalar(conn, "SELECT pg_has_role(current_user, nspowner, 'USAGE') "
+                     "FROM pg_namespace WHERE nspname = 'public'"):
+        _try(conn, "REVOKE CREATE ON SCHEMA public FROM PUBLIC", report,
+             "cannot revoke CREATE on schema public from PUBLIC")
+    if _scalar(conn, "SELECT has_schema_privilege(:r, 'public', 'CREATE')", r=APP_ROLE):
+        report.warn(f"{APP_ROLE} can still create objects in schema public — revoke CREATE "
+                    "on schema public from PUBLIC (needs the schema owner)")
     if _scalar(conn, "SELECT to_regclass('public.alembic_version')") is not None:
         # The app reads the schema revision; only migrations write it.
         _try(conn, f"REVOKE INSERT, UPDATE, DELETE ON alembic_version FROM {APP_ROLE}",
@@ -310,6 +324,21 @@ def set_rls(conn, tables: Iterable[str], enabled: bool) -> None:
                 conn.exec_driver_sql(f"ALTER TABLE {ident} NO FORCE ROW LEVEL SECURITY")
             if on:
                 conn.exec_driver_sql(f"ALTER TABLE {ident} DISABLE ROW LEVEL SECURITY")
+
+
+def enable_now(conn, tables: Iterable[str], *, flag: bool, defer: bool) -> bool:
+    """Whether this run may enable RLS. ``defer`` (the updater's migrate
+    step, while the old backend — which may still run with the flag off —
+    keeps serving): never switch RLS on from off, only keep it on (and cover
+    new tables) where it already is. Switching on then happens when the new
+    backend starts (its entrypoint runs migrate.py without ``defer``).
+    Switching off is always allowed: an app that sets the settings works
+    without RLS too."""
+    if not flag:
+        return False
+    if not defer:
+        return True
+    return any(on for on, _ in rls_state(conn, tables).values())
 
 
 def apply(conn, tables: Iterable[str], *, enabled: bool,

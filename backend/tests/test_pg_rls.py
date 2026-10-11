@@ -247,3 +247,22 @@ def test_revision_044_covers_every_tenant_table_of_its_time():
     # Tables added later get their policy from migrate.py (live list);
     # nothing classified then may be missing from the revision.
     assert frozen <= live
+
+
+def test_owner_url_resolution():
+    from config import resolve_owner_url, same_database
+
+    app = "postgresql+asyncpg://nodeglow:pw@db:5432/nodeglow"
+    compose_owner = "postgresql+asyncpg://nodeglow:pw@db:5432/nodeglow"
+    external = "postgresql+asyncpg://ng:pw@pg.example:5432/ng"
+    # One user (every existing install): the app's URL, also when only
+    # DATABASE_URL was overridden to another server.
+    assert resolve_owner_url({"NODEGLOW_COMPOSE_OWNER_URL": compose_owner}, external) == external
+    # Two users: the compose owner URL.
+    env = {"NODEGLOW_COMPOSE_OWNER_URL": compose_owner, "POSTGRES_APP_USER": "nodeglow_app"}
+    assert resolve_owner_url(env, app) == compose_owner
+    # Explicit wins; blank does not count.
+    assert resolve_owner_url({**env, "MIGRATION_DATABASE_URL": external}, app) == external
+    assert resolve_owner_url({**env, "DATABASE_OWNER_URL": " "}, app) == compose_owner
+    assert same_database(app, "postgresql+asyncpg://nodeglow_app:x@db/nodeglow")
+    assert not same_database(app, external)

@@ -60,6 +60,7 @@ def _safe_table(name: str) -> str:
 # would return only the request's tenant — so they run in system scope.
 _EXPORT_SCOPE = "backup: export every table of the installation"
 _RESTORE_SCOPE = "backup: restore every table of the installation"
+RESTORE_LOCK_TIMEOUT = "30s"
 
 
 @asynccontextmanager
@@ -76,7 +77,18 @@ async def _restore_session(db: AsyncSession):
     if base.DATABASE_OWNER_URL == base.DATABASE_URL:
         yield db
         return
+    # The request's own transaction (API-key lookup, tenant check) still
+    # holds ACCESS SHARE locks on api_keys/tenants: the owner's TRUNCATE
+    # would wait for it forever — the waiter is this very coroutine, so
+    # PostgreSQL sees no deadlock. Commit, not rollback: with
+    # expire_on_commit=False the objects loaded so far (request.state.api_key,
+    # read by the audit entry afterwards) stay usable.
+    await db.commit()
     async with AsyncSession(base.owner_engine(), expire_on_commit=False) as owner_db:
+        if owner_db.get_bind().dialect.name == "postgresql":
+            # Any other lock holder makes the restore fail instead of hang
+            # while it keeps the tables truncated so far locked.
+            await owner_db.execute(text(f"SET LOCAL lock_timeout = '{RESTORE_LOCK_TIMEOUT}'"))
         yield owner_db
 
 

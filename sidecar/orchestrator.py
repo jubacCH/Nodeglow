@@ -569,10 +569,14 @@ def step_migrate(ctx: Ctx) -> str:
     — the compose file passes both), and after the revisions it brings the
     row-level-security setup in line (app role, grants, policies,
     ``NODEGLOW_RLS``). ``SKIP_MIGRATIONS=1`` keeps the image's entrypoint from
-    running the same thing a second time first.
+    running the same thing a second time first. ``NODEGLOW_RLS_DEFER_ENABLE=1``:
+    the old backend keeps serving until the restart step, possibly with
+    ``NODEGLOW_RLS`` still off — so this step never switches RLS on; the new
+    backend's entrypoint does when it starts.
     """
     result = _compose(
-        ctx, "run", "--rm", "--no-deps", "-e", "SKIP_MIGRATIONS=1", "nodeglow",
+        ctx, "run", "--rm", "--no-deps", "-e", "SKIP_MIGRATIONS=1",
+        "-e", "NODEGLOW_RLS_DEFER_ENABLE=1", "nodeglow",
         "python", "migrate.py",
         timeout=MIGRATE_TIMEOUT,
     )
