@@ -534,8 +534,11 @@ hosts **of that site**.
    per datagram) and TCP (newline-terminated or octet-counted, RFC 6587) both
    work; at most 64 KiB per message, 64 TCP connections.
 4. Check `GET /api/v1/agents/{id}` → `syslog_relay.status`: `listening`,
-   `received`, `forwarded`, `dropped`, `buffered`, `send_failures` and, if the
-   port could not be opened, `error`.
+   `received`, `forwarded` (stored by the backend), `rejected` (refused by the
+   backend: not on the allowlist, invalid, oversized), `dropped` (lost in the
+   probe's buffer), `buffered`, `send_failures` and, if the port could not be
+   opened, `error`. Without step 1 the backend drops what a probe relays
+   (`relay_disabled`), whatever the probe does.
 
 Ports below 1024 need privileges on Linux: the agent installed by the install
 script runs as root and can use 514. An agent running as an ordinary user
@@ -571,7 +574,7 @@ settings](#advanced-backend-settings)) controls the server's own syslog ports:
 
 | Value | Behaviour |
 |---|---|
-| `auto` (default) | Listens. Messages go to the default tenant as long as the installation has **one** tenant — every community install, nothing changes. With more than one tenant it refuses messages (it cannot tell whose a datagram is), logs a warning every five minutes and counts them as `nodeglow_syslog_messages_dropped_total{reason="listener_disabled"}`; use probe relays. |
+| `auto` (default) | Listens. Messages go to the default tenant as long as the installation has **one** tenant — every community install, nothing changes. With more than one tenant it refuses messages (it cannot tell whose a datagram is), logs a warning every five minutes and counts them as `nodeglow_syslog_messages_dropped_total{reason="listener_disabled"}`; use probe relays. Until the server has counted its tenants once (the database unreachable at startup) it refuses as well. |
 | `on` | Listens and always files messages under the default tenant. |
 | `off` | Does not open the ports at all. Hosted (SaaS) installations: syslog is probe-only. Agent logs and probe relays keep working. |
 
