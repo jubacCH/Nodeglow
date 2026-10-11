@@ -58,13 +58,13 @@ jobs:
           node-version: "20"
 
       # The lockfile is all npm audit needs; no install required.
-      # Runtime dependencies only: the dev-only findings come from the
-      # Tailwind 3 / ESLint build tooling (braces ReDoS on build input we
-      # control) and only clear with the Tailwind 4 migration.
+      # Runtime and build tooling are both clean since the Tailwind 4
+      # migration (plus the fast-glob -> tinyglobby override for
+      # @next/eslint-plugin-next in package.json), so both steps fail on high.
       - name: Audit runtime dependencies (high and above)
         run: npm audit --package-lock-only --omit=dev --audit-level=high
-      - name: Audit build tooling (informational)
-        run: npm audit --package-lock-only --audit-level=high || true
+      - name: Audit build tooling (high and above)
+        run: npm audit --package-lock-only --audit-level=high
 
   cargo-audit:
     name: cargo audit (agent)
