@@ -20,13 +20,11 @@ def _fresh_caches():
 
     invalidate_topology_cache()
     dashboard_v2.clear_caches()
-    predictions._disk_pred_cache = None
-    predictions._agent_pred_cache = None
+    predictions.clear_cache()
     yield
     invalidate_topology_cache()
     dashboard_v2.clear_caches()
-    predictions._disk_pred_cache = None
-    predictions._agent_pred_cache = None
+    predictions.clear_cache()
 
 
 @contextmanager
@@ -324,7 +322,7 @@ async def test_upcoming_lists_disk_predictions_from_the_cache():
                        "current_pct": 40.0, "days_until_full": 400, "confidence": 0.9},
         "agent-4:E:": {"agent_id": 4, "agent_name": "noisy", "pool_name": "E:",
                        "current_pct": 70.0, "days_until_full": 3, "confidence": 0.1},
-    })
+    }, tenant_id=1)
     async with make_client() as (client, _sf):
         with fake_clickhouse():
             up = (await client.get("/api/v2/dashboard")).json()["upcoming"]
@@ -341,9 +339,14 @@ async def test_prediction_refresh_job_fills_both_caches():
 
     with patch.object(predictions, "predict_disk_full", new=AsyncMock(return_value={"a": {}})), \
          patch.object(predictions, "predict_agent_disks", new=AsyncMock(return_value={"b": {}})):
-        await predictions.refresh_cache(None)
-    assert predictions.cached_predictions("integration", 60) == {"a": {}}
-    assert predictions.cached_predictions("agent", 60) == {"b": {}}
+        from services.tenancy import tenant_scope
+        with tenant_scope(1):
+            await predictions.refresh_cache(None)
+    assert predictions.cached_predictions("integration", 60, tenant_id=1) == {"a": {}}
+    assert predictions.cached_predictions("agent", 60, tenant_id=1) == {"b": {}}
+    # Another tenant's dashboard sees none of it.
+    assert predictions.cached_predictions("integration", 60, tenant_id=2) is None
+    assert predictions.cached_predictions("agent", 60, tenant_id=2) is None
 
 
 async def test_query_count_does_not_grow_with_hosts_or_incidents():
@@ -357,7 +360,7 @@ async def test_query_count_does_not_grow_with_hosts_or_incidents():
 
         invalidate_topology_cache()
         dashboard_v2.clear_caches()
-        predictions._disk_pred_cache = None
+        predictions.clear_cache()
         async with make_client() as (client, sf):
             async with sf() as db:
                 hosts = [PingHost(name=f"h{i}", hostname=f"10.1.{i // 250}.{i % 250}") for i in range(n)]

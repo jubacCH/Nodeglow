@@ -642,12 +642,12 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
     try:
         from services.syslog import _resolve_host_id, _refresh_host_cache
         await _refresh_host_cache()
-        host_id = _resolve_host_id(source_ip, hostname)
+        host_id = _resolve_host_id(source_ip, hostname, agent.tenant_id)
     except Exception:
         host_id = None
 
     # Feed logs through the syslog pipeline (_enqueue handles ClickHouse write + live tail)
-    from services.syslog import _enqueue
+    from services.syslog import TENANT_KEY, _enqueue
     count = 0
     for entry in logs[:500]:
         ts_str = entry.get("timestamp", "")
@@ -666,6 +666,7 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
             "app_name": entry.get("app_name", ""),
             "message": entry.get("message", "")[:2000],
             "host_id": host_id,
+            TENANT_KEY: agent.tenant_id,
         }
         await _enqueue(parsed)
         count += 1

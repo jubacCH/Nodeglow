@@ -22,9 +22,9 @@ from services import log_intelligence as li
 
 @pytest.fixture(autouse=True)
 def _reset_progress():
-    li._baseline_done_through = None
+    li.reset_state()
     yield
-    li._baseline_done_through = None
+    li.reset_state()
 
 
 def _epoch(dt: datetime) -> int:
@@ -149,7 +149,7 @@ async def test_compute_baselines_is_idempotent_within_an_hour(db):
         assert await li.compute_baselines(db, now=now + timedelta(minutes=20)) == 0
         # Forget the in-memory mirror, as a restart would: the persisted
         # progress must still prevent a second fold of the same hours.
-        li._baseline_done_through = None
+        li._tenant_state(1).baseline_done_through = None
         assert await li.compute_baselines(db, now=now + timedelta(minutes=30)) == 0
 
     assert len(fake.calls) == 1
@@ -314,9 +314,7 @@ async def test_content_anomalies_fire_on_fallback_slot(db):
 
 
 async def test_flush_templates_bulk_upserts(db):
-    li._template_cache.clear()
-    li._template_counts.clear()
-    li._new_templates.clear()
+    st = li._tenant_state(1)
 
     db.add(LogTemplate(template_hash="known00000000001", template="known <*>",
                        count=10, last_seen=datetime(2026, 1, 1)))
@@ -326,10 +324,10 @@ async def test_flush_templates_bulk_upserts(db):
                        last_seen=datetime(2026, 1, 1)))
     await db.commit()
 
-    li._template_counts.update({
+    st.template_counts.update({
         "known00000000001": 3, "raced00000000001": 2, "fresh00000000001": 4,
     })
-    li._new_templates.update({
+    st.new_templates.update({
         "raced00000000001": ("raced <*>", "raced x", []),
         "fresh00000000001": ("fresh <*>", "fresh y", ["network"]),
     })
@@ -346,22 +344,20 @@ async def test_flush_templates_bulk_upserts(db):
     assert rows["fresh00000000001"].tags == "network"
     assert rows["fresh00000000001"].noise_score == 10
     # Ids land in the cache so the next message is not "new" again.
-    assert li._template_cache["fresh00000000001"] == rows["fresh00000000001"].id
-    assert li._template_cache["raced00000000001"] == rows["raced00000000001"].id
-    assert not li._template_counts and not li._new_templates
+    assert st.template_cache["fresh00000000001"] == rows["fresh00000000001"].id
+    assert st.template_cache["raced00000000001"] == rows["raced00000000001"].id
+    assert not st.template_counts and not st.new_templates
 
 
 async def test_flush_templates_keeps_counts_when_the_write_fails(db):
-    li._template_counts.clear()
-    li._new_templates.clear()
-    li._template_counts["abc"] = 5
+    st = li._tenant_state(1)
+    st.template_counts["abc"] = 5
 
     with patch.object(li, "_write_template_batch", new=AsyncMock(side_effect=RuntimeError("db down"))):
         with pytest.raises(RuntimeError):
             await li.flush_templates(db)
 
-    assert li._template_counts["abc"] == 5
-    li._template_counts.clear()
+    assert st.template_counts["abc"] == 5
 
 
 # ── severity trends ─────────────────────────────────────────────────────────
