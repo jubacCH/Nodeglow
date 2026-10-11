@@ -3,6 +3,7 @@ mod collector;
 mod checks;
 mod client;
 mod services;
+mod syslog_relay;
 mod updater;
 
 #[cfg(target_os = "linux")]
@@ -82,6 +83,16 @@ async fn main() {
     let mut pending_results = checks::PendingResults::new();
     let mut probe_client: Option<checks::ProbeClient> = None;
 
+    // Probe syslog relay. Nothing is bound or spawned until a heartbeat
+    // answer switches it on (probes only); see syslog_relay.rs.
+    let relay_hostname = hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    let mut relay = syslog_relay::SyslogRelay::new(
+        Arc::new(ApiClient::with_token(&cfg, &token)),
+        relay_hostname,
+    );
+
     let interval = std::time::Duration::from_secs(cfg.interval);
 
     info!("Entering main loop (interval={}s)", cfg.interval);
@@ -114,8 +125,15 @@ async fn main() {
         // Report to server, handing over any check results collected since the
         // last successful heartbeat.
         let delivered = pending_results.len();
+        let relay_status = relay.status();
         match api
-            .report(&metrics, &logs, pending_results.as_slice(), &service_states)
+            .report(
+                &metrics,
+                &logs,
+                pending_results.as_slice(),
+                &service_states,
+                relay_status.as_ref(),
+            )
             .await
         {
             Ok(resp) => {
@@ -160,6 +178,13 @@ async fn main() {
                 }
             }
         }
+
+        // Follow the relay config of the last answered heartbeat. While the
+        // backend is unreachable the relay keeps listening and buffering.
+        let relay_cfg = syslog_relay::RelayConfig::from_server(
+            server_config.read().await.syslog_relay.as_ref(),
+        );
+        relay.apply(relay_cfg).await;
 
         // Auto-update check (every 5 minutes)
         let count = update_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

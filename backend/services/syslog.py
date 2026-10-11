@@ -3,11 +3,12 @@ Syslog receiver – asyncio UDP + TCP server with RFC 3164/5424 parsing,
 write-buffered DB inserts, and auto-host assignment.
 """
 import asyncio
+import ipaddress
 import logging
 import os
 import re
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -282,27 +283,81 @@ def parse_syslog(raw: str, source_ip: str) -> dict:
 
 # ── Host cache for auto-assignment ──────────────────────────────────────────
 #
-# Keyed by tenant: the same RFC1918 address or host name is a different device
-# in every customer network, so a lookup is always "(tenant, ip | name) ->
-# host". The direct UDP/TCP listener knows only the source address; it feeds
-# the default tenant (LISTENER_TENANT_ID, see the spec's "Syslog ingestion").
-# Agent log submissions resolve in the agent's tenant.
+# Keyed by tenant and site: the same RFC1918 address or host name is a
+# different device in every customer network — and in every branch office of
+# one customer — so a lookup is "(tenant, site, ip | name) -> host".
+#
+# * The direct UDP/TCP listener knows only the source address; it feeds the
+#   default tenant (LISTENER_TENANT_ID, see the spec's "Syslog ingestion") and
+#   resolves tenant-wide, without a site (the single-tenant behaviour).
+# * Probe-relayed syslog (phase 10) resolves inside the probe's site first.
+#   A key the site does not know falls back to the whole tenant only where
+#   that cannot pick a device of another branch: a host name or a public
+#   address, and only when no other site has the same key. A private address
+#   never resolves outside its site — 192.168.1.1 in branch A is not
+#   192.168.1.1 in branch B. Another tenant's hosts are never candidates.
+# * An agent's own logs are attributed to the agent's own host by name.
 
 LISTENER_TENANT_ID = DEFAULT_TENANT_ID
 _host_cache: dict[int, dict[str, int]] = {}  # tenant_id -> ip_or_hostname -> host_id
+_site_host_cache: dict[tuple[int, int], dict[str, int]] = {}  # (tenant, site) -> key -> host_id
+# Per tenant: keys that name hosts in more than one site — never resolved
+# tenant-wide from a site (which branch's "gw" would it be?).
+_cross_site_keys: dict[int, set[str]] = {}
 _host_cache_ts: float = 0.0
 _HOST_CACHE_TTL = 120  # seconds
 # Per tenant: only accept syslog from known hosts (syslog_allowlist_only).
 _allowlist_only: dict[int, bool] = {}
 _allowlist_ips: dict[int, set[str]] = {}  # tenant_id -> resolved IPs of known hosts
+_site_allowlist_ips: dict[tuple[int, int], set[str]] = {}  # (tenant, site) -> IPs
+# Active tenants at the last cache refresh; the direct listener in "auto"
+# mode only accepts while there is one (see _listener_accepts). None until a
+# refresh has counted them: the listener fails closed until then, so a DB
+# that is unreachable at startup cannot turn a multi-tenant installation's
+# listener into "everything goes to the default tenant".
+_active_tenant_count: Optional[int] = None
 
 
-def _is_allowed_source(source_ip: str, tenant_id: int = LISTENER_TENANT_ID) -> bool:
-    """Check if source IP is from a known host of the tenant. Only enforced
-    when that tenant's allowlist is enabled."""
+def reset_host_cache() -> None:
+    """Forget every host, allowlist and the tenant count (tests)."""
+    global _host_cache, _site_host_cache, _cross_site_keys, _host_cache_ts
+    global _allowlist_only, _allowlist_ips, _site_allowlist_ips, _active_tenant_count
+    _host_cache, _site_host_cache, _cross_site_keys = {}, {}, {}
+    _allowlist_only, _allowlist_ips, _site_allowlist_ips = {}, {}, {}
+    _host_cache_ts = 0.0
+    _active_tenant_count = None
+
+
+def _ip_or_none(value):
+    try:
+        return ipaddress.ip_address(str(value))
+    except ValueError:
+        return None
+
+
+def _site_fallback_ok(key: str, tenant_id: int) -> bool:
+    """May ``key`` (an IP or a lower-cased name) be looked up tenant-wide by
+    a site that does not know it? Names and public addresses may, private
+    addresses may not; nor may a key several sites use."""
+    if key in _cross_site_keys.get(tenant_id, ()):
+        return False
+    ip = _ip_or_none(key)
+    return ip is None or ip.is_global
+
+
+def _is_allowed_source(
+    source_ip: str, tenant_id: int = LISTENER_TENANT_ID, site_id: Optional[int] = None,
+) -> bool:
+    """Check if source IP is from a known host of the tenant (of its site, for
+    relayed syslog). Only enforced when that tenant's allowlist is enabled."""
     if not _allowlist_only.get(tenant_id, False):
         return True
-    return source_ip in _allowlist_ips.get(tenant_id, ())
+    if site_id is None:
+        return source_ip in _allowlist_ips.get(tenant_id, ())
+    if source_ip in _site_allowlist_ips.get((tenant_id, site_id), ()):
+        return True
+    return (_site_fallback_ok(source_ip, tenant_id)
+            and source_ip in _allowlist_ips.get(tenant_id, ()))
 
 
 _DNS_CONCURRENCY = _env_int("NODEGLOW_SYSLOG_DNS_CONCURRENCY", 16)
@@ -344,8 +399,16 @@ def _raw_host(hostname: str) -> str:
     return raw.split("/")[0].split(":")[0]
 
 
+def _host_site(tenancy, host) -> Optional[int]:
+    """The site a host's syslog belongs to: its own, else the tenant's default."""
+    if host.site_id is not None:
+        return host.site_id
+    return tenancy.default_site_id(host.tenant_id)
+
+
 async def _refresh_host_cache():
     global _host_cache, _host_cache_ts, _allowlist_only, _allowlist_ips
+    global _site_host_cache, _site_allowlist_ips, _cross_site_keys, _active_tenant_count
     import time
     now = time.time()
     if now - _host_cache_ts < _HOST_CACHE_TTL and _host_cache:
@@ -353,36 +416,55 @@ async def _refresh_host_cache():
     try:
         from database import get_setting
         from services.tenancy import backend as _tenancy_backend
+        tenancy = _tenancy_backend()
         # One listener serves the installation, so the refresh reads every
-        # tenant's hosts (system scope) and files them per tenant.
+        # tenant's hosts (system scope) and files them per tenant and site.
         # (Two statements: system_scope is a plain context manager — inside
         # an ``async with`` it raised, and the cache silently stayed empty.)
         with _system_scope("syslog: host cache"):
             async with AsyncSessionLocal() as db:
                 hosts = (await db.execute(select(PingHost))).scalars().all()
-                tenant_ids = set(await _tenancy_backend().active_tenant_ids())
-                tenant_ids |= {h.tenant_id for h in hosts}
+                active = set(await tenancy.active_tenant_ids())
+                # Stored at once: the listener's gate must not depend on the
+                # rest of the refresh (one tenant's failing setting) succeeding.
+                _active_tenant_count = len(active)
+                tenant_ids = active | {h.tenant_id for h in hosts}
                 allowlist_only = {
                     t: (await get_setting(db, "syslog_allowlist_only", "0", tenant_id=t)) == "1"
                     for t in sorted(tenant_ids)
                 }
         cache: dict[int, dict[str, int]] = {t: {} for t in tenant_ids}
+        site_cache: dict[tuple[int, int], dict[str, int]] = {}
         allowed_ips: dict[int, set[str]] = {t: set() for t in tenant_ids}
-        raws: list[tuple[int, str, int]] = []
+        site_allowed: dict[tuple[int, int], set[str]] = {}
+        key_sites: dict[tuple[int, str], set] = {}  # (tenant, key) -> sites using it
+        raws: list[tuple[int, Optional[int], str, int]] = []
+
+        def _file(tenant_id: int, site_id: Optional[int], key: str, host_id: int) -> None:
+            cache[tenant_id][key] = host_id
+            key_sites.setdefault((tenant_id, key), set()).add(site_id)
+            if site_id is not None:
+                site_cache.setdefault((tenant_id, site_id), {})[key] = host_id
+
+        def _allow(tenant_id: int, site_id: Optional[int], ip: str) -> None:
+            allowed_ips[tenant_id].add(ip)
+            if site_id is not None:
+                site_allowed.setdefault((tenant_id, site_id), set()).add(ip)
+
         for h in hosts:
-            tc = cache[h.tenant_id]
-            tc[h.hostname.lower()] = h.id
+            site_id = _host_site(tenancy, h)
+            _file(h.tenant_id, site_id, h.hostname.lower(), h.id)
             if h.name:
-                tc[h.name.lower()] = h.id
+                _file(h.tenant_id, site_id, h.name.lower(), h.id)
 
             raw = _raw_host(h.hostname)
-            tc[raw.lower()] = h.id
-            raws.append((h.tenant_id, raw, h.id))
+            _file(h.tenant_id, site_id, raw.lower(), h.id)
+            raws.append((h.tenant_id, site_id, raw, h.id))
 
             # If raw is already an IP, add it directly
             try:
                 socket.inet_aton(raw)
-                allowed_ips[h.tenant_id].add(raw)
+                _allow(h.tenant_id, site_id, raw)
             except OSError:
                 pass
 
@@ -390,22 +472,30 @@ async def _refresh_host_cache():
         # one after another, so a few unresolvable names (each waiting for the
         # resolver timeout) stalled the refresh for minutes. Now concurrent,
         # bounded, and each lookup capped. (Resolved by this installation's
-        # resolver; the answer is filed under the host's own tenant.)
+        # resolver; the answer is filed under the host's own tenant and site.)
         resolved = await _resolve_many(
-            sorted({raw for _, raw, _ in raws}), socket.gethostbyname,
+            sorted({raw for _, _, raw, _ in raws}), socket.gethostbyname,
         )
-        for tenant_id, raw, host_id in raws:
+        for tenant_id, site_id, raw, host_id in raws:
             ip = resolved.get(raw)
             if ip:
-                cache[tenant_id][ip] = host_id
-                allowed_ips[tenant_id].add(ip)
+                _file(tenant_id, site_id, ip, host_id)
+                _allow(tenant_id, site_id, ip)
+
+        cross: dict[int, set[str]] = {t: set() for t in tenant_ids}
+        for (tenant_id, key), sites in key_sites.items():
+            if len(sites) > 1:
+                cross[tenant_id].add(key)
 
         _host_cache = cache
+        _site_host_cache = site_cache
+        _cross_site_keys = cross
         _allowlist_ips = allowed_ips
+        _site_allowlist_ips = site_allowed
         _allowlist_only = allowlist_only
         _host_cache_ts = now
-        log.debug("Syslog host cache refreshed: %d hosts in %d tenant(s) (allowlist=%s)",
-                  len(hosts), len(tenant_ids), allowlist_only)
+        log.debug("Syslog host cache refreshed: %d hosts in %d tenant(s), %d site(s) "
+                  "(allowlist=%s)", len(hosts), len(tenant_ids), len(site_cache), allowlist_only)
     except Exception as e:
         log.warning("Failed to refresh host cache: %s", e)
 
@@ -417,35 +507,84 @@ _RDNS_CACHE_MAX = 5_000  # max cached entries
 _rdns_cache_ts: float = 0.0
 
 
-def _resolve_host_id(
-    source_ip: str, hostname: Optional[str], tenant_id: int = LISTENER_TENANT_ID,
-) -> Optional[int]:
-    """Try to match source_ip or hostname to a PingHost of ``tenant_id``.
+def _lookup(cache: dict[str, int], source_ip: Optional[str], hostname: Optional[str],
+            rdns: bool, accept=None) -> Optional[int]:
+    """Match a message against one cache: name, address, reverse-DNS name.
+    ``accept(key)`` may veto a key (the tenant-wide fallback of a site)."""
+    def hit(key: Optional[str]) -> Optional[int]:
+        if not key or key not in cache:
+            return None
+        if accept is not None and not accept(key):
+            return None
+        return cache[key]
 
-    Only that tenant's hosts are candidates: an address or name another
-    customer also uses never resolves to the other customer's host.
-    """
-    cache = _host_cache.get(tenant_id) or {}
-    if hostname and hostname.lower() in cache:
-        return cache[hostname.lower()]
-    if source_ip in cache:
-        return cache[source_ip]
-    if source_ip.lower() in cache:
-        return cache[source_ip.lower()]
+    found = hit(hostname.lower() if hostname else None)
+    if found is None and source_ip:
+        found = hit(source_ip)
+        if found is None:
+            found = hit(source_ip.lower())
+    if found is not None or not rdns or not source_ip:
+        return found
 
     # Try reverse DNS on source_ip (cached). The rDNS cache holds what this
     # installation's resolver says about an address — no tenant data; the
     # match against a host is per tenant like everything above.
     rdns_name = _rdns_cache.get(source_ip)
-    if rdns_name and rdns_name.lower() in cache:
-        return cache[rdns_name.lower()]
-    # Also try short hostname from FQDN (e.g. "gw.example.com" → "gw")
-    if rdns_name and "." in rdns_name:
-        short = rdns_name.split(".")[0].lower()
-        if short in cache:
-            return cache[short]
+    if rdns_name:
+        found = hit(rdns_name.lower())
+        # Also try short hostname from FQDN (e.g. "gw.example.com" → "gw")
+        if found is None and "." in rdns_name:
+            found = hit(rdns_name.split(".")[0].lower())
+    return found
 
-    return None
+
+def _resolve_host_id(
+    source_ip: Optional[str], hostname: Optional[str], tenant_id: int = LISTENER_TENANT_ID,
+    site_id: Optional[int] = None, *, rdns: bool = True,
+) -> Optional[int]:
+    """Try to match source_ip or hostname to a PingHost of ``tenant_id``.
+
+    Only that tenant's hosts are candidates: an address or name another
+    customer also uses never resolves to the other customer's host. With a
+    ``site_id`` (probe-relayed syslog) the site's hosts come first, the rest
+    of the tenant only for keys that cannot belong to another branch
+    (``_site_fallback_ok``). ``rdns=False`` skips the reverse-DNS step — the
+    installation's resolver knows nothing about a customer's private network.
+    """
+    if site_id is None:
+        return _lookup(_host_cache.get(tenant_id) or {}, source_ip, hostname, rdns)
+    found = _lookup(_site_host_cache.get((tenant_id, site_id)) or {}, source_ip, hostname, rdns)
+    if found is not None:
+        return found
+    return _lookup(_host_cache.get(tenant_id) or {}, source_ip, hostname, rdns,
+                   accept=lambda key: _site_fallback_ok(key, tenant_id))
+
+
+def resolve_agent_host_id(
+    client_ip: Optional[str], hostname: Optional[str], tenant_id: int, site_id: Optional[int],
+) -> Optional[int]:
+    """The host an agent's own logs belong to.
+
+    By the agent's name inside its tenant and site first. Failing that, by
+    the request's address — but only inside the agent's own site (never the
+    tenant-wide fallback, never reverse DNS), and only where that address can
+    be the agent's own: a private address (the agent reached us over a LAN
+    or VPN), or any address when all of the tenant's hosts live in one site
+    (the single-site installation, where this was always the behaviour). A
+    public address of a multi-site tenant is the customer's NAT more often
+    than not, so it is not used.
+    """
+    found = _resolve_host_id(None, hostname, tenant_id, site_id, rdns=False)
+    if found is not None or not client_ip or site_id is None:
+        return found
+    ip = _ip_or_none(client_ip)
+    if ip is None:
+        return None
+    if ip.is_global:
+        sites = {s for (t, s) in _site_host_cache if t == tenant_id}
+        if len(sites) > 1:
+            return None
+    return _lookup(_site_host_cache.get((tenant_id, site_id)) or {}, client_ip, None, False)
 
 
 async def _rdns_resolve_loop():
@@ -467,6 +606,10 @@ async def _rdns_resolve_loop():
         async with _buffer_lock:
             snapshot = list(_buffer)
         for entry in snapshot:
+            # Not for relayed messages: their address is one in the customer's
+            # network, which this installation's resolver knows nothing about.
+            if entry.get(RELAYED_KEY):
+                continue
             if not entry.get("host_id") and entry.get("source_ip"):
                 ips_to_resolve.add(entry["source_ip"])
         # Also resolve IPs we haven't seen before (concurrently, bounded)
@@ -485,6 +628,9 @@ _subscribers: list[tuple[int, asyncio.Queue]] = []
 # producer (direct listener: LISTENER_TENANT_ID, agent logs: the agent's
 # tenant); written to the row's tenant_id column on insert (_clean_rows).
 TENANT_KEY = "_tenant_id"
+# Internal key: the message was relayed by a probe (phase 10). Its source
+# address belongs to the probe's site, not to this installation's network.
+RELAYED_KEY = "_relayed"
 
 
 def subscribe(tenant_id: int) -> asyncio.Queue:
@@ -614,7 +760,7 @@ def _clean_rows(batch: list[dict]) -> list[dict]:
     them, so this only guards against a producer that bypassed it; a batch
     with such a row would otherwise fail as a whole and be retried forever.
     """
-    _transient = {"is_new_template", "severity_label", TENANT_KEY}
+    _transient = {"is_new_template", "severity_label", TENANT_KEY, RELAYED_KEY}
     cleaned = []
     for msg in batch:
         tenant_id = msg.get(TENANT_KEY, msg.get("tenant_id"))
@@ -695,6 +841,8 @@ class SyslogUDPProtocol(asyncio.DatagramProtocol):
         if len(data) > _MAX_MSG_SIZE:
             return  # drop oversized message
         source_ip = addr[0]
+        if not _listener_accepts():
+            return
         if not _is_allowed_source(source_ip):
             return
         if not _syslog_rate_ok(source_ip):
@@ -733,7 +881,7 @@ class SyslogTCPHandler:
         global _tcp_connection_count
         addr = self.writer.get_extra_info("peername")
         source_ip = addr[0] if addr else "0.0.0.0"
-        if not _is_allowed_source(source_ip):
+        if not _listener_accepts() or not _is_allowed_source(source_ip):
             self.writer.close()
             return
         async with _tcp_count_lock:
@@ -755,6 +903,8 @@ class SyslogTCPHandler:
                 raw = line.decode("utf-8", errors="replace").strip()
                 if not raw:
                     continue
+                if not _listener_accepts():
+                    break
                 if not _syslog_rate_ok(source_ip):
                     continue
                 if not _global_rate_ok():
@@ -775,6 +925,125 @@ class SyslogTCPHandler:
             self.writer.close()
 
 
+# ── Direct listener mode ────────────────────────────────────────────────────
+#
+# NODEGLOW_SYSLOG_LISTENER decides whether the backend's own UDP/TCP listener
+# runs (spec "Syslog ingestion", owner decision 3: SaaS syslog is probe-only):
+#
+#   auto (default)  listen; accept messages while the installation has one
+#                   active tenant (every core install) — everything lands in
+#                   the default tenant as before. Once a second tenant exists
+#                   the listener stops accepting (it cannot tell whose a
+#                   datagram is) and says so; syslog then goes through probes.
+#   on              always accept, into the default tenant (an on-prem
+#                   operator who wants the listener for tenant 1 anyway).
+#   off             do not bind the port at all (SaaS). Agent logs and
+#                   probe-relayed syslog keep working: the write pipeline
+#                   runs either way.
+
+LISTENER_MODES = ("auto", "on", "off")
+_listener_mode: str = "auto"
+_listener_refused_logged: float = -1e9
+_LISTENER_REFUSED_LOG_INTERVAL = 300.0  # seconds between two warnings
+
+
+def listener_mode_from_env() -> str:
+    """The configured listener mode (``NODEGLOW_SYSLOG_LISTENER``)."""
+    raw = (os.environ.get("NODEGLOW_SYSLOG_LISTENER") or "auto").strip().lower()
+    aliases = {"1": "on", "true": "on", "yes": "on", "0": "off", "false": "off", "no": "off"}
+    mode = aliases.get(raw, raw)
+    if mode not in LISTENER_MODES:
+        log.error("NODEGLOW_SYSLOG_LISTENER=%r is not one of %s; using 'auto'",
+                  raw, "/".join(LISTENER_MODES))
+        return "auto"
+    return mode
+
+
+def _listener_accepts() -> bool:
+    """Whether the direct listener takes a message now (see the modes above)."""
+    global _listener_refused_logged
+    if _listener_mode == "on":
+        return True
+    if (_listener_mode == "auto" and _active_tenant_count is not None
+            and _active_tenant_count <= 1):
+        return True
+    _count_drop("listener_disabled")
+    import time
+    now = time.monotonic()
+    if now - _listener_refused_logged >= _LISTENER_REFUSED_LOG_INTERVAL:
+        _listener_refused_logged = now
+        log.warning(
+            "Direct syslog listener refuses messages: %s. Send syslog through a "
+            "probe with the syslog relay instead (see OPERATIONS.md, 'Probe syslog relay').",
+            "NODEGLOW_SYSLOG_LISTENER=off" if _listener_mode != "auto"
+            else "the tenant count is not known yet (host cache refresh failing)"
+            if _active_tenant_count is None
+            else "the installation has more than one tenant",
+        )
+    return False
+
+
+# ── Probe syslog relay (phase 10) ───────────────────────────────────────────
+#
+# A probe listens for syslog inside the customer network and forwards the raw
+# lines over its agent token (POST /api/agent/logs, entries with ``raw``).
+# Tenant and site come from the probe — never from the message — and the
+# device's address travels per entry. Nothing here guesses a tenant.
+
+RELAY_MAX_ENTRIES = 500          # per request, like the agent's own logs
+_RELAY_MAX_FUTURE = 300          # seconds a probe's clock may run ahead
+_RELAY_MAX_AGE = 7 * 24 * 3600   # older receive times are clamped to "now"
+
+
+def _relay_received_at(value, now: datetime) -> datetime:
+    """The probe's receive time, as naive UTC; ``now`` when absent or absurd."""
+    if not isinstance(value, str) or not value:
+        return now
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return now
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+    delta = (ts - now).total_seconds()
+    if delta > _RELAY_MAX_FUTURE or -delta > _RELAY_MAX_AGE:
+        return now
+    return ts
+
+
+def parse_relayed_entry(
+    entry: dict, *, tenant_id: int, site_id: Optional[int], now: Optional[datetime] = None,
+) -> tuple[Optional[dict], Optional[str]]:
+    """One probe-relayed syslog line → a parsed message of the probe's tenant
+    and site, or ``(None, reason)`` when it must be dropped.
+
+    ``tenant_id`` / ``site_id`` are the probe's; the entry cannot change them.
+    """
+    now = now or datetime.utcnow()
+    raw = entry.get("raw")
+    if not isinstance(raw, str):
+        return None, "relay_invalid"
+    ip = _ip_or_none(entry.get("source_ip"))
+    if ip is None:
+        return None, "relay_invalid"
+    source_ip = str(ip)
+    if len(raw.encode("utf-8", errors="replace")) > _MAX_MSG_SIZE:
+        return None, "relay_oversized"
+    if not _is_allowed_source(source_ip, tenant_id, site_id):
+        return None, "relay_not_allowed"
+    parsed = parse_syslog(raw, source_ip)
+    if not parsed:
+        return None, "relay_empty"
+    parsed["received_at"] = _relay_received_at(entry.get("received_at"), now)
+    parsed["host_id"] = _resolve_host_id(
+        source_ip, parsed.get("hostname"), tenant_id, site_id, rdns=False,
+    )
+    parsed["site_id"] = site_id or 0
+    parsed[TENANT_KEY] = tenant_id
+    parsed[RELAYED_KEY] = True
+    return parsed, None
+
+
 # ── Server lifecycle ────────────────────────────────────────────────────────
 
 _udp_transport = None
@@ -792,19 +1061,35 @@ async def _cache_refresh_loop():
         await asyncio.sleep(_HOST_CACHE_TTL)
 
 
-async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
-    """Start UDP + TCP syslog listeners."""
+async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514,
+                              mode: Optional[str] = None):
+    """Start the write pipeline and, unless the mode is ``off``, the UDP + TCP
+    listeners. ``mode`` defaults to ``NODEGLOW_SYSLOG_LISTENER``."""
     # _rdns_task used to be assigned without being declared global, so
     # stop_syslog_server never saw (or cancelled) the rDNS loop.
     global _udp_transport, _tcp_server, _flush_task, _cache_task, _rdns_task
-    global _udp_task, _udp_queue, _flush_event
+    global _udp_task, _udp_queue, _flush_event, _listener_mode
 
     loop = asyncio.get_running_loop()
+    _listener_mode = mode if mode in LISTENER_MODES else listener_mode_from_env()
+    listen = _listener_mode != "off"
 
     # Initial host cache load (also populates _allowlist_only from DB setting).
     await _refresh_host_cache()
 
-    if not _allowlist_only.get(LISTENER_TENANT_ID, False):
+    if not listen:
+        log.info("Direct syslog listener disabled (NODEGLOW_SYSLOG_LISTENER=off): "
+                 "syslog only through agents and probe relays")
+    elif _listener_mode == "auto" and _active_tenant_count is None:
+        log.warning("Direct syslog listener on port %d/%d refuses messages until "
+                    "the tenant count is known (host cache refresh failed).",
+                    udp_port, tcp_port)
+    elif _listener_mode == "auto" and _active_tenant_count > 1:
+        log.warning("Direct syslog listener on port %d/%d refuses messages: the "
+                    "installation has %d tenants. Use probe syslog relays, or set "
+                    "NODEGLOW_SYSLOG_LISTENER=off (or =on for the default tenant).",
+                    udp_port, tcp_port, _active_tenant_count)
+    elif not _allowlist_only.get(LISTENER_TENANT_ID, False):
         log.warning(
             "Syslog host allowlist is DISABLED — every UDP/TCP source on "
             "port %d/%d can inject log entries and trigger host auto-assignment. "
@@ -830,21 +1115,22 @@ async def start_syslog_server(udp_port: int = 1514, tcp_port: int = 1514):
     _flush_task = asyncio.create_task(_flush_loop())
     _udp_task = asyncio.create_task(_udp_worker())
 
-    # UDP
-    _udp_transport, _ = await loop.create_datagram_endpoint(
-        SyslogUDPProtocol, local_addr=("0.0.0.0", udp_port)
-    )
-    log.info("Syslog UDP listening on port %d", udp_port)
+    if listen:
+        # UDP
+        _udp_transport, _ = await loop.create_datagram_endpoint(
+            SyslogUDPProtocol, local_addr=("0.0.0.0", udp_port)
+        )
+        log.info("Syslog UDP listening on port %d", udp_port)
 
-    # TCP
-    async def _tcp_client_connected(reader, writer):
-        handler = SyslogTCPHandler(reader, writer)
-        await handler.handle()
+        # TCP
+        async def _tcp_client_connected(reader, writer):
+            handler = SyslogTCPHandler(reader, writer)
+            await handler.handle()
 
-    _tcp_server = await asyncio.start_server(
-        _tcp_client_connected, "0.0.0.0", tcp_port
-    )
-    log.info("Syslog TCP listening on port %d", tcp_port)
+        _tcp_server = await asyncio.start_server(
+            _tcp_client_connected, "0.0.0.0", tcp_port
+        )
+        log.info("Syslog TCP listening on port %d", tcp_port)
 
     # Background tasks
     _cache_task = asyncio.create_task(_cache_refresh_loop())
@@ -858,9 +1144,11 @@ async def stop_syslog_server():
 
     if _udp_transport:
         _udp_transport.close()
+        _udp_transport = None
     if _tcp_server:
         _tcp_server.close()
         await _tcp_server.wait_closed()
+        _tcp_server = None
     for task in (_flush_task, _cache_task, _rdns_task, _udp_task):
         if task:
             task.cancel()

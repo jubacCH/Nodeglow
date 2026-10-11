@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10 — phases 1–9 implemented 2026-10-11; per-tenant envelope keys (owner decision 7, revision 046) implemented 2026-10-11 (see "Implementation status")
+Status: design · 2026-10-10 — phases 1–9 implemented 2026-10-11; per-tenant envelope keys (owner decision 7, revision 046) and phase 10 (probe syslog relay) implemented 2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -793,7 +793,7 @@ is user-visible until phase 7.
 | 7 ✅ | Postgres RLS + role split; CI job on Postgres asserting policies | core | M |
 | 8 ✅ | Tenant-isolation test suite (built from phase 2 on, gating from phase 4) | core | M |
 | 9 ✅ | `ee/` skeleton, licence verification, tenant lifecycle incl. purge, tenant switcher | ee | L |
-| 10 | Probe syslog relay (agent) + `/api/agent/logs` per-entry source + site-scoped resolution | core (agent + backend) | M + S |
+| 10 ✅ | Probe syslog relay (agent) + `/api/agent/logs` per-entry source + site-scoped resolution | core (agent + backend) | M + S |
 | 11 | MSP portal: cross-tenant overview, incident board, provider roles and keys, provider channels | ee | L |
 | 12 | Export (core) / import (ee), agent `migrate` command | core + ee | L |
 | 13 | SSO: OIDC, SAML, SCIM, home-realm discovery | ee | L |
@@ -2100,6 +2100,123 @@ Deviations / limits:
   a follow-up.
 - Other processes may hold an unwrapped DEK until their current
   transaction ends (≈ request); destroy is immediate for new transactions.
+### Phase 10 — probe syslog relay (done)
+
+Revision `047` (chained after `046`: 044 → 045 phase 9 → 046 tenant keys →
+047).
+`tests/test_alembic_heads.py` asserts one alembic head, so a forgotten
+re-chain fails CI instead of the container's startup migration. Code in
+`agent/src/syslog_relay.rs`, `backend/services/syslog.py`,
+`backend/services/probe_syslog.py`, `routers/agents.py`, `routers/api_v1.py`.
+
+- **Agent.** `syslog_relay.rs`: with the relay on (heartbeat config
+  `syslog_relay: {"enabled": true, "port": 514}`, probes only) the agent
+  binds UDP and TCP on `0.0.0.0:<port>`; TCP understands newline/NUL and
+  octet-counted framing (RFC 6587), 64 KiB per message, 64 connections,
+  5 min idle timeout. Received lines (raw, device address, receive time,
+  transport) go into a bounded in-memory buffer (20 000 entries / 16 MiB,
+  oldest dropped and counted); a forwarder sends batches of ≤ 500 entries /
+  ~1 MiB to `POST /api/agent/logs` every 2 s or when a batch is full, puts a
+  failed batch back in front and backs off up to 60 s. Only what the backend
+  stored (`count` of the response) counts as `forwarded`; the rest of the
+  batch (allowlist, invalid, oversized, past the per-request limit) as
+  `rejected`. A permanent 4xx (400, 413, 422, …; not 401/403/404/408/429)
+  discards the batch (counted `rejected`) instead of retrying it forever.
+  A port that cannot be
+  bound is reported (`status.error`) and retried every minute; a changed
+  port rebinds, relay off closes the listeners (the forwarder delivers what
+  is buffered). Counters (`listening`, `port`, `received`, `forwarded`,
+  `rejected`, `dropped`, `buffered`, `send_failures`, `error`) ride the heartbeat as
+  `syslog_relay` once the relay was ever on — a plain agent's heartbeat is
+  byte-for-byte unchanged. The config is read leniently from raw JSON: a
+  malformed value means "off", never a failed heartbeat. No new crates;
+  updater, signing and the agent-build workflow are untouched.
+- **Backend, ingestion.** `/api/agent/logs`: an entry with `raw` is a relayed
+  line. Only a probe whose relay an admin switched on may send them (others:
+  dropped, `relay_not_a_probe` / `relay_disabled`, WARNING — the
+  backend enforces the switch, a tampered probe ignoring its config relays
+  nothing); `services.syslog.parse_relayed_entry` validates the address
+  (`ipaddress`), the size and the allowlist, parses with the existing
+  parser, takes `received_at` from the probe (clamped: ≤ 5 min ahead, ≤ 7 days
+  old, else now) and stamps **the probe's** tenant and site — nothing in the
+  entry can change them. Rows carry `site_id` into ClickHouse
+  (`insert_batch` already wrote it; agent logs now stamp it too, the direct
+  listener keeps 0 = unknown). The agent's *own* logs are attributed to its
+  own host by name inside its tenant and site (spec item 2); failing that
+  (`resolve_agent_host_id`) by the request's address inside the agent's own
+  site only — when the address is private (LAN/VPN), or any address while
+  all of the tenant's hosts are in one site (a host added by IP before the
+  agent, a cloud server). Never tenant-wide, never via reverse DNS; a public
+  address of a multi-site tenant (a customer's NAT) is not used. The
+  relayed marker keeps relayed addresses out of
+  the installation's reverse-DNS loop.
+- **Site-scoped resolution** (`_resolve_host_id(ip, name, tenant, site)`):
+  the host cache is filed per tenant *and* per site (a host without a site
+  counts for its tenant's default site). A site lookup tries the site's
+  hosts (name, address); then the rest of the tenant only for a host name or
+  a public (`is_global`) address that no other site also uses — a private
+  address never resolves outside its site, a name two branches use is never
+  guessed from a third. No reverse DNS for relayed addresses. The listener
+  (no site) resolves tenant-wide exactly as before. The allowlist follows the
+  same rule for relayed syslog.
+- **Direct listener** (`NODEGLOW_SYSLOG_LISTENER`, documented in
+  OPERATIONS.md "Probe syslog relay"): `auto` (default) listens and accepts
+  while the installation has one active tenant — every core install,
+  unchanged; with more than one it refuses messages (counted
+  `listener_disabled`, a warning every 5 min). `on` always accepts into the
+  default tenant; `off` binds no port (SaaS, owner decision 3) while the
+  write pipeline keeps running for agent logs and relays. The tenant count is
+  taken from the host-cache refresh (every 120 s), so a second tenant created
+  at runtime shuts the `auto` listener within two minutes. It fails closed:
+  until a refresh has counted the tenants (the database unreachable at
+  startup) `auto` refuses; the count is stored as soon as it is read, so a
+  later failing step of the refresh does not leave it stale.
+- **Configuration.** `agents.syslog_relay_enabled` (NOT NULL, default false),
+  `syslog_relay_port` (NULL = 514), `syslog_relay_status` (sanitised JSON of
+  the last counters). `PATCH /api/v1/agents/{id}` sets them (admin, audited
+  in `agent.probe`; enabling needs a probe; dropping the probe role switches
+  the relay off); agent responses carry `syslog_relay`. No new route, no new
+  table (the isolation suite needs no new classification; `agents` is
+  already tenant-owned with RLS).
+
+Tests: `tests/test_probe_syslog_relay.py` (two tenants, two sites of tenant
+1 sharing 192.168.1.0/24: per-site resolution, private addresses never leave
+their site, names / public addresses fall back only when unambiguous, other
+tenants never candidates, the listener unchanged, no rDNS, site-scoped
+allowlist, entry parser incl. receive-time clamping, listener modes and
+`off` binding nothing, `auto` failing closed while the tenant count is
+unknown, the agent-host fallback), `tests/test_routers/test_probe_syslog_relay_api.py`
+(HTTP: a probe of A claiming B's tenant/site/host in its entries lands in A
+and A's site; B's probe lands in B; a plain agent cannot relay; malformed
+entries dropped; a probe with the relay off relays nothing; own logs by
+name, an IP-keyed host via the private request address in the agent's site
+only; ClickHouse rows stamped with the probe's
+tenant and site; heartbeat config to probes only; counters sanitised; the
+API switch — admin only, probes only, 404 for another tenant's probe), also
+run against PostgreSQL as `nodeglow_app` with RLS (`ROUTER_TESTS_ON_PG`);
+`test_047_probe_syslog_relay_up_and_down` (PostgreSQL). Rust: buffer bounds
+and requeue order, framing (both framings, split reads, floods, absurd
+lengths), config parsing, wire format, loopback UDP/TCP end to end, a busy
+port reported instead of fatal, heartbeat payload/response compatibility,
+relay responses (`count`/`dropped` → forwarded/rejected, permanent 4xx).
+**The Rust code was written without a local toolchain** (no `cargo` on the
+development machine); `cargo test` / `clippy` first run in CI
+(`agent-build`).
+
+Deviations / not done:
+
+- The buffer is in memory only (the task allowed "on-disk/in-memory"); an
+  agent restart loses what is buffered.
+- The relay binds `0.0.0.0` (IPv4), one port for UDP and TCP; no bind address
+  setting, no IPv6.
+- No UI for the relay yet (API only); the agents page shows nothing of it.
+- Per-tenant syslog rate limits / buckets for relayed messages remain phase
+  14 (a probe sends at most 500 entries per request; the per-IP limiter of
+  the direct listener does not apply to relays).
+- `site_id` is stamped on syslog rows but nothing filters on it yet (syslog
+  UI/API by site), and `site_id` stays nullable on the PostgreSQL tables.
+- TLS syslog with per-tenant client certificates (owner decision 3, "later")
+  is not part of this.
 
 ### Open items (after phases 5–8)
 

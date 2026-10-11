@@ -6,6 +6,7 @@ use crate::checks::{CheckAssignment, CheckResult};
 use crate::collector::SystemMetrics;
 use crate::config::{Config, ServerConfig};
 use crate::services::ServiceStatus;
+use crate::syslog_relay::{RelayEntry, RelayStatus};
 
 /// Hard cap on update-binary download size to prevent OOM/DoS from a malicious
 /// or compromised server returning an unbounded body. 200 MiB.
@@ -43,6 +44,9 @@ struct ReportPayload<'a> {
     check_results: &'a [CheckResult],
     #[serde(skip_serializing_if = "no_services")]
     service_states: &'a [ServiceStatus],
+    /// Syslog relay counters; only once the relay was ever switched on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    syslog_relay: Option<&'a RelayStatus>,
 }
 
 fn is_empty(results: &&[CheckResult]) -> bool {
@@ -156,6 +160,7 @@ impl ApiClient {
         logs: &[LogEntry],
         check_results: &[CheckResult],
         service_states: &[ServiceStatus],
+        syslog_relay: Option<&RelayStatus>,
     ) -> anyhow::Result<ReportResponse> {
         let resp = self
             .client
@@ -165,6 +170,7 @@ impl ApiClient {
                 metrics,
                 check_results,
                 service_states,
+                syslog_relay,
             })
             .send()
             .await?;
@@ -219,6 +225,39 @@ impl ApiClient {
                 }
             }
         }
+    }
+
+    /// Forward a batch of relayed syslog lines (probe syslog relay). Unlike
+    /// the agent's own logs, a failure that may pass is returned as `Err`:
+    /// the relay keeps the batch and retries it. What the backend took and
+    /// what it refused (or refused outright) comes back as a `RelaySent`.
+    pub async fn send_relay_logs(
+        &self,
+        hostname: &str,
+        entries: &[RelayEntry],
+    ) -> anyhow::Result<RelaySent> {
+        #[derive(Serialize)]
+        struct RelayPayload<'a> {
+            hostname: &'a str,
+            logs: &'a [RelayEntry],
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/api/agent/logs", self.base_url))
+            .bearer_auth(&self.token)
+            .json(&RelayPayload { hostname, logs: entries })
+            .send()
+            .await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Ok(RelaySent::from_response(entries.len(), &body));
+        }
+        if relay_status_is_permanent(status.as_u16()) {
+            return Ok(RelaySent::Refused(status.as_u16()));
+        }
+        anyhow::bail!("relay submission failed: {}", status);
     }
 
     /// Check latest agent version info (hash + optional signature) from server.
@@ -280,11 +319,77 @@ impl ApiClient {
     }
 }
 
+/// What became of a relayed batch the backend answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelaySent {
+    /// The backend stored `accepted` entries and dropped `rejected` of them
+    /// (not allowed, oversized, invalid, ...). Resending them cannot help.
+    Done { accepted: u64, rejected: u64 },
+    /// The backend refused the whole batch for good (a 4xx resending cannot
+    /// fix, such as 400 or 413): it is discarded, not retried forever.
+    Refused(u16),
+}
+
+impl RelaySent {
+    /// Read `{"count": n, "dropped": m}`. The accepted count is what the
+    /// backend stored; everything else of the batch counts as rejected
+    /// (that also covers entries past the backend's per-request limit). A
+    /// backend that does not say (an unreadable body) took the batch.
+    fn from_response(sent: usize, body: &str) -> Self {
+        let sent = sent as u64;
+        let accepted = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("count").and_then(|c| c.as_u64()))
+            .map(|c| c.min(sent))
+            .unwrap_or(sent);
+        RelaySent::Done { accepted, rejected: sent - accepted }
+    }
+}
+
+/// A 4xx resending cannot fix. Authentication (401/403: a token or probe
+/// an admin may restore), 404 (a backend mid-upgrade), 408 and 429 pass;
+/// 5xx and network errors are always retried.
+fn relay_status_is_permanent(status: u16) -> bool {
+    (400..500).contains(&status) && !matches!(status, 401 | 403 | 404 | 408 | 425 | 429)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::collector::SystemMetrics;
     use std::collections::{BTreeMap, HashMap};
+
+    #[test]
+    fn relay_responses_count_only_what_the_backend_stored() {
+        assert_eq!(
+            RelaySent::from_response(5, r#"{"ok": true, "count": 3, "dropped": 2}"#),
+            RelaySent::Done { accepted: 3, rejected: 2 }
+        );
+        // Entries the backend ignored without counting them are rejected too.
+        assert_eq!(
+            RelaySent::from_response(600, r#"{"ok": true, "count": 500, "dropped": 0}"#),
+            RelaySent::Done { accepted: 500, rejected: 100 }
+        );
+        // A count above the batch is capped; a body that says nothing means taken.
+        assert_eq!(
+            RelaySent::from_response(2, r#"{"count": 9}"#),
+            RelaySent::Done { accepted: 2, rejected: 0 }
+        );
+        assert_eq!(
+            RelaySent::from_response(4, ""),
+            RelaySent::Done { accepted: 4, rejected: 0 }
+        );
+    }
+
+    #[test]
+    fn only_unfixable_client_errors_discard_a_relay_batch() {
+        for permanent in [400, 413, 422] {
+            assert!(relay_status_is_permanent(permanent), "{permanent}");
+        }
+        for retry in [401, 403, 404, 408, 429, 500, 502, 503] {
+            assert!(!relay_status_is_permanent(retry), "{retry}");
+        }
+    }
 
     fn sample_metrics() -> SystemMetrics {
         SystemMetrics {
@@ -336,6 +441,7 @@ mod tests {
             metrics: &metrics,
             check_results: &[],
             service_states: &[],
+            syslog_relay: None,
         };
         let with_probe_field = serde_json::to_value(&payload).unwrap();
         let plain = serde_json::to_value(&metrics).unwrap();
@@ -353,6 +459,7 @@ mod tests {
             metrics: &metrics,
             check_results: &results,
             service_states: &[],
+            syslog_relay: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
 
@@ -383,6 +490,7 @@ mod tests {
             metrics: &metrics,
             check_results: &[],
             service_states: &states,
+            syslog_relay: None,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["hostname"], "probe01");
@@ -419,6 +527,60 @@ mod tests {
         let resp: ReportResponse =
             serde_json::from_str(r#"{"ok": true, "config": {"watched_services": null}}"#).unwrap();
         assert!(resp.config.unwrap().watched_services.unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn relay_counters_ride_along_once_the_relay_was_on() {
+        let metrics = sample_metrics();
+        let status = RelayStatus {
+            listening: true,
+            port: 514,
+            received: 7,
+            forwarded: 5,
+            rejected: 1,
+            dropped: 0,
+            buffered: 2,
+            send_failures: 1,
+            error: None,
+        };
+        let payload = ReportPayload {
+            metrics: &metrics,
+            check_results: &[],
+            service_states: &[],
+            syslog_relay: Some(&status),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["hostname"], "probe01");
+        assert_eq!(
+            json["syslog_relay"],
+            serde_json::json!({"listening": true, "port": 514, "received": 7, "forwarded": 5,
+                               "rejected": 1, "dropped": 0, "buffered": 2, "send_failures": 1})
+        );
+    }
+
+    #[test]
+    fn the_relay_config_arrives_and_a_bad_one_does_not_break_the_heartbeat() {
+        use crate::syslog_relay::RelayConfig;
+        let resp: ReportResponse = serde_json::from_str(
+            r#"{"ok": true, "config": {"syslog_relay": {"enabled": true, "port": 1514}}}"#,
+        )
+        .unwrap();
+        let sc = resp.config.unwrap();
+        assert_eq!(
+            RelayConfig::from_server(sc.syslog_relay.as_ref()),
+            Some(RelayConfig { port: 1514 })
+        );
+        for bad in [
+            r#"{"ok": true, "config": {"syslog_relay": {"enabled": true, "port": 99999}}}"#,
+            r#"{"ok": true, "config": {"syslog_relay": "on"}}"#,
+            r#"{"ok": true, "config": {"syslog_relay": null}}"#,
+            r#"{"ok": true, "config": {"log_levels": "1"}}"#,
+        ] {
+            let resp: ReportResponse = serde_json::from_str(bad).unwrap();
+            let sc = resp.config.unwrap();
+            let cfg = RelayConfig::from_server(sc.syslog_relay.as_ref());
+            assert!(cfg.is_none() || cfg == Some(RelayConfig { port: 514 }), "{bad}");
+        }
     }
 
     #[test]

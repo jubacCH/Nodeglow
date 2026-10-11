@@ -178,6 +178,12 @@ pub struct ServerConfig {
     /// absent field instead of failing the whole heartbeat response.
     #[serde(default)]
     pub watched_services: Option<Vec<String>>,
+    /// Probe syslog relay (`{"enabled": bool, "port": u16}`), probes only.
+    /// Kept as raw JSON and read leniently by
+    /// `syslog_relay::RelayConfig::from_server`: a malformed value turns the
+    /// relay off instead of failing the whole heartbeat response.
+    #[serde(default)]
+    pub syslog_relay: Option<serde_json::Value>,
 }
 
 fn default_log_level() -> String {

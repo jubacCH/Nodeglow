@@ -90,6 +90,19 @@ def _reset_tenant_job_state():
 
 
 @pytest.fixture(autouse=True)
+def _reset_syslog_host_cache():
+    """The syslog host cache (hosts per tenant and site, allowlists, the
+    tenant count the direct listener's "auto" mode reads) is process-global."""
+    from services import syslog
+
+    syslog.reset_host_cache()
+    syslog._listener_mode = "auto"
+    yield
+    syslog.reset_host_cache()
+    syslog._listener_mode = "auto"
+
+
+@pytest.fixture(autouse=True)
 def _core_tenancy_backend(request, monkeypatch):
     """The core suite specifies the core's tenancy (``SingleTenancy``, no
     retention policy) — also when the ee plugin is loaded and has registered
@@ -125,6 +138,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "ee_tenancy: run with the tenancy backend the ee plugin registered (if any)",
     )
+
+
+@pytest.fixture(autouse=True)
 def _reset_tenant_key_cache():
     """Unwrapped tenant data keys are cached per process; each test's
     database has its own keys."""
