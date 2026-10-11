@@ -309,7 +309,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: digests-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          name: digests-${{ matrix.platform.arch }}-${{ matrix.image.name }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -350,7 +350,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: digests-${{ matrix.name }}-*
+          # Arch first: digests-backend-* would also match backend-community.
+          pattern: digests-*-${{ matrix.name }}
           merge-multiple: true
           path: ${{ runner.temp }}/digests
 
