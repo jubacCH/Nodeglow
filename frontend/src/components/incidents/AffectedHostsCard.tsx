@@ -28,7 +28,7 @@ function HostRow({ host }: { host: IncidentHost }) {
           </span>
         </div>
         {host.hostname && host.hostname !== host.name && <p className="truncate font-mono text-meta text-fg-3">{host.hostname}</p>}
-        {host.state_reason && !deleted && <p className="mt-0.5 text-meta text-fg-2 [overflow-wrap:anywhere]">{host.state_reason}</p>}
+        {host.state_reason && !deleted && <p className="mt-0.5 text-meta text-fg-2 wrap-anywhere">{host.state_reason}</p>}
       </div>
     </li>
   );

@@ -88,7 +88,7 @@ export function Popover({ trigger, label, children, placement = 'bottom-end', cl
         tabIndex={-1}
         hidden={!open}
         className={cn(
-          'absolute z-popover w-[300px] rounded-card border border-border-2 bg-surface p-1.5 text-fg shadow-overlay outline-none',
+          'absolute z-popover w-[300px] rounded-card border border-border-2 bg-surface p-1.5 text-fg shadow-overlay outline-hidden',
           place[placement],
           className,
         )}

@@ -111,7 +111,7 @@ export function IncidentTable({ items, sort, onSort, actions, now }: {
                 <SeverityIndicator severity={inc.severity} status={inc.status} />
                 <IncidentStatusBadge status={inc.status} />
               </div>
-              <Link href={`/incidents/${inc.id}`} className="mt-2 block font-medium text-fg hover:text-accent [overflow-wrap:anywhere]">
+              <Link href={`/incidents/${inc.id}`} className="mt-2 block font-medium text-fg hover:text-accent wrap-anywhere">
                 {inc.title}
               </Link>
               <p className="mt-0.5 truncate text-meta text-fg-3">

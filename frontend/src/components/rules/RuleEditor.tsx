@@ -257,7 +257,7 @@ export function RuleEditor({ open, rule, onClose, onSaved }: {
             <p className={testResult.would_trigger ? 'text-ui font-medium text-warning' : 'text-ui font-medium text-fg'}>
               {testResult.would_trigger ? 'Would trigger now' : 'Would not trigger now'}
             </p>
-            <p className="mt-0.5 font-mono text-meta text-fg-2 [overflow-wrap:anywhere]">{testResult.detail}</p>
+            <p className="mt-0.5 font-mono text-meta text-fg-2 wrap-anywhere">{testResult.detail}</p>
             {testResult.current_value != null && (
               <p className="mt-0.5 text-meta text-fg-2">Current value: <span className="font-mono">{display(testResult.current_value)}</span></p>
             )}

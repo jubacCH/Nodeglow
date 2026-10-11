@@ -96,7 +96,7 @@ export function UpdateProgress({
             {banner.kind === 'restarting' && <RefreshCw size={13} aria-hidden="true" className="animate-spin" />}
             {banner.title}
           </div>
-          {banner.detail && <p className="mt-1 break-words text-fg-2">{banner.detail}</p>}
+          {banner.detail && <p className="mt-1 wrap-break-word text-fg-2">{banner.detail}</p>}
         </div>
       )}
 
@@ -120,7 +120,7 @@ export function UpdateProgress({
                 <span className="sr-only"> ({STEP_STATE_LABEL[restarting && step.name === 'restart' ? 'running' : step.status]})</span>
               </span>
               {step.detail && (
-                <span className="block break-words font-mono text-fg-3">{step.detail}</span>
+                <span className="block wrap-break-word font-mono text-fg-3">{step.detail}</span>
               )}
             </span>
           </li>

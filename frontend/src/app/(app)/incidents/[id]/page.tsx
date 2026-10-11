@@ -321,7 +321,7 @@ function TimelineCard({ events, total }: { events: TimelineEvent[]; total?: numb
                     <span className="text-ui font-medium text-fg">{eventLabel(t)}</span>
                     <time dateTime={evt.timestamp} className="text-meta text-fg-3">{formatDateTime(evt.timestamp)}</time>
                   </div>
-                  <p className="mt-0.5 text-ui text-fg-2 [overflow-wrap:anywhere]">{evt.summary}</p>
+                  <p className="mt-0.5 text-ui text-fg-2 wrap-anywhere">{evt.summary}</p>
                   {evt.detail && (
                     <pre className="mt-1.5 max-h-48 overflow-auto rounded-ctl border border-border bg-surface-2 p-2 font-mono text-meta text-fg-2">{evt.detail}</pre>
                   )}

@@ -1,7 +1,7 @@
 # Nodeglow frontend
 
 The web UI: Next.js 15 (App Router, `output: 'standalone'`), React 19,
-TypeScript, Tailwind CSS 3, TanStack Query, Zustand, ECharts, lucide-react.
+TypeScript, Tailwind CSS 4, TanStack Query, Zustand, ECharts, lucide-react.
 It has no data of its own — every request goes to the backend through the
 rewrites in `next.config.mjs`.
 
@@ -44,6 +44,7 @@ CI runs type check, lint, tests and build — see
 | `src/components/layout/` | App shell: icon rail, top bar, section sub-navigation, mobile tab bar, license banner |
 | `src/components/ui/` | Design-system components — use these, not ad-hoc markup |
 | `design-tokens/tokens.json` | Colour, type and spacing tokens for light and dark; generated into `src/styles/tokens.gen.*` and used through semantic Tailwind classes (`bg-surface`, `text-fg-2`, `text-down`, …) |
+| `src/app/globals.css` | Tailwind 4 setup, CSS-first (there is no `tailwind.config.ts`): the `@theme inline` block maps every semantic class to its `--ng-*` token; also the shared `.ng-*` classes and global rules. PostCSS runs only `@tailwindcss/postcss` |
 | `src/lib/theme.ts` | Light / dark / system theme |
 | `src/app/fonts.ts` | Self-hosted fonts (Sora, Inter Tight, JetBrains Mono from `@fontsource-variable/*`) — the build needs no network access |
 | `src/lib/features.ts` | `useFeatures()` / `hasFeature()` — show enterprise features only when `/api/v2/features` reports them |

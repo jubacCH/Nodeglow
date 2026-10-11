@@ -39,7 +39,7 @@ Table.displayName = 'Table';
 export function THead({ sticky, className, ...props }: HTMLAttributes<HTMLTableSectionElement> & { sticky?: boolean }) {
   return (
     <thead
-      className={cn(sticky && '[&_th]:sticky [&_th]:top-0 [&_th]:z-[1] [&_th]:bg-surface', className)}
+      className={cn(sticky && '[&_th]:sticky [&_th]:top-0 [&_th]:z-1 [&_th]:bg-surface', className)}
       {...props}
     />
   );

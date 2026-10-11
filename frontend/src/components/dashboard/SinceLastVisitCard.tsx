@@ -50,7 +50,7 @@ export function SinceLastVisitCard({ slv, loading, error, generatedAt, className
                 key={tile.type}
                 className={
                   'min-w-0 border-l border-border px-5 py-0.5 first:border-l-0 first:pl-0 ' +
-                  'max-[1199px]:[&:nth-child(4)]:border-l-0 max-[1199px]:[&:nth-child(4)]:pl-0 ' +
+                  'max-[1199px]:nth-4:border-l-0 max-[1199px]:nth-4:pl-0 ' +
                   'max-[759px]:border-l-0 max-[759px]:pl-0 max-[759px]:pr-2'
                 }
               >

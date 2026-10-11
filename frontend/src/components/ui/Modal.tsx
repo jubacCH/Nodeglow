@@ -63,7 +63,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
             aria-describedby={description ? descId : undefined}
             tabIndex={-1}
             className={cn(
-              'relative flex max-h-[calc(100vh-32px)] w-full flex-col rounded-ng-lg border border-border-2 bg-surface shadow-overlay outline-none',
+              'relative flex max-h-[calc(100vh-32px)] w-full flex-col rounded-ng-lg border border-border-2 bg-surface shadow-overlay outline-hidden',
               widths[size],
             )}
             initial={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -73,7 +73,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
           >
             <div className="flex items-start gap-3 border-b border-border px-5 py-4">
               <div className="min-w-0 flex-1">
-                <h2 id={titleId} className="font-display text-lead font-semibold tracking-[-0.025em] text-fg">{title}</h2>
+                <h2 id={titleId} className="font-display text-lead font-semibold tracking-tight text-fg">{title}</h2>
                 {description && <p id={descId} className="mt-1 text-ui text-fg-2">{description}</p>}
               </div>
               <button
