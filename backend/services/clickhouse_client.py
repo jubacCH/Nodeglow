@@ -473,15 +473,16 @@ async def _ensure_schemas(client) -> None:
             await client.command(ddl)
         except Exception as exc:
             log.warning("ClickHouse schema alter failed: %s", exc)
-    # The step-B cutover stops merges on a table for its final pass. Had the
+    # The step-B rebuild stops (TTL) merges on a table for its cutover. Had the
     # process died in between, nothing else would start them again (the
-    # blocker lives until the ClickHouse server restarts) and the table would
-    # eventually refuse inserts with "too many parts".
+    # blocker lives until the ClickHouse server restarts): the table would
+    # eventually refuse inserts with "too many parts", or stop expiring rows.
     for table in TENANT_TABLES:
-        try:
-            await client.command(f"SYSTEM START MERGES {table}")
-        except Exception:
-            log.debug("SYSTEM START MERGES %s failed", table, exc_info=True)
+        for action in ("MERGES", "TTL MERGES"):
+            try:
+                await client.command(f"SYSTEM START {action} {table}")
+            except Exception:
+                log.debug("SYSTEM START %s %s failed", action, table, exc_info=True)
     if CLICKHOUSE_TENANT_URL and PROVISION_TENANT_USER:
         try:
             await provision_tenant_user(client, CLICKHOUSE_TENANT_URL)

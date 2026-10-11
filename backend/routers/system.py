@@ -551,6 +551,15 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    # ── ClickHouse tenancy rebuild (step B), installation-level ──────────
+    ch_rebuild = None
+    if _is_admin:
+        try:
+            from services import clickhouse_rebuild
+            ch_rebuild = await asyncio.wait_for(clickhouse_rebuild.status(), timeout=5)
+        except Exception:
+            pass
+
     # ── Await thread pool results ────────────────────────────────────────
     sysinfo = await sysinfo_fut
     log_lines = await logs_fut if logs_fut is not None else []
@@ -574,6 +583,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "alert_rules": alert_rule_stats,
             "maintenance": maintenance_stats,
             "log_intelligence": log_intelligence,
+            "clickhouse_tenant_rebuild": ch_rebuild,
         },
         "disk_forecast": disk_forecast,
         "dashboard_perf": _get_dashboard_perf(),
