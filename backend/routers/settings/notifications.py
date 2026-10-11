@@ -4,7 +4,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import encrypt_value, get_db, set_setting
+from database import get_db, set_setting
+from services.tenant_keys import encrypt_secret
 from ratelimit import rate_limit
 from services.audit import log_action
 
@@ -13,7 +14,8 @@ from ._helpers import log, require_admin
 router = APIRouter()
 
 EXTRA_CHANNELS = ("teams", "slack", "ntfy")
-# Secrets of the Teams/Slack/ntfy channels, stored via encrypt_value like
+# Secrets of the Teams/Slack/ntfy channels, stored under the tenant's data
+# key (services.tenant_keys) like
 # smtp_password. Teams Workflows and Slack webhook URLs carry their own
 # credential, so they count as secrets and are never sent back to the UI.
 EXTRA_SECRET_KEYS = ("teams_webhook_url", "slack_webhook_url", "ntfy_token")
@@ -64,7 +66,7 @@ async def _save_extra_channels(db: AsyncSession, valid_severities: set[str],
         if values.get(f"{key}_clear") == "1":
             await set_setting(db, key, "")
         elif given(key) and values[key].strip():
-            await set_setting(db, key, encrypt_value(values[key].strip()))
+            await set_setting(db, key, await encrypt_secret(db, values[key].strip()))
 
 
 
@@ -150,14 +152,14 @@ async def save_notifications(
         if form.get(f"{key}_clear") == "1":
             await set_setting(db, key, "")
         elif val.strip():
-            await set_setting(db, key, encrypt_value(val.strip()))
+            await set_setting(db, key, await encrypt_secret(db, val.strip()))
     await set_setting(db, "smtp_host", smtp_host.strip())
     await set_setting(db, "smtp_port", smtp_port.strip() or "587")
     await set_setting(db, "smtp_user", smtp_user.strip())
     await set_setting(db, "smtp_from", smtp_from.strip())
     await set_setting(db, "smtp_to", smtp_to.strip())
     if smtp_password.strip():
-        await set_setting(db, "smtp_password", encrypt_value(smtp_password.strip()))
+        await set_setting(db, "smtp_password", await encrypt_secret(db, smtp_password.strip()))
 
     valid_severities = {"all", "warning", "error", "critical"}
     for key, val in [
@@ -234,9 +236,11 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
         _send_telegram, _send_discord, _send_webhook, _send_email,
         _build_html_email, _log_notification,
     )
-    from database import decrypt_value, get_setting
-    from services.channel_secrets import reveal
+    from database import get_setting
+    from services.tenant_keys import tenant_cipher
     try:
+        cipher = await tenant_cipher(db)
+        reveal = cipher.reveal
         if channel == "telegram":
             token = reveal(await get_setting(db, "telegram_bot_token", ""))
             chat  = await get_setting(db, "telegram_chat_id", "")
@@ -252,7 +256,7 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
             host  = await get_setting(db, "smtp_host", "")
             port  = int(await get_setting(db, "smtp_port", "587"))
             user  = await get_setting(db, "smtp_user", "")
-            pw    = decrypt_value(await get_setting(db, "smtp_password", ""))
+            pw    = cipher.decrypt(await get_setting(db, "smtp_password", ""))
             frm   = await get_setting(db, "smtp_from", "") or user
             to    = await get_setting(db, "smtp_to", "")
             html  = _build_html_email("Nodeglow Test", "Notifications are working ✓", "info")
@@ -260,7 +264,7 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
                               "[Nodeglow] Test", "Nodeglow Test\nNotifications are working ✓", html)
         elif channel in EXTRA_CHANNELS:
             from notification_channels import build_link, load_config, make_send
-            cfg = await load_config(db, get_setting, decrypt_value)
+            cfg = await load_config(db, get_setting, cipher.decrypt)
             await make_send(cfg, channel, "Nodeglow Test", "Notifications are working ✓",
                             "info", build_link(cfg.public_url, None))
         else:

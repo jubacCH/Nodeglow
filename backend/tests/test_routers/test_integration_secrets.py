@@ -44,7 +44,7 @@ async def _stored(session_factory, cfg_id):
     from services import integration as int_svc
     async with session_factory() as db:
         cfg = await int_svc.get_config(db, cfg_id)
-        return int_svc.decrypt_config(cfg.config_json)
+        return await int_svc.decrypt_config(db, cfg)
 
 
 @pytest.fixture

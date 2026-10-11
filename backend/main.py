@@ -69,6 +69,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         import logging as _logging
         _logging.getLogger("nodeglow").exception("Encrypting notification channel secrets failed")
+    # Tenant secrets still under the installation key (written by the old
+    # backend during the update, restored backups) move to the tenant's key.
+    try:
+        from services.tenant_keys import upgrade_legacy_secrets
+        await upgrade_legacy_secrets()
+    except Exception:
+        import logging as _logging
+        _logging.getLogger("nodeglow").exception("Moving tenant secrets to tenant keys failed")
     await start_scheduler()
     os.environ["NODEGLOW_START_TIME"] = str(time.time())
     from services.syslog import start_syslog_server, stop_syslog_server

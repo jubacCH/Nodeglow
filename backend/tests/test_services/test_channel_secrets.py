@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from models.base import decrypt_value, encrypt_value
+from models.base import encrypt_value
 from services import channel_secrets as cs
 
 TG = "123456:ABC-DEF_secret"
@@ -54,9 +54,15 @@ async def test_migration_encrypts_plaintext_in_place(db):
 
     assert await cs.encrypt_plaintext_channel_secrets(factory) == 2
 
+    from services import tenant_keys
+
     tg_raw = await _raw(factory, "telegram_bot_token")
-    assert tg_raw != TG and decrypt_value(tg_raw) == TG
-    assert decrypt_value(await _raw(factory, "discord_webhook_url")) == DC
+    # Encrypted with tenant 1's data key, not the installation key.
+    assert tg_raw != TG and tenant_keys.is_v2(tg_raw)
+    async with factory() as s:
+        assert await tenant_keys.decrypt_secret(s, tg_raw, tenant_id=1) == TG
+        assert await tenant_keys.decrypt_secret(
+            s, await _raw(factory, "discord_webhook_url"), tenant_id=1) == DC
     assert await _raw(factory, "webhook_secret") == already  # untouched
     assert await _raw(factory, "webhook_url") == ""
     assert await _raw(factory, "telegram_chat_id") == "-100"  # not a secret
@@ -81,7 +87,7 @@ async def test_migration_on_empty_install(db):
     assert await _raw(factory, cs.MIGRATION_MARKER)
 
 
-async def test_notify_decrypts_legacy_secrets():
+async def test_notify_decrypts_legacy_secrets(keyless_tenant_cipher):
     import notifications
     notifications._recent.clear()
     settings = {

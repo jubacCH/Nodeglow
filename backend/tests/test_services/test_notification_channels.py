@@ -310,7 +310,7 @@ _ALL = {
 }
 
 
-async def test_notify_reaches_new_channels_with_link():
+async def test_notify_reaches_new_channels_with_link(keyless_tenant_cipher):
     m = await _run_notify(_ALL, title="Incident A", message="m", severity="critical",
                           link_path="/incidents/7")
     m["teams"].assert_awaited_once_with(TEAMS_URL, "Incident A", "m", "critical",
@@ -322,7 +322,7 @@ async def test_notify_reaches_new_channels_with_link():
     assert all(c.args[4] == "sent" for c in m["log"].await_args_list)
 
 
-async def test_notify_rule_channel_selection():
+async def test_notify_rule_channel_selection(keyless_tenant_cipher):
     m = await _run_notify(_ALL, title="Rule B", message="m", severity="warning",
                           channels=["ntfy"])
     m["ntfy"].assert_awaited_once()
@@ -331,14 +331,14 @@ async def test_notify_rule_channel_selection():
     m["telegram"].assert_not_awaited()  # built, then dropped by the channel filter
 
 
-async def test_notify_disabled_toggle_skips_channel():
+async def test_notify_disabled_toggle_skips_channel(keyless_tenant_cipher):
     settings = dict(_ALL, slack_enabled="0")
     m = await _run_notify(settings, title="C", message="m")
     m["slack"].assert_not_called()
     m["teams"].assert_awaited_once()
 
 
-async def test_notify_failure_is_logged_and_others_still_send():
+async def test_notify_failure_is_logged_and_others_still_send(keyless_tenant_cipher):
     notifications._recent.clear()
     cls_patch, gs_patch = _patched_notify_env(_ALL)
     with cls_patch as mock_cls, gs_patch, \
@@ -356,7 +356,7 @@ async def test_notify_failure_is_logged_and_others_still_send():
     assert teams_logs[0].args[5] == "Teams: HTTP 400"
 
 
-async def test_notify_rate_limit_covers_new_channels():
+async def test_notify_rate_limit_covers_new_channels(keyless_tenant_cipher):
     m = await _run_notify(_ALL, title="Same", message="m")
     m["teams"].assert_awaited_once()
     # second call with the same title inside the cooldown: nothing at all
