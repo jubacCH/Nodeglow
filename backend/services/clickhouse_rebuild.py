@@ -504,6 +504,26 @@ async def _sync_all(c, table: str, work: str, *, stable: bool, deadline: float |
     return changed
 
 
+async def _ready_for_exchange(c, table: str, work: str) -> bool:
+    """Re-check every partition against the current part set: the copy holds
+    exactly the recorded rows, and the source has nothing but rows inserted
+    since (those the delta passes carry over after the exchange)."""
+    progress = await load_progress(c, table)
+    src_parts = await partitions(c, table)
+    if set(await partitions(c, work)) - set(src_parts):
+        return False
+    for partition_id, parts in src_parts.items():
+        prog = progress.get(partition_id)
+        if prog is None:
+            return False
+        old_names = [p.name for p in parts if p.max_block <= prog.max_block]
+        action = plan(parts, prog, await count_rows(c, table, partition_id, old_names),
+                      await count_rows(c, work, partition_id))
+        if action == "full":
+            return False
+    return True
+
+
 async def _finish(c, table: str, *, waits=DELTA_WAITS, sleep=asyncio.sleep) -> str:
     old = table + OLD_SUFFIX
     state, detail, age_s = await get_state(c, table)
@@ -590,13 +610,14 @@ async def rebuild_table(c, table: str, *, budget_seconds: int | None = None,
             if not await _sync_all(c, table, work, stable=False, deadline=None):
                 break
         await c.command(f"SYSTEM STOP MERGES {table}")
-        await sleep(1)  # merges being cancelled may still commit
-        await _sync_all(c, table, work, stable=True, deadline=None,
-                        max_full_bytes=CUTOVER_MAX_BYTES)
-        progress = await load_progress(c, table)
-        for partition_id in await partitions(c, work):
-            if await count_rows(c, work, partition_id) != progress.get(partition_id, Progress()).rows:
-                raise RuntimeError(f"{work} partition {partition_id} does not match its progress")
+        for _ in range(3):
+            await sleep(1)  # a merge being cancelled may still commit
+            await _sync_all(c, table, work, stable=True, deadline=None,
+                            max_full_bytes=CUTOVER_MAX_BYTES)
+            if await _ready_for_exchange(c, table, work):
+                break
+        else:
+            raise CutoverPostponed("the source's parts kept changing with merges stopped")
         await c.command(f"EXCHANGE TABLES {table} AND {work}")
         exchanged = True
     except CutoverPostponed as exc:
