@@ -93,16 +93,29 @@ async def _restore_session(db: AsyncSession):
 
 
 async def export_backup(db: AsyncSession) -> dict:
-    """Export all PostgreSQL tables as a JSON dict."""
+    """Export all PostgreSQL tables as a JSON dict.
+
+    Tenant secrets (integration configs, credentials, secret tenant
+    settings) are decrypted with their tenant's key and carried in
+    plaintext (``services.tenant_keys.open_for_export``): tenant keys never
+    leave the installation, and the restore encrypts them again under the
+    key of the tenant they land in. The dict is therefore only ever handed
+    out inside the passphrase-encrypted envelope (:func:`encrypt_backup`;
+    the route refuses to export without a passphrase).
+    """
+    from services import tenant_keys
+
     backup = {
         "_meta": {
-            "version": "1.0",
+            "version": "1.1",
             "timestamp": datetime.utcnow().isoformat(),
             "format": "nodeglow-backup",
-            # Never the key itself: credentials in this file are encrypted
-            # with SECRET_KEY, which must be escrowed separately. The
-            # fingerprint only tells a restore which key it needs.
+            # Never the key itself: installation secrets (settings) in this
+            # file are encrypted with SECRET_KEY, which must be escrowed
+            # separately. The fingerprint only tells a restore which key it
+            # needs. Tenant secrets are plaintext inside the envelope.
             "secret_key_fingerprint": _key_fingerprint(),
+            "tenant_secrets": "plaintext",
         },
         "tables": {},
     }
@@ -123,6 +136,8 @@ async def export_backup(db: AsyncSession) -> dict:
             except Exception as e:
                 logger.warning("Skipping table %s: %s", table_name, e)
                 backup["tables"][table_name] = []
+        for table_name, rows in backup["tables"].items():
+            await tenant_keys.open_for_export(db, table_name, rows)
 
     return backup
 
@@ -167,13 +182,18 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
     key_warning = None
     backup_fp = meta.get("secret_key_fingerprint")
     current_fp = _key_fingerprint()
+    tenant_plain = meta.get("tenant_secrets") == "plaintext"
     if backup_fp and current_fp and backup_fp != current_fp:
+        what = ("restored installation secrets (LDAP bind password, AI provider keys, "
+                "licence)" if tenant_plain else "restored credentials")
         key_warning = (
             f"Backup was made with encryption key {backup_fp}, this installation "
-            f"runs with {current_fp}: restored credentials will not decrypt until "
+            f"runs with {current_fp}: {what} will not decrypt until "
             "the original SECRET_KEY is configured."
         )
         logger.error(key_warning)
+
+    from services import tenant_keys
 
     # Rows of a backup from before multi-tenancy (revision < 040) belong to
     # the importing tenant and its default site.
@@ -181,6 +201,10 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
     site_id = tenancy.backend().default_site_id(tenant_id)
     async with _restore_session(db) as raw:
         with tenancy.system_scope(_RESTORE_SCOPE):
+            # Tenant secrets travel in plaintext inside the envelope: each is
+            # encrypted under the key of the tenant its row lands in (keys
+            # are created in the restore's transaction where missing).
+            await tenant_keys.seal_for_restore(raw, tables_data, tenant_id)
             imported = await _restore_tables(raw, tables_data, tenant_id, site_id)
 
     # A backup from before the settings split (revision 042) carries the
@@ -207,6 +231,21 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
     else:
         granted = await backfill_memberships(db, tenant_id)
     if moved or granted:
+        await db.commit()
+
+    # A backup from before revision 046 (or one whose values could not be
+    # opened) carries tenant secrets under the installation key: they move
+    # to the tenant's key now, like 046 does on upgrade.
+    restored_tenants = {
+        int(r.get("tenant_id") or tenant_id)
+        for t in ("integration_configs", "credentials", "tenant_settings")
+        for r in (tables_data.get(t) or [])
+    }
+    moved_secrets = 0
+    for tid in sorted(restored_tenants):
+        with tenancy.system_scope(f"backup: restored secrets of tenant {tid} to its key"):
+            moved_secrets += (await tenant_keys.reencrypt_legacy(db, tid)).converted
+    if moved_secrets:
         await db.commit()
 
     result = {"imported": imported, "total_rows": sum(imported.values())}
