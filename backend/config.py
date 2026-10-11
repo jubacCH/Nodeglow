@@ -16,6 +16,28 @@ if not DATABASE_URL:
     DATABASE_PATH = DATA_DIR / "nodeglow.db"
     DATABASE_URL = f"sqlite+aiosqlite:///{DATABASE_PATH}"
 
+# Owner connection: the role that owns the schema. Migrations (migrate.py,
+# alembic, the update sidecar), the row-level-security setup and the backup
+# restore use it; the application itself runs on DATABASE_URL. Unset (every
+# install before phase 7 of multi-tenancy): the same connection as the app —
+# one user that owns and runs everything, exactly as before.
+DATABASE_OWNER_URL = (
+    os.getenv("DATABASE_OWNER_URL", "").strip()
+    or os.getenv("MIGRATION_DATABASE_URL", "").strip()
+    or DATABASE_URL
+)
+
+
+def _flag(value: str | None) -> bool:
+    return (value or "").strip().lower() in ("1", "on", "true", "yes")
+
+
+# PostgreSQL row-level security, the second tenant-isolation layer
+# (services/pg_rls.py). Off by default so existing installs behave exactly as
+# before; scripts/install.sh turns it on for new installs. See
+# docs/OPERATIONS.md, "Row-level security".
+RLS_ENABLED = _flag(os.getenv("NODEGLOW_RLS"))
+
 # Optional Redis URL for shared, durable state (e.g. rate-limit counters).
 # When unset, state lives in-process (per-worker) exactly as before; when set,
 # limits are shared across workers/nodes. No connection is made at import time.

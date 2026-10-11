@@ -14,6 +14,12 @@ current.
 **Existing install** — ``alembic_version`` is present. Run the outstanding
 migrations and nothing else.
 
+Both run on the **owner** connection (``DATABASE_OWNER_URL``, falling back to
+``DATABASE_URL``). Afterwards the row-level-security setup
+(``services/pg_rls.py``: app role, grants, policies, ``NODEGLOW_RLS``) is
+brought in line — on every run, because a fresh install never executes the
+revision that introduced it.
+
 Run as ``python migrate.py``; exits non-zero if the schema could not be brought
 up to date, so the caller can refuse to start the app on a drifted schema.
 """
@@ -25,15 +31,17 @@ import sys
 
 logging.basicConfig(level=logging.INFO, format="[migrate] %(message)s")
 log = logging.getLogger("nodeglow.migrate")
+# alembic.ini's logging config sets the root logger to WARNING when alembic
+# runs in-process; these messages are what an operator reads after an update.
+for _name in ("nodeglow.migrate", "nodeglow.rls"):
+    logging.getLogger(_name).setLevel(logging.INFO)
 
 ALEMBIC_CONFIG = "alembic.ini"
 
 
-async def has_alembic_version() -> bool:
+async def has_alembic_version(engine) -> bool:
     """True when this database has already been placed under Alembic control."""
     from sqlalchemy import text
-
-    from models.base import engine
 
     async with engine.connect() as conn:
         result = await conn.execute(
@@ -42,11 +50,11 @@ async def has_alembic_version() -> bool:
         return result.scalar() is not None
 
 
-async def create_schema_from_models() -> None:
+async def create_schema_from_models(engine) -> None:
     """Create every table the models define (fresh installs only)."""
     from models import init_db
 
-    await init_db()
+    await init_db(bind=engine)
 
 
 def stamp_head() -> None:
@@ -68,17 +76,60 @@ def upgrade_head() -> None:
 async def _probe_and_prepare() -> bool:
     """Do all async work in one loop; return True if the database already exists.
 
-    The engine binds to the loop it is first used in, so probing and schema
-    creation share a single ``asyncio.run`` and dispose before returning.
+    Runs on the owner connection (``DATABASE_OWNER_URL``, default
+    ``DATABASE_URL``): the tables created here belong to the owner, never
+    to the app role. The engine binds to the loop it is first used in, so
+    probing and schema creation share a single ``asyncio.run`` and dispose
+    before returning.
     """
-    from models.base import engine
+    from models.base import create_owner_engine
 
+    engine = create_owner_engine()
     try:
-        existing = await has_alembic_version()
+        existing = await has_alembic_version(engine)
         if not existing:
             log.info("fresh database — creating schema from models")
-            await create_schema_from_models()
+            await create_schema_from_models(engine)
         return existing
+    finally:
+        await engine.dispose()
+
+
+async def _setup_row_level_security() -> None:
+    """Roles, grants, policies and the RLS switch (services.pg_rls).
+
+    Every start, after the schema is at head: a fresh install never runs
+    revision 044, a table added later needs its policy and grants, and
+    ``NODEGLOW_RLS`` may have been switched. Idempotent; DDL only where the
+    state differs. A failure is fatal only when RLS is wanted — with
+    NODEGLOW_RLS off the app does not depend on any of it.
+    """
+    import config
+    from models.base import create_owner_engine
+    from services import pg_rls
+    from services.tenancy import tenant_tables
+
+    engine = create_owner_engine()
+    try:
+        if engine.dialect.name != "postgresql":
+            return
+        tables = sorted(t.name for t in tenant_tables())
+        login = pg_rls.app_login()
+        try:
+            async with engine.begin() as conn:
+                report = await conn.run_sync(
+                    lambda c: pg_rls.apply(c, tables, enabled=config.RLS_ENABLED, login=login)
+                )
+        except Exception as exc:
+            if config.RLS_ENABLED:
+                raise
+            log.warning("row-level security setup skipped (NODEGLOW_RLS is off): %s", exc)
+            return
+        state = "enabled and forced" if report.rls_enabled else "prepared, switched off (NODEGLOW_RLS=off)"
+        log.info("row-level security %s on %d tenant tables; app role %s%s",
+                 state, len(report.tables),
+                 pg_rls.APP_ROLE if report.app_role else "missing",
+                 f", app login {report.app_login}" if report.app_login else "")
     finally:
         await engine.dispose()
 
@@ -100,6 +151,7 @@ def main() -> int:
         else:
             stamp_head()
             log.info("schema created and stamped at head")
+        asyncio.run(_setup_row_level_security())
     except Exception as exc:  # noqa: BLE001
         log.error("failed to bring schema up to date: %s", exc)
         return 1
