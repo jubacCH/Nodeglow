@@ -174,6 +174,17 @@ async def require_admin(api_key: ApiKey = Depends(require_api_key)) -> ApiKey:
     return api_key
 
 
+async def require_operator(request: Request, api_key: ApiKey = Depends(require_admin)) -> ApiKey:
+    """Installation-level actions (the full backup and restore cover every
+    tenant). In the core the operator is the admin of the default tenant —
+    a session or an admin key of it — so single-tenant installs keep
+    exactly the access they had; another tenant's admin is refused."""
+    user = getattr(request.state, "current_user", None) if api_key.id == 0 else None
+    if not tenancy.backend().is_operator(user, api_key.role, api_key.tenant_id):
+        raise HTTPException(status_code=403, detail="Operator access required.")
+    return api_key
+
+
 # ── Integration device extraction ────────────────────────────────────────────
 
 
@@ -2211,7 +2222,7 @@ async def query_audit(
 @router.get("/backup/info", summary="Backup info (table counts, DB size)")
 async def backup_info(
     db: AsyncSession = Depends(get_db),
-    _key: ApiKey = Depends(require_admin),
+    _key: ApiKey = Depends(require_operator),
 ):
     from services.backup import get_backup_info
     return await get_backup_info(db)
@@ -2222,7 +2233,7 @@ async def backup_info(
 async def download_backup(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _key: ApiKey = Depends(require_admin),
+    _key: ApiKey = Depends(require_operator),
 ):
     """Body: ``{"passphrase": "..."}`` (min. 12 characters).
 
@@ -2263,7 +2274,7 @@ async def download_backup(
 async def restore_backup(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _key: ApiKey = Depends(require_admin),
+    _key: ApiKey = Depends(require_operator),
 ):
     """Body: ``{"backup": <file contents>, "passphrase": "..."}``.
 

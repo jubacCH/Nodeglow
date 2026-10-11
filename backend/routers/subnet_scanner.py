@@ -326,9 +326,11 @@ async def api_create_schedule(request: Request, db: AsyncSession = Depends(get_d
 @router.delete("/api/subnet-scanner/schedules/{schedule_id}")
 async def api_delete_schedule(schedule_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a scheduled scan."""
-    await db.execute(
+    result = await db.execute(
         delete(SubnetScanSchedule).where(SubnetScanSchedule.id == schedule_id)
     )
+    if not result.rowcount:
+        return JSONResponse({"error": "Not found"}, status_code=404)
     await db.commit()
     return JSONResponse({"ok": True})
 
