@@ -16,6 +16,8 @@ export interface SettingsData {
   proxmox_retention_days: string;
   integration_retention_days: string;
   incident_event_retention_days: string;
+  /** Highest retention per key (installation cap, ee plan); absent = none. */
+  retention_caps?: Record<string, number>;
   anomaly_threshold: string;
   proxmox_cpu_threshold: string;
   proxmox_ram_threshold: string;

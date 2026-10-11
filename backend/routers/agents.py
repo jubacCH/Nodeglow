@@ -56,6 +56,17 @@ def _require_admin(request: Request):
     return None
 
 
+def _require_access_admin(request: Request):
+    """Issuing or revoking install tokens: an admin, not through support
+    access (a token made by a support session would outlive its grant)."""
+    if err := _require_admin(request):
+        return err
+    if tenancy.request_via_support(request):
+        return JSONResponse({"error": tenancy.SUPPORT_IAM_REFUSED, "code": "support_access"},
+                            status_code=403)
+    return None
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -710,7 +721,7 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
 async def create_install_token(request: Request):
     """Issue a new per-install enrollment token. Admin only. Returns the
     plaintext token once — it is stored only as an HMAC hash afterwards."""
-    if err := _require_admin(request):
+    if err := _require_access_admin(request):
         return err
     try:
         body = await request.json()
@@ -784,7 +795,7 @@ async def list_install_tokens(request: Request):
 @rate_limit(max_requests=10, window_seconds=60)
 async def revoke_install_token(token_id: int, request: Request):
     """Revoke an install token without deleting its audit record."""
-    if err := _require_admin(request):
+    if err := _require_access_admin(request):
         return err
     async with AsyncSessionLocal() as db:
         row = await db.get(AgentInstallToken, token_id)

@@ -253,7 +253,7 @@ Die Migration ist abgeschlossen (Stand 10.10.2026); die Tabelle bleibt als Refer
 | `StatusDot` | `StatusDot.tsx` | 6/8/10 px. Zustände `ok degraded warning down maint unknown` (+ alte Namen `online offline error maintenance disabled`). Unknown = hohler Ring. Down/Warning glühen (abschaltbar), `breathe` nur für kritisch + unquittiert. Hat einen zugänglichen Namen (`label`, `""` wenn Text daneben steht). |
 | `StatusPill` | `StatusPill.tsx` | Getönte Pill mit Punkt und AA-Text, Default-Label aus dem Vokabular. Für Zusammenfassungen („1 critical“, „9 no data“) und Statusspalten. Pills glühen nie. |
 | `Badge` | `Badge.tsx` | Kleines Rechteck für Zähler/Typen; `tone` (`neutral accent ok …`) oder `variant="severity"`. Integrationsfarben entfallen. |
-| `Tag`, `Pill` | `Tag.tsx` | `Tag` = Outline-Label; `planned` = gestrichelt („Multi-tenant · Planned“). `Pill` neutral/akzent für Filter und Auswahl. |
+| `Tag`, `Pill` | `Tag.tsx` | `Tag` = Outline-Label; `planned` = gestrichelt (z. B. „Sites · Planned“). `Pill` neutral/akzent für Filter und Auswahl. |
 | `Tabs`, `TabPanel`, `NavTabs`, `SegmentedControl` | `Tabs.tsx` | `Tabs` = ARIA-Tablist mit Pfeiltasten (Panels in einer Seite). `NavTabs` = Link-Tabs mit `aria-current` (Sub-Navigation, Detail-Tabs als Pfadsegment). `SegmentedControl` = Radiogroup für 2–5 Ansichtsoptionen. Zähler mit `count`/`countTone`. |
 | `Field`, `Input`, `Select`, `Textarea`, `Checkbox`, `Switch` | `Field.tsx` | `Field` verdrahtet Label, Hinweis, Fehler (`htmlFor`, `aria-describedby`, `aria-invalid`). `Switch` = `role="switch"` für sofort wirksame Einstellungen; `Checkbox` in Formularen mit Speichern. Alle nutzen `.ng-input`. |
 | `TableContainer`, `Table`, `THead`, `TBody`, `Tr`, `Th`, `Td` | `Table.tsx` | `density` comfortable 36 / compact 28 px, `THead sticky`, `Th sort/onSort` setzt `aria-sort`, `numeric` = rechtsbündig + Tabellenziffern, `Tr interactive/selected`. Statusspalte zuerst. |
@@ -313,7 +313,7 @@ Jeder Zustand hat **Farbe und Form und Text**. Status nie nur über Farbe.
 ## 7. App-Shell, Layout, Raster
 
 - **Leiste** (≥ 760 px): 60 px, Zeichen oben (About-Popover), Bereichs-Icons mit Tooltip, aktiv = `accent-soft`, Incident-Zähler mit Glow, Administration unten.
-- **Kopfzeile**: 60 px, sticky. Tenant („Default tenant“, Tag *Multi-tenant · Planned*, Popover erklärt den Status), Suche (Ctrl K; unter 900 px nur Icon), Live-Status, Glow (nur bei aktiver KI), Theme-Umschalter, Konto (Theme dunkel/hell/System, Tastenkürzel, Abmelden).
+- **Kopfzeile**: 60 px, sticky. Tenant-Umschalter (`TenantSwitcher`, nur bei mehr als einem Tenant: Popover mit den Tenants des Benutzers, Rolle und Zugriffsart, z. B. Tag *Support access*; Wechsel = `POST /api/auth/tenant`, Query-Cache wird geleert, Live-Socket neu verbunden; Operatoren mit ee zusätzlich „Manage tenants“), Suche (Ctrl K; unter 900 px nur Icon), Live-Status, Glow (nur bei aktiver KI), Theme-Umschalter, Konto (Theme dunkel/hell/System, Tastenkürzel, Abmelden).
 - **Sub-Navigation**: `NavTabs` oben im Inhalt, aus `lib/navigation.ts`, nur bei Bereichen mit ≥ 2 Seiten; Zähler (Incidents rot, Discovery neutral).
 - **Mobil (< 760 px)**: Tab-Bar unten (58 px) mit 5 Bereichen + „More“ (SidePanel mit allen Seiten). Inhalt `px-4`, unten 90 px Platz.
 - **Inhalt**: `max-w-content` (1760 px), Seitenrand 24 px (mobil 16), oben 28 px. Kartenraster: 12 Spalten, `gap-4`-Äquivalent 16 px (`grid grid-cols-12 gap-[16px]`); unter 1200 px 2 Spalten, unter 760 px 1 Spalte (E3-Raster als Vorlage).
@@ -328,9 +328,9 @@ Jeder Zustand hat **Farbe und Form und Text**. Status nie nur über Farbe.
 | Infrastructure | Hosts → `/hosts` (+ `/hosts/[id]`) · Topology → `/topology` · Agents & Probes → `/agents` (+ `/agents/[id]`) · Integrations → `/integration/store` (+ `/integration/[type]`, `/integration/[type]/[id]`) · SNMP → `/snmp` · Discovery → `/tasks` · Scans → `/scanner` · Certificates → `/ssl` · Backups → `/backups` |
 | Observability | Logs → `/syslog` · Log overview → `/syslog/dashboard` · Log patterns → `/syslog/templates` · Traffic → `/bandwidth` |
 | Analytics | Reports → `/digest` |
-| Administration | Settings → `/settings`* · Users → `/users`* · Credentials → `/credentials` · System status → `/system/status` · Audit log → `/system/audit`* |
+| Administration | Settings → `/settings`* · Users → `/users`* · Credentials → `/credentials` · System status → `/system/status` · Audit log → `/system/audit`* · Tenants → `/tenants`** |
 
-\* nur Admin. `src/lib/navigation.test.ts` scannt `app/(app)/**/page.tsx` und schlägt fehl, wenn eine Route keinem Eintrag zugeordnet ist. Die Ziel-URLs der IA (`/incidents`, `/logs`, `/admin/*` …) kommen später mit Weiterleitungen; dann nur `href`/`match` in der Registry anpassen.
+\* nur Admin. \*\* nur Installations-Operator und nur mit installiertem Feature `multi_tenancy` (ee). `src/lib/navigation.test.ts` scannt `app/(app)/**/page.tsx` und schlägt fehl, wenn eine Route keinem Eintrag zugeordnet ist. Die Ziel-URLs der IA (`/incidents`, `/logs`, `/admin/*` …) kommen später mit Weiterleitungen; dann nur `href`/`match` in der Registry anpassen.
 
 ---
 

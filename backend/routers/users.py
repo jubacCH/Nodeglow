@@ -14,10 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db
 from models.settings import Session as UserSession, _hash_token, _hash_token_legacy
-from models.tenant import TenantMembership
+from models.tenant import ProviderMembership, TenantMembership
 from ratelimit import rate_limit
 from services import memberships as ms
-from services.tenancy import request_is_admin
+from services.tenancy import (
+    SUPPORT_IAM_REFUSED, request_is_admin, request_is_operator, request_via_support,
+)
 from utils.password import hash_password, validate_password, verify_password
 
 router = APIRouter(prefix="/users")
@@ -32,8 +34,59 @@ def _require_admin(request: Request) -> bool:
     return not request_is_admin(request)
 
 
+def _refuse_change(request: Request) -> JSONResponse | None:
+    """403 unless the request may change who has access to its tenant: an
+    admin, and not through support access — a support session could
+    otherwise leave an account behind that outlives its grant (or take the
+    tenant's own admins out)."""
+    if not getattr(request.state, "current_user", None) or not request_is_admin(request):
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if request_via_support(request):
+        return JSONResponse({"error": SUPPORT_IAM_REFUSED, "code": "support_access"}, status_code=403)
+    return None
+
+
 def _tenant(request: Request) -> int:
     return request.state.tenant_id
+
+
+FOREIGN_IDENTITY = ("This user also has access outside this tenant (another tenant, the "
+                    "provider or the installation); only the user or an operator can change "
+                    "their credentials.")
+
+
+async def _reach(db: AsyncSession, request: Request, user: User) -> set[str]:
+    """Where else this (global) identity has access, besides the request's
+    tenant: ``operator`` (the installation), ``provider`` (a provider's
+    tenants), ``tenant`` (another tenant's membership). Empty: the request's
+    tenant alone owns the account."""
+    reach: set[str] = set()
+    if bool(getattr(user, "is_operator", False)):
+        reach.add("operator")
+    other = (await db.execute(
+        select(TenantMembership.tenant_id).where(
+            TenantMembership.user_id == user.id, TenantMembership.tenant_id != _tenant(request))
+        .limit(1)
+    )).first()
+    if other is not None:
+        reach.add("tenant")
+    provider = (await db.execute(
+        select(ProviderMembership.provider_id).where(ProviderMembership.user_id == user.id).limit(1)
+    )).first()
+    if provider is not None:
+        reach.add("provider")
+    return reach
+
+
+async def _may_set_credentials(db: AsyncSession, request: Request, user: User) -> bool:
+    """Whether the request may reset this user's password. Users are global:
+    a tenant admin may only for an account the tenant alone owns — else one
+    customer's admin could take over an account that reaches other tenants,
+    the operator's included. An installation operator may for anyone (in the
+    core: the admin of the one tenant, so nothing changes there)."""
+    if request_is_operator(request):
+        return True
+    return not await _reach(db, request, user)
 
 
 def _verify_password(user, candidate) -> bool:
@@ -66,12 +119,16 @@ async def _member(db: AsyncSession, request: Request, user_id: int) -> tuple[Use
 
 async def _remove_from_tenant(db: AsyncSession, request: Request, user: User) -> None:
     """Revoke the membership; a user left without any membership is deleted
-    (in the core: always — there is one tenant)."""
+    (in the core: always — there is one tenant). An operator or a provider
+    member keeps the account: it is not the tenant's to delete (an operator
+    may delete another operator's, as in the core)."""
+    reach = await _reach(db, request, user)
+    keep = "provider" in reach or ("operator" in reach and not request_is_operator(request))
     await ms.revoke(db, user.id, _tenant(request))
     remaining = (await db.execute(
         select(TenantMembership.tenant_id).where(TenantMembership.user_id == user.id)
     )).first()
-    if remaining is None:
+    if remaining is None and not keep:
         await db.execute(sa_delete(UserSession).where(UserSession.user_id == user.id))
         await db.delete(user)
 
@@ -102,8 +159,8 @@ async def list_users_api(request: Request, db: AsyncSession = Depends(get_db)):
 async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
     """Create a new user in the request's tenant (admin only, JSON API)."""
     current = getattr(request.state, "current_user", None)
-    if not current or _require_admin(request):
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if err := _refuse_change(request):
+        return err
     body = await request.json()
     username = (body.get("username") or "").strip()
     password = body.get("password", "")
@@ -131,8 +188,8 @@ async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
 async def delete_user_api(user_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     """Remove a user from the request's tenant (admin only, JSON API)."""
     current = getattr(request.state, "current_user", None)
-    if not current or _require_admin(request):
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if err := _refuse_change(request):
+        return err
     if current.id == user_id:
         return JSONResponse({"error": "Cannot delete yourself"}, status_code=400)
     user, role = await _member(db, request, user_id)
@@ -150,12 +207,15 @@ async def delete_user_api(user_id: int, request: Request, db: AsyncSession = Dep
 async def update_user_api(user_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     """Update user role (in the request's tenant) or password (admin only, JSON API)."""
     current = getattr(request.state, "current_user", None)
-    if not current or _require_admin(request):
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if err := _refuse_change(request):
+        return err
     user, role = await _member(db, request, user_id)
     if not user:
         return JSONResponse({"error": "User not found"}, status_code=404)
     body = await request.json()
+    resetting_other = bool(body.get("password")) and user.id != current.id
+    if resetting_other and not await _may_set_credentials(db, request, user):
+        return JSONResponse({"error": FOREIGN_IDENTITY, "code": "foreign_identity"}, status_code=403)
     if "role" in body:
         new_role = body["role"]
         if new_role not in VALID_ROLES:
@@ -239,8 +299,8 @@ async def add_user(
     role: str = Form("readonly"),
     db: AsyncSession = Depends(get_db),
 ):
-    if _require_admin(request):
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if err := _refuse_change(request):
+        return err
     pw_error = validate_password(password)
     if pw_error:
         return JSONResponse({"error": pw_error}, status_code=400)
@@ -266,8 +326,8 @@ async def update_role(
     role: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    if _require_admin(request):
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if err := _refuse_change(request):
+        return err
     if role not in VALID_ROLES:
         return RedirectResponse(url="/users?error=invalid_role", status_code=303)
     user, current_role = await _member(db, request, user_id)
@@ -288,14 +348,17 @@ async def reset_password(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    if _require_admin(request):
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if err := _refuse_change(request):
+        return err
     pw_error = validate_password(password)
     if pw_error:
         return JSONResponse({"error": pw_error}, status_code=400)
     user, _ = await _member(db, request, user_id)
     if not user:
         return JSONResponse({"error": "User not found"}, status_code=404)
+    current = request.state.current_user
+    if user.id != current.id and not await _may_set_credentials(db, request, user):
+        return JSONResponse({"error": FOREIGN_IDENTITY, "code": "foreign_identity"}, status_code=403)
     user.password_hash = hash_password(password)
     await db.execute(sa_delete(UserSession).where(UserSession.user_id == user_id))
     await db.commit()
@@ -308,8 +371,8 @@ async def delete_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    if _require_admin(request):
-        return JSONResponse({"error": "Admin access required"}, status_code=403)
+    if err := _refuse_change(request):
+        return err
     current = request.state.current_user
     if current and current.id == user_id:
         return RedirectResponse(url="/users?error=self_delete", status_code=303)

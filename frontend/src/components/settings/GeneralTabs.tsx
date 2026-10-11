@@ -88,7 +88,20 @@ function NumberField({
   );
 }
 
-export function MonitoringTab({ form, set, status, onSave, onDiscard }: GeneralTabProps) {
+/** The field's upper bound within a retention cap, and the hint that says so. */
+function capped(max: number, cap: number | undefined): { max: number; hint?: string } {
+  if (cap === undefined || cap >= max) return { max };
+  return { max: cap, hint: `Up to ${cap} days on this tenant's plan.` };
+}
+
+export function MonitoringTab({
+  form, set, status, onSave, onDiscard, retentionCaps,
+}: GeneralTabProps & { retentionCaps?: Record<string, number> }) {
+  const caps = retentionCaps ?? {};
+  const ping = capped(30, caps.ping_retention_days);
+  const integration = capped(90, caps.integration_retention_days);
+  const proxmox = capped(90, caps.proxmox_retention_days);
+  const events = capped(365, caps.incident_event_retention_days);
   return (
     <div className="space-y-4">
       <SettingsSection id="checks" title="Checks" description="How often hosts and integrations are polled.">
@@ -101,16 +114,18 @@ export function MonitoringTab({ form, set, status, onSave, onDiscard }: GeneralT
 
       <SettingsSection id="retention" title="Data retention" description="Older data is pruned nightly.">
         <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField label="Ping history (days)" value={form.pingRetention} onChange={(v) => set('pingRetention', v)} min={1} max={30} />
-          <NumberField label="Integration snapshots (days)" value={form.integrationRetention} onChange={(v) => set('integrationRetention', v)} min={1} max={90} />
-          <NumberField label="Proxmox history (days)" value={form.proxmoxRetention} onChange={(v) => set('proxmoxRetention', v)} min={1} max={90} />
+          <NumberField label="Ping history (days)" hint={ping.hint} value={form.pingRetention} onChange={(v) => set('pingRetention', v)} min={1} max={ping.max} />
+          <NumberField label="Integration snapshots (days)" hint={integration.hint} value={form.integrationRetention} onChange={(v) => set('integrationRetention', v)} min={1} max={integration.max} />
+          <NumberField label="Proxmox history (days)" hint={proxmox.hint} value={form.proxmoxRetention} onChange={(v) => set('proxmoxRetention', v)} min={1} max={proxmox.max} />
           <NumberField
             label="Incident events (days)"
-            hint="The newest event per incident is always kept. 0 = keep forever."
+            hint={events.hint
+              ? `The newest event per incident is always kept. ${events.hint}`
+              : 'The newest event per incident is always kept. 0 = keep forever.'}
             value={form.incidentEventRetention}
             onChange={(v) => set('incidentEventRetention', v)}
-            min={0}
-            max={365}
+            min={events.hint ? 1 : 0}
+            max={events.max}
           />
         </div>
       </SettingsSection>
