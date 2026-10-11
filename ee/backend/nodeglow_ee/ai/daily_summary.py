@@ -393,26 +393,32 @@ async def run_daily_ai_summary(*, force: bool = False):
             return
 
         # Which channels should receive the summary (default: all)
-        from notification_channels import load_config as load_channel_config
+        from notification_channels import CHANNELS, ChannelSecrets, load_config as load_channel_config
         from services.tenant_keys import tenant_cipher
         cipher = await tenant_cipher(db)   # channel secrets: the tenant's data key
-        reveal = cipher.reveal
+        # One by one: a secret that does not decrypt fails only its channel.
+        secrets = ChannelSecrets(cipher.reveal)
         channels_csv = (await get_setting(db, "daily_ai_summary_channels", "")
                         or DAILY_SUMMARY_DEFAULT_CHANNELS)
         selected = {c.strip() for c in channels_csv.split(",") if c.strip()}
 
-        tg_token = reveal(await get_setting(db, "telegram_bot_token", ""))
+        tg_token = secrets.get("telegram", await get_setting(db, "telegram_bot_token", ""))
         tg_chat = await get_setting(db, "telegram_chat_id", "")
-        dc_webhook = reveal(await get_setting(db, "discord_webhook_url", ""))
-        wh_url = reveal(await get_setting(db, "webhook_url", ""))
-        wh_secret = reveal(await get_setting(db, "webhook_secret", ""))
+        dc_webhook = secrets.get("discord", await get_setting(db, "discord_webhook_url", ""))
+        wh_url = secrets.get("webhook", await get_setting(db, "webhook_url", ""))
+        wh_secret = secrets.get("webhook", await get_setting(db, "webhook_secret", ""))
         smtp_host = await get_setting(db, "smtp_host", "")
         smtp_user = await get_setting(db, "smtp_user", "")
         smtp_pw_enc = await get_setting(db, "smtp_password", "")
+        smtp_pw = secrets.get("email", smtp_pw_enc)
         smtp_to = await get_setting(db, "smtp_to", "")
         smtp_port = int(await get_setting(db, "smtp_port", "587"))
         smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
-        channel_cfg = await load_channel_config(db, get_setting, cipher.decrypt)
+        channel_cfg = await load_channel_config(db, get_setting, cipher.decrypt, secrets)
+
+    for ch, error in secrets.errors.items():
+        if ch in selected and ch not in CHANNELS:   # Teams/Slack/ntfy: below
+            await _log_notification(ch, title, summary[:200], "info", "failed", error)
 
     # Telegram
     if "telegram" in selected and tg_token and tg_chat:
@@ -438,8 +444,8 @@ async def run_daily_ai_summary(*, force: bool = False):
             logger.error("Daily AI summary Discord failed: %s", exc)
             await _log_notification("discord", title, summary[:200], "info", "failed", str(exc))
 
-    # Webhook
-    if "webhook" in selected and wh_url:
+    # Webhook (never unsigned because its signing secret does not decrypt)
+    if "webhook" in selected and wh_url and "webhook" not in secrets.errors:
         try:
             await _send_webhook(wh_url, wh_secret, title, summary, "info")
             await _log_notification("webhook", title, summary[:200], "info", "sent")
@@ -449,9 +455,8 @@ async def run_daily_ai_summary(*, force: bool = False):
             await _log_notification("webhook", title, summary[:200], "info", "failed", str(exc))
 
     # Email
-    if "email" in selected and smtp_host and smtp_user and smtp_pw_enc and smtp_to:
+    if "email" in selected and smtp_host and smtp_user and smtp_pw and smtp_to:
         try:
-            smtp_pw = cipher.reveal(smtp_pw_enc)
             html_body = _build_html_email(title, summary, "info")
             await _send_email(
                 smtp_host, smtp_port, smtp_user, smtp_pw,
@@ -466,7 +471,8 @@ async def run_daily_ai_summary(*, force: bool = False):
 
     # Teams / Slack / ntfy
     from notification_channels import send_to_selected
-    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary):
+    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary,
+                                          failed=secrets.errors):
         if exc is None:
             await _log_notification(ch, title, summary[:200], "info", "sent")
             sent = True
@@ -553,17 +559,19 @@ async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get
     sent = False
     errors = []
 
+    from notification_channels import CHANNELS, ChannelSecrets
     from services.tenant_keys import tenant_cipher
     cipher = await tenant_cipher(db)   # channel secrets: the tenant's data key
-    reveal = cipher.reveal
-    tg_token = reveal(await get_setting(db, "telegram_bot_token", ""))
+    secrets = ChannelSecrets(cipher.reveal)   # one by one, see run_daily_ai_summary
+    tg_token = secrets.get("telegram", await get_setting(db, "telegram_bot_token", ""))
     tg_chat = await get_setting(db, "telegram_chat_id", "")
-    dc_webhook = reveal(await get_setting(db, "discord_webhook_url", ""))
-    wh_url = reveal(await get_setting(db, "webhook_url", ""))
-    wh_secret = reveal(await get_setting(db, "webhook_secret", ""))
+    dc_webhook = secrets.get("discord", await get_setting(db, "discord_webhook_url", ""))
+    wh_url = secrets.get("webhook", await get_setting(db, "webhook_url", ""))
+    wh_secret = secrets.get("webhook", await get_setting(db, "webhook_secret", ""))
     smtp_host = await get_setting(db, "smtp_host", "")
     smtp_user = await get_setting(db, "smtp_user", "")
     smtp_pw_enc = await get_setting(db, "smtp_password", "")
+    smtp_pw = secrets.get("email", smtp_pw_enc)
     smtp_to = await get_setting(db, "smtp_to", "")
     smtp_port = int(await get_setting(db, "smtp_port", "587"))
     smtp_from = await get_setting(db, "smtp_from", "") or smtp_user
@@ -586,16 +594,15 @@ async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get
         except Exception as exc:
             errors.append(f"Discord: {exc}")
 
-    if "webhook" in selected and wh_url:
+    if "webhook" in selected and wh_url and "webhook" not in secrets.errors:
         try:
             await _send_webhook(wh_url, wh_secret, title, summary, "info")
             sent = True
         except Exception as exc:
             errors.append(f"Webhook: {exc}")
 
-    if "email" in selected and smtp_host and smtp_user and smtp_pw_enc and smtp_to:
+    if "email" in selected and smtp_host and smtp_user and smtp_pw and smtp_to:
         try:
-            smtp_pw = cipher.reveal(smtp_pw_enc)
             html_body = _build_html_email(title, summary, "info")
             await _send_email(
                 smtp_host, smtp_port, smtp_user, smtp_pw,
@@ -607,8 +614,11 @@ async def test_daily_ai_summary(request: Request, db: AsyncSession = Depends(get
             errors.append(f"Email: {exc}")
 
     from notification_channels import load_config as load_channel_config, send_to_selected
-    channel_cfg = await load_channel_config(db, get_setting, cipher.decrypt)
-    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary):
+    channel_cfg = await load_channel_config(db, get_setting, cipher.decrypt, secrets)
+    errors.extend(msg for ch, msg in secrets.errors.items()
+                  if ch in selected and ch not in CHANNELS)
+    for ch, exc in await send_to_selected(channel_cfg, selected, f"🤖 {title}", summary,
+                                          failed=secrets.errors):
         if exc is None:
             sent = True
         else:

@@ -116,3 +116,61 @@ async def test_send_to_selected_skips_disabled_and_collects_errors():
         results = await nc.send_to_selected(cfg, {"teams", "slack", "ntfy"}, "t", "m")
     teams.assert_not_called()
     assert [(n, str(e) if e else None) for n, e in results] == [("slack", None), ("ntfy", "boom")]
+
+
+# ── A channel secret that does not decrypt fails only its own channel ────────
+
+async def _seed_with_one_broken_secret(sf):
+    """Discord fine; the webhook's signing secret and the ntfy token are
+    tenant-key values that do not decrypt (a corrupted / foreign value)."""
+    from services import tenant_keys
+    async with sf() as db:
+        good = await tenant_keys.encrypt_secret(db, SECRETS["discord_webhook_url"], tenant_id=1)
+        wh_url = await tenant_keys.encrypt_secret(db, SECRETS["webhook_url"], tenant_id=1)
+        await db.commit()
+    broken = good[:-6] + "AAAAAA"
+    await _set(sf, notify_enabled="1", discord_webhook_url=good, webhook_url=wh_url,
+               webhook_secret=broken, ntfy_enabled="1", ntfy_topic="alerts", ntfy_token=broken)
+    return broken
+
+
+async def test_one_undecryptable_channel_secret_does_not_stop_the_others():
+    import notifications
+
+    async with make_client() as (_client, sf):
+        broken = await _seed_with_one_broken_secret(sf)
+        with patch("database.AsyncSessionLocal", sf), \
+             patch("notifications._send_discord", new_callable=AsyncMock) as dc, \
+             patch("notifications._send_webhook", new_callable=AsyncMock) as wh, \
+             patch.object(nc, "send_ntfy", new_callable=AsyncMock) as ntfy, \
+             patch("notifications._log_notification", new_callable=AsyncMock) as logged:
+            await notifications.notify("Host down", "srv01 is down", "critical", tenant_id=1)
+    assert dc.await_args.args[0] == SECRETS["discord_webhook_url"]
+    wh.assert_not_called()      # never unsigned, never with the ciphertext as secret
+    ntfy.assert_not_awaited()   # never without its token
+    status = {c.args[0]: (c.args[4], c.args[5] if len(c.args) > 5 else None)
+              for c in logged.await_args_list}
+    assert status["discord"] == ("sent", None)
+    assert status["webhook"][0] == "failed" and "does not decrypt" in status["webhook"][1]
+    assert status["ntfy"][0] == "failed"
+    for _ch, (_s, err) in status.items():
+        assert not err or (broken not in err and SECRETS["webhook_url"] not in err)
+
+
+async def test_test_endpoint_reports_only_the_tested_channels_secret():
+    async with make_client() as (client, sf):
+        await _seed_with_one_broken_secret(sf)
+        await _set(sf, slack_enabled="1", slack_webhook_url="https://hooks.slack.com/services/T/B/x")
+        with patch("notifications._send_discord", new_callable=AsyncMock) as dc, \
+             patch.object(nc, "send_slack", new_callable=AsyncMock) as slack, \
+             patch("notifications._log_notification", new_callable=AsyncMock):
+            ok = await client.post("/settings/notifications/test", json={"channel": "discord"})
+            # ntfy's token is broken; Slack's own secret is fine.
+            ok_slack = await client.post("/settings/notifications/test", json={"channel": "slack"})
+            bad = await client.post("/settings/notifications/test", json={"channel": "webhook"})
+            bad_ntfy = await client.post("/settings/notifications/test", json={"channel": "ntfy"})
+    assert ok.status_code == 200 and dc.await_count == 1
+    assert ok_slack.status_code == 200, ok_slack.text
+    slack.assert_awaited_once()
+    for r in (bad, bad_ntfy):
+        assert r.status_code == 500 and "does not decrypt" in r.json()["message"]
