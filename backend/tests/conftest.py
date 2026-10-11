@@ -100,9 +100,24 @@ def _core_tenancy_backend(request, monkeypatch):
         yield
         return
     import extensions
+    from services import tenancy, tenant_jobs
 
-    monkeypatch.setattr(extensions.registry, "tenancy_backend", None)
-    monkeypatch.setattr(extensions.registry, "retention_policy", None)
+    # Not by resetting the registry: the plugin registers when main is first
+    # imported — possibly during this test — and must not be lost afterwards.
+    # A backend a test installs itself (monkeypatching the registry) is kept.
+    def _plugin(obj) -> bool:
+        return getattr(type(obj), "__module__", "").startswith("nodeglow_ee") or             getattr(obj, "__module__", "").startswith("nodeglow_ee")
+
+    def core_backend():
+        b = extensions.registry.tenancy_backend
+        return tenancy._SINGLE if b is None or _plugin(b) else b
+
+    def core_retention_policy():
+        p = extensions.registry.retention_policy
+        return None if p is None or _plugin(p) else p
+
+    monkeypatch.setattr(tenancy, "backend", core_backend)
+    monkeypatch.setattr(tenant_jobs, "_retention_policy", core_retention_policy)
     yield
 
 

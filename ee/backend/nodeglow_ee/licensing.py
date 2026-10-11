@@ -77,7 +77,9 @@ TRUSTED_KEYS: dict[str, str] = {
 # Every enterprise feature a license can grant (the names of the flags in
 # GET /api/v2/features). "*" in a license grants all of them, including
 # features added after the license was issued.
-KNOWN_FEATURES: tuple[str, ...] = ("ha_scheduler", "ai_assistant", "ai_postmortem", "ai_daily_summary")
+KNOWN_FEATURES: tuple[str, ...] = (
+    "ha_scheduler", "ai_assistant", "ai_postmortem", "ai_daily_summary", "multi_tenancy",
+)
 
 # Features that keep running after the grace period. Leader election protects
 # monitoring itself (without it every replica would run every job), and an

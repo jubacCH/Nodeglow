@@ -433,7 +433,6 @@ async def retention_cap(db, key: str) -> int | None:
     (empty: none) and, when a retention policy is registered (ee: the
     tenant's plan tier), the tenant's cap — the smaller of the two. None:
     no cap. The tenant is the session's (context or binding)."""
-    import extensions
     from models.settings import get_setting
 
     raw_cap = await get_setting(db, f"{key}_max")
@@ -443,7 +442,7 @@ async def retention_cap(db, key: str) -> int | None:
         cap = None
     if cap is not None and cap <= 0:
         cap = None
-    policy = extensions.registry.retention_policy
+    policy = _retention_policy()
     if policy is not None:
         from services.tenancy import session_tenant_id
 
@@ -455,6 +454,12 @@ async def retention_cap(db, key: str) -> int | None:
         if plan_cap is not None and plan_cap > 0:
             cap = plan_cap if cap is None else min(cap, plan_cap)
     return cap
+
+
+def _retention_policy():
+    import extensions
+
+    return extensions.registry.retention_policy
 
 
 def apply_retention_cap(value: int, cap: int | None) -> int:
