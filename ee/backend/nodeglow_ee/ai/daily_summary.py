@@ -21,6 +21,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal, PingHost, get_db, get_setting
+from services.tenancy import per_tenant_job
 from models.incident import Incident
 from models.integration import IntegrationConfig, Snapshot
 from models.log_template import LogTemplate
@@ -274,6 +275,7 @@ Max ~800 words."""
 # ── Scheduled job ─────────────────────────────────────────────────────────────
 
 
+@per_tenant_job
 async def run_daily_ai_summary():
     """Build AI-powered daily summary and send via configured notification channels."""
     from database import set_setting

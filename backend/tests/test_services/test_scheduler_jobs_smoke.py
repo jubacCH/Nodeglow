@@ -56,11 +56,20 @@ JOBS = [
 
 @pytest.fixture
 def session_factory(db):
-    """Hand every job the test's SQLite session instead of the real engine."""
+    """Hand every job sessions on the test's SQLite database.
+
+    Fresh, *unbound* sessions — not the test's own, which acts for tenant 1:
+    a job has to establish its tenant (or system) scope itself, exactly as in
+    production, or the tenant filter fails it closed.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    maker = async_sessionmaker(db.bind, expire_on_commit=False)
 
     @asynccontextmanager
     async def factory():
-        yield db
+        async with maker() as session:
+            yield session
 
     return factory
 
@@ -181,6 +190,29 @@ async def test_every_scheduled_job_is_covered_here():
         covered.add(name)
 
     # Map registered job ids to their function names by reading the source.
-    pairs = re.findall(r'@instrument_job\("([a-z_]+)"\)\s*\nasync def ([a-z_]+)\(', source.read_text())
+    pairs = re.findall(
+        r'@instrument_job\("([a-z_]+)"\)\s*\n(?:@[^\n]+\n)*async def ([a-z_]+)\(',
+        source.read_text(),
+    )
+    assert len(pairs) == len(registered), "the pattern no longer matches scheduler.py"
     missing = {fn for _, fn in pairs} - covered
     assert not missing, f"scheduled jobs without a smoke test: {sorted(missing)}"
+
+
+async def test_every_scheduled_job_declares_its_tenancy():
+    """Each job runs per tenant or in an explicit system scope — never bare.
+
+    The tenant filter fails closed, so a bare job would crash on every run;
+    this makes the omission visible before it ships. ``check_disk_space``
+    records an installation sample and delegates the incident to a per-tenant
+    helper.
+    """
+    import scheduler
+
+    for name in JOBS + ["run_weekly_digest", "update_geoip"]:
+        fn, scopes = getattr(scheduler, name), set()
+        while fn is not None:
+            scopes.add(getattr(fn, "__tenancy__", None))
+            fn = getattr(fn, "__wrapped__", None)
+        assert scopes & {"per_tenant", "system"} or name == "check_disk_space", name
+    assert scheduler._disk_space_incident.__tenancy__ == "per_tenant"
