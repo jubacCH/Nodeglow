@@ -33,6 +33,7 @@ async def _seed(sf) -> None:
             s.add(Tenant(id=B, provider_id=1, name=f"{CANARY}-tenant", slug="b", status="active"))
             await s.flush()
             s.add(Site(id=2, tenant_id=B, name="B"))
+            await s.flush()  # PostgreSQL enforces the host's site FK
             s.add(PingHost(id=900, tenant_id=B, name=f"{CANARY}-host", hostname="10.9.9.9", site_id=2))
             s.add(TenantSetting(tenant_id=B, key="site_name", value=f"{CANARY}-name"))
             s.add(TenantSetting(tenant_id=B, key="telegram_chat_id", value=f"{CANARY}-chat"))

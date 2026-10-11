@@ -53,16 +53,32 @@ from services import tenancy as _tenancy  # noqa: E402
 
 _tenancy.install()
 
+# Layer 2 (PostgreSQL row-level security, NODEGLOW_RLS=on): the tenant
+# settings are set per transaction on the app's engine.
+from services import pg_rls as _pg_rls  # noqa: E402
 
-async def init_db():
-    """Create all tables and the default provider/tenant/site (fresh installs)."""
-    async with engine.begin() as conn:
+_pg_rls.install_if_enabled(engine)
+
+
+async def init_db(bind=None):
+    """Create all tables and the default provider/tenant/site (fresh installs).
+
+    ``bind``: the engine to use (migrate.py passes the owner engine);
+    default the app's.
+    """
+    async with (bind or engine).begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     # Every tenant-owned row references tenant 1; on a database built by the
     # migration chain these rows come from revision 039 and this is a no-op.
-    async with AsyncSessionLocal() as db:
-        await ensure_default_tenant(db)
+    if bind is None:
+        async with AsyncSessionLocal() as db:
+            await ensure_default_tenant(db)
+    else:
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async with AsyncSession(bind, expire_on_commit=False) as db:
+            await ensure_default_tenant(db)
 
     # Syslog messages are stored in ClickHouse — no PostgreSQL trigger needed
 
