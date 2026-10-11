@@ -157,7 +157,7 @@ Air-gapped: `sudo sh install.sh --offline nodeglow-X.Y.Z-offline-amd64.tar.gz`.
 Then open `http://<host>:8000` and finish the setup wizard right away — it
 creates the admin account.
 
-Requirements: Linux x86_64 (arm64: build from source), Docker Engine 20.10+ with Compose v2,
+Requirements: Linux x86_64 or arm64, Docker Engine 20.10+ with Compose v2,
 2 vCPU / 4 GB RAM / 20 GB SSD. Everything else — editions, upgrades, backups,
 signature verification — is in **[docs/INSTALL.md](docs/INSTALL.md)**.
 
