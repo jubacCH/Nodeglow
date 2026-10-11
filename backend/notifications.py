@@ -266,14 +266,17 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         if enabled != "1":
             return
 
-        # The channel secrets are under the tenant's data key.
+        # The channel secrets are under the tenant's data key, read one by
+        # one: a secret that does not decrypt fails only its own channel.
+        from notification_channels import ChannelSecrets
         from services.tenant_keys import tenant_cipher
         cipher = await tenant_cipher(db, tenant_id)
-        tg_token    = cipher.reveal(await get_setting(db, "telegram_bot_token", ""))
+        secrets = ChannelSecrets(cipher.reveal)
+        tg_token    = secrets.get("telegram", await get_setting(db, "telegram_bot_token", ""))
         tg_chat     = await get_setting(db, "telegram_chat_id", "")
-        dc_webhook  = cipher.reveal(await get_setting(db, "discord_webhook_url", ""))
-        wh_url      = cipher.reveal(await get_setting(db, "webhook_url", ""))
-        wh_secret   = cipher.reveal(await get_setting(db, "webhook_secret", ""))
+        dc_webhook  = secrets.get("discord", await get_setting(db, "discord_webhook_url", ""))
+        wh_url      = secrets.get("webhook", await get_setting(db, "webhook_url", ""))
+        wh_secret   = secrets.get("webhook", await get_setting(db, "webhook_secret", ""))
         smtp_host   = await get_setting(db, "smtp_host", "")
         smtp_port   = await get_setting(db, "smtp_port", "587")
         smtp_user   = await get_setting(db, "smtp_user", "")
@@ -288,7 +291,7 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         min_sev_email    = await get_setting(db, "notify_email_min_severity", "all")
 
         from notification_channels import load_config as _load_extra_channels
-        extra_cfg = await _load_extra_channels(db, get_setting, cipher.decrypt)
+        extra_cfg = await _load_extra_channels(db, get_setting, cipher.decrypt, secrets)
 
     channels_list = []  # (name, coroutine) pairs
     color = {"critical": 0xe74c3c, "warning": 0xf39c12, "info": 0x2ecc71}.get(severity, 0x2ecc71)
@@ -298,24 +301,38 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         channels_list.append(("telegram", _send_telegram(tg_token, tg_chat, tg_text)))
     if dc_webhook and _severity_passes(severity, min_sev_discord):
         channels_list.append(("discord", _send_discord(dc_webhook, title, message, color)))
-    if wh_url and _severity_passes(severity, min_sev_webhook):
+    if wh_url and "webhook" not in secrets.errors and _severity_passes(severity, min_sev_webhook):
         channels_list.append(("webhook", _send_webhook(wh_url, wh_secret, title, message, severity)))
     if smtp_host and smtp_user and smtp_pw_enc and smtp_to and _severity_passes(severity, min_sev_email):
         # A value under the installation key (the installation SMTP relay
         # this tenant falls back to, or a row from before revision 046)
         # decrypts as well; plaintext passes through as before.
-        smtp_pw = cipher.reveal(smtp_pw_enc)
-        html_body = _build_html_email(title, message, severity)
-        channels_list.append(("email", _send_email(
-            smtp_host, int(smtp_port), smtp_user, smtp_pw,
-            smtp_from or smtp_user, smtp_to,
-            f"[Nodeglow] {title}", f"{title}\n{message}", html_body,
-        )))
+        smtp_pw = secrets.get("email", smtp_pw_enc)
+        if "email" not in secrets.errors:
+            html_body = _build_html_email(title, message, severity)
+            channels_list.append(("email", _send_email(
+                smtp_host, int(smtp_port), smtp_user, smtp_pw,
+                smtp_from or smtp_user, smtp_to,
+                f"[Nodeglow] {title}", f"{title}\n{message}", html_body,
+            )))
 
     from notification_channels import build_sends as _extra_channel_sends
     channels_list.extend(_extra_channel_sends(
         extra_cfg, title, message, severity, link_path=link_path, channels=channels,
     ))
+
+    # A channel whose secret does not decrypt is not sent (an ntfy topic
+    # without its token, a webhook without its signing secret) and is logged
+    # as failed; the others go out.
+    for name, coro in channels_list:
+        if name in secrets.errors:
+            coro.close()
+    channels_list = [(n, c) for n, c in channels_list if n not in secrets.errors]
+    for name, error in secrets.errors.items():
+        if channels and name not in channels:
+            continue
+        await _log_notification(name, title, message, severity, "failed", error,
+                                tenant_id=tenant_id)
 
     if not channels_list:
         return

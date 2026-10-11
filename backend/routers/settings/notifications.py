@@ -237,10 +237,18 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
         _build_html_email, _log_notification,
     )
     from database import get_setting
+    from notification_channels import ChannelError, ChannelSecrets
     from services.tenant_keys import tenant_cipher
     try:
         cipher = await tenant_cipher(db)
-        reveal = cipher.reveal
+        secrets = ChannelSecrets(cipher.reveal)
+
+        def reveal(value: str) -> str:
+            plain = secrets.get(channel, value)
+            if channel in secrets.errors:
+                raise ChannelError(secrets.errors[channel])
+            return plain
+
         if channel == "telegram":
             token = reveal(await get_setting(db, "telegram_bot_token", ""))
             chat  = await get_setting(db, "telegram_chat_id", "")
@@ -256,7 +264,7 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
             host  = await get_setting(db, "smtp_host", "")
             port  = int(await get_setting(db, "smtp_port", "587"))
             user  = await get_setting(db, "smtp_user", "")
-            pw    = cipher.decrypt(await get_setting(db, "smtp_password", ""))
+            pw    = reveal(await get_setting(db, "smtp_password", ""))
             frm   = await get_setting(db, "smtp_from", "") or user
             to    = await get_setting(db, "smtp_to", "")
             html  = _build_html_email("Nodeglow Test", "Notifications are working ✓", "info")
@@ -264,7 +272,9 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
                               "[Nodeglow] Test", "Nodeglow Test\nNotifications are working ✓", html)
         elif channel in EXTRA_CHANNELS:
             from notification_channels import build_link, load_config, make_send
-            cfg = await load_config(db, get_setting, cipher.decrypt)
+            cfg = await load_config(db, get_setting, cipher.decrypt, secrets)
+            if channel in secrets.errors:   # only the tested channel's own secret counts
+                raise ChannelError(secrets.errors[channel])
             await make_send(cfg, channel, "Nodeglow Test", "Notifications are working ✓",
                             "info", build_link(cfg.public_url, None))
         else:
@@ -274,7 +284,6 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
     except Exception as e:
         log.error("Test notification failed: %s", e)
         await _log_notification(channel, "Test Notification", "Manual test", "info", "failed", str(e))
-        from notification_channels import ChannelError
         if isinstance(e, ChannelError):
             # Built without URLs or tokens, so it is safe to show.
             return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
