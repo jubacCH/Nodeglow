@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10 — phases 1–2 implemented 2026-10-11 (see "Implementation status")
+Status: design · 2026-10-10 — phases 1–4 implemented 2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -784,8 +784,8 @@ is user-visible until phase 7.
 | 0 | Spikes: CH row policy with custom setting on 24.8 via clickhouse-connect; RLS + `set_config` per transaction with asyncpg/SQLAlchemy; column-based TTL | — | S |
 | 1 ✅ | Schema foundation: new tables, `tenant_id` + backfill + composite uniques/FKs, `TenantScoped` mixin; static test "every table classified" | core | L |
 | 2 ✅ | Tenant context: middleware resolution, `system_scope()`, session filter fail-closed; every router passes in single-tenant mode | core | L |
-| 3 | Settings split + registry; `main.py` caches keyed; per-user dashboard layout | core | M |
-| 4 | Auth binding: memberships replace `users.role`, API keys/install tokens/agents bound, audit fields, WebSocket/SSE scoping, notifications per tenant, in-process state table above | core | L |
+| 3 ✅ | Settings split + registry; `main.py` caches keyed; per-user dashboard layout | core | M |
+| 4 ✅ | Auth binding: memberships replace `users.role`, API keys/install tokens/agents bound, audit fields, WebSocket/SSE scoping, notifications per tenant, in-process state table above | core | L |
 | 5 | Scheduler: per-tenant analysis loops, fair-share queue for data-plane jobs, per-tenant metrics | core | M |
 | 6 | ClickHouse: step A + helper filtering + row policies + two users; step B rebuild job | core | M + M |
 | 7 | Postgres RLS + role split; CI job on Postgres asserting policies | core | M |
@@ -957,22 +957,187 @@ The `text()` statements the spec listed in `services/digest.py`,
 exist (grep 2026-10-11). `ee/` contains no raw SQL. ClickHouse is unchanged
 (phase 6).
 
-### Open items for phases 3–4
+### Phase 3 — settings split (done)
 
-- In-process caches are still keyed without tenant (table in "In-process
-  state"): syslog host cache, log-intelligence caches, `_nav_cache` /
-  `_settings_cache`, disk-prediction cache, notification cooldown.
-- `notify()` reads global settings; WebSocket and syslog live tail broadcast
-  to everyone.
-- Memberships for users created after 039 (see above); `users.role` remains
-  the source of truth.
-- Settings are untouched (`tenant_settings` is empty); `get_setting` has no
-  tenant awareness yet.
-- Subnet-scan auto-added hosts land in the tenant's default site, not the
-  schedule's `site_id`.
-- Code that spawns work outside the request (`asyncio.create_task`) inherits
-  the context by `contextvars` semantics; a task started in `system_scope`
-  that writes must set its tenant itself.
+Migration `042`; code in `services/settings_registry.py`,
+`models/settings.py`.
+
+- **Registry**: every key is declared once (`SettingDef`: scope
+  installation|tenant, type, default, `secret`, `fallback`, `prefix`).
+  `get_setting` / `set_setting` route by it: installation keys in
+  `settings`, tenant keys in `tenant_settings` of the current tenant — the
+  ambient context, the session's binding, or an explicit `tenant_id=`
+  (setup wizard, scheduler start, syslog host cache; it must agree with a
+  context if one is set). A tenant key without a tenant raises
+  `TenantContextError`; an **undeclared key raises `UnknownSettingError`**
+  (stricter than the spec, which only asked for the tenant rule).
+  `tests/test_settings_registry.py` walks the core and `ee` sources (AST:
+  literals, constants, tuples, loop variables, small key helpers,
+  f-strings) and fails on any key that does not resolve to a declaration;
+  the two genuinely dynamic sites are listed with a reason.
+- **042** copies the tenant keys (a list frozen in the revision, pinned to
+  the registry by a test) with their `encrypted` flag to tenant 1 and
+  deletes them from `settings`; `dashboard_layout` becomes the column
+  `user_preferences.dashboard_layout` and is copied to every existing user.
+  Downgrade copies tenant 1 back (and the first user's layout).
+- **Classification** as in the table above, plus: `public_url`,
+  `ai_provider` / `ai_anthropic_model` / `ai_openai_*` (the provider config
+  that belongs with `claude_api_key`), the upgrade markers
+  (`ai_optin_migrated`, `channel_secrets_encrypted_at`) and the ee licence
+  keys are installation; `ai_redact_*`, `ai_restore_placeholders`,
+  `ai_enabled_by/at`, `availability_target`, `agent_service_fail_reports`,
+  `template_*retention_days`, `log_baseline_done_through` (state) and the
+  Teams/Slack/ntfy channel keys are tenant. `smtp_*` fall back to an
+  installation row when the tenant has none — except `smtp_to` (a tenant's
+  recipients are its own).
+- `main.py`: `_nav_cache` / `_settings_cache` are dicts keyed by tenant;
+  `invalidate_*()` take a tenant (default: the current one, none: all).
+- Startup upgrades follow the split: the AI opt-in upgrade switches AI on
+  for the default tenant only (a pre-opt-in install has no other), the
+  channel-secret encryption walks every tenant's rows.
+- Backups export `tenant_memberships`, `tenant_settings`,
+  `user_preferences`; restoring a pre-042 backup moves its tenant keys into
+  the importing tenant (`adopt_legacy_tenant_settings`).
+- Settings API shapes are unchanged. `site_name` also renames the tenant.
+
+Deviations / not done:
+
+- "tenant, floor at installation" (`ping_interval`, `proxmox_interval`)
+  and "capped at installation/plan" (`*_retention_days`) are not modelled:
+  there is one tenant and no plan. The global jobs run at the **fastest
+  tenant's** interval and the digest cron at the **first tenant's**
+  schedule (scheduler start); per-tenant cadence is phase 5.
+- `claude_api_key` has no per-tenant override (ee).
+- New users get the default dashboard layout; before the split a new user
+  saw the installation's shared layout.
+
+### Phase 4 — auth binding (done)
+
+Migration `043`; code in `services/memberships.py`, `services/tenancy.py`,
+`services/audit.py`, `services/websocket.py`, `notifications.py`.
+
+- **Memberships are the source of truth.** `043` backfills memberships for
+  users created after 039; the setup wizard, the users API (and its form
+  twins), LDAP login and backup restore write them. `users.role` mirrors
+  the default tenant's role for one release (rollback; `043` downgrade
+  refreshes it from the memberships) and is no longer read for
+  authorisation anywhere: admin checks use `request.state.tenant_role`
+  (`tenancy.request_role` / `request_is_admin`).
+- **Resolution** (`TenancyBackend.resolve_access` → `TenantAccess(tenant,
+  role, via)`, replacing `resolve_request_tenant` + sync `effective_role`):
+  `X-Nodeglow-Tenant` header (WebSocket: `?tenant=`), else
+  `sessions.active_tenant_id`, else the only membership. It must be a
+  membership of an *active* tenant, otherwise 404 — also for a session
+  whose active tenant the user is no longer a member of. Several
+  memberships with no choice → 404 (no "last used" yet). Used by the
+  middleware, `/ws/live`, `/api/auth/*` and the API-key session fallback.
+- **Login** starts the session in the resolved tenant (stored in
+  `active_tenant_id`); no membership → 403 and no session.
+  `/api/auth/me` reports the membership role. `POST /api/auth/tenant`
+  switches the session's tenant (membership-checked, CSRF-checked — the
+  middleware skips `/api/auth/` — and audited in the target tenant). The
+  core has one tenant; nothing in the UI uses it yet.
+- **Users API** works on the request's tenant: it lists its members,
+  creates users with a membership, changes the membership role, and
+  "delete" revokes the membership (the user row goes when no membership is
+  left). The last-admin rule counts the tenant's admins.
+- **Operator**: `users.is_operator` (043: every admin; setup: the first
+  user). Installation settings (LDAP, GeoIP, syslog port, agent URL,
+  updates, app logs, the ee licence) require `is_operator()`.
+  *Deviation:* `SingleTenancy.is_operator` is "flag **or** admin of the
+  request's tenant" — in the core the one tenant's admin administers the
+  installation, so nobody loses a right; an ee backend must use the flag.
+- **API keys / tokens**: a key's tenant decides; a header naming another
+  tenant → 404. API keys, agent tokens and install tokens of a tenant that
+  is not active stop working. The shared enrolment key is refused once
+  there is more than one tenant.
+- **Audit**: `audit_logs.provider_id` (043 backfills it) and `acting_via`
+  (`membership` | `provider_role` | `operator` from ee, plus `api_key`,
+  `agent`, `system` — the spec's list did not cover keys and agent
+  tokens). `log_action` takes the tenant from the context (NULL in system
+  scope). **Writes in `system_scope` are audited** by the session filter:
+  one `system_scope.write` row per affected tenant and scope (reason,
+  tables); bulk statements are logged installation-level; reads are not
+  audited (token lookups on every agent request would drown the log); the
+  bootstrap of the default tenant opts out (`audit=False`).
+- **WebSocket / SSE**: `WsClient.tenant_ids`; `broadcast()` has a required
+  `tenant_id` (ping updates from the per-tenant job, agent metrics from
+  the agent's tenant). Syslog live-tail subscribers register with their
+  tenant; every parsed message carries its tenant (`syslog.TENANT_KEY`,
+  stripped before the ClickHouse insert) and only reaches that tenant's
+  queues; a message without one is dropped.
+- **Notifications**: `notify(..., tenant_id=None)` takes the current
+  tenant (raises without one), reads that tenant's channels, keys the
+  cooldown by `(tenant, title)` and logs to `notification_logs` in the
+  tenant. Provider-level channels (`NotificationFanout`) are ee.
+- **In-process state keyed by tenant**: syslog host cache and allowlist,
+  log-intelligence template cache / counts / new templates / bursts /
+  baseline progress, disk-prediction cache, notification cooldown, `main.py`
+  caches — and, found on the way, three more: the correlation streak
+  counters (one tenant's end-of-cycle prune reset every other tenant's
+  streaks), the correlation topology cache and `topology.cached_topology`
+  (one tenant's topology served to the next within the TTL), and the
+  `dashboard_v2` TTL cache key.
+- **Fixed** (from phase 2): the syslog host-cache refresh and the startup
+  template-cache load used `async with session, system_scope(...)`; the
+  scope is a plain context manager, so both raised, were swallowed, and
+  the host cache stayed empty since phase 2 (no host attribution, no
+  allowlist).
+
+Not keyed, on purpose: the rDNS cache (what this installation's resolver
+says about an address — no tenant data; the host match is per tenant), the
+per-IP syslog rate limiter (listener-level; per-tenant buckets are phase
+14), `rules._consecutive_matches` and the other caches keyed by global ids,
+`ai_client._semaphore` (per-tenant fairness is phase 14).
+
+Tests: `tests/test_routers/test_tenant_auth_binding.py` (two tenants, real
+auth: membership role, sessions bound to a foreign tenant, header,
+suspended tenant, switching, users API, API keys of A vs B, audit fields,
+WebSocket and live-tail fan-out, notifications), `test_memberships.py`,
+`tests/test_tenant_inprocess_state.py` (one test per keyed state),
+`test_settings_registry.py`; the isolation smoke test now also covers
+settings, notification history and API keys; the PostgreSQL migration test
+covers 042/043 up and down.
+
+Performance: one more query per authenticated request (the user's
+memberships joined with `tenants`); unchanged statement counts otherwise.
+
+### Open items for phases 5–8
+
+- **Phase 5 (scheduler):** per-tenant cadence (`ping_interval`,
+  `proxmox_interval`, digest day/hour, daily AI summary hour) instead of
+  "fastest / first tenant"; installation floors and retention caps; the
+  fair-share queue and the global data-plane pass; a `tenant` label on job
+  metrics; subnet-scan auto-added hosts still land in the tenant's default
+  site, not the schedule's.
+- **Phase 6 (ClickHouse):** the tables have no `tenant_id` yet. Messages
+  carry their tenant in-process (`syslog.TENANT_KEY`) — stamp it into the
+  row once the column exists. Until then every ClickHouse read is
+  installation-wide, notably the log-intelligence baselines
+  (`compute_baselines` keys by `source_ip` over all syslog), precursor and
+  fleet-pattern queries, the dashboard syslog histogram and agent/ping
+  series: correct with one tenant, a leak with two. ee must not allow a
+  second tenant before phase 6.
+- **Phase 7 (RLS):** add `tenant_settings` and `user_preferences` to the
+  policies; `settings`, `users`, `sessions`, memberships stay global. The
+  `system_scope` write audit does not see raw SQL (backup import,
+  `text()` counts) — those stay operator-only. Backups now also export the
+  tenancy tables of every tenant (installation-level, operator-only).
+- **Phase 8 (isolation suite):** the route walker (every route with B's
+  ids → 404, every response without B's canary, with session, API key and
+  header) is still the smoke subset plus targeted tests; job isolation per
+  analysis job.
+- Still true from phase 2: work spawned with `asyncio.create_task` inherits
+  the context; a task started in `system_scope` that writes must set its
+  tenant itself (notifications and WebSocket broadcasts now take the
+  tenant explicitly).
+- Later / ee: drop `users.role` after one release; manage `is_operator`
+  (no API yet — set by 043 and the setup wizard only); the AI provider
+  settings (installation keys) are still saved through the tenant admin's
+  AI form — gate them on the operator when tenant admins are not
+  operators; "last used tenant" at login; provider roles and operator
+  access in `resolve_access` (`via = provider_role | operator`);
+  `audit_logs.provider_id` on the `system_scope.write` rows is NULL.
 
 ## Risks
 
