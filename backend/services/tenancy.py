@@ -125,6 +125,37 @@ def session_tenant_id(session: Any) -> int:
     return current_tenant_id()  # raises with the right message
 
 
+def tenant_access(session: Any, tenant_id: int | None):
+    """``(tenant, scope)``: the tenant a per-tenant helper (settings, tenant
+    keys) acts for, and the context manager to run its statements in.
+
+    An explicit ``tenant_id`` (jobs in system scope, the setup wizard, the
+    syslog listener, a row's own tenant) must agree with the ambient tenant
+    context or the session's binding if there is one; with no context at
+    all the access runs in ``tenant_scope(tenant_id)``. Without an explicit
+    id the context (or the binding) decides, and with neither this raises —
+    fail closed like tenant tables.
+    """
+    from contextlib import nullcontext
+
+    if tenant_id is None:
+        return session_tenant_id(session), nullcontext()
+    tenant_id = int(tenant_id)
+    ctx = _current.get()
+    if ctx is not None:
+        if not ctx.system and ctx.tenant_id != tenant_id:
+            raise TenantContextError(
+                f"tenant {tenant_id} requested in the context of tenant {ctx.tenant_id}"
+            )
+        return tenant_id, nullcontext()
+    bound = session.info.get(SESSION_TENANT_KEY)
+    if bound is not None and bound != tenant_id:
+        raise TenantContextError(
+            f"tenant {tenant_id} requested on a session bound to tenant {bound}"
+        )
+    return tenant_id, tenant_scope(tenant_id)
+
+
 def in_system_scope() -> bool:
     ctx = _current.get()
     return ctx is not None and ctx.system

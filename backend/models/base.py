@@ -67,14 +67,24 @@ _KDF_SALT = hashlib.sha256(("nodeglow-kdf-salt:" + SECRET_KEY).encode()).digest(
 
 
 @functools.lru_cache(maxsize=1)
-def _fernet() -> Fernet:
-    # 480k PBKDF2 rounds take ~50 ms. SECRET_KEY and the salt are fixed for the
-    # life of the process, so the key is derived once instead of on every
-    # encrypt/decrypt (the dashboard alone decrypted once per Proxmox cluster
-    # per request).
+def installation_key_material() -> bytes:
+    """The stretched SECRET_KEY: 32 bytes of PBKDF2 output.
+
+    480k PBKDF2 rounds take ~50 ms. SECRET_KEY and the salt are fixed for the
+    life of the process, so this runs once instead of on every
+    encrypt/decrypt (the dashboard alone decrypted once per Proxmox cluster
+    per request). Two keys come from it: the installation Fernet key
+    (:func:`_fernet`, installation secrets and every value written before
+    per-tenant keys) and, via HKDF with its own label, the key-encryption key
+    that wraps the tenant data keys (``services.tenant_keys``).
+    """
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=_KDF_SALT, iterations=480_000)
-    key = kdf.derive(SECRET_KEY.encode())
-    return Fernet(base64.urlsafe_b64encode(key))
+    return kdf.derive(SECRET_KEY.encode())
+
+
+@functools.lru_cache(maxsize=1)
+def _fernet() -> Fernet:
+    return Fernet(base64.urlsafe_b64encode(installation_key_material()))
 
 
 def _fernet_legacy() -> Fernet:

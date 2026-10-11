@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import encrypt_value, get_db, get_setting, set_setting
+from database import get_db, get_setting, set_setting
 from models.integration import IntegrationConfig
 from notification_channels import DAILY_SUMMARY_DEFAULT_CHANNELS
 from ratelimit import rate_limit
@@ -348,7 +348,8 @@ async def save_phpipam(
     await set_setting(db, "phpipam_verify_ssl", "1" if phpipam_verify_ssl == "on" else "0")
 
     if phpipam_password.strip():
-        await set_setting(db, "phpipam_password", encrypt_value(phpipam_password.strip()))
+        from services.tenant_keys import encrypt_secret
+        await set_setting(db, "phpipam_password", await encrypt_secret(db, phpipam_password.strip()))
 
     try:
         sync_h = max(0, min(168, int(phpipam_sync_hours)))
@@ -386,7 +387,7 @@ async def run_phpipam_sync():
             select(IntegrationConfig).where(IntegrationConfig.type == "phpipam")
         )).scalars().all()
         for cfg in cfgs:
-            config_dict = _int_svc.decrypt_config(cfg.config_json)
+            config_dict = await _int_svc.decrypt_config(_db, cfg)
             await sync_phpipam_hosts(_db, config_dict)
 
 
@@ -403,7 +404,7 @@ async def manual_phpipam_sync(request: Request, db: AsyncSession = Depends(get_d
     )).scalars().all()
     results = []
     for cfg in cfgs:
-        config_dict = _int_svc.decrypt_config(cfg.config_json)
+        config_dict = await _int_svc.decrypt_config(db, cfg)
         result = await sync_phpipam_hosts(db, config_dict)
         results.append(result)
     return JSONResponse(results[0] if len(results) == 1 else {"synced": results})

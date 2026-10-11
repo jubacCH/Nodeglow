@@ -85,7 +85,7 @@ async def api_create_credential(request: Request, db: AsyncSession = Depends(get
     cred = Credential(
         name=name,
         type=cred_type,
-        data_json=encrypt_credential(data),
+        data_json=await encrypt_credential(db, data),
     )
     db.add(cred)
     await db.commit()
@@ -109,14 +109,14 @@ async def api_update_credential(cred_id: int, request: Request,
         cred.name = body["name"]
 
     # Update credential data – only overwrite non-empty fields
-    existing_data = decrypt_credential(cred.data_json)
+    existing_data = await decrypt_credential(db, cred)
     type_def = CREDENTIAL_TYPES.get(cred.type, {})
     for field in type_def.get("fields", []):
         new_val = body.get(field["name"])
         if new_val is not None and new_val != "":
             existing_data[field["name"]] = new_val
 
-    cred.data_json = encrypt_credential(existing_data)
+    cred.data_json = await encrypt_credential(db, existing_data, tenant_id=cred.tenant_id)
     await db.commit()
 
     return JSONResponse({"ok": True})
