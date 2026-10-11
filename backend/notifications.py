@@ -260,18 +260,20 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         logger.debug("Notification rate-limited: %s", title)
         return
 
-    from database import AsyncSessionLocal, decrypt_value, get_setting
+    from database import AsyncSessionLocal, get_setting
     async with AsyncSessionLocal() as db:
         enabled = await get_setting(db, "notify_enabled", "0")
         if enabled != "1":
             return
 
-        from services.channel_secrets import reveal  # stored via encrypt_value
-        tg_token    = reveal(await get_setting(db, "telegram_bot_token", ""))
+        # The channel secrets are under the tenant's data key.
+        from services.tenant_keys import tenant_cipher
+        cipher = await tenant_cipher(db, tenant_id)
+        tg_token    = cipher.reveal(await get_setting(db, "telegram_bot_token", ""))
         tg_chat     = await get_setting(db, "telegram_chat_id", "")
-        dc_webhook  = reveal(await get_setting(db, "discord_webhook_url", ""))
-        wh_url      = reveal(await get_setting(db, "webhook_url", ""))
-        wh_secret   = reveal(await get_setting(db, "webhook_secret", ""))
+        dc_webhook  = cipher.reveal(await get_setting(db, "discord_webhook_url", ""))
+        wh_url      = cipher.reveal(await get_setting(db, "webhook_url", ""))
+        wh_secret   = cipher.reveal(await get_setting(db, "webhook_secret", ""))
         smtp_host   = await get_setting(db, "smtp_host", "")
         smtp_port   = await get_setting(db, "smtp_port", "587")
         smtp_user   = await get_setting(db, "smtp_user", "")
@@ -286,7 +288,7 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         min_sev_email    = await get_setting(db, "notify_email_min_severity", "all")
 
         from notification_channels import load_config as _load_extra_channels
-        extra_cfg = await _load_extra_channels(db, get_setting, decrypt_value)
+        extra_cfg = await _load_extra_channels(db, get_setting, cipher.decrypt)
 
     channels_list = []  # (name, coroutine) pairs
     color = {"critical": 0xe74c3c, "warning": 0xf39c12, "info": 0x2ecc71}.get(severity, 0x2ecc71)
@@ -299,10 +301,10 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
     if wh_url and _severity_passes(severity, min_sev_webhook):
         channels_list.append(("webhook", _send_webhook(wh_url, wh_secret, title, message, severity)))
     if smtp_host and smtp_user and smtp_pw_enc and smtp_to and _severity_passes(severity, min_sev_email):
-        try:
-            smtp_pw = decrypt_value(smtp_pw_enc)
-        except Exception:
-            smtp_pw = smtp_pw_enc
+        # A value under the installation key (the installation SMTP relay
+        # this tenant falls back to, or a row from before revision 046)
+        # decrypts as well; plaintext passes through as before.
+        smtp_pw = cipher.reveal(smtp_pw_enc)
         html_body = _build_html_email(title, message, severity)
         channels_list.append(("email", _send_email(
             smtp_host, int(smtp_port), smtp_user, smtp_pw,

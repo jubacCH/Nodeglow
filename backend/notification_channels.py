@@ -290,12 +290,16 @@ class ExtraChannelConfig:
 
 
 def reveal(value: str, decrypt: Callable[[str], str]) -> str:
-    """Decrypt a value stored via encrypt_value; tolerate legacy plaintext."""
+    """Decrypt a stored secret; tolerate legacy plaintext. ``decrypt`` is the
+    tenant cipher's (``services.tenant_keys``): a value under the tenant's
+    data key that does not decrypt raises — it is never used as plaintext."""
     if not value:
         return ""
     try:
         return decrypt(value)
     except Exception:
+        if value.startswith("v2:"):
+            raise
         return value
 
 

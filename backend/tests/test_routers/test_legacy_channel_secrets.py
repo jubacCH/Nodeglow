@@ -3,7 +3,7 @@ blank keeps, *_clear removes; the daily summary defaults include Teams/Slack/ntf
 from unittest.mock import AsyncMock, patch
 
 import notification_channels as nc
-from database import Setting, decrypt_value, encrypt_value
+from database import Setting, encrypt_value
 from tests.test_routers.conftest import make_client
 
 JSON = {"accept": "application/json"}
@@ -22,6 +22,13 @@ async def _raw(sf, key):
         return row.value if row else None
 
 
+async def _open(sf, raw, tenant_id=1):
+    """A stored secret decrypted with the tenant's data key."""
+    from services import tenant_keys
+    async with sf() as db:
+        return await tenant_keys.decrypt_secret(db, raw, tenant_id=tenant_id)
+
+
 async def _set(sf, **values):
     from tests.conftest import put_settings
     async with sf() as db:
@@ -35,7 +42,7 @@ async def test_save_encrypts_and_json_never_returns_the_values():
         assert r.status_code == 200, r.text
         for key, value in SECRETS.items():
             raw = await _raw(sf, key)
-            assert raw != value and decrypt_value(raw) == value
+            assert raw != value and raw.startswith("v2:") and await _open(sf, raw) == value
 
         resp = await client.get("/settings/json")
         body = resp.json()

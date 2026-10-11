@@ -54,7 +54,7 @@ async def _make_cfg(db, name: str, cluster_group: str | None = None) -> Integrat
     cfg = IntegrationConfig(
         type="proxmox",
         name=name,
-        config_json=encrypt_config({"host": "https://x", "token_id": "t", "token_secret": "s"}),
+        config_json=await encrypt_config(db, {"host": "https://x", "token_id": "t", "token_secret": "s"}),
         enabled=True,
         cluster_group=cluster_group,
     )

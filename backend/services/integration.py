@@ -10,20 +10,26 @@ from typing import Any
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.base import encrypt_value, decrypt_value
 from models.integration import IntegrationConfig, Snapshot
 
 
 # ── Config CRUD ──────────────────────────────────────────────────────────────
 
-def encrypt_config(config_dict: dict[str, Any]) -> str:
-    """Serialize config dict to encrypted JSON string."""
-    return encrypt_value(json.dumps(config_dict))
+async def encrypt_config(db: AsyncSession, config_dict: dict[str, Any], *,
+                         tenant_id: int | None = None) -> str:
+    """Config dict as JSON under the tenant's data key (default: the
+    session's tenant; ``services.tenant_keys``)."""
+    from services import tenant_keys
+
+    return await tenant_keys.encrypt_secret(db, json.dumps(config_dict), tenant_id=tenant_id)
 
 
-def decrypt_config(encrypted_json: str) -> dict[str, Any]:
-    """Decrypt JSON string back to config dict."""
-    return json.loads(decrypt_value(encrypted_json))
+async def decrypt_config(db: AsyncSession, cfg: IntegrationConfig) -> dict[str, Any]:
+    """The config dict of an integration row, decrypted with its tenant's key
+    (a value from before revision 046 with the installation key)."""
+    from services import tenant_keys
+
+    return json.loads(await tenant_keys.decrypt_secret(db, cfg.config_json, tenant_id=cfg.tenant_id))
 
 
 async def get_configs(db: AsyncSession, integration_type: str) -> list[IntegrationConfig]:
@@ -71,7 +77,7 @@ async def create_config(
     cfg = IntegrationConfig(
         type=integration_type,
         name=name,
-        config_json=encrypt_config(config_dict),
+        config_json=await encrypt_config(db, config_dict),
         cluster_group=cluster_group or None,
     )
     db.add(cfg)
@@ -98,7 +104,7 @@ async def update_config(
     if name is not None:
         cfg.name = name
     if config_dict is not None:
-        cfg.config_json = encrypt_config(config_dict)
+        cfg.config_json = await encrypt_config(db, config_dict, tenant_id=cfg.tenant_id)
     if not isinstance(cluster_group, _Unset):
         cfg.cluster_group = cluster_group or None
     try:

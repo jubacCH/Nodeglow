@@ -1,7 +1,12 @@
 """Tests for the notification service."""
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 import notifications
+
+# The database session is mocked: no tenant keys (services.tenant_keys).
+pytestmark = pytest.mark.usefixtures("keyless_tenant_cipher")
 
 
 def _clear_rate_limit():
