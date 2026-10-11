@@ -72,11 +72,13 @@ async def extract_agent_bandwidth(
     body: dict,
     timestamp: datetime | None = None,
     *,
+    tenant_id: int,
     source_name: str = "",
 ) -> int:
     """Extract bandwidth samples from an agent heartbeat payload.
 
-    Returns the number of samples written to ClickHouse.
+    Returns the number of samples written to ClickHouse. ``tenant_id`` is the
+    agent's tenant; every row carries it.
     """
     if not body:
         return 0
@@ -111,6 +113,8 @@ async def extract_agent_bandwidth(
         })
 
     if rows:
+        for row in rows:
+            row["tenant_id"] = tenant_id
         try:
             await ch.insert_bandwidth_metrics(rows)
         except Exception as exc:
@@ -126,6 +130,7 @@ async def extract_proxmox_bandwidth(
     snapshot_data_json: str | dict | None,
     timestamp: datetime | None = None,
     *,
+    tenant_id: int,
     source_name: str = "",
 ) -> int:
     """Extract bandwidth samples from a Proxmox integration snapshot."""
@@ -192,6 +197,8 @@ async def extract_proxmox_bandwidth(
             })
 
     if rows:
+        for row in rows:
+            row["tenant_id"] = tenant_id
         try:
             await ch.insert_bandwidth_metrics(rows)
         except Exception as exc:
@@ -207,6 +214,7 @@ async def extract_unifi_bandwidth(
     snapshot_data_json: str | dict | None,
     timestamp: datetime | None = None,
     *,
+    tenant_id: int,
     source_name: str = "",
 ) -> int:
     """Extract bandwidth samples from a UniFi integration snapshot.
@@ -267,6 +275,8 @@ async def extract_unifi_bandwidth(
             })
 
     if rows:
+        for row in rows:
+            row["tenant_id"] = tenant_id
         try:
             await ch.insert_bandwidth_metrics(rows)
         except Exception as exc:
