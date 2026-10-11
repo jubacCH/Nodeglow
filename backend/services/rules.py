@@ -223,7 +223,7 @@ async def _evaluate_syslog_rule(rule: AlertRule, now: datetime) -> int:
         params = {"t": window, "pat": rule.threshold or ""}
 
     count = int(await ch_scalar(
-        f"SELECT count() FROM syslog_messages WHERE timestamp >= {{t:DateTime64(3)}} AND {condition}",
+        f"SELECT count() FROM syslog_messages WHERE tenant_id = {{nodeglow_tenant:UInt32}} AND timestamp >= {{t:DateTime64(3)}} AND {condition}",
         params,
     ) or 0)
     return count

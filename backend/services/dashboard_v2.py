@@ -662,7 +662,7 @@ async def section_latency(base: Base) -> dict | None:
                countIf(success = 1) AS ok,
                countIf(success = 0) AS failed
         FROM ping_checks
-        WHERE host_id IN ({hids:Array(UInt32)}) AND timestamp >= {since:DateTime64(3)}
+        WHERE tenant_id = {nodeglow_tenant:UInt32} AND host_id IN ({hids:Array(UInt32)}) AND timestamp >= {since:DateTime64(3)}
         GROUP BY minute ORDER BY minute
         """,
         {"hids": host_ids, "since": since},
@@ -707,7 +707,7 @@ async def section_syslog(db, base: Base) -> dict:
                    count() AS cnt,
                    countIf(severity <= 3) AS errors
             FROM syslog_messages
-            WHERE {where}
+            WHERE {ch.TENANT_FILTER} AND {where}
             GROUP BY bucket ORDER BY bucket
             """,
             params,
@@ -720,7 +720,8 @@ async def section_syslog(db, base: Base) -> dict:
     errors = sum(b["errors"] for b in buckets)
     recent_where, recent_params = ch.received_since_clause(base.now - timedelta(minutes=15), "recent")
     current = int(await ch.query_scalar(
-        f"SELECT count() FROM syslog_messages WHERE {recent_where}", recent_params) or 0)
+        f"SELECT count() FROM syslog_messages WHERE {ch.TENANT_FILTER} AND {recent_where}",
+        recent_params) or 0)
 
     usual = None
     try:
@@ -779,7 +780,7 @@ async def section_availability(db, base: Base) -> dict:
             """
             SELECT count() AS total, countIf(success = 1) AS ok, uniqExact(host_id) AS hosts
             FROM ping_checks
-            WHERE host_id IN ({hids:Array(UInt32)})
+            WHERE tenant_id = {nodeglow_tenant:UInt32} AND host_id IN ({hids:Array(UInt32)})
               AND timestamp >= now() - toIntervalDay({d:UInt32})
             """,
             {"hids": host_ids, "d": AVAILABILITY_DAYS},
