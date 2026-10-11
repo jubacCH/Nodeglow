@@ -247,6 +247,9 @@ async def test_ensure_schemas_provisions_only_when_configured(monkeypatch):
         async def command(self, ddl, parameters=None):
             issued.append(" ".join(ddl.split()))
 
+        async def query(self, sql, parameters=None, settings=None):
+            return _Result()
+
     monkeypatch.setattr(ch, "_schemas_applied", False)
     monkeypatch.setattr(ch, "CLICKHOUSE_TENANT_URL", "")
     await ch._ensure_schemas(Client())
@@ -263,6 +266,127 @@ async def test_ensure_schemas_provisions_only_when_configured(monkeypatch):
     monkeypatch.setattr(ch, "PROVISION_TENANT_USER", True)
     await ch._ensure_schemas(Client())
     assert any("ROW POLICY" in s for s in issued)
+
+
+async def test_a_failed_step_a_fails_the_connect_and_is_applied_again(monkeypatch):
+    failing = {ch._STEP_A_ALTERS[0]}
+    issued: list[str] = []
+
+    class Client:
+        async def command(self, ddl, parameters=None):
+            issued.append(ddl)
+            if ddl in failing:
+                raise ConnectionError("server busy")
+
+    monkeypatch.setattr(ch, "_schemas_applied", False)
+    monkeypatch.setattr(ch, "CLICKHOUSE_TENANT_URL", "")
+    with pytest.raises(RuntimeError, match="schema incomplete"):
+        await ch._ensure_schemas(Client())
+    assert ch._schemas_applied is False
+    failing.clear()
+    await ch._ensure_schemas(Client())
+    assert ch._schemas_applied is True
+    assert issued.count(ch._STEP_A_ALTERS[0]) == 2
+
+
+async def test_get_client_publishes_the_client_only_with_the_schema(monkeypatch):
+    attempts: list[int] = []
+
+    async def fake_connect(dsn, **kw):
+        return object()
+
+    async def fake_ensure(client):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("ClickHouse schema incomplete")
+
+    async def no_sleep(_):
+        return None
+    monkeypatch.setattr(ch, "_client", None)
+    monkeypatch.setattr(ch, "connect", fake_connect)
+    monkeypatch.setattr(ch, "_ensure_schemas", fake_ensure)
+    monkeypatch.setattr(ch.asyncio, "sleep", no_sleep)
+    client = await ch.get_client()
+    assert client is ch._client and len(attempts) == 2
+
+
+def test_optional_alters_stay_best_effort():
+    # Only CREATE TABLE and step A are required; the older optional columns
+    # and settings keep their warn-and-continue behaviour.
+    assert set(ch._STEP_A_ALTERS) < set(ch._PHASE3_ALTERS)
+    assert "ALTER TABLE syslog_messages MODIFY SETTING ttl_only_drop_parts = 0" not in ch._STEP_A_ALTERS
+
+
+class _RestrictedClient:
+    def __init__(self, policy_in_force=True):
+        self.policy_in_force = policy_in_force
+        self.closed = False
+
+    async def query(self, sql, parameters=None, settings=None):
+        if self.policy_in_force and not (settings or {}).get(ch.ROW_POLICY_SETTING):
+            raise RuntimeError("Unknown setting SQL_nodeglow_tenant")
+        return _Result()
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def tenant_url(monkeypatch, main_client):
+    monkeypatch.setattr(ch, "CLICKHOUSE_URL", "http://nodeglow:pw@clickhouse:8123/nodeglow")
+    monkeypatch.setattr(ch, "CLICKHOUSE_TENANT_URL", "http://nodeglow_app:pw@clickhouse:8123")
+    monkeypatch.setattr(ch, "_tenant_client", None)
+    monkeypatch.setattr(ch, "_tenant_client_error", None)
+    return monkeypatch
+
+
+async def test_restricted_client_is_verified_and_gets_the_main_database(tenant_url):
+    seen = {}
+    restricted = _RestrictedClient()
+
+    async def fake_connect(dsn, **kw):
+        seen.update(kw, dsn=dsn)
+        return restricted
+    tenant_url.setattr(ch, "connect", fake_connect)
+    assert await ch.get_tenant_client() is restricted
+    # The tenant DSN has no database: the main DSN's applies.
+    assert seen["database"] == "nodeglow"
+
+
+async def test_tenant_reads_fail_closed_without_the_row_policy(tenant_url):
+    restricted = _RestrictedClient(policy_in_force=False)
+
+    async def fake_connect(dsn, **kw):
+        return restricted
+    tenant_url.setattr(ch, "connect", fake_connect)
+    with tenant_scope(A):
+        with pytest.raises(ch.TenantIsolationError, match="row policy missing"):
+            await ch.get_ping_history(1)
+        # Remembered for a minute, without reconnecting on every read.
+        with pytest.raises(ch.TenantIsolationError):
+            await ch.get_ping_history(1)
+    assert restricted.closed and ch._tenant_client is None
+
+
+async def test_tenant_dsn_naming_the_main_user_is_refused(tenant_url):
+    tenant_url.setattr(ch, "CLICKHOUSE_TENANT_URL", "http://nodeglow:pw@clickhouse:8123/nodeglow")
+    with pytest.raises(ch.TenantIsolationError, match="same user"):
+        await ch.get_tenant_client()
+
+
+async def test_provisioning_revokes_a_renamed_users_grants():
+    class Client(FakeClient):
+        async def query(self, sql, parameters=None, settings=None):
+            return _Result([("nodeglow_app",), ("nodeglow_ro",)], ("u",))
+
+    client = Client()
+    await ch.provision_tenant_user(client, "http://nodeglow_ro:pw@clickhouse:8123/nodeglow")
+    cmds = [c for c, _ in client.commands]
+    revokes = [c for c in cmds if c.startswith("REVOKE")]
+    assert revokes and all("`nodeglow_app`" in c for c in revokes)
+    assert "REVOKE SELECT ON `nodeglow`.`ping_checks` FROM `nodeglow_app`" in revokes
+    assert cmds.index(revokes[-1]) < next(i for i, c in enumerate(cmds) if "ROW POLICY" in c)
+    assert any("DEFAULT DATABASE `nodeglow`" in c for c in cmds if c.startswith("CREATE USER"))
 
 
 def test_allow_custom_setting_registers_for_the_0_8_client():

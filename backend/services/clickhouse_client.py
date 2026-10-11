@@ -308,11 +308,15 @@ _PHASE3_ALTERS = [
     # single whole-row expression on daily partitions, where dropping whole
     # parts is exact to the day and free.
     "ALTER TABLE syslog_messages MODIFY SETTING ttl_only_drop_parts = 0",
-    # Multi-tenancy step A (phase 6): tenant_id on every table, existing rows
-    # read as tenant 1. The sort-key prefix is the step-B rebuild
-    # (services/clickhouse_rebuild.py), which runs in the background.
-    *[stmt for table in TENANT_TABLES for stmt in tenant_column_alters(table)],
+    # Multi-tenancy step A (phase 6), see _STEP_A_ALTERS.
 ]
+
+# Multi-tenancy step A (phase 6): tenant_id on every table, existing rows read
+# as tenant 1. The sort-key prefix is the step-B rebuild
+# (services/clickhouse_rebuild.py), which runs in the background. Unlike the
+# optional columns above these are required: every insert names tenant_id.
+_STEP_A_ALTERS = [stmt for table in TENANT_TABLES for stmt in tenant_column_alters(table)]
+_PHASE3_ALTERS += _STEP_A_ALTERS
 
 _schemas_applied = False
 
@@ -337,6 +341,10 @@ _client = None
 _client_lock = asyncio.Lock()
 _tenant_client = None
 _tenant_client_lock = asyncio.Lock()
+# When the restricted connection failed its check: (monotonic time, reason).
+# Tenant reads fail closed until a retry (after _TENANT_RETRY_SECONDS) passes.
+_tenant_client_error: tuple[float, str] | None = None
+_TENANT_RETRY_SECONDS = 60.0
 
 
 def _redact_dsn(dsn: str) -> str:
@@ -348,9 +356,13 @@ def _redact_dsn(dsn: str) -> str:
     return parts._replace(netloc=netloc).geturl()
 
 
-async def connect(dsn: str, *, send_receive_timeout: int = 30):
-    """A new async client for ``dsn`` with the application's defaults."""
+async def connect(dsn: str, *, send_receive_timeout: int = 30, database: str | None = None):
+    """A new async client for ``dsn`` with the application's defaults.
+
+    ``database`` applies when the DSN names none (its path wins otherwise).
+    """
     import clickhouse_connect
+    kwargs = {"database": database} if database and not dsn_credentials(dsn)[2] else {}
     return await clickhouse_connect.get_async_client(
         dsn=dsn,
         # lz4 ships with clickhouse-connect; cheap on CPU, and it
@@ -359,6 +371,7 @@ async def connect(dsn: str, *, send_receive_timeout: int = 30):
         query_limit=0,
         connect_timeout=10,
         send_receive_timeout=send_receive_timeout,
+        **kwargs,
     )
 
 
@@ -376,9 +389,14 @@ async def get_client():
             return _client
         for attempt in range(1, 6):
             try:
-                _client = await connect(CLICKHOUSE_URL)
+                client = await connect(CLICKHOUSE_URL)
                 log.info("ClickHouse connected: %s", _redact_dsn(CLICKHOUSE_URL))
-                await _ensure_schemas(_client)
+                # Published only once the schema is in place: a failed step A
+                # fails this attempt, and the next attempt (or the next call)
+                # applies it again instead of every insert failing for the
+                # rest of the process.
+                await _ensure_schemas(client)
+                _client = client
                 return _client
             except Exception as e:
                 log.warning("ClickHouse connect attempt %d failed: %s", attempt, e)
@@ -412,21 +430,82 @@ def allow_custom_setting(client, name: str) -> None:
         log.debug("Could not register custom ClickHouse setting %s", name, exc_info=True)
 
 
+class TenantIsolationError(RuntimeError):
+    """The restricted tenant user is configured but its row policies are not
+    in force; tenant reads are refused rather than run without them."""
+
+
+def tenant_database() -> str | None:
+    """The database of the restricted user: its DSN's, else CLICKHOUSE_URL's."""
+    return dsn_credentials(CLICKHOUSE_TENANT_URL)[2] or dsn_credentials(CLICKHOUSE_URL)[2]
+
+
+async def verify_restricted(client) -> None:
+    """The restricted connection must be confined by the row policy on every
+    tenant table: a read without ``SQL_nodeglow_tenant`` fails, a read with
+    it succeeds. Raises :class:`TenantIsolationError` otherwise."""
+    for table in TENANT_TABLES:
+        sql = f"SELECT tenant_id FROM {table} LIMIT 0"
+        try:
+            await client.query(sql)
+        except Exception:
+            pass
+        else:
+            raise TenantIsolationError(
+                f"{table}: the restricted user reads without {ROW_POLICY_SETTING} "
+                "(row policy missing)"
+            )
+        try:
+            await client.query(sql, settings={ROW_POLICY_SETTING: "0"})
+        except Exception as exc:
+            raise TenantIsolationError(f"{table}: the restricted user cannot read ({exc})") from exc
+
+
 async def get_tenant_client():
     """The client for tenant-scoped reads: the restricted user of
-    ``CLICKHOUSE_TENANT_URL`` (row policies), else the main client."""
-    global _tenant_client
+    ``CLICKHOUSE_TENANT_URL`` (row policies), else the main client.
+
+    The restricted connection is checked once (:func:`verify_restricted`)
+    before it is used. If the check fails — provisioning failed or was partial,
+    the DSN names the main user, a policy was dropped — tenant reads fail
+    closed with :class:`TenantIsolationError` and an error in the log; the
+    check is retried every minute.
+    """
+    global _tenant_client, _tenant_client_error
     if not CLICKHOUSE_TENANT_URL:
         return await get_client()
     if _tenant_client is not None:
         return _tenant_client
     await get_client()  # schemas and the user's provisioning come first
     async with _tenant_client_lock:
-        if _tenant_client is None:
-            client = await connect(CLICKHOUSE_TENANT_URL)
+        if _tenant_client is not None:
+            return _tenant_client
+        now = asyncio.get_running_loop().time()
+        if _tenant_client_error and now - _tenant_client_error[0] < _TENANT_RETRY_SECONDS:
+            raise TenantIsolationError(_tenant_client_error[1])
+        client = None
+        try:
+            if dsn_credentials(CLICKHOUSE_TENANT_URL)[0] == dsn_credentials(CLICKHOUSE_URL)[0]:
+                raise TenantIsolationError(
+                    "CLICKHOUSE_TENANT_URL names the same user as CLICKHOUSE_URL"
+                )
+            client = await connect(CLICKHOUSE_TENANT_URL, database=tenant_database())
             allow_custom_setting(client, ROW_POLICY_SETTING)
-            _tenant_client = client
-            log.info("ClickHouse tenant connection: %s", _redact_dsn(CLICKHOUSE_TENANT_URL))
+            await verify_restricted(client)
+        except Exception as exc:
+            reason = f"ClickHouse tenant isolation not in place, tenant reads refused: {exc}"
+            _tenant_client_error = (now, reason)
+            log.error(reason)
+            if client is not None:
+                try:
+                    closed = client.close()
+                    if asyncio.iscoroutine(closed):
+                        await closed
+                except Exception:
+                    pass
+            raise TenantIsolationError(reason) from exc
+        _tenant_client, _tenant_client_error = client, None
+        log.info("ClickHouse tenant connection: %s", _redact_dsn(CLICKHOUSE_TENANT_URL))
     return _tenant_client
 
 
@@ -458,12 +537,15 @@ def row_policy_statements(user: str, password: str | None, database: str,
     u = _quote_ident(user)
     db = _quote_ident(database)
     stmts: list[str] = []
+    # DEFAULT DATABASE: the helpers name tables unqualified.
     if password is not None:
         pw = _quote_str(password)
-        stmts.append(f"CREATE USER IF NOT EXISTS {u} IDENTIFIED WITH sha256_password BY {pw}")
-        stmts.append(f"ALTER USER {u} IDENTIFIED WITH sha256_password BY {pw}")
+        stmts.append(f"CREATE USER IF NOT EXISTS {u} IDENTIFIED WITH sha256_password BY {pw} "
+                     f"DEFAULT DATABASE {db}")
+        stmts.append(f"ALTER USER {u} IDENTIFIED WITH sha256_password BY {pw} DEFAULT DATABASE {db}")
     else:
-        stmts.append(f"CREATE USER IF NOT EXISTS {u}")
+        stmts.append(f"CREATE USER IF NOT EXISTS {u} DEFAULT DATABASE {db}")
+        stmts.append(f"ALTER USER {u} DEFAULT DATABASE {db}")
     stmts.append(f"GRANT SELECT ON system.settings TO {u}")
     for table in tables:
         t = _quote_ident(table)
@@ -489,31 +571,69 @@ def dsn_credentials(dsn: str) -> tuple[str, str | None, str | None]:
     return user, password, database
 
 
-async def provision_tenant_user(client, tenant_dsn: str) -> None:
-    """Create/refresh the restricted user of ``tenant_dsn`` and its policies."""
-    user, password, database = dsn_credentials(tenant_dsn)
-    if database is None:
-        database = str(await client.command("SELECT currentDatabase()"))
+def revoke_statements(user: str, database: str,
+                      tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
+    """Take a previously provisioned tenant user's grants away."""
+    u, db = _quote_ident(user), _quote_ident(database)
+    return [f"REVOKE SELECT ON {db}.{_quote_ident(t)} FROM {u}" for t in tables] + [
+        f"REVOKE SELECT ON system.settings FROM {u}"]
+
+
+async def provision_tenant_user(client, tenant_dsn: str, database: str | None = None) -> None:
+    """Create/refresh the restricted user of ``tenant_dsn`` and its policies.
+
+    A user the policies were provisioned for before (the DSN's user was
+    renamed) loses its grants first: re-targeting the policies would otherwise
+    put it under ``nodeglow_unrestricted``, reading every tenant's rows.
+    """
+    user, password, dsn_db = dsn_credentials(tenant_dsn)
+    database = dsn_db or database or str(await client.command("SELECT currentDatabase()"))
+    result = await client.query(
+        "SELECT DISTINCT arrayJoin(apply_to_list) AS u FROM system.row_policies "
+        "WHERE short_name = {p:String} AND database = {db:String}",
+        parameters={"p": ROW_POLICY_NAME, "db": database},
+    )
+    for (previous,) in result.result_rows:
+        if previous != user:
+            for stmt in revoke_statements(previous, database):
+                try:
+                    await client.command(stmt)
+                except Exception:
+                    log.debug("%s failed", stmt, exc_info=True)
+            log.warning("ClickHouse: revoked the tenant-table grants of %s, the previous "
+                        "restricted user (now %s)", previous, user)
     for stmt in row_policy_statements(user, password, database):
         await client.command(stmt)
     log.info("ClickHouse row policies provisioned for %s on %s", user, database)
 
 
 async def _ensure_schemas(client) -> None:
-    """Apply Phase 2 CREATE TABLE + Phase 3 ALTERs once per process."""
+    """Apply Phase 2 CREATE TABLE + Phase 3 ALTERs once per process.
+
+    Raises when a CREATE TABLE or a step-A ALTER failed (every insert names
+    tenant_id, so without it every insert would fail): the connect attempt
+    fails and is retried, and the schema is applied again. The other ALTERs
+    are best effort, as before.
+    """
     global _schemas_applied
     if _schemas_applied:
         return
+    required_failed: list[str] = []
     for ddl in _PHASE2_SCHEMAS:
         try:
             await client.command(ddl)
         except Exception as exc:
             log.warning("ClickHouse schema migration failed: %s", exc)
+            required_failed.append(" ".join(ddl.split())[:60])
     for ddl in _PHASE3_ALTERS:
         try:
             await client.command(ddl)
         except Exception as exc:
             log.warning("ClickHouse schema alter failed: %s", exc)
+            if ddl in _STEP_A_ALTERS:
+                required_failed.append(ddl)
+    if required_failed:
+        raise RuntimeError(f"ClickHouse schema incomplete: {'; '.join(required_failed)}")
     # The step-B rebuild stops (TTL) merges on a table for its cutover. Had the
     # process died in between, nothing else would start them again (the
     # blocker lives until the ClickHouse server restarts): the table would
@@ -526,8 +646,10 @@ async def _ensure_schemas(client) -> None:
                 log.debug("SYSTEM START %s %s failed", action, table, exc_info=True)
     if CLICKHOUSE_TENANT_URL and PROVISION_TENANT_USER:
         try:
-            await provision_tenant_user(client, CLICKHOUSE_TENANT_URL)
+            await provision_tenant_user(client, CLICKHOUSE_TENANT_URL, tenant_database())
         except Exception as exc:
+            # Not fatal for the main connection; get_tenant_client() verifies
+            # the policies and refuses tenant reads while they are missing.
             log.error("ClickHouse row-policy provisioning failed: %s", exc)
     _schemas_applied = True
 
@@ -1337,6 +1459,8 @@ async def query_chunked(
 # every DELETE is a mutation, an empty one is still work for the server.
 #
 # table -> (settings key, the table's TTL in days = the ceiling)
+_retention_capped_logged: set[tuple[str, int]] = set()
+
 RETENTION_RULES: dict[str, tuple[str, int]] = {
     "ping_checks": ("ping_retention_days", 30),
 }
@@ -1354,8 +1478,12 @@ async def enforce_retention(table: str, days: int) -> int:
     ctx = _require_context()
     if ctx.system:
         raise _tenancy.TenantContextError("enforce_retention() runs per tenant, not in system scope")
-    _, ceiling = RETENTION_RULES[table]
+    key, ceiling = RETENTION_RULES[table]
     days = int(days)
+    if days > ceiling and (table, ctx.tenant_id) not in _retention_capped_logged:
+        _retention_capped_logged.add((table, ctx.tenant_id))
+        log.info("Retention: %s=%d for tenant %s exceeds the %d-day TTL of %s; "
+                 "rows expire after %d days", key, days, ctx.tenant_id, ceiling, table, ceiling)
     if days <= 0 or days >= ceiling:
         return 0
     params: dict = {"d": days}
