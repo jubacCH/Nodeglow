@@ -33,6 +33,7 @@ from services import snapshot as snap_svc
 from services import maintenance as maint_svc
 from services import tenancy
 from services.audit import log_action
+from services.probe_syslog import relay_view
 from services.agent_services import (
     apply_watch_list_change,
     normalize_watch_list,
@@ -1083,6 +1084,7 @@ def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) ->
     out = {
         "is_probe": bool(agent.is_probe),
         "probe_interval_seconds": agent.probe_interval_seconds,
+        "syslog_relay": relay_view(agent),
     }
     if agent.is_probe:
         st = ProbeState(
@@ -1255,9 +1257,32 @@ async def patch_agent(
                 if not 10 <= value <= 3600:
                     raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null")
             updates["probe_interval_seconds"] = value
-        for field in ("is_probe", "probe_interval_seconds"):
-            if field in updates and getattr(agent, field) != updates[field]:
-                probe_changes[field] = {"from": getattr(agent, field), "to": updates[field]}
+    # Probe syslog relay: the probe listens for syslog of its whole site, so
+    # it is admin-only and audited like the probe role itself.
+    if "syslog_relay_enabled" in body or "syslog_relay_port" in body:
+        if _key.role != "admin":
+            raise HTTPException(403, "Admin role required to change the syslog relay.")
+        if "syslog_relay_enabled" in body:
+            if not isinstance(body["syslog_relay_enabled"], bool):
+                raise HTTPException(400, "syslog_relay_enabled must be true or false")
+            will_be_probe = updates.get("is_probe", bool(agent.is_probe))
+            if body["syslog_relay_enabled"] and not will_be_probe:
+                raise HTTPException(400, "the syslog relay needs a probe (is_probe)")
+            updates["syslog_relay_enabled"] = body["syslog_relay_enabled"]
+        if "syslog_relay_port" in body:
+            port = body["syslog_relay_port"]
+            if port is not None and (isinstance(port, bool) or not isinstance(port, int)
+                                     or not 1 <= port <= 65535):
+                raise HTTPException(400, "syslog_relay_port must be 1..65535 or null")
+            updates["syslog_relay_port"] = port
+    if updates.get("is_probe") is False:
+        # A plain agent never relays: switching the role off switches it off.
+        updates["syslog_relay_enabled"] = False
+
+    for field in ("is_probe", "probe_interval_seconds", "syslog_relay_enabled",
+                  "syslog_relay_port"):
+        if field in updates and getattr(agent, field) != updates[field]:
+            probe_changes[field] = {"from": getattr(agent, field), "to": updates[field]}
 
     if updates:
         await db.execute(update(Agent).where(Agent.id == agent_id).values(**updates))
@@ -1275,6 +1300,7 @@ async def patch_agent(
         "agent_log_level": agent.agent_log_level or "errors",
         "is_probe": bool(agent.is_probe),
         "probe_interval_seconds": agent.probe_interval_seconds,
+        "syslog_relay": relay_view(agent),
     }
 
 
