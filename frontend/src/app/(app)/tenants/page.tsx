@@ -16,10 +16,11 @@ import { StatusPill } from '@/components/ui/StatusPill';
 import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '@/components/ui/Table';
 import { Tag } from '@/components/ui/Tag';
 import { useConfirm } from '@/hooks/useConfirm';
-import { apiErrorMessage, get, patch, post } from '@/lib/api';
+import { apiErrorBody, apiErrorMessage, get, patch, post } from '@/lib/api';
 import {
-  deletionConfirmed, formatDate, purgeDate, tenantStatusLabel, tenantStatusTone, usageLabel,
-  type TenantRow, type TenantsPayload,
+  deletionConfirmed, formatDate, planFromSelect, purgeDate, retentionLoweringLines,
+  tenantStatusLabel, tenantStatusTone, usageLabel,
+  type RetentionLowering, type TenantRow, type TenantsPayload,
 } from '@/lib/tenants';
 import { useAuthStore, useIsOperator } from '@/stores/auth';
 import { useToastStore } from '@/stores/toast';
@@ -78,9 +79,29 @@ export default function TenantsPage() {
     if (ok) await act(t, 'suspend', `${t.name} suspended`);
   }
 
-  async function setPlan(t: TenantRow, plan: string) {
+  async function setPlan(t: TenantRow, value: string) {
+    const plan = planFromSelect(value);
     try {
-      await patch(`/api/tenants/${t.id}`, { plan });
+      try {
+        await patch(`/api/tenants/${t.id}`, { plan });
+      } catch (e) {
+        // A plan below the stored retention lowers it, and the nightly
+        // cleanup then deletes the older history for good: ask first.
+        const body = apiErrorBody(e);
+        if (body?.code !== 'retention_would_lower') throw e;
+        const lines = retentionLoweringLines((body.retention_lowered ?? {}) as RetentionLowering);
+        const ok = await confirm({
+          title: `Lower the retention of ${t.name}?`,
+          description: `${lines.join('; ')}. History older than that is deleted for good by the next nightly cleanup.`,
+          confirmLabel: 'Change plan and lower retention',
+          variant: 'danger',
+        });
+        if (!ok) {
+          await refresh(); // the select shows the unchanged plan again
+          return;
+        }
+        await patch(`/api/tenants/${t.id}`, { plan, confirm_retention_lowering: true });
+      }
       await refresh();
       toast(`Plan of ${t.name} changed`, 'success');
     } catch (e) {
@@ -167,10 +188,12 @@ export default function TenantsPage() {
                           aria-label={`Plan of ${t.name}`}
                           value={t.plan ?? ''}
                           onChange={(e) => setPlan(t, e.target.value)}
-                          disabled={!d.usage.licensed || t.status === 'deleting'}
+                          // The default tenant (the installation's own data) gets no plan.
+                          disabled={t.default || !d.usage.licensed || t.status === 'deleting'}
+                          title={t.default ? 'The default tenant has no plan: only the installation caps apply.' : undefined}
                           className="h-[30px] min-h-0 w-[190px] py-0 text-meta"
                         >
-                          {!t.plan && <option value="">No plan (installation caps)</option>}
+                          <option value="">No plan (installation caps)</option>
                           {d.plans.map((p) => (
                             <option key={p.key} value={p.key}>{p.name} · {p.retention_days} days</option>
                           ))}
