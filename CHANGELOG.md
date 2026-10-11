@@ -9,6 +9,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+## [2.0.0-rc.6] - 2026-10-11
+
 ### Changed
 - Release images are published for linux/amd64 only for now; the arm64
   frontend build under QEMU exceeded the 6 h job limit. arm64 will return with
@@ -141,7 +143,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   sidecar finds the database without a hard-coded container name.
 - Password hashing survives bcrypt 5's 72-byte limit.
 
-[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.5...HEAD
+[Unreleased]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.6...HEAD
+[2.0.0-rc.6]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.5...v2.0.0-rc.6
 [2.0.0-rc.5]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.4...v2.0.0-rc.5
 [2.0.0-rc.4]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.3...v2.0.0-rc.4
 [2.0.0-rc.3]: https://github.com/jubacCH/Nodeglow/compare/v2.0.0-rc.2...v2.0.0-rc.3
