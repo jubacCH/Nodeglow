@@ -14,9 +14,28 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
-from fastapi import APIRouter
+# This module and every integration's collect path run in two places: in the
+# backend and inside the probe's collector pack, which ships only the standard
+# library and httpx. Nothing backend-side may be imported at module level here
+# — tests/test_integration_boundary.py enforces it.
+if TYPE_CHECKING:
+    from fastapi import APIRouter
+
+# Where collect() has to run (BaseIntegration.network_scope).
+NETWORK_SCOPES = ("site", "cloud", "any")
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def backend_only(fn: _F) -> _F:
+    """Mark a module-level function as backend-only: it may import models,
+    services or sqlalchemy and never runs on a probe. ``on_snapshot`` is
+    backend-only by definition. Backend-only code opens no network
+    connections — in the SaaS it runs where the target is unreachable."""
+    fn.__backend_only__ = True  # type: ignore[attr-defined]
+    return fn
 
 
 @dataclass
@@ -73,6 +92,18 @@ class BaseIntegration(ABC):
     # An explicit poll_interval_seconds in the instance config still wins.
     default_interval_seconds: int = 60
 
+    # Where collect() has to run (probe-side integrations):
+    #   "site"  — only where the target is (speedtest: collected from the
+    #             SaaS it would measure the SaaS's own uplink);
+    #   "cloud" — a public SaaS API: the core collects it, never a probe;
+    #   "any"   — decided per config by the target address (default).
+    network_scope: str = "any"
+
+    # Set by the ingest path (services.integration_ingest) before on_snapshot
+    # runs, so a hook can address its own config row instead of decrypting
+    # and matching every config of its type.
+    config_id: Optional[int] = None
+
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize with decrypted config dict."""
         self.config = config or {}
@@ -109,7 +140,7 @@ class BaseIntegration(ABC):
         """Return extra template context for the detail page. Override if needed."""
         return {}
 
-    def get_router(self) -> APIRouter | None:
+    def get_router(self) -> "APIRouter | None":
         """Return custom APIRouter if this integration needs non-standard routes."""
         return None
 
@@ -117,5 +148,9 @@ class BaseIntegration(ABC):
         """
         Hook called after a successful snapshot is saved.
         Use for auto-import of hosts, etc.
+
+        Backend-only: works from ``data`` alone and opens no network
+        connection (enrichment that needs the target network belongs in
+        collect()).
         """
         pass

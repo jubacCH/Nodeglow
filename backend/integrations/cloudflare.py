@@ -213,6 +213,8 @@ class CloudflareAPI:
 
 class CloudflareIntegration(BaseIntegration):
     name = "cloudflare"
+    # A public SaaS API: the core collects it everywhere, never a probe.
+    network_scope = "cloud"
     display_name = "Cloudflare"
     icon = "cloudflare"
     color = "orange"

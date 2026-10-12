@@ -107,12 +107,47 @@ async def update_config(
         cfg.config_json = await encrypt_config(db, config_dict, tenant_id=cfg.tenant_id)
     if not isinstance(cluster_group, _Unset):
         cfg.cluster_group = cluster_group or None
+    # Every change gets a new revision: a collect started before it (core or
+    # probe) is dropped at ingest instead of overwriting the new config's
+    # state with data from the old address or credentials.
+    bump_config_rev(cfg)
     try:
         await db.commit()
     except Exception:
         # Roll back so the session is left in a clean state for reuse/pooling.
         await db.rollback()
         raise
+    return cfg
+
+
+def bump_config_rev(cfg: IntegrationConfig) -> None:
+    cfg.config_rev = (cfg.config_rev or 1) + 1
+
+
+async def assign_collector(
+    db: AsyncSession, cfg: IntegrationConfig, collector: str, probe_id: int | None = None,
+) -> IntegrationConfig:
+    """Move a config to the server (``'core'``) or to a probe of its tenant.
+
+    Bumps ``config_rev``, so an in-flight result of the previous collector is
+    dropped. The caller commits. The UI and the "test via probe" step before
+    a move come with the probe runtime (spec phases P2/P3)."""
+    from models.agent import Agent
+    from models.integration import COLLECTOR_CORE, COLLECTOR_PROBE
+
+    if collector == COLLECTOR_CORE:
+        cfg.collector, cfg.probe_id = COLLECTOR_CORE, None
+    elif collector == COLLECTOR_PROBE:
+        if probe_id is None:
+            raise ValueError("a probe collector needs a probe")
+        probe = await db.get(Agent, probe_id)  # tenant-filtered: another tenant's is None
+        if probe is None or not probe.is_probe or probe.tenant_id != cfg.tenant_id:
+            raise ValueError(f"probe {probe_id} not found")
+        cfg.collector, cfg.probe_id = COLLECTOR_PROBE, probe_id
+    else:
+        raise ValueError(f"unknown collector {collector!r}")
+    bump_config_rev(cfg)
+    await db.flush()
     return cfg
 
 

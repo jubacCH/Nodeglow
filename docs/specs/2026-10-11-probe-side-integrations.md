@@ -1,6 +1,8 @@
 # Probe-side integrations
 
-Status: design · 2026-10-11, revised after review the same day — not implemented. Owner decision 4 of
+Status: design · 2026-10-11, revised after review the same day. **P0 (spike)
+and P1 (collector split, migration 048) done 2026-10-12** — see
+"Implementation status"; P2 onwards open. Owner decision 4 of
 [the multi-tenancy design](2026-10-10-multi-tenancy-design.md#owner-decisions-2026-10-11):
 built in parallel to tenancy phase 9.
 
@@ -963,6 +965,194 @@ depends on P2a (release-signed agent updates) and needs the phase 9 purge to
 write the agent tombstone. P4 depends on the envelope-key work. P6 is part of
 phase 14.
 
+### Implementation status
+
+| Phase | State | Where |
+|---|---|---|
+| P0 | done 2026-10-12 | results below ("P0 spike results"); `tools/probe-pack/` |
+| P1 | done 2026-10-12 | branch `feat/probe-integrations-p1`; details below |
+| P2a–P6 | open | — |
+
+**P1 as built** (backend only; production behaviour unchanged — every
+existing config is `collector = 'core'` and is collected exactly as before):
+
+- `integrations/_base.py` imports nothing beyond the standard library
+  (`APIRouter` only under `TYPE_CHECKING`); new `network_scope` (`"any"`
+  default, `speedtest` `"site"`, `cloudflare` `"cloud"`), `config_id` (set
+  by ingest before `on_snapshot`) and the `@backend_only` marker for
+  module-level functions that may import backend packages.
+- Boundary test `tests/test_integration_boundary.py`: a static check of every
+  import statement (backend packages only inside `on_snapshot`, a
+  `@backend_only` function or `if TYPE_CHECKING`; no network names inside
+  those) and a runtime check in a fresh interpreter in which `fastapi`,
+  `sqlalchemy`, `models`, `services`, … cannot be imported at all — all 19
+  modules still import and register.
+- `services/integration_ingest.py`: the write path taken out of
+  `scheduler.py` (`_apply_result` is now a thin call): stamp check, snapshot,
+  cluster-group primary/standby (still the per-pass rule; the freshness rule
+  for asynchronous arrivals is P2), bandwidth with an explicit timestamp
+  (`collected_at`), `on_snapshot`. `CollectStamp(config_rev, collector,
+  probe_id)` is captured when the scheduler decides a config is due; ingest
+  re-reads the config under `snapshot_write_lock()` and drops the result
+  (`stale_config_rev` / `not_assigned` / `deleted`, nothing written) unless
+  all three still match. A probe stamp writes `collected_by` and
+  `collected_at`, and `timestamp = collected_at`.
+- `run_integration_checks` selects only `collector = 'core'` (rule 1); a
+  probe config with `probe_id IS NULL` is skipped as well.
+- `services/integration.py`: `update_config` bumps `config_rev` on every
+  change; `assign_collector(db, cfg, 'core' | 'probe', probe_id)` (the later
+  "Move to probe / server", bumps the rev; refuses a non-probe agent or one
+  of another tenant).
+- phpIPAM: `apply_phpipam_hosts(db, data, source)` (backend-only) applies the
+  `collect()` data (which now also carries `source_url`); `sync_phpipam_hosts`
+  = collect + apply. The settings sync button and the scheduled sync
+  (`routers/settings/general.py:sync_phpipam_config`) fetch live for a core
+  config and apply the latest snapshot for a probe config, without
+  decrypting it.
+- UniFi: the reverse-DNS lookup moved into `collect()`
+  (`enrich_reverse_dns`, bounded: 16 concurrent, 2 s each, off the event
+  loop) and is stored as `devices[].fqdn`; `import_unifi_devices` needs no
+  network.
+- Proxmox: `on_snapshot` syncs backups by `self.config_id` instead of
+  decrypting every Proxmox config to find its own (falls back to the old
+  match when called outside ingest). Deploy-agent answers 409 for a
+  probe-collected config.
+- Migration **048** (`048_probe_integrations.py`, after 047):
+  `integration_configs.collector` (VARCHAR(16) NOT NULL DEFAULT 'core'),
+  `probe_id` (composite tenant FK `fk_integration_configs_probe_id` →
+  `agents`, `ON DELETE SET NULL (probe_id)`, indexed), `config_rev` (INT NOT
+  NULL DEFAULT 1), checks `ck_integration_configs_collector` and
+  `ck_integration_configs_probe_collector`; `snapshots.collected_by` (soft
+  reference, no FK — history outlives a probe) and `collected_at`. The
+  downgrade refuses while a config is collected by a probe. *A parallel
+  branch (mobile backend) may also claim 048 — whichever merges second
+  renumbers to 049.*
+- Status API (`/api/integration/{type}/{id}/status`) additionally returns
+  `collector`, `collected_by`, `collected_at`; `/api/integrations` returns
+  `network_scope`.
+- Tests: `tests/test_services/test_integration_ingest.py` (rule 1, rule 6
+  including the move-during-collect race and the reverse for a probe result,
+  never-issued revs, needs-a-probe, standby, phpIPAM/UniFi/Proxmox splits);
+  isolation suite (a probe config per tenant seeded, `collected_by` in the
+  reference walk, a config cannot name another tenant's probe, the core
+  collects neither tenant's probe configs); PostgreSQL
+  `test_048_probe_integrations_existing_configs_keep_collecting` (upgrade of
+  a populated 047 database with RLS on, constraints, probe deletion, a real
+  scheduler pass collecting exactly the existing configs with the same
+  decrypted config and snapshot shape, downgrade guard); classification test
+  unchanged (both tables were already tenant-owned).
+
+### P0 spike results (2026-10-12)
+
+Scripts in `tools/probe-pack/` (`build_pack.py` — pinned, SHA-256-checked
+downloads; `runner.py` — the JSON-lines runner plus `--replay` / `--selftest`;
+`replay.py` — fixture replay with fail-on-unmatched and fail-on-unused;
+README). Fixtures (documentation addresses only) in
+`backend/tests/fixtures/integrations/{proxmox,unifi,synology}.json` with
+`*.expected.json`; the same replay runs in the backend suite
+(`tests/test_services/test_integration_fixtures.py`) — the contract test of
+"Testing", in its backend half.
+
+**Pack contents.** python-build-standalone 20261009, CPython 3.12.15,
+`install_only_stripped`; httpx 0.28.1, httpcore 1.0.9, h11 0.16.0, anyio
+4.15.1, certifi 2026.7.22, idna 3.20, typing_extensions 4.16.0 (all
+`py3-none-any`, versions = backend venv); sniffio is not needed by these
+versions. Stripped: tests, idlelib, tkinter, ensurepip, lib2to3, turtledemo,
+caches, and on Linux the unused `libpython3.12.so` (32.8 MB, dropped only
+after checking the binary does not link it). The release is three days old
+at the time of the spike; P2 pins one that has aged.
+
+| Target | Download | Unpacked | Pack on disk (stripped) | Archive (stripped) |
+|---|---:|---:|---:|---:|
+| windows-x86_64 | 22.0 MB | 63.2 MB | 32.5 MB | zip 10.2 MB · tar.xz 7.2 MB |
+| linux-x86_64 (glibc ≥ 2.17) | 34.3 MB | 98.5 MB | 42.2 MB | tar.gz 14.1 MB · tar.xz 9.6 MB |
+| linux-x86_64-musl | 28.1 MB | 78.6 MB | 33.7 MB | tar.gz 10.6 MB · tar.xz 7.8 MB |
+
+Well below the estimate in option A (60–80 MB on disk, 20–30 MB compressed).
+
+**Memory (Windows, measured** with `GetProcessMemoryInfo` in the runner,
+cross-checked from outside): bare runtime 23.9 MB working set; all 19
+collectors imported and the three replays run 34.1 MB (peak 34.7 MB, ~25 MB
+private); after a real HTTPS collect through `safe_async_client` (TLS
+context, certifi) 42.4 MB, peak 45.8 MB, 31 MB private. **Linux: not
+measured** — this machine has neither WSL nor Docker; estimate 30–45 MB RSS
+(same interpreter and modules). The runner reports VmRSS/VmHWM from
+`/proc/self/status`, so one `--replay` run on a Linux host closes it (P2).
+
+**musl.** All seven dependencies are pure Python (no `.so`/`.pyd` in the
+vendored tree; the build aborts if one appears). Correction to option A:
+the current python-build-standalone musl build is *not* static — it is
+dynamically linked against `/lib/ld-musl-x86_64.so.1`, so it runs on musl
+hosts (Alpine) only. ssl, sqlite3, ctypes, asyncio etc. are built into both
+Linux binaries. Decision for P2: the **glibc pack** for generic Linux (next
+to the static musl agent), the musl pack only for Alpine.
+
+**Collectors in the pack.** All 19 modules import and register in the
+Windows pack without any backend package (the P1 boundary holds);
+Proxmox (11 requests), UniFi (UniFi OS login with `x-csrf-token`, 6) and
+Synology (5) replay **byte-identical** to the backend's output (canonical
+JSON); no time-dependent fields. The SSRF guard works in the pack (loopback
+refused; a real public HTTPS GET succeeds). Linux packs: built and checked
+statically (every needed stdlib module present), not run.
+
+Findings for P2:
+
+1. The integration `name` is not always the module name (`hass` in
+   `homeassistant.py`, `ups` in `nut.py`): the wire contract carries `type` =
+   `name`, the runner resolves it through `get_integration()`.
+2. Collectors swallow failed sub-requests (Proxmox `lxc_config`,
+   `node_storages`, Synology logout), so the replay must also fail on
+   *unused* fixture entries — done in `replay.py`.
+3. `integrations/proxmox.py` uses `datetime.utcfromtimestamp`
+   (deprecated in 3.12); fix before the pack runs with warnings as errors.
+4. The Synology fixture follows what the parser reads; DSM 7 probably
+   answers differently (`volumes`/`disks`, `SYNO.Core.System.Utilization`).
+   Needs a recording from a real NAS before Synology is a pilot.
+5. The agent must start the runtime with `-I -B` (or a short
+   `pycache_prefix`): otherwise bytecode is written into the pack; startup
+   ~480 ms without `.pyc`, ~180 ms with — one-time for a long-lived runtime.
+6. No Windows asyncio, TLS or certifi problems.
+7. Archives are not yet byte-reproducible (zip mtimes, manifest time) —
+   needed for signed CI builds.
+
+**Speedtest licence (open question 1).** Sources accessed 2026-10-12.
+
+- *Ookla Speedtest CLI* — EULA (<https://www.speedtest.net/about/eula>):
+  the grant is "a limited, non-exclusive and non-transferable license to use
+  the Software through a command line interface for your personal,
+  non-commercial use on a single personal computer owned or otherwise
+  controlled by you"; you shall not "(a) copy the Software, except as
+  expressly permitted herein", "(e) … distribute, publish, transfer, or
+  otherwise make available the Software … to any third party for any reason",
+  "(f) install or use the Software on any router, modem, or other
+  non-personal computer device". Terms of Use
+  (<https://www.speedtest.net/about/terms>): "Users of the Services may use
+  the Content only for their personal, noncommercial use." The CLI's
+  first-run banner says the same ("only … for personal, non-commercial use").
+  So neither bundling the binary nor running it on customer probes as part
+  of a commercial service is covered. Ookla sells that as "Speedtest
+  Embedded" (<https://www.ookla.com/speedtest-embedded>) under contract.
+- *sivel/speedtest-cli* — Apache-2.0 code, archived (last release 2.1.3,
+  2021); it uses Ookla's servers, so Ookla's terms still apply. Not usable.
+- *LibreSpeed CLI* — LGPL-3.0, maintained (v1.0.14, 2026-08). Default
+  server list and telemetry are librespeed.org's — no permission found for
+  commercial automated use of the public servers. Against a **self-hosted**
+  backend (speedtest-go / speedtest-rust, LGPL-3.0, maintained) it is fine:
+  shipped as a separate binary with its licence and a source link,
+  `--local-json`, telemetry off.
+- *iperf3* — BSD-3-Clause, maintained; needs a server we or the customer run.
+- *Own endpoints* — a native HTTPS download/upload test in the agent against
+  Nodeglow-run (or customer-run) endpoints: no third-party terms at all.
+
+Recommendation: do not ship or auto-run the Ookla CLI (nor sivel) in the
+product. The P5 speedtest site job measures against **our own endpoints**
+(LibreSpeed-compatible backend, the agent either running LibreSpeed CLI or a
+native HTTPS test), iperf3 optional for path tests; Ookla Embedded only if
+customers demand Ookla numbers. The reading of the licence text is clear;
+the conclusion still wants a lawyer's confirmation before launch. Today's
+on-prem `speedtest.py` (the customer installs and runs the Ookla binary
+themselves on their own server) is a separate question for the same review.
+
 **Open Core.** Probe-side integrations are core (AGPL): probes, sites and
 probe-based syslog are core in the tenancy spec's table, and a single-tenant
 multi-site install needs this as much as the SaaS does. Plan-tier quotas and
@@ -1038,7 +1228,10 @@ interval floors for probe ingestion are ee (with phase 14's plan limits).
 1. **Speedtest licence.** Whether the Ookla CLI's licence allows running it on
    customer probes as part of a commercial service has to be checked.
    Alternatives: speedtest-cli (unmaintained, see `speedtest.py`), LibreSpeed
-   CLI, or measuring against our own endpoints.
+   CLI, or measuring against our own endpoints. *P0 (2026-10-12): the free
+   EULA allows personal, non-commercial use on a personal computer only — no
+   bundling, no customer devices; recommendation: own endpoints (see "P0 spike
+   results"), pending legal confirmation.*
 2. **ARM probes** (Raspberry Pi): the agent ships x86_64 builds only today. Are
    they needed at launch? They double the runtime builds.
 3. **Credential default in the SaaS**: is S2 (sealed — the SaaS cannot read
