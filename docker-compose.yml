@@ -120,6 +120,10 @@ services:
       # /data/nodeglow-license.txt). Optional: admins can also install it
       # under Settings → License. See docs/OPERATIONS.md.
       NODEGLOW_LICENSE: ${NODEGLOW_LICENSE:-}
+      # Enterprise multi-tenancy: "1" allows a second tenant without
+      # PostgreSQL row-level security (application filter only). See
+      # docs/OPERATIONS.md, "Tenants".
+      NODEGLOW_TENANTS_WITHOUT_RLS: ${NODEGLOW_TENANTS_WITHOUT_RLS:-}
       # Logging: LOG_LEVEL=DEBUG|INFO|WARNING|ERROR, LOG_FORMAT=text|json.
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}

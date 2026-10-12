@@ -41,13 +41,16 @@ from fastapi.routing import APIWebSocketRoute
 from sqlalchemy import select
 from starlette.routing import Mount
 
-from database import encrypt_value
 from models.base import Base
 from models.settings import Session, User, _hash_token
 from models.tenant import Tenant, TenantMembership
 from services import clickhouse_client as _ch
 from services.tenancy import system_scope, tenant_scope, tenant_tables
 from tests.test_routers.conftest import make_client
+
+# The walk runs with the tenancy backend the ee plugin registered (if any):
+# the gating suite covers the backend that serves production.
+pytestmark = pytest.mark.ee_tenancy
 
 A, B = 1, 2
 CANARY = "CANARY-B"
@@ -68,15 +71,35 @@ def _later(days=30):
     return datetime.utcnow() + timedelta(days=days)
 
 
+def _seed_key(tid: int) -> tuple[str, bytes]:
+    """(key id, data key) of each tenant's seeded tenant key: the key id
+    carries the canary, the secrets below are encrypted under it."""
+    import hashlib
+
+    return f"{TAG[tid]}-tenant_keys", hashlib.sha256(f"seed-dek-{tid}".encode()).digest()
+
+
+def _secret(tid: int, plaintext: str) -> str:
+    from services import tenant_keys
+
+    key_id, dek = _seed_key(tid)
+    return tenant_keys.seal(tenant_keys.dek_fernet(dek), key_id, plaintext)
+
+
 def _seeds(tid: int) -> dict[str, list[dict]]:
     """table -> rows (column values) for tenant ``tid``; children after parents."""
+    from services import tenant_keys
+
     b, tag = BASE[tid], TAG[tid]
     net = 10 if tid == A else 20
 
     def c(table):
         return f"{tag}-{table}"
 
+    key_id, dek = _seed_key(tid)
     return {
+        "tenant_keys": [dict(key_id=key_id, kek_id=tenant_keys.KEK_ID,
+                             wrapped_dek=tenant_keys.wrap_dek(dek, tid, key_id))],
         "sites": [dict(id=b, name=c("sites"))],
         "agents": [dict(id=b, name=c("agents"), hostname=f"{tag.lower()}-agent", token=f"tok-{tid}",
                         is_probe=True, site_id=b, platform="linux",
@@ -100,7 +123,7 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
         "incident_events": [dict(id=b, incident_id=b, event_type="created",
                                  summary=c("incident_events"))],
         "integration_configs": [dict(id=b, type="proxmox", name=c("integration_configs"),
-                                     config_json=encrypt_value(json.dumps(
+                                     config_json=_secret(tid, json.dumps(
                                          {"host": f"{net}.0.0.9", "token_name": c("config")})),
                                      cluster_group=c("cluster"))],
         "snapshots": [dict(id=b, entity_type="proxmox", entity_id=b, ok=True,
@@ -115,7 +138,7 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
                              source_id=b + 1, field_path="online", operator="eq",
                              threshold="false")],
         "credentials": [dict(id=b, name=c("credentials"), type="snmp_v2c",
-                             data_json=encrypt_value(json.dumps({"community": c("community")})))],
+                             data_json=_secret(tid, json.dumps({"community": c("community")})))],
         "snmp_host_configs": [dict(id=b, host_id=b, credential_id=b,
                                    oids_json=json.dumps([{"oid": "1.3.6.1", "name": c("oid")}]))],
         "snmp_results": [dict(id=b, host_id=b, data_json=json.dumps({c("snmp_results"): 1}))],
@@ -149,6 +172,9 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
                             dict(key="telegram_chat_id", value=c("telegram_chat_id")),
                             dict(key="ntfy_topic", value=c("ntfy_topic")),
                             dict(key="smtp_to", value=c("smtp_to"))],
+        "support_grants": [dict(id=b, role="readonly", reason=c("support_grants"),
+                                created_at=datetime.utcnow(), expires_at=_later(),
+                                granted_by=b, granted_by_name=c("granted_by"))],
         "user_preferences": [dict(user_id=b, dashboard_layout=json.dumps(
             [{"i": c("user_preferences"), "x": 0, "y": 0, "w": 4, "h": 4}]))],
     }
@@ -279,6 +305,9 @@ PARAM_TABLE = {
     "port_id": "discovered_ports",
     "user_id": "users",
     "template_hash": "log_templates",
+    "grant_id": "support_grants",
+    # Tenant ids themselves: only the operator's installation routes take one.
+    "tenant_id": "tenants",
 }
 # Where a parameter name means another table on one route.
 PARAM_OVERRIDES = {
@@ -311,6 +340,29 @@ INSTALLATION_ROUTES = {
     ("POST", "/api/snmp/mibs/library/import"):
         "global MIB catalogue; operator-only with several tenants",
 }
+
+
+def _ee_loaded() -> bool:
+    import ee_loader
+
+    return not ee_loader.ee_disabled() and ee_loader._source_tree() is not None
+
+
+# ee tenant lifecycle (phase 9): the operator manages tenants — names, plans,
+# member counts and status of every tenant, no tenant data.
+EE_INSTALLATION_ROUTES = {
+    ("GET", "/api/tenants"): "operator-only list of the installation's tenants (ee lifecycle)",
+    ("POST", "/api/tenants"): "operator-only tenant creation (ee lifecycle)",
+    ("PATCH", "/api/tenants/{tenant_id}"): "operator-only rename / plan assignment (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/suspend"): "operator-only suspension (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/resume"): "operator-only resumption (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/delete"):
+        "operator-only scheduled deletion, typed confirmation (ee lifecycle)",
+    ("POST", "/api/tenants/{tenant_id}/cancel-deletion"):
+        "operator-only cancellation of a scheduled deletion (ee lifecycle)",
+}
+if _ee_loaded():
+    INSTALLATION_ROUTES.update(EE_INSTALLATION_ROUTES)
 
 # Routes that never resolve a tenant from the session (public, token-authenticated
 # or authentication itself) — not walked here; the header check does not apply.
@@ -446,6 +498,7 @@ def _ids_of(tid: int) -> dict[str, Any]:
     ids = {t: b for t in PARAM_TABLE.values()}
     ids["snmp_host_configs"] = b
     ids["log_templates"] = _tpl_hash(tid)
+    ids["tenants"] = tid
     return ids
 
 
@@ -810,11 +863,22 @@ async def _walk(e: Env, auth: dict, *, accept_unauthenticated: bool,
             after = await _tenant_rows(e.sf, B)
             if after != before:
                 changed = [t for t in after if after[t] != before[t]]
-                failures.append(f"{method} {url} changed tenant B's rows in {changed}")
+                if not (allowed and _only_lifecycle_audit(before, after, changed)):
+                    failures.append(f"{method} {url} changed tenant B's rows in {changed}")
                 before = after
             for ref in await _foreign_refs(e.sf):
                 failures.append(f"{method} {url} left A referencing B: {ref}")
     return failures, checked
+
+
+def _only_lifecycle_audit(before: dict, after: dict, changed: list[str]) -> bool:
+    """The operator's lifecycle actions on B (ee: suspend, resume, …) are
+    recorded in B's own audit log on purpose — B's admins see who did it.
+    That, and nothing else, may change in B through an installation route."""
+    if changed != ["audit_logs"]:
+        return False
+    old, new = set(before["audit_logs"]), set(after["audit_logs"])
+    return old <= new and all(any(v.startswith("'tenant.") for v in row) for row in new - old)
 
 
 def _is_login_redirect(resp) -> bool:
@@ -974,7 +1038,8 @@ async def test_the_canaries_are_reachable_from_their_own_tenant(env):
                  "/api/credentials/list", "/api/v1/rules", "/api/backups", "/settings/json",
                  "/settings/notifications/history", "/api/v1/audit", "/api/users",
                  "/api/v1/maintenance-windows", "/api/subnet-scanner/page-data",
-                 "/syslog/api/templates", "/api/agents/install-tokens", "/api/v1/keys"):
+                 "/syslog/api/templates", "/api/agents/install-tokens", "/api/v1/keys",
+                 *(["/api/support-access"] if _ee_loaded() else [])):
         resp = await _call(env.client, "GET", path, auth=auth)
         assert resp.status_code == 200, f"{path}: {resp.status_code} {resp.text[:200]}"
         seen += CANARY in resp.text

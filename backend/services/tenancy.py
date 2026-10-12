@@ -125,6 +125,37 @@ def session_tenant_id(session: Any) -> int:
     return current_tenant_id()  # raises with the right message
 
 
+def tenant_access(session: Any, tenant_id: int | None):
+    """``(tenant, scope)``: the tenant a per-tenant helper (settings, tenant
+    keys) acts for, and the context manager to run its statements in.
+
+    An explicit ``tenant_id`` (jobs in system scope, the setup wizard, the
+    syslog listener, a row's own tenant) must agree with the ambient tenant
+    context or the session's binding if there is one; with no context at
+    all the access runs in ``tenant_scope(tenant_id)``. Without an explicit
+    id the context (or the binding) decides, and with neither this raises —
+    fail closed like tenant tables.
+    """
+    from contextlib import nullcontext
+
+    if tenant_id is None:
+        return session_tenant_id(session), nullcontext()
+    tenant_id = int(tenant_id)
+    ctx = _current.get()
+    if ctx is not None:
+        if not ctx.system and ctx.tenant_id != tenant_id:
+            raise TenantContextError(
+                f"tenant {tenant_id} requested in the context of tenant {ctx.tenant_id}"
+            )
+        return tenant_id, nullcontext()
+    bound = session.info.get(SESSION_TENANT_KEY)
+    if bound is not None and bound != tenant_id:
+        raise TenantContextError(
+            f"tenant {tenant_id} requested on a session bound to tenant {bound}"
+        )
+    return tenant_id, tenant_scope(tenant_id)
+
+
 def in_system_scope() -> bool:
     ctx = _current.get()
     return ctx is not None and ctx.system
@@ -200,6 +231,8 @@ ACTING_VIA_OPERATOR = "operator"
 ACTING_VIA_API_KEY = "api_key"
 ACTING_VIA_AGENT = "agent"
 ACTING_VIA_SYSTEM = "system"
+# Time-limited support access a tenant admin granted (ee, owner decision 8).
+ACTING_VIA_SUPPORT = "support"
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,14 +324,26 @@ class SingleTenancy:
         access = await self.resolve_access(request, user)
         return access.tenant_id if access else None
 
+    async def resolve_login_access(self, request: Any, user: Any) -> TenantAccess | None:
+        """The tenant a new session starts in. The core: as for any request
+        (header, else the only membership); a backend with several tenants
+        may pick one for a user with several (ee: the last used)."""
+        return await self.resolve_access(request, user)
+
     async def list_tenants_for(self, user: Any) -> list[int]:
+        return [a.tenant_id for a in await self.list_access_for(user)]
+
+    async def list_access_for(self, user: Any) -> list[TenantAccess]:
+        """Every tenant the user may switch into, with the role there and how
+        the access is granted, ordered by tenant id."""
         if user is None or getattr(user, "id", None) is None:
             return []
         from models import base as _base
         from services.memberships import memberships_for
 
         async with _base.AsyncSessionLocal() as db:
-            return sorted(await memberships_for(db, user.id))
+            found = await memberships_for(db, user.id)
+        return [TenantAccess(tenant_id=t, role=r) for t, r in sorted(found.items())]
 
     async def active_tenant_ids(self) -> list[int]:
         return [DEFAULT_TENANT_ID]
@@ -314,13 +359,19 @@ class SingleTenancy:
             return (await memberships_for(db, user.id)).get(tenant_id)
 
     def is_operator(self, user: Any, role: str | None = None,
-                    tenant_id: int | None = None) -> bool:
+                    tenant_id: int | None = None, via: str | None = None) -> bool:
         """Installation operator. In the core: the admin of the default
         tenant (``role`` is the user's role in the request's tenant
         ``tenant_id``) — exactly who administered the installation before
         the split, and nobody else: a demoted admin loses it with the role.
         ``users.is_operator`` is kept equal to that (services.memberships)
-        for an ee backend, which decides by the flag."""
+        for an ee backend, which decides by the flag.
+
+        ``via`` is how the role was granted: a role that comes from support
+        access (ee) never makes anyone an operator — a temporary grant on
+        the default tenant must not turn into installation rights."""
+        if via == ACTING_VIA_SUPPORT:
+            return False
         return tenant_id == DEFAULT_TENANT_ID and role == "admin"
 
     def can_create_tenant(self) -> bool:
@@ -368,7 +419,32 @@ def request_is_operator(request: Any) -> bool:
     user = getattr(state, "current_user", None)
     if user is None:
         return False
-    return backend().is_operator(user, request_role(request), getattr(state, "tenant_id", None))
+    return backend().is_operator(user, request_role(request), getattr(state, "tenant_id", None),
+                                 via=request_acting_via(request))
+
+
+def request_acting_via(request: Any) -> str | None:
+    """How the request's user has access to the request's tenant (see the
+    ``ACTING_VIA_*`` constants), None when unknown."""
+    return getattr(getattr(request, "state", None), "acting_via", None)
+
+
+def request_via_support(request: Any) -> bool:
+    """Whether the request works in its tenant through support access (ee)."""
+    return request_acting_via(request) == ACTING_VIA_SUPPORT
+
+
+def request_may_manage_access(request: Any) -> bool:
+    """Whether the request may manage who has access to its tenant: create,
+    delete or re-role users and memberships, reset passwords, issue API keys
+    and agent install tokens. Tenant admins may; support access may not,
+    whatever role the grant carries — a support session must not outlive
+    its grant through an account or a key it made (owner decision 8)."""
+    return request_is_admin(request) and not request_via_support(request)
+
+
+SUPPORT_IAM_REFUSED = ("Support access cannot manage users, passwords, API keys or "
+                       "install tokens of this tenant.")
 
 
 # How often a long-lived connection (/ws/live, the syslog live tail) checks

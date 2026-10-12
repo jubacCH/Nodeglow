@@ -592,7 +592,7 @@ class ProxmoxIntegration(BaseIntegration):
                 )
             )
             for cfg in result.scalars().all():
-                if decrypt_config(cfg.config_json).get("host") == own_host:
+                if (await decrypt_config(db, cfg)).get("host") == own_host:
                     await sync_proxmox_backups(db, cfg.id, data)
                     break
         except Exception as exc:

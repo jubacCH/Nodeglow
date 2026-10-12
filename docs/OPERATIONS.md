@@ -62,6 +62,7 @@ from that experience, not from a load test.
 | 8000 | tcp | inbound | Web UI and API (frontend, proxies to the backend) | Users and agents; put TLS in front |
 | 514 | udp | inbound | Syslog (mapped to container 1514) | Devices that send logs |
 | 1514 | tcp | inbound | Syslog over TCP | Devices that send logs |
+| 514 (configurable) | udp + tcp | inbound **on a probe host** | [Probe syslog relay](#probe-syslog-relay), only where switched on | Devices in the probe's network |
 | 8000 (backend), 5432, 8123, 9100 | tcp | internal only | Backend, Postgres, ClickHouse, updater | Docker network only — never publish |
 | varies | icmp/tcp/udp | outbound | Checks, integrations (HTTPS APIs), SNMP 161/udp | Monitored networks |
 | 443 | tcp | outbound | Notifications (Telegram, Discord, Teams, Slack, ntfy, webhooks), the AI provider if AI is enabled, GeoIP updates, GitHub / GHCR for updates | Internet |
@@ -391,11 +392,67 @@ escrowed `SECRET_KEY` — without it the file cannot be restored. Restore with
 Unencrypted exports from older versions are still accepted, but only with
 `"allow_unencrypted": true` in the body.
 
+### Tenant keys (envelope encryption)
+
+Since revision 046 the credentials of a tenant (integration configs, SNMP /
+WinRM / SSH credentials, notification channel secrets, SMTP and phpIPAM
+passwords) are encrypted with that **tenant's own data key**. The data keys
+are random, stored only wrapped (encrypted) by a key derived from
+`SECRET_KEY` in the table `tenant_keys`. Installation secrets (LDAP bind
+password, AI provider keys, licence, GeoIP key) keep the `SECRET_KEY`
+directly. Nothing changes for escrow: `SECRET_KEY` still opens everything,
+and a `pg_dump` contains the wrapped keys.
+
+- The migration 046 rewrites no credential: the old backend keeps serving
+  while the updater migrates, and it can read only the old format. The new
+  backend moves every credential to the tenant key when it starts, and does
+  so again on every start for anything written in the old format later.
+  Values that do not decrypt with the current `SECRET_KEY` are left exactly
+  as they are.
+- **Going back to an older version after the new one has started** needs
+  the downgrade first, while the new version still runs:
+  `docker compose exec nodeglow python -m alembic downgrade 044` (back to
+  2.0.x; this also undoes 047 and 045: the probe syslog relay settings,
+  support grants and tenant lifecycle columns are dropped). It puts every
+  credential back under `SECRET_KEY`. Switching `NODEGLOW_VERSION` back alone
+  leaves the credentials under tenant keys, which the old version cannot
+  read (integrations fail, notifications do not go out). Restoring the
+  updater's pre-update dump works as well.
+- Check the state at any time (read-only, prints counts, never a secret;
+  exit code 1 when something does not decrypt):
+
+  ```bash
+  docker compose exec nodeglow python -m services.tenant_keys verify
+  ```
+
+  `upgrade` moves remaining old-format values, `rotate --tenant N` gives a
+  tenant a new data key and re-encrypts its secrets (the old key stays
+  readable as "retired").
+- Purging a deleted tenant (ee, after its 30 days) destroys its data keys
+  first, before any row is deleted: its credentials are then unreadable in the database, replicas and every dump or export taken
+  afterwards, even with `SECRET_KEY` (crypto-shred). A dump or JSON export
+  taken **before** the deletion contains the wrapped keys along with the
+  data, so it stays readable with `SECRET_KEY` until it is deleted: keep
+  backup retention within what you promise customers for deleted data.
+- The JSON export decrypts nothing. It carries the credentials as stored
+  and the `tenant_keys` rows (data keys wrapped by `SECRET_KEY`), so opening
+  a credential from it needs the escrowed `SECRET_KEY` as well as the
+  passphrase. Holding an operator API key and choosing a passphrase is not
+  enough. A restore into an installation with a different `SECRET_KEY`
+  warns, and its credentials do not decrypt until the original key is
+  configured. To enter credentials again there instead, give each tenant a
+  new key with `rotate --tenant N`.
+- A backup holds no `tenants` table. Rows of a tenant that the target
+  installation does not have are restored as they are, and no key is
+  created for that tenant. The restore result names those tenants in
+  `warning`.
+
 ### Changing it
 
-There is no re-encryption tooling. Setting a different `SECRET_KEY` makes all
-existing credentials unreadable; they then have to be entered again. Treat the
-key as permanent for the life of the installation.
+There is no re-encryption tooling for `SECRET_KEY` itself. Setting a different
+`SECRET_KEY` makes all existing credentials unreadable (the wrapped tenant keys
+included); they then have to be entered again. Treat the key as permanent for
+the life of the installation.
 
 ### Recovering after losing the host
 
@@ -505,6 +562,80 @@ RLS. The backend logs a warning saying so.
   in its grants; `pg_restore` reports those statements as errors when the
   role does not exist yet. Harmless — the next start creates the role and
   the grants.
+
+---
+
+## Probe syslog relay
+
+Syslog from network devices normally goes straight to the server (514/udp,
+1514/tcp). When the devices cannot reach the server — a remote site, a
+customer network, a hosted (SaaS) installation — a **probe** can receive it
+instead: the probe listens for syslog inside that network and forwards the
+lines over its own agent connection (HTTPS to the UI port, nothing inbound on
+the server). Every relayed message belongs to the probe's tenant and site; the
+sending device's address travels with each message and is matched against the
+hosts **of that site**.
+
+### Setting it up
+
+1. Enrol an agent in the network the devices are in and make it a probe
+   (**Infrastructure → Agents & Probes**, or `PATCH /api/v1/agents/{id}` with
+   `{"is_probe": true}`).
+2. Switch the relay on (admin):
+   `PATCH /api/v1/agents/{id}` with `{"syslog_relay_enabled": true}`, and
+   optionally `"syslog_relay_port": 1514` (default 514, the same port for UDP
+   and TCP). The probe picks it up with its next heartbeat (≤ its report
+   interval) and starts listening on all interfaces of the probe host.
+3. Point the devices' syslog at the probe's address and port. UDP (one message
+   per datagram) and TCP (newline-terminated or octet-counted, RFC 6587) both
+   work; at most 64 KiB per message, 64 TCP connections.
+4. Check `GET /api/v1/agents/{id}` → `syslog_relay.status`: `listening`,
+   `received`, `forwarded` (stored by the backend), `rejected` (refused by the
+   backend: not on the allowlist, invalid, oversized), `dropped` (lost in the
+   probe's buffer), `buffered`, `send_failures` and, if the port could not be
+   opened, `error`. Without step 1 the backend drops what a probe relays
+   (`relay_disabled`), whatever the probe does.
+
+Ports below 1024 need privileges on Linux: the agent installed by the install
+script runs as root and can use 514. An agent running as an ordinary user
+reports `cannot listen on port 514: permission denied` in `status.error` and
+retries every minute — use a port ≥ 1024 then. Open the port in the probe
+host's firewall for the devices (Windows: an inbound rule for the agent's
+executable or the port).
+
+While the server is unreachable the probe keeps listening and buffers up to
+20 000 messages / 16 MiB in memory, then drops the oldest (counted in
+`dropped`); a restart of the agent loses what is buffered. Switching the relay
+off (or the probe role) closes the port within one heartbeat.
+
+### How messages are attributed
+
+- Tenant and site come from the probe's token. Nothing in a message — its
+  host name, any field the probe sends — can move it into another tenant.
+- The device's host is looked up among the hosts of the probe's site first
+  (host name, then address). Outside the site only a **host name** or a
+  **public address** is matched, and only when exactly one site of the tenant
+  knows it: `192.168.1.1` at branch A is never branch B's `192.168.1.1`.
+  Reverse DNS is not used for relayed addresses — the server's resolver knows
+  nothing about the customer's network.
+- The per-tenant "only accept syslog from known hosts" setting applies with
+  the same site rule.
+- An agent that is not a probe cannot relay; it only sends its own logs, which
+  are attributed to its own host by name.
+
+### The direct listener
+
+`NODEGLOW_SYSLOG_LISTENER` (backend environment, see [Advanced backend
+settings](#advanced-backend-settings)) controls the server's own syslog ports:
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | Listens. Messages go to the default tenant as long as the installation has **one** tenant — every community install, nothing changes. With more than one tenant it refuses messages (it cannot tell whose a datagram is), logs a warning every five minutes and counts them as `nodeglow_syslog_messages_dropped_total{reason="listener_disabled"}`; use probe relays. Until the server has counted its tenants once (the database unreachable at startup) it refuses as well. |
+| `on` | Listens and always files messages under the default tenant. |
+| `off` | Does not open the ports at all. Hosted (SaaS) installations: syslog is probe-only. Agent logs and probe relays keep working. |
+
+With `off` you can also remove the 514/1514 port mappings from the compose
+file.
 
 ---
 
@@ -658,7 +789,48 @@ python -m nodeglow_ee.licensing issue \
 ```
 
 The owner's own installation uses a license issued the same way — there is no
-built-in bypass. Back up the private key (password manager / vault); without
+built-in bypass.
+
+### Tenants (enterprise)
+
+With the `multi_tenancy` feature an installation holds several customers
+(tenants) whose data never meets. Installation operators manage them under
+Administration → Tenants (`/tenants`); the license's `max_tenants` caps how
+many exist (suspended and deleting ones count, purged ones do not).
+
+- **The second tenant** is refused until the ClickHouse tenant rebuild has
+  completed (System → Status, `clickhouse_tenant_rebuild`) and PostgreSQL
+  row-level security protects the app's connection
+  ([Row-level security](#row-level-security): `NODEGLOW_RLS=on`, the app as
+  `nodeglow_app`). An install that knowingly runs without RLS sets
+  `NODEGLOW_TENANTS_WITHOUT_RLS=1`; the application filter is then the only
+  isolation layer.
+- **Suspending** stops monitoring of the tenant and every login, API key,
+  agent and install token of it; nothing is deleted. **Deleting** suspends
+  the tenant for 30 days (cancellable), then a background job purges every
+  PostgreSQL and ClickHouse row of it, its memberships and the users who
+  belong to no other tenant (audit entry `tenant.purged`). The purge
+  destroys the tenant's data keys first ([Tenant keys](#tenant-keys-envelope-encryption)). The default
+  tenant (id 1) cannot be suspended or deleted.
+- **Plans** (Standard 30 / Professional 90 / Enterprise 365 days) cap every
+  retention setting of a tenant; its admins choose within the plan. A plan
+  below the tenant's stored retention lowers it after a confirmation, and
+  the nightly cleanup then deletes the older history for good. The default
+  tenant gets no plan; "No plan" takes a tenant back to the installation
+  caps.
+- **Operators see no tenant data.** A tenant's admin grants time-limited
+  support access under Settings → Support access; every access is in that
+  tenant's audit log (`acting_via = support`). Support access cannot manage
+  users, passwords, API keys or install tokens of the tenant, and never
+  makes anyone an operator.
+- **Users are global.** A tenant admin can reset the password only of users
+  who belong to that tenant alone; for a user who also reaches another
+  tenant, the provider or the installation, only the user or an operator
+  can. The AI provider, its endpoint and keys (Settings → AI) are
+  installation settings: only operators change them.
+- When the license expires every tenant keeps being monitored and reachable;
+  creating, suspending, resuming and plan changes are refused, cancelling a
+  deletion and ending support access still work, scheduled purges still run. Back up the private key (password manager / vault); without
 it no new licenses can be issued. Rotating the key: generate a new one with a
 new `--kid`, add its public key to `TRUSTED_KEYS` next to the old one, and
 remove the old id only once every license signed with it has been replaced.
@@ -797,6 +969,7 @@ start from `.env.example`.
 | `SECRET_KEY` | unset (file in `./data`) | Encryption key for stored credentials. Strongly recommended; `install.sh` generates it — see [The encryption key](#the-encryption-key) | both |
 | `NODEGLOW_LICENSE` | unset | Enterprise license key or a path to a file with it ([Enterprise license](#enterprise-license)) | both |
 | `NODEGLOW_DISABLE_EE` | unset | `1` runs the community edition even with `ee/` present | both |
+| `NODEGLOW_TENANTS_WITHOUT_RLS` | unset | `1` lets the enterprise multi-tenancy create a second tenant without PostgreSQL row-level security ([Tenants](#tenants-enterprise)) | both |
 | `NODEGLOW_ALLOW_SHARED_ENROLLMENT` | unset | `1` re-enables the legacy shared agent enrollment key; leave unset | both |
 | `UI_BIND` | `0.0.0.0` | Host address for the UI port 8000 (`127.0.0.1` behind a local reverse proxy) | both |
 | `SYSLOG_BIND` | `0.0.0.0` | Host address for the syslog ports 514/udp, 1514/tcp | both |
@@ -840,6 +1013,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `NODEGLOW_INTEGRATION_TIMEOUT` | `nodeglow` | `60` | Seconds per integration collect |
 | `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |
 | `NODEGLOW_PING_LOOKBACK_HOURS` | `nodeglow` | `24` | How far back the "latest check" lookup searches |
+| `NODEGLOW_SYSLOG_LISTENER` | `nodeglow` | `auto` | The server's own syslog listener: `auto` (default tenant while there is one tenant), `on`, `off` (probe-only, SaaS) — [Probe syslog relay](#the-direct-listener) |
 | `NODEGLOW_SYSLOG_CLOCK_SKEW_HOURS` | `nodeglow` | `24` | How far a sender's clock may lag and its messages still show up in time-window queries |
 | `NODEGLOW_CLICKHOUSE_COMPRESSION` | `nodeglow` | `lz4` | ClickHouse client compression |
 | `DNS_CACHE_TTL` | `nodeglow` | `60` | Seconds DNS lookups of check targets are cached; `0` disables |

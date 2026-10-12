@@ -12,7 +12,6 @@ import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.base import decrypt_value, encrypt_value
 from models.credential import Credential
 from models.snmp import SnmpHostConfig, SnmpMib, SnmpOid, SnmpResult
 
@@ -668,12 +667,19 @@ def _parse_snmp_value(value: str):
 # ── Credential helpers ───────────────────────────────────────────────────────
 
 
-def encrypt_credential(data: dict) -> str:
-    return encrypt_value(json.dumps(data))
+async def encrypt_credential(db: AsyncSession, data: dict, *, tenant_id: int | None = None) -> str:
+    """Credential fields as JSON under the tenant's data key (default: the
+    session's tenant)."""
+    from services import tenant_keys
+
+    return await tenant_keys.encrypt_secret(db, json.dumps(data), tenant_id=tenant_id)
 
 
-def decrypt_credential(encrypted: str) -> dict:
-    return json.loads(decrypt_value(encrypted))
+async def decrypt_credential(db: AsyncSession, cred: Credential) -> dict:
+    """The fields of a credential row, decrypted with its tenant's key."""
+    from services import tenant_keys
+
+    return json.loads(await tenant_keys.decrypt_secret(db, cred.data_json, tenant_id=cred.tenant_id))
 
 
 async def get_credential(db: AsyncSession, credential_id: int) -> dict | None:
@@ -683,7 +689,7 @@ async def get_credential(db: AsyncSession, credential_id: int) -> dict | None:
     if not cred:
         return None
     return {"id": cred.id, "name": cred.name, "type": cred.type,
-            **decrypt_credential(cred.data_json)}
+            **await decrypt_credential(db, cred)}
 
 
 # ── Poll a single host ──────────────────────────────────────────────────────

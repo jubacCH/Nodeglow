@@ -26,7 +26,7 @@ from services.ai_config import (
 )
 from services.audit import log_action
 
-from ._helpers import log, require_admin
+from ._helpers import is_operator, log, require_admin
 
 router = APIRouter()
 
@@ -39,15 +39,32 @@ _PLAIN_KEYS = (
 )
 _FLAG_KEYS = ("ai_redact_enabled", "ai_redact_hostnames", "ai_restore_placeholders")
 
+# The provider, its endpoint and its keys are INSTALLATION settings (one
+# operator-owned key for every opted-in tenant, owner decision 2): only an
+# operator writes them. A tenant admin who could would reroute every
+# tenant's prompts — incident and log data — to an endpoint of their own.
+_INSTALLATION_FIELDS = (
+    "provider", "anthropic_model", "anthropic_api_key",
+    "openai_base_url", "openai_model", "openai_api_version", "openai_api_key",
+)
+PROVIDER_OPERATOR_ONLY = ("The AI provider, its endpoint and its keys are installation settings; "
+                          "only an installation operator can change them.")
+
+
+def _installation_changes(old: AIConfig, new: AIConfig) -> list[str]:
+    return [f for f in _INSTALLATION_FIELDS if getattr(old, f) != getattr(new, f)]
+
 
 def _actor_name(request: Request) -> str:
     user = getattr(request.state, "current_user", None)
     return getattr(user, "username", None) or "admin"
 
 
-def _config_payload(cfg: AIConfig) -> dict:
+def _config_payload(cfg: AIConfig, *, provider_editable: bool = True) -> dict:
     """AI config for the settings UI. Secrets are reported as present/absent only."""
     return {
+        # Whether this user may change the provider section (an operator).
+        "provider_editable": provider_editable,
         "ai_enabled": cfg.enabled,
         "ai_enabled_by": cfg.enabled_by,
         "ai_enabled_at": cfg.enabled_at,
@@ -75,7 +92,7 @@ async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
     if err := require_admin(request):
         return err
     cfg = await load_ai_config(db)
-    data = _config_payload(cfg)
+    data = _config_payload(cfg, provider_editable=is_operator(request))
     data["daily_ai_summary_enabled"] = (await get_setting(db, "daily_ai_summary_enabled", "0")) == "1"
     data["daily_ai_summary_hour"] = await get_setting(db, "daily_ai_summary_hour", "") or "8"
     data["daily_ai_summary_channels"] = (
@@ -133,6 +150,12 @@ async def save_ai_settings(request: Request, db: AsyncSession = Depends(get_db))
         return JSONResponse({"ok": False, "error": f"Unknown provider: {provider}"}, status_code=400)
 
     new = _merge_form(old, form)
+    operator = is_operator(request)
+    if not operator and _installation_changes(old, new):
+        # The form sends the current provider values back unchanged; only an
+        # actual change is refused.
+        return JSONResponse({"ok": False, "error": PROVIDER_OPERATOR_ONLY,
+                             "code": "operator_required"}, status_code=403)
     if new.provider == PROVIDER_OPENAI and new.openai_base_url:
         if url_err := await validate_ai_base_url_async(new.openai_base_url):
             return JSONResponse({"ok": False, "error": f"Base URL rejected: {url_err}"}, status_code=400)
@@ -150,18 +173,20 @@ async def save_ai_settings(request: Request, db: AsyncSession = Depends(get_db))
     changed: list[str] = []
 
     # Secrets: encrypted like every other credential; never echoed back.
-    if form.get("claude_api_key", "").strip():
+    # Installation keys: written by an operator only (refused above when a
+    # tenant admin tries to change them; unchanged values are not rewritten).
+    if operator and form.get("claude_api_key", "").strip():
         await set_setting(db, "claude_api_key", encrypt_value(form["claude_api_key"].strip()))
         changed.append("claude_api_key")
-    if form.get("clear_openai_api_key") in _BOOL_ON:
+    if operator and form.get("clear_openai_api_key") in _BOOL_ON:
         await set_setting(db, "ai_openai_api_key", "")
         changed.append("ai_openai_api_key")
-    elif form.get("ai_openai_api_key", "").strip():
+    elif operator and form.get("ai_openai_api_key", "").strip():
         await set_setting(db, "ai_openai_api_key", encrypt_value(form["ai_openai_api_key"].strip()))
         changed.append("ai_openai_api_key")
 
     for key in _PLAIN_KEYS + _FLAG_KEYS:
-        if key not in form:
+        if key not in form or (key in _PLAIN_KEYS and not operator):
             continue
         value = ("1" if form[key] in _BOOL_ON else "0") if key in _FLAG_KEYS else form[key].strip()
         if await get_setting(db, key, None) != value:
@@ -200,7 +225,8 @@ async def save_ai_settings(request: Request, db: AsyncSession = Depends(get_db))
 
     accept = request.headers.get("accept", "")
     if "application/json" in accept:
-        return JSONResponse({"ok": True, "config": _config_payload(await load_ai_config(db))})
+        return JSONResponse({"ok": True, "config": _config_payload(await load_ai_config(db),
+                                                                    provider_editable=operator)})
     return RedirectResponse(url="/settings?saved=1", status_code=303)
 
 
@@ -219,7 +245,10 @@ async def test_ai_connection(request: Request, db: AsyncSession = Depends(get_db
     provider = form.get("ai_provider", "")
     if provider and provider not in PROVIDERS:
         return JSONResponse({"ok": False, "message": f"Unknown provider: {provider}"}, status_code=400)
-    cfg = _merge_form(await load_ai_config(db), form)
+    saved = await load_ai_config(db)
+    # A tenant admin tests the installation's provider as configured; only
+    # an operator may try other values (an endpoint of their own included).
+    cfg = _merge_form(saved, form) if is_operator(request) else saved
     result = await check_connection(cfg)
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 

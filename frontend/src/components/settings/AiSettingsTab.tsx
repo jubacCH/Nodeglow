@@ -19,6 +19,8 @@ import { Code, Notice, SaveBar, SettingsSection, useSaveStatus, useSectionForm }
 /* ---------- Types ---------- */
 
 export interface AiConfig {
+  /** Whether this user may change the provider section (installation operator). */
+  provider_editable?: boolean;
   ai_enabled: boolean;
   ai_enabled_by: string;
   ai_enabled_at: string;
@@ -167,7 +169,9 @@ export function AiSettingsTab() {
     if (!f) return false;
     save.start();
     try {
-      const p = providerParams(f);
+      // The provider, its endpoint and keys are the installation's: only an
+      // operator sends them (the backend refuses a change from anyone else).
+      const p = cfg?.provider_editable === false ? new URLSearchParams() : providerParams(f);
       p.set('ai_enabled', f.enabled ? '1' : '0');
       p.set('ai_redact_enabled', f.redact ? '1' : '0');
       p.set('ai_redact_hostnames', f.redactHosts ? '1' : '0');
@@ -250,6 +254,7 @@ export function AiSettingsTab() {
     const destination = describeDestination(f.provider, f.baseUrl, f.apiVersion);
     const keyMissing = f.provider === 'anthropic' ? !cfg?.claude_has_key && !f.claudeKey.trim() : false;
     const azure = !!f.apiVersion.trim();
+    const providerLocked = cfg?.provider_editable === false;
 
     return (
       <div className="space-y-4">
@@ -290,6 +295,12 @@ export function AiSettingsTab() {
           description="Anthropic, or any endpoint that speaks the OpenAI Chat Completions API: Azure OpenAI (e.g. Switzerland North), Ollama, vLLM, LM Studio."
         >
           <div className="space-y-4">
+            {providerLocked && (
+              <Notice tone="info">
+                <span data-testid="ai-provider-locked">The AI provider, its endpoint and its keys are set by the operators of this installation for every tenant. You decide whether AI is used here, and with which redaction.</span>
+              </Notice>
+            )}
+            <fieldset disabled={providerLocked} className="contents">
             <SegmentedControl<Provider>
               label="AI provider"
               value={f.provider}
@@ -352,6 +363,7 @@ export function AiSettingsTab() {
                 </div>
               </div>
             )}
+            </fieldset>
 
             <div className="flex flex-wrap items-center gap-3">
               <Button size="sm" variant="secondary" onClick={testConnection} loading={testing} disabled={testing || keyMissing} data-testid="ai-test-connection">

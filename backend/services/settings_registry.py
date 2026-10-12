@@ -44,8 +44,9 @@ class SettingDef:
     type: ValueType = "str"
     # Used when the caller of get_setting() passes no default of its own.
     default: str | None = None
-    # The value is a secret, stored encrypted (encrypt_value) and never sent
-    # back to the UI. Informational for the storage layer: callers encrypt.
+    # The value is a secret, stored encrypted and never sent back to the UI.
+    # Installation keys: encrypt_value (the installation key); tenant keys:
+    # the tenant's data key (services.tenant_keys). Callers encrypt.
     secret: bool = False
     # Tenant key that falls back to the installation row when the tenant has
     # none (an installation-wide relay that a tenant may override).
@@ -236,3 +237,9 @@ def tenant_keys() -> frozenset[str]:
 
 def installation_keys() -> frozenset[str]:
     return frozenset(k for k, d in REGISTRY.items() if not d.is_tenant)
+
+
+def secret_tenant_keys() -> frozenset[str]:
+    """Tenant keys whose value is a secret: encrypted under the tenant's data
+    key (``services.tenant_keys``), never under the installation key."""
+    return frozenset(k for k, d in REGISTRY.items() if d.is_tenant and d.secret)

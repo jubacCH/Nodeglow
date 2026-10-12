@@ -5,6 +5,19 @@ export interface User {
   id: number;
   username: string;
   role: 'admin' | 'editor' | 'readonly';
+  /** Installation operator (manages tenants, installation settings). */
+  is_operator?: boolean;
+}
+
+/** How a user has access to a tenant (GET /api/auth/me). */
+export type TenantVia = 'membership' | 'provider_role' | 'operator' | 'support' | string;
+
+/** A tenant the user may switch into. */
+export interface TenantAccess {
+  id: number;
+  name: string;
+  role: User['role'];
+  via: TenantVia;
 }
 
 // ── Hosts ──

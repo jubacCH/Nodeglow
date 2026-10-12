@@ -289,33 +289,72 @@ class ExtraChannelConfig:
         return False
 
 
+class ChannelSecrets:
+    """Reads the channel secrets one by one. A secret that does not decrypt
+    (a ``v2`` value whose tenant key is missing, destroyed or does not match
+    — :class:`services.tenant_keys.TenantKeyError`) marks only its own
+    channel as failed in :attr:`errors` and reads as ``""``; the other
+    channels still go out. The stored value is never used as plaintext."""
+
+    def __init__(self, reveal: Callable[[str], str]):
+        self._reveal = reveal
+        self.errors: dict[str, str] = {}
+
+    def get(self, channel: str, value: str | None) -> str:
+        from services.tenant_keys import TenantKeyError
+
+        if not value:
+            return ""
+        try:
+            return self._reveal(value)
+        except TenantKeyError as exc:
+            # The message names no secret (key ids, tenant id only).
+            msg = f"{channel}: the stored secret does not decrypt ({type(exc).__name__})"
+            self.errors.setdefault(channel, msg)
+            logger.warning("Notification channel %s skipped: %s", channel, exc)
+            return ""
+
+
 def reveal(value: str, decrypt: Callable[[str], str]) -> str:
-    """Decrypt a value stored via encrypt_value; tolerate legacy plaintext."""
+    """Decrypt a stored secret; tolerate legacy plaintext. ``decrypt`` is the
+    tenant cipher's (``services.tenant_keys``): a value under the tenant's
+    data key that does not decrypt raises — it is never used as plaintext."""
     if not value:
         return ""
     try:
         return decrypt(value)
     except Exception:
+        if value.startswith("v2:"):
+            raise
         return value
 
 
 async def load_config(db, get_setting: Callable[..., Awaitable[Any]],
-                      decrypt: Callable[[str], str]) -> ExtraChannelConfig:
+                      decrypt: Callable[[str], str],
+                      secrets: ChannelSecrets | None = None) -> ExtraChannelConfig:
+    """The Teams/Slack/ntfy configuration. With ``secrets``, a secret that
+    does not decrypt is recorded there for its channel (and reads as empty);
+    without, it raises."""
     async def g(key: str, default: str = "") -> str:
         return (await get_setting(db, key, default)) or default
+
+    def secret(channel: str, value: str) -> str:
+        if secrets is None:
+            return reveal(value, decrypt)
+        return secrets.get(channel, value) if value.startswith("v2:") else reveal(value, decrypt)
 
     return ExtraChannelConfig(
         public_url=(await g("public_url")).strip().rstrip("/"),
         teams_enabled=await g("teams_enabled", "0") == "1",
-        teams_webhook_url=reveal(await g("teams_webhook_url"), decrypt),
+        teams_webhook_url=secret("teams", await g("teams_webhook_url")),
         teams_min_severity=await g("notify_teams_min_severity", "all"),
         slack_enabled=await g("slack_enabled", "0") == "1",
-        slack_webhook_url=reveal(await g("slack_webhook_url"), decrypt),
+        slack_webhook_url=secret("slack", await g("slack_webhook_url")),
         slack_min_severity=await g("notify_slack_min_severity", "all"),
         ntfy_enabled=await g("ntfy_enabled", "0") == "1",
         ntfy_server_url=(await g("ntfy_server_url", DEFAULT_NTFY_SERVER)).strip() or DEFAULT_NTFY_SERVER,
         ntfy_topic=(await g("ntfy_topic")).strip(),
-        ntfy_token=reveal(await g("ntfy_token"), decrypt),
+        ntfy_token=secret("ntfy", await g("ntfy_token")),
         ntfy_min_severity=await g("notify_ntfy_min_severity", "all"),
     )
 
@@ -338,13 +377,21 @@ def make_send(cfg: ExtraChannelConfig, channel: str, title: str, message: str,
 async def send_to_selected(cfg: ExtraChannelConfig, selected: set[str] | list[str],
                            title: str, message: str, severity: str = "info",
                            link_path: str | None = None,
+                           failed: dict[str, str] | None = None,
                            ) -> list[tuple[str, Exception | None]]:
     """Deliver to each enabled, configured Teams/Slack/ntfy channel in
-    ``selected`` (used by the daily AI summary). Returns (channel, error)."""
+    ``selected`` (used by the daily AI summary). Returns (channel, error).
+    ``failed`` (``ChannelSecrets.errors``): channels whose secret does not
+    decrypt — reported as failed, never sent."""
     link = build_link(cfg.public_url, link_path)
     results: list[tuple[str, Exception | None]] = []
     for name in CHANNELS:
-        if name not in selected or not getattr(cfg, f"{name}_enabled") or not cfg.configured(name):
+        if name not in selected or not getattr(cfg, f"{name}_enabled"):
+            continue
+        if failed and name in failed:
+            results.append((name, ChannelError(failed[name])))
+            continue
+        if not cfg.configured(name):
             continue
         try:
             await make_send(cfg, name, title, message, severity, link)

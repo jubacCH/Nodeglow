@@ -9,6 +9,47 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ## [Unreleased]
 
+### Added
+- Enterprise multi-tenancy (licence feature `multi_tenancy`, `max_tenants`):
+  operators create, suspend, resume and delete tenants under Administration →
+  Tenants (deletion = 30 days suspended, then every PostgreSQL and ClickHouse
+  row of the tenant is purged, its data keys destroyed first), assign
+  retention plans (30 / 90 / 365 days),
+  and see licence usage. The second tenant needs the ClickHouse tenant
+  rebuild and PostgreSQL row-level security (or
+  `NODEGLOW_TENANTS_WITHOUT_RLS=1`). Migration 045.
+- Tenant switcher in the top bar (only with more than one tenant).
+- Support access: operators see a tenant's data only while its admin has
+  granted time-limited access (Settings → Support access); every access is
+  in the tenant's audit log and a banner shows it to every member. It
+  cannot manage the tenant's users, passwords, API keys or install tokens.
+- Per-tenant envelope encryption: every tenant's credentials (integration
+  configs, credentials, notification channel secrets, SMTP/phpIPAM
+  passwords) are encrypted with the tenant's own data key, wrapped by a key
+  derived from `SECRET_KEY` (table `tenant_keys`, revision 046). Existing
+  values move to the tenant key when the new backend starts, not during the
+  migration, so the old backend keeps working while an update runs.
+  Destroying a tenant's keys makes its secrets unreadable everywhere
+  (crypto-shred). `python -m services.tenant_keys verify` reports the
+  formats and decrypt failures without printing secrets. JSON backups carry
+  the encrypted values and the wrapped keys, so restoring one needs
+  `SECRET_KEY` as well as the passphrase. A channel secret that does not
+  decrypt fails only its own notification channel.
+- Probe syslog relay: a probe can receive syslog (UDP/TCP, port 514 by
+  default) inside its network and forward it over its agent connection;
+  messages land in the probe's tenant and site and are matched against the
+  hosts of that site. Switched on per probe through the agent API
+  (`syslog_relay_enabled`, `syslog_relay_port`); needs the updated agent.
+  See docs/OPERATIONS.md "Probe syslog relay".
+- `NODEGLOW_SYSLOG_LISTENER` (`auto` / `on` / `off`) for the server's own
+  syslog listener; `off` for hosted installations where syslog is
+  probe-only.
+
+### Changed
+- An agent's own log entries are attributed to its own host by name, no
+  longer by the address the request came from (behind NAT that was the
+  customer's router).
+
 ## [2.0.0] - 2026-10-11
 
 ### Added

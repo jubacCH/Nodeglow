@@ -71,7 +71,11 @@ The release images never contain the proprietary Ookla speedtest CLI
 - Optional but recommended: [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
   — with it, `install.sh` also verifies the release signatures
 - Ports: 8000/tcp (UI), 514/udp and 1514/tcp (syslog), see
-  [Ports and firewall](OPERATIONS.md#ports-and-firewall)
+  [Ports and firewall](OPERATIONS.md#ports-and-firewall). Devices that cannot
+  reach the server (remote sites, hosted installations) send syslog to a
+  probe in their network instead — [Probe syslog relay](OPERATIONS.md#probe-syslog-relay);
+  a hosted installation sets `NODEGLOW_SYSLOG_LISTENER=off` and needs no
+  syslog ports at all
 
 ---
 
