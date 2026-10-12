@@ -10,7 +10,7 @@ from utils.net_safety import safe_async_client
 
 logger = logging.getLogger(__name__)
 
-from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, backend_only
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -369,6 +369,7 @@ def parse_cluster_data(resources: list[dict], cluster_status: list[dict],
 # ── Host Import ───────────────────────────────────────────────────────────────
 
 
+@backend_only
 async def import_proxmox_hosts(cluster_name: str, data: dict, db) -> dict:
     from models.ping import PingHost
     from sqlalchemy import select
@@ -571,19 +572,21 @@ class ProxmoxIntegration(BaseIntegration):
 
         # Sync backup jobs from collected data.
         #
-        # We need this integration's DB config_id for sync_proxmox_backups, but the
-        # on_snapshot hook only receives the decrypted `config` dict (no DB id). The
-        # host to match on is therefore taken directly from `config`. We fetch the
-        # candidate rows in a single query (instead of select-ids + per-row db.get,
-        # which was an N+1) and decrypt lazily, breaking on the first host match so
-        # we run at most one expensive PBKDF2 decrypt per non-matching row up to the
-        # match — not a full decrypt of every row before doing anything.
+        # sync_proxmox_backups needs this integration's DB config_id. The ingest
+        # path (services.integration_ingest) sets self.config_id, so no secret
+        # has to be decrypted here — which matters for probe-collected configs,
+        # whose credentials the backend should never need. Without it (a caller
+        # outside ingest) the config row is found by matching the host: the
+        # candidate rows in one query, decrypted lazily up to the first match.
         try:
             from services.backup_monitor import sync_proxmox_backups
             from services.integration import decrypt_config
             from models.integration import IntegrationConfig
             from sqlalchemy import select
 
+            if self.config_id is not None:
+                await sync_proxmox_backups(db, self.config_id, data)
+                return
             own_host = config.get("host")
             result = await db.execute(
                 select(IntegrationConfig).where(

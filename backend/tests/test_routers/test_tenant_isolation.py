@@ -125,11 +125,21 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
         "integration_configs": [dict(id=b, type="proxmox", name=c("integration_configs"),
                                      config_json=_secret(tid, json.dumps(
                                          {"host": f"{net}.0.0.9", "token_name": c("config")})),
-                                     cluster_group=c("cluster"))],
+                                     cluster_group=c("cluster")),
+                                # Collected by the tenant's probe (probe-side
+                                # integrations): probe_id is a reference too.
+                                dict(id=b + 1, type="unifi", name=c("integration_configs") + "-probe",
+                                     config_json=_secret(tid, json.dumps(
+                                         {"host": f"https://{net}.0.0.10", "username": c("probe_cfg")})),
+                                     collector="probe", probe_id=b, config_rev=3)],
         "snapshots": [dict(id=b, entity_type="proxmox", entity_id=b, ok=True,
                            timestamp=datetime.utcnow() - timedelta(hours=1),
                            data_json=json.dumps({"cluster_name": c("snapshots"), "nodes": [],
                                                  "cpu": 99})),
+                      dict(id=b + 1, entity_type="unifi", entity_id=b + 1, ok=True,
+                           timestamp=datetime.utcnow() - timedelta(minutes=2),
+                           collected_by=b, collected_at=datetime.utcnow() - timedelta(minutes=2),
+                           data_json=json.dumps({"devices": [], "site": c("probe_snapshot")})),
                       ],
         "alert_rules": [dict(id=b, name=c("alert_rules"), source_type="proxmox", source_id=b,
                              field_path="cpu", operator="gt", threshold="1",
@@ -251,6 +261,7 @@ REF_TARGETS = {
     "source_config_id": "integration_configs", "template_id": "log_templates",
     "job_id": "backup_jobs", "schedule_id": "subnet_scan_schedules",
     "incident_id": "incidents", "entity_id": "integration_configs",
+    "collected_by": "agents",
 }
 
 
@@ -938,6 +949,52 @@ async def test_the_reference_check_sees_a_cross_tenant_reference(env):
     found = await _foreign_refs(env.sf)
     assert any("alert_rules.source_id" in f for f in found), found
     assert any("maintenance_windows.host_ids" in f for f in found), found
+
+
+async def test_a_config_cannot_be_assigned_to_another_tenants_probe(env):
+    """Probe-side integrations: "collected by" a probe of B is refused for
+    A's config (the lookup runs in A's scope; on PostgreSQL the composite
+    key fk_integration_configs_probe_id refuses it as well)."""
+    from models.integration import IntegrationConfig
+    from services import integration as int_svc
+
+    async with env.sf() as s:
+        with tenant_scope(A):
+            cfg = await s.get(IntegrationConfig, BASE[A])
+            with pytest.raises(ValueError):
+                await int_svc.assign_collector(s, cfg, "probe", BASE[B])
+            await int_svc.assign_collector(s, cfg, "probe", BASE[A])
+            await s.commit()
+    assert not await _foreign_refs(env.sf)
+
+
+async def test_the_core_collects_no_probe_config_of_either_tenant(env):
+    """Rule 1 across tenants: the seeded probe configs of A and B are never
+    collected by the core's integration pass."""
+    import scheduler
+    from integrations._base import BaseIntegration, CollectorResult
+
+    collected: list = []
+
+    class Fake(BaseIntegration):
+        name = "unifi"
+
+        async def collect(self):
+            collected.append(self.config)
+            return CollectorResult(success=True, data={})
+
+    from services import tenant_jobs
+
+    with patch("integrations.get_registry", return_value={"unifi": Fake, "proxmox": Fake}), \
+            patch.object(scheduler, "AsyncSessionLocal", env.sf), \
+            patch.object(tenant_jobs, "FLEET_PARALLEL_TENANTS", 1), \
+            patch("services.tenancy.SingleTenancy.active_tenant_ids",
+                  new=_async_return([A, B])):
+        await scheduler.run_integration_checks()
+    # Both tenants' core configs (Proxmox) are collected — the pass ran —
+    # and neither tenant's probe config (UniFi).
+    assert sorted(c.get("token_name") for c in collected) == sorted(
+        f"{TAG[t]}-config" for t in (A, B)), collected
 
 
 @pytest.fixture
