@@ -336,6 +336,24 @@ sha256sum --ignore-missing -c SHA256SUMS
 **Verify `install.sh` this way before running it as root**, if your policy
 requires it — `curl | sh` is convenient, not auditable.
 
+### Agent binaries (release key)
+
+Agent binaries carry a second, independent signature: CI signs each one with
+the agent **release key** (Ed25519), whose public half is compiled into the
+agent and whose private half no Nodeglow server holds. The agent checks it on
+every self-update (see [Agent updates](OPERATIONS.md#agent-updates)). Each
+release attaches `nodeglow-agent-linux-x86_64.sig` and
+`nodeglow-agent-windows-x86_64.exe.sig` (one line of JSON: `key_id`, `sha256`,
+`signature` over `nodeglow-agent-binary:v1:<linux|windows>:<sha256>`), listed in
+the signed `SHA256SUMS`. With the release public key (`agent/src/release_keys.rs`
+at the tag) saved as SPKI PEM, a binary can be checked before installing it:
+
+```sh
+cp nodeglow-agent-linux-x86_64 nodeglow-agent-linux
+cp nodeglow-agent-linux-x86_64.sig nodeglow-agent-linux.sig
+sh tools/agent-release-key/sign.sh verify release-pub.pem nodeglow-agent-linux
+```
+
 ---
 
 ## Configuration (.env)
