@@ -1,0 +1,251 @@
+{
+ "backups": {
+  "local": [
+   {
+    "content": "backup",
+    "ctime": 1791680402,
+    "format": "tar.zst",
+    "notes": "dns01",
+    "size": 412316860,
+    "subtype": "lxc",
+    "verification": {
+     "state": "ok",
+     "upid": "UPID:pve01:000A1B2D:01234568:66F0A100:verify::root@pam:"
+    },
+    "vmid": 200,
+    "volid": "local:backup/vzdump-lxc-200-2026_10_11-01_00_02.tar.zst"
+   }
+  ],
+  "pbs01": [
+   {
+    "content": "backup",
+    "ctime": 1791680405,
+    "format": "pbs-vm",
+    "notes": "ci-runner",
+    "protected": 0,
+    "size": 68719476736,
+    "subtype": "qemu",
+    "verification": {
+     "state": "ok",
+     "upid": "UPID:pbs01:00001234:00ABCDEF:66F0A200:verificationjob::root@pam:"
+    },
+    "vmid": 100,
+    "volid": "pbs01:backup/vm/100/2026-10-11T01:00:05Z"
+   },
+   {
+    "content": "backup",
+    "ctime": 1791681000,
+    "format": "pbs-ct",
+    "notes": "media",
+    "size": 34359738368,
+    "subtype": "lxc",
+    "vmid": 201,
+    "volid": "pbs01:backup/ct/201/2026-10-11T01:10:00Z"
+   }
+  ]
+ },
+ "cluster_name": "lab-cluster",
+ "containers": [
+  {
+   "cpu_pct": 0.4,
+   "disk_pct": 37.5,
+   "disk_total_gb": 4.0,
+   "disk_used_gb": 1.5,
+   "diskread": 104857600,
+   "diskwrite": 52428800,
+   "id": 200,
+   "ip": "192.0.2.50",
+   "mem_total_gb": 0.5,
+   "mem_used_gb": 0.09,
+   "name": "dns01",
+   "netin": 734003200,
+   "netout": 912261120,
+   "node": "pve01",
+   "running": true,
+   "status": "running",
+   "type": "LXC",
+   "uptime_s": 1726350
+  },
+  {
+   "cpu_pct": 0,
+   "disk_pct": 0.0,
+   "disk_total_gb": 8.0,
+   "disk_used_gb": 0.0,
+   "diskread": 0,
+   "diskwrite": 0,
+   "id": 202,
+   "mem_total_gb": 1.0,
+   "mem_used_gb": 0.0,
+   "name": "staging-web",
+   "netin": 0,
+   "netout": 0,
+   "node": "pve01",
+   "running": false,
+   "status": "stopped",
+   "type": "LXC",
+   "uptime_s": 0
+  },
+  {
+   "cpu_pct": 8.2,
+   "disk_pct": 37.5,
+   "disk_total_gb": 32.0,
+   "disk_used_gb": 12.0,
+   "diskread": 5368709120,
+   "diskwrite": 2147483648,
+   "id": 201,
+   "ip": "198.51.100.21",
+   "mem_total_gb": 4.0,
+   "mem_used_gb": 2.0,
+   "name": "media",
+   "netin": 412316860416,
+   "netout": 98784247808,
+   "node": "pve02",
+   "running": true,
+   "status": "running",
+   "type": "LXC",
+   "uptime_s": 604650
+  }
+ ],
+ "nodes": [
+  {
+   "cpu_pct": 7.1,
+   "disk_pct": 18.2,
+   "disk_total_gb": 93.9,
+   "disk_used_gb": 17.1,
+   "mem_pct": 62.2,
+   "mem_total_gb": 62.7,
+   "mem_used_gb": 39.0,
+   "name": "pve01",
+   "netin": 0,
+   "netout": 0,
+   "online": true,
+   "status": "online",
+   "uptime_s": 1726405
+  },
+  {
+   "cpu_pct": 23.8,
+   "disk_pct": 14.3,
+   "disk_total_gb": 62.8,
+   "disk_used_gb": 9.0,
+   "mem_pct": 76.8,
+   "mem_total_gb": 31.3,
+   "mem_used_gb": 24.0,
+   "name": "pve02",
+   "netin": 0,
+   "netout": 0,
+   "online": true,
+   "status": "online",
+   "uptime_s": 604812
+  }
+ ],
+ "quorum_ok": true,
+ "tasks": [
+  {
+   "id": "100",
+   "node": "pve01",
+   "ok": null,
+   "starttime": "2026-10-11 02:20:00",
+   "status": "running",
+   "type": "qmstart",
+   "user": "nodeglow@pve!probe"
+  },
+  {
+   "id": "101",
+   "node": "pve02",
+   "ok": false,
+   "starttime": "2026-10-11 01:20:00",
+   "status": "unable to create temporary directory",
+   "type": "vzdump",
+   "user": "root@pam"
+  },
+  {
+   "id": "",
+   "node": "pve01",
+   "ok": true,
+   "starttime": "2026-10-11 01:00:00",
+   "status": "OK",
+   "type": "vzdump",
+   "user": "root@pam"
+  },
+  {
+   "id": "101",
+   "node": "pve02",
+   "ok": true,
+   "starttime": "2026-10-11 00:00:00",
+   "status": "OK",
+   "type": "vncproxy",
+   "user": "root@pam"
+  }
+ ],
+ "totals": {
+  "cpu_avg_pct": 15.4,
+  "lxc_running": 2,
+  "lxc_total": 3,
+  "mem_pct": 67.0,
+  "mem_total_gb": 94.0,
+  "mem_used_gb": 63.0,
+  "nodes_online": 2,
+  "nodes_total": 2,
+  "vms_running": 2,
+  "vms_total": 3
+ },
+ "vms": [
+  {
+   "cpu_pct": 15.3,
+   "disk_pct": 0.0,
+   "disk_total_gb": 64.0,
+   "disk_used_gb": 0.0,
+   "diskread": 23498752000,
+   "diskwrite": 81264640000,
+   "id": 100,
+   "mem_total_gb": 8.0,
+   "mem_used_gb": 6.0,
+   "name": "ci-runner",
+   "netin": 98234511872,
+   "netout": 12039485440,
+   "node": "pve01",
+   "running": true,
+   "status": "running",
+   "type": "VM",
+   "uptime_s": 1726300
+  },
+  {
+   "cpu_pct": 2.8,
+   "disk_pct": 0.0,
+   "disk_total_gb": 32.0,
+   "disk_used_gb": 0.0,
+   "diskread": 1234567890,
+   "diskwrite": 9876543210,
+   "id": 101,
+   "mem_total_gb": 4.0,
+   "mem_used_gb": 2.8,
+   "name": "homeassistant",
+   "netin": 5123456789,
+   "netout": 1987654321,
+   "node": "pve02",
+   "running": true,
+   "status": "running",
+   "type": "VM",
+   "uptime_s": 604700
+  },
+  {
+   "cpu_pct": 0,
+   "disk_pct": 0.0,
+   "disk_total_gb": 80.0,
+   "disk_used_gb": 0.0,
+   "diskread": 0,
+   "diskwrite": 0,
+   "id": 102,
+   "mem_total_gb": 8.0,
+   "mem_used_gb": 0.0,
+   "name": "win-test",
+   "netin": 0,
+   "netout": 0,
+   "node": "pve02",
+   "running": false,
+   "status": "stopped",
+   "type": "VM",
+   "uptime_s": 0
+  }
+ ]
+}
