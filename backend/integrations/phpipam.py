@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import BaseIntegration, CollectorResult, ConfigField, backend_only
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,53 +66,36 @@ class PhpIpamClient:
 
 
 # ── Host Sync ─────────────────────────────────────────────────────────────────
+#
+# Split into "fetch" and "apply": fetching is collect() (the address list is
+# part of the snapshot data, so a probe can do it inside the customer
+# network); applying the list to the host table is backend-only and works
+# from data alone.
 
 
-async def sync_phpipam_hosts(db: "AsyncSession", config: dict) -> dict:
+@backend_only
+async def apply_phpipam_hosts(db: "AsyncSession", data: dict, source_detail: str) -> dict:
+    """Import/merge the addresses of a phpIPAM snapshot as ping hosts."""
     from models.ping import PingHost
     from sqlalchemy import select
 
-    url = config.get("host", "")
-    app_id = config.get("app_id", "")
-    username = config.get("username")
-    password = config.get("password")
-    verify_ssl = config.get("verify_ssl", True)
-
-    if not url or not app_id:
-        return {"added": 0, "merged": 0, "skipped": 0,
-                "errors": ["phpIPAM not configured (URL or App-ID missing)"]}
-
-    app_secret = config.get("app_secret")
-
-    client = PhpIpamClient(
-        base_url=url, app_id=app_id, app_secret=app_secret or None,
-        username=username or None, password=password or None,
-        verify_ssl=verify_ssl,
-    )
-
-    try:
-        await client.authenticate()
-        addresses = await client.get_addresses()
-    except Exception as exc:
-        logger.error("phpIPAM fetch failed: %s", exc)
-        return {"added": 0, "merged": 0, "skipped": 0, "errors": [str(exc)]}
+    addresses = data.get("addresses") or []
+    # collect() keeps only active addresses with an IP; the rest were skipped.
+    skipped = max(0, int(data.get("addresses_total") or 0) - len(addresses))
 
     existing_q = await db.execute(select(PingHost))
     existing: dict[str, PingHost] = {h.hostname: h for h in existing_q.scalars().all()}
 
-    added = merged = skipped = 0
+    added = merged = 0
     errors: list[str] = []
     dirty = False
 
     for addr in addresses:
-        if str(addr.get("active", "1")) == "0":
-            skipped += 1
-            continue
         ip = (addr.get("ip") or "").strip()
         if not ip:
             skipped += 1
             continue
-        name = (addr.get("hostname") or addr.get("description") or ip).strip() or ip
+        name = (addr.get("hostname") or ip).strip() or ip
 
         try:
             if ip in existing:
@@ -132,7 +115,7 @@ async def sync_phpipam_hosts(db: "AsyncSession", config: dict) -> dict:
             else:
                 db.add(PingHost(
                     name=name[:128], hostname=ip, check_type="icmp",
-                    enabled=True, source="phpipam", source_detail=url,
+                    enabled=True, source="phpipam", source_detail=source_detail,
                 ))
                 existing[ip] = True  # type: ignore[assignment]
                 added += 1
@@ -144,6 +127,22 @@ async def sync_phpipam_hosts(db: "AsyncSession", config: dict) -> dict:
         await db.commit()
 
     return {"added": added, "merged": merged, "skipped": skipped, "errors": errors}
+
+
+async def sync_phpipam_hosts(db: "AsyncSession", config: dict) -> dict:
+    """Live import for a config the core collects: fetch (collect()) + apply.
+    Not backend-only: it is a collection; for a probe's config the settings
+    route applies the latest snapshot instead (routers/settings/general.py)."""
+    url = config.get("host", "")
+    if not url or not config.get("app_id", ""):
+        return {"added": 0, "merged": 0, "skipped": 0,
+                "errors": ["phpIPAM not configured (URL or App-ID missing)"]}
+
+    result = await PhpIpamIntegration(config=config).collect()
+    if not result.success:
+        logger.error("phpIPAM fetch failed: %s", result.error)
+        return {"added": 0, "merged": 0, "skipped": 0, "errors": [str(result.error)]}
+    return await apply_phpipam_hosts(db, result.data, url)
 
 
 # ── Integration Plugin ────────────────────────────────────────────────────────
@@ -212,6 +211,9 @@ class PhpIpamIntegration(BaseIntegration):
                 "addresses_inactive": len(addresses) - len(active),
                 "subnets_count": len(subnets),
                 "addresses": all_addrs,
+                # Where the addresses came from: the imported hosts'
+                # source_detail when they are applied from this snapshot.
+                "source_url": self.config.get("host", ""),
             })
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))

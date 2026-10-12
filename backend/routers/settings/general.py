@@ -372,6 +372,33 @@ async def save_phpipam(
     return RedirectResponse(url="/settings?saved=1", status_code=303)
 
 
+async def sync_phpipam_config(db: AsyncSession, cfg) -> dict:
+    """Host import for one phpIPAM config row (the sync button and the
+    scheduled sync).
+
+    A config the core collects is fetched live, as before. A probe-collected
+    one is applied from its latest successful snapshot: the backend neither
+    reaches the probe's network nor needs the config's secrets (probe-side
+    integrations, rule 2); an on-demand collect through the probe comes with
+    the command channel."""
+    import json
+
+    from integrations.phpipam import apply_phpipam_hosts, sync_phpipam_hosts
+    from models.integration import COLLECTOR_CORE
+    from services import integration as int_svc
+    from services import snapshot as snap_svc
+
+    if (cfg.collector or COLLECTOR_CORE) == COLLECTOR_CORE:
+        return await sync_phpipam_hosts(db, await int_svc.decrypt_config(db, cfg))
+
+    snap = await snap_svc.get_latest_data(db, "phpipam", cfg.id)
+    if snap is None:
+        return {"added": 0, "merged": 0, "skipped": 0,
+                "errors": ["No phpIPAM data from the probe yet"]}
+    data = json.loads(snap.data_json)
+    return await apply_phpipam_hosts(db, data, data.get("source_url") or cfg.name)
+
+
 @per_tenant_job
 async def run_phpipam_sync():
     """Scheduled phpIPAM import: every tenant's phpIPAM integrations.
@@ -379,16 +406,13 @@ async def run_phpipam_sync():
     Declares its tenancy like the jobs in scheduler.py — scheduled jobs start
     without any context (scheduler.ContextFreeExecutor)."""
     from database import AsyncSessionLocal
-    from integrations.phpipam import sync_phpipam_hosts
-    from services import integration as _int_svc
 
     async with AsyncSessionLocal() as _db:
         cfgs = (await _db.execute(
             select(IntegrationConfig).where(IntegrationConfig.type == "phpipam")
         )).scalars().all()
         for cfg in cfgs:
-            config_dict = await _int_svc.decrypt_config(_db, cfg)
-            await sync_phpipam_hosts(_db, config_dict)
+            await sync_phpipam_config(_db, cfg)
 
 
 @router.post("/phpipam/sync")
@@ -397,16 +421,13 @@ async def manual_phpipam_sync(request: Request, db: AsyncSession = Depends(get_d
     """Trigger a manual phpIPAM host import. Returns JSON result."""
     if err := require_admin(request):
         return err
-    from integrations.phpipam import sync_phpipam_hosts
-    from services import integration as _int_svc
     cfgs = (await db.execute(
         select(IntegrationConfig).where(IntegrationConfig.type == "phpipam")
     )).scalars().all()
     results = []
     for cfg in cfgs:
-        config_dict = await _int_svc.decrypt_config(db, cfg)
-        result = await sync_phpipam_hosts(db, config_dict)
-        results.append(result)
+        # Core configs are fetched live; probe configs from their snapshot.
+        results.append(await sync_phpipam_config(db, cfg))
     return JSONResponse(results[0] if len(results) == 1 else {"synced": results})
 
 

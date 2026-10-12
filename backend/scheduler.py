@@ -13,8 +13,9 @@ from sqlalchemy import delete, select
 import config
 import extensions
 from database import AsyncSessionLocal, PingHost
-from models.integration import IntegrationConfig
+from models.integration import COLLECTOR_CORE, IntegrationConfig
 from services import integration as int_svc
+from services import integration_ingest
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
 from services import tenant_jobs
@@ -87,10 +88,9 @@ scheduler = AsyncIOScheduler(job_defaults=JOB_DEFAULTS,
 # ── Generic integration collection ───────────────────────────────────────────
 
 
-# Markers placed in the snapshot row's `error` field to indicate dedupe state.
-# These are visible in the API/UI so the user can see "this integration is a
-# standby for cluster X". They are not real errors.
-_STANDBY_MARKER = "[standby:duplicate-of-primary]"
+# Kept here for the API and the tests that import it from the scheduler; the
+# write path itself lives in services.integration_ingest.
+_STANDBY_MARKER = integration_ingest.STANDBY_MARKER
 
 # Collections used to run strictly one after another, with no timeout: one
 # hanging API (or a 60 s speedtest) held up every other integration. They now
@@ -107,9 +107,6 @@ _TYPE_COLLECT_TIMEOUTS = {
 # skipped until it finishes, so a slow target is never polled twice at once.
 _inflight_cfgs: set[int] = set()
 _background_units: set[asyncio.Task] = set()
-# Created per event loop: asyncio primitives bind to the loop they first wait
-# on, and the test suite runs every test on a fresh loop.
-_loop_locks: dict[int, asyncio.Lock] = {}
 
 
 def _collect_slot():
@@ -122,14 +119,7 @@ def _collect_slot():
 
 
 def _snapshot_write_lock() -> asyncio.Lock:
-    # Writes stay serial: they are cheap, some (on_snapshot auto-import)
-    # touch shared host rows, and cluster-group ownership is decided in order.
-    key = id(asyncio.get_running_loop())
-    lock = _loop_locks.get(key)
-    if lock is None:
-        _loop_locks.clear()  # at most one live loop in production
-        lock = _loop_locks[key] = asyncio.Lock()
-    return lock
+    return integration_ingest.snapshot_write_lock()
 
 
 def collect_timeout_for(integration_cls, integration_type: str) -> float:
@@ -141,13 +131,17 @@ def collect_timeout_for(integration_cls, integration_type: str) -> float:
 
 
 class _DueConfig:
-    __slots__ = ("cfg_id", "name", "cluster_group", "config")
+    __slots__ = ("cfg_id", "name", "cluster_group", "config", "stamp")
 
-    def __init__(self, cfg_id: int, name: str, cluster_group: str | None, config: dict):
+    def __init__(self, cfg_id: int, name: str, cluster_group: str | None, config: dict,
+                 stamp: integration_ingest.CollectStamp):
         self.cfg_id = cfg_id
         self.name = name
         self.cluster_group = cluster_group
         self.config = config
+        # (config_rev, collector, probe_id) when the collect was decided on;
+        # ingest drops the result if the config changed meanwhile (rule 6).
+        self.stamp = stamp
 
 
 async def _collect_one(integration_type: str, integration_cls, due: _DueConfig):
@@ -184,98 +178,13 @@ async def _collect_one(integration_type: str, integration_cls, due: _DueConfig):
 async def _apply_result(
     db, integration_type: str, due: _DueConfig, instance, result, exc,
     cluster_owners: set[tuple[str, str]],
-) -> None:
-    """Persist one collection: snapshot, cluster-group dedupe, bandwidth, hooks."""
-    cfg = await db.get(IntegrationConfig, due.cfg_id)
-    if cfg is None:
-        return  # deleted while collecting
-    try:
-        if exc is not None:
-            raise exc
-        if result.success:
-            # Auto-populate cluster_group from cluster_name for
-            # Proxmox integrations on first successful poll.
-            if (
-                integration_type == "proxmox"
-                and not cfg.cluster_group
-                and isinstance(result.data, dict)
-                and result.data.get("cluster_name")
-            ):
-                cfg.cluster_group = str(result.data["cluster_name"])
-                logger.info(
-                    "Auto-grouped %s/%s under cluster_group=%s",
-                    integration_type, cfg.name, cfg.cluster_group,
-                )
-
-            # Determine primary vs standby for this cluster_group.
-            group_key = (
-                (integration_type, cfg.cluster_group)
-                if cfg.cluster_group else None
-            )
-            is_standby = group_key is not None and group_key in cluster_owners
-
-            if is_standby:
-                # Standby: write a health-only snapshot so the health check
-                # passes but skip data, bandwidth, hooks, and alerts.
-                await snap_svc.save(
-                    db, integration_type, cfg.id,
-                    ok=True, error=_STANDBY_MARKER,
-                )
-                logger.debug(
-                    "Standby skip [%s/%s] — primary already wrote group=%s",
-                    integration_type, cfg.name, cfg.cluster_group,
-                )
-                return
-
-            # Primary: write everything.
-            if group_key is not None:
-                cluster_owners.add(group_key)
-
-            await snap_svc.save(
-                db, integration_type, cfg.id,
-                ok=True, data=result.data,
-            )
-            # Extract bandwidth data from supported integration types
-            try:
-                from services.bandwidth import (
-                    extract_proxmox_bandwidth,
-                    extract_unifi_bandwidth,
-                )
-                if integration_type == "proxmox":
-                    await extract_proxmox_bandwidth(
-                        cfg.id, result.data, tenant_id=cfg.tenant_id, source_name=cfg.name,
-                    )
-                elif integration_type == "unifi":
-                    await extract_unifi_bandwidth(
-                        cfg.id, result.data, tenant_id=cfg.tenant_id, source_name=cfg.name,
-                    )
-            except Exception as bw_exc:
-                logger.warning(
-                    "Bandwidth extraction failed [%s/%s]: %s",
-                    integration_type, cfg.name, bw_exc,
-                )
-            # Run post-snapshot hook (e.g., auto-import hosts)
-            try:
-                await instance.on_snapshot(result.data, due.config, db)
-            except Exception as hook_exc:
-                logger.warning(
-                    "on_snapshot hook failed [%s/%s]: %s",
-                    integration_type, cfg.name, hook_exc,
-                )
-        else:
-            await snap_svc.save(
-                db, integration_type, cfg.id,
-                ok=False, error=result.error,
-            )
-    except Exception as exc2:
-        logger.error(
-            "Integration collect [%s/%s]: %s",
-            integration_type, cfg.name, exc2,
-        )
-        await snap_svc.save(
-            db, integration_type, cfg.id,
-            ok=False, error=str(exc2),
-        )
+) -> integration_ingest.Outcome:
+    """Persist one core collection through the shared ingest path."""
+    return await integration_ingest.ingest(
+        db, integration_type=integration_type, cfg_id=due.cfg_id, stamp=due.stamp,
+        result=result, exc=exc, instance=instance, config=due.config,
+        cluster_owners=cluster_owners,
+    )
 
 
 async def _run_unit(
@@ -354,7 +263,10 @@ async def run_integration_checks():
         # persist.
         id_rows = (await db.execute(
             select(IntegrationConfig.id, IntegrationConfig.type)
-            .where(IntegrationConfig.enabled == True)
+            .where(IntegrationConfig.enabled == True,
+                   # Rule 1: the core collects only its own configs — never a
+                   # probe's, also not one whose probe was deleted.
+                   IntegrationConfig.collector == COLLECTOR_CORE)
             .order_by(IntegrationConfig.id)
         )).all()
 
@@ -377,8 +289,9 @@ async def run_integration_checks():
                 if cfg_id in _inflight_cfgs:
                     continue
                 cfg = await db.get(IntegrationConfig, cfg_id)
-                if cfg is None or not cfg.enabled:
+                if cfg is None or not cfg.enabled or cfg.collector != COLLECTOR_CORE:
                     continue
+                stamp = integration_ingest.CollectStamp.of(cfg)
                 try:
                     config_dict = await int_svc.decrypt_config(db, cfg)
                 except Exception as dec_exc:
@@ -399,7 +312,7 @@ async def run_integration_checks():
                 last_run = await snap_svc.last_timestamp(db, integration_type, cfg.id)
                 if not is_due(last_run, datetime.utcnow(), interval):
                     continue
-                due = _DueConfig(cfg.id, cfg.name, cfg.cluster_group, config_dict)
+                due = _DueConfig(cfg.id, cfg.name, cfg.cluster_group, config_dict, stamp)
                 if cfg.cluster_group:
                     groups.setdefault(cfg.cluster_group, []).append(due)
                 else:

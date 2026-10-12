@@ -34,8 +34,9 @@ def test_every_revision_chains_to_the_base():
 
 
 def test_the_tenancy_revisions_are_linear():
-    """044 -> 045 (phase 9) -> 046 (tenant keys) -> 047 (phase 10)."""
+    """044 -> 045 (phase 9) -> 046 (tenant keys) -> 047 (phase 10)
+    -> 048 (probe-side integrations P1)."""
     scripts = _scripts()
-    chain = {r: scripts.get_revision(r).down_revision for r in ("045", "046", "047")}
-    assert chain == {"045": "044", "046": "045", "047": "046"}
-    assert list(scripts.get_heads()) == ["047"]
+    chain = {r: scripts.get_revision(r).down_revision for r in ("045", "046", "047", "048")}
+    assert chain == {"045": "044", "046": "045", "047": "046", "048": "047"}
+    assert list(scripts.get_heads()) == ["048"]

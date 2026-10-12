@@ -1,10 +1,17 @@
 """Generic IntegrationConfig and Snapshot models for all integrations."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, text
+from sqlalchemy import (
+    Boolean, CheckConstraint, Column, DateTime, Index, Integer, String, Text, text,
+)
 
 from models.base import Base
-from models.tenant import TenantScoped
+from models.tenant import TenantScoped, tenant_fk
+
+# Who collects a config (probe-side integrations, revision 048).
+COLLECTOR_CORE = "core"
+COLLECTOR_PROBE = "probe"
+COLLECTORS = (COLLECTOR_CORE, COLLECTOR_PROBE)
 
 
 class IntegrationConfig(TenantScoped, Base):
@@ -19,6 +26,16 @@ class IntegrationConfig(TenantScoped, Base):
     for failover but skip duplicate writes (snapshots, bandwidth, alerts).
     For Proxmox integrations this is auto-populated from the cluster_name
     after the first successful poll.
+
+    collector / probe_id / config_rev (revision 048, probe-side integrations):
+    ``collector`` names who collects the config — the core (``'core'``, every
+    existing row) or a probe (``'probe'``, with ``probe_id``). Who collects is
+    the column, never the nullness of ``probe_id``: deleting a probe clears
+    ``probe_id`` (SET NULL) but leaves ``collector = 'probe'`` — "needs a
+    probe" — and the core still does not collect it. ``config_rev`` is bumped
+    on every change of the config; a result is stored only if it was started
+    with the config's current ``config_rev`` and collector
+    (``services.integration_ingest``).
     """
     __tablename__ = "integration_configs"
     id            = Column(Integer, primary_key=True, autoincrement=True)
@@ -28,6 +45,21 @@ class IntegrationConfig(TenantScoped, Base):
     enabled       = Column(Boolean, default=True)
     cluster_group = Column(String(128), nullable=True, index=True)
     created_at    = Column(DateTime, default=datetime.utcnow)
+    collector     = Column(String(16), nullable=False, default=COLLECTOR_CORE,
+                           server_default=COLLECTOR_CORE)
+    probe_id      = Column(Integer, nullable=True, index=True)
+    config_rev    = Column(Integer, nullable=False, default=1, server_default="1")
+
+    __table_args__ = (
+        CheckConstraint("collector IN ('core', 'probe')",
+                        name="ck_integration_configs_collector"),
+        CheckConstraint("collector = 'probe' OR probe_id IS NULL",
+                        name="ck_integration_configs_probe_collector"),
+        # The probe belongs to the config's own tenant; removing it clears
+        # only probe_id, the config stays a probe config ("needs a probe").
+        tenant_fk("probe_id", "agents", name="fk_integration_configs_probe_id",
+                  ondelete="SET NULL"),
+    )
 
 
 class Snapshot(TenantScoped, Base):
@@ -44,6 +76,12 @@ class Snapshot(TenantScoped, Base):
     ok          = Column(Boolean, nullable=False, default=True)
     data_json   = Column(Text, nullable=True)
     error       = Column(Text, nullable=True)
+    # Revision 048: the probe that collected this snapshot (NULL = the core;
+    # a soft reference, no foreign key — history outlives a deleted probe)
+    # and the probe's collection time, clock-corrected. ``timestamp`` stays
+    # the authoritative "as of" time and is set from collected_at.
+    collected_by = Column(Integer, nullable=True)
+    collected_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index("ix_snap_type_entity_ts", "tenant_id", "entity_type", "entity_id", timestamp.desc()),
