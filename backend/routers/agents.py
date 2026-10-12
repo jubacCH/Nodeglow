@@ -56,6 +56,17 @@ def _require_admin(request: Request):
     return None
 
 
+def _require_access_admin(request: Request):
+    """Issuing or revoking install tokens: an admin, not through support
+    access (a token made by a support session would outlive its grant)."""
+    if err := _require_admin(request):
+        return err
+    if tenancy.request_via_support(request):
+        return JSONResponse({"error": tenancy.SUPPORT_IAM_REFUSED, "code": "support_access"},
+                            status_code=403)
+    return None
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -427,6 +438,11 @@ async def _handle_report(db, agent: Agent, body: dict):
     if command:
         agent.pending_command = None
 
+    # Syslog relay counters (probes with the relay on); kept for the API.
+    from services import probe_syslog
+    if agent.is_probe and "syslog_relay" in body:
+        agent.syslog_relay_status = probe_syslog.sanitize_status(body.get("syslog_relay"))
+
     await db.commit()
 
     # Watched services. Only agents that know the feature send the key; for
@@ -487,6 +503,11 @@ async def _handle_report(db, agent: Agent, body: dict):
         # Older agents ignore the extra key.
         "watched_services": watched_list(agent),
     }}
+    # Probe syslog relay: on/off and port, for probes only (an agent without
+    # the key — every non-probe — keeps its relay off).
+    relay = probe_syslog.relay_config(agent)
+    if relay is not None:
+        resp["config"]["syslog_relay"] = relay
     if command:
         resp["command"] = command
 
@@ -659,48 +680,102 @@ async def agent_logs(request: Request):
 async def _handle_logs(request: Request, agent: Agent, body: dict):
     """Log submission after authentication, inside the agent's tenant scope."""
     hostname = body.get("hostname", agent.hostname or "unknown")
+    if not isinstance(hostname, str):
+        hostname = agent.hostname or "unknown"
     logs = body.get("logs", [])
-    if not logs:
+    if not isinstance(logs, list) or not logs:
         return {"ok": True, "count": 0}
 
-    # Get client IP for source_ip
-    source_ip = request.client.host if request.client else "0.0.0.0"
+    from services import syslog as syslog_svc
 
-    # Resolve host_id via syslog host cache
+    # The agent's site; a probe relays syslog of exactly this site. An agent
+    # enrolled without one is filed under its tenant's default site.
+    site_id = agent.site_id
+    if site_id is None:
+        site_id = tenancy.backend().default_site_id(agent.tenant_id)
+
     try:
-        from services.syslog import _resolve_host_id, _refresh_host_cache
-        await _refresh_host_cache()
-        host_id = _resolve_host_id(source_ip, hostname, agent.tenant_id)
+        await syslog_svc._refresh_host_cache()
     except Exception:
-        host_id = None
+        pass
+
+    # The agent's own logs: attributed to the agent's own host, matched by
+    # name inside its tenant and site; by the request's address only where
+    # that cannot be a customer's NAT (see resolve_agent_host_id). The
+    # column keeps the request's address for display.
+    client_ip = request.client.host if request.client else "0.0.0.0"
+    try:
+        own_host_id = syslog_svc.resolve_agent_host_id(
+            client_ip, hostname, agent.tenant_id, site_id,
+        )
+    except Exception:
+        logger.warning("Agent %d: resolving its own host failed", agent.id, exc_info=True)
+        own_host_id = None
 
     # Feed logs through the syslog pipeline (_enqueue handles ClickHouse write + live tail)
-    from services.syslog import TENANT_KEY, _enqueue
     count = 0
-    for entry in logs[:500]:
+    dropped: dict[str, int] = {}
+    now = datetime.utcnow()
+    for entry in logs[:syslog_svc.RELAY_MAX_ENTRIES]:
+        if not isinstance(entry, dict):
+            dropped["invalid"] = dropped.get("invalid", 0) + 1
+            continue
+
+        if "raw" in entry:
+            # Probe syslog relay: a device's line, with the device's address.
+            # Only a probe may speak for other devices; tenant and site are
+            # the probe's whatever the entry says. The relay is the admin's
+            # (audited) switch per probe: a probe whose relay is off — or a
+            # tampered one ignoring its config — relays nothing.
+            if not agent.is_probe:
+                reason = "relay_not_a_probe"
+                parsed = None
+            elif not agent.syslog_relay_enabled:
+                reason = "relay_disabled"
+                parsed = None
+            else:
+                parsed, reason = syslog_svc.parse_relayed_entry(
+                    entry, tenant_id=agent.tenant_id, site_id=site_id, now=now,
+                )
+            if parsed is None:
+                dropped[reason] = dropped.get(reason, 0) + 1
+                syslog_svc._count_drop(reason)
+                continue
+            await syslog_svc._enqueue(parsed)
+            count += 1
+            continue
+
         ts_str = entry.get("timestamp", "")
         try:
             ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
         except Exception:
-            ts = datetime.utcnow()
+            ts = now
 
         parsed = {
             "timestamp": ts,
-            "received_at": datetime.utcnow(),
-            "source_ip": source_ip,
+            "received_at": now,
+            "source_ip": client_ip,
             "hostname": hostname,
             "facility": entry.get("facility"),
             "severity": entry.get("severity", 6),
             "app_name": entry.get("app_name", ""),
-            "message": entry.get("message", "")[:2000],
-            "host_id": host_id,
-            TENANT_KEY: agent.tenant_id,
+            "message": str(entry.get("message", ""))[:2000],
+            "host_id": own_host_id,
+            "site_id": site_id or 0,
+            syslog_svc.TENANT_KEY: agent.tenant_id,
         }
-        await _enqueue(parsed)
+        await syslog_svc._enqueue(parsed)
         count += 1
 
+    if dropped:
+        # The allowlist doing its job is not worth a warning per batch; a
+        # malformed entry or a non-probe relaying is.
+        level = (logging.DEBUG if set(dropped) <= {"relay_not_allowed", "relay_empty"}
+                 else logging.WARNING)
+        logger.log(level, "Agent %d: dropped %d log entr(ies): %s",
+                   agent.id, sum(dropped.values()), dropped)
     logger.debug("Agent %s sent %d log entries", hostname, count)
-    return {"ok": True, "count": count}
+    return {"ok": True, "count": count, "dropped": sum(dropped.values())}
 
 
 # ── Install-token CRUD (admin) ────────────────────────────────────────────────
@@ -710,7 +785,7 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
 async def create_install_token(request: Request):
     """Issue a new per-install enrollment token. Admin only. Returns the
     plaintext token once — it is stored only as an HMAC hash afterwards."""
-    if err := _require_admin(request):
+    if err := _require_access_admin(request):
         return err
     try:
         body = await request.json()
@@ -784,7 +859,7 @@ async def list_install_tokens(request: Request):
 @rate_limit(max_requests=10, window_seconds=60)
 async def revoke_install_token(token_id: int, request: Request):
     """Revoke an install token without deleting its audit record."""
-    if err := _require_admin(request):
+    if err := _require_access_admin(request):
         return err
     async with AsyncSessionLocal() as db:
         row = await db.get(AgentInstallToken, token_id)

@@ -33,6 +33,7 @@ from services import snapshot as snap_svc
 from services import maintenance as maint_svc
 from services import tenancy
 from services.audit import log_action
+from services.probe_syslog import relay_view
 from services.agent_services import (
     apply_watch_list_change,
     normalize_watch_list,
@@ -179,8 +180,17 @@ async def require_operator(request: Request, api_key: ApiKey = Depends(require_a
     reads and replaces every tenant's rows. In the core the operator is the
     admin of the default tenant, so this is ``require_admin`` there."""
     user = getattr(request.state, "current_user", None)
-    if not tenancy.backend().is_operator(user, api_key.role, api_key.tenant_id):
+    if not tenancy.backend().is_operator(user, api_key.role, api_key.tenant_id,
+                                         via=tenancy.request_acting_via(request)):
         raise HTTPException(status_code=403, detail="Installation operator required.")
+    return api_key
+
+
+async def require_access_admin(request: Request, api_key: ApiKey = Depends(require_admin)) -> ApiKey:
+    """Managing the tenant's API keys: an admin, but not through support
+    access (a key made by a support session would outlive its grant)."""
+    if tenancy.request_via_support(request):
+        raise HTTPException(status_code=403, detail=tenancy.SUPPORT_IAM_REFUSED)
     return api_key
 
 
@@ -228,7 +238,7 @@ def _extract_device_data(int_type: str, raw: dict, host: PingHost) -> dict | Non
 # ── API Key Management ───────────────────────────────────────────────────────
 
 
-@router.post("/keys", summary="Create API key", dependencies=[Depends(require_admin)])
+@router.post("/keys", summary="Create API key", dependencies=[Depends(require_access_admin)])
 async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
     body = await request.json()
     name = (body.get("name") or "").strip()
@@ -264,7 +274,7 @@ async def list_api_keys(db: AsyncSession = Depends(get_db)):
     ]
 
 
-@router.delete("/keys/{key_id}", summary="Delete API key", dependencies=[Depends(require_admin)])
+@router.delete("/keys/{key_id}", summary="Delete API key", dependencies=[Depends(require_access_admin)])
 async def delete_api_key(key_id: int, db: AsyncSession = Depends(get_db)):
     key = await db.get(ApiKey, key_id)
     if not key:
@@ -1083,6 +1093,7 @@ def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) ->
     out = {
         "is_probe": bool(agent.is_probe),
         "probe_interval_seconds": agent.probe_interval_seconds,
+        "syslog_relay": relay_view(agent),
     }
     if agent.is_probe:
         st = ProbeState(
@@ -1255,9 +1266,32 @@ async def patch_agent(
                 if not 10 <= value <= 3600:
                     raise HTTPException(400, "probe_interval_seconds must be 10..3600 or null")
             updates["probe_interval_seconds"] = value
-        for field in ("is_probe", "probe_interval_seconds"):
-            if field in updates and getattr(agent, field) != updates[field]:
-                probe_changes[field] = {"from": getattr(agent, field), "to": updates[field]}
+    # Probe syslog relay: the probe listens for syslog of its whole site, so
+    # it is admin-only and audited like the probe role itself.
+    if "syslog_relay_enabled" in body or "syslog_relay_port" in body:
+        if _key.role != "admin":
+            raise HTTPException(403, "Admin role required to change the syslog relay.")
+        if "syslog_relay_enabled" in body:
+            if not isinstance(body["syslog_relay_enabled"], bool):
+                raise HTTPException(400, "syslog_relay_enabled must be true or false")
+            will_be_probe = updates.get("is_probe", bool(agent.is_probe))
+            if body["syslog_relay_enabled"] and not will_be_probe:
+                raise HTTPException(400, "the syslog relay needs a probe (is_probe)")
+            updates["syslog_relay_enabled"] = body["syslog_relay_enabled"]
+        if "syslog_relay_port" in body:
+            port = body["syslog_relay_port"]
+            if port is not None and (isinstance(port, bool) or not isinstance(port, int)
+                                     or not 1 <= port <= 65535):
+                raise HTTPException(400, "syslog_relay_port must be 1..65535 or null")
+            updates["syslog_relay_port"] = port
+    if updates.get("is_probe") is False:
+        # A plain agent never relays: switching the role off switches it off.
+        updates["syslog_relay_enabled"] = False
+
+    for field in ("is_probe", "probe_interval_seconds", "syslog_relay_enabled",
+                  "syslog_relay_port"):
+        if field in updates and getattr(agent, field) != updates[field]:
+            probe_changes[field] = {"from": getattr(agent, field), "to": updates[field]}
 
     if updates:
         await db.execute(update(Agent).where(Agent.id == agent_id).values(**updates))
@@ -1275,6 +1309,7 @@ async def patch_agent(
         "agent_log_level": agent.agent_log_level or "errors",
         "is_probe": bool(agent.is_probe),
         "probe_interval_seconds": agent.probe_interval_seconds,
+        "syslog_relay": relay_view(agent),
     }
 
 

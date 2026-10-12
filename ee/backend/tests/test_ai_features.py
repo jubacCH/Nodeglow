@@ -45,9 +45,11 @@ def test_plugin_registers_everything_on_a_fresh_registry():
     assert {"/api/v1/glow/chat", "/api/v1/incidents/{incident_id}/postmortem",
             "/settings/ai/test-summary"} <= paths
     assert "/settings/license" in paths
+    assert {"/api/tenants", "/api/support-access"} <= paths
     assert reg.scheduler_coordinator is not None and reg.license_provider is not None
-    # The license hook first, then the daily summary job.
-    assert len(reg.incident_resolved_hooks) == 1 and len(reg.scheduler_hooks) == 2
+    assert reg.tenancy_backend is not None and reg.retention_policy is not None
+    # The license hook first, then the daily summary job, then the tenancy jobs.
+    assert len(reg.incident_resolved_hooks) == 1 and len(reg.scheduler_hooks) == 3
 
 
 async def test_daily_summary_hook_schedules_the_job():

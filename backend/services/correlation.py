@@ -442,7 +442,7 @@ async def _rule_integration_host(
         # Try to extract host from config
         try:
             from services.integration import decrypt_config
-            config_dict = decrypt_config(cfg.config_json)
+            config_dict = await decrypt_config(db, cfg)
             cfg_host = (config_dict.get("host") or "").lower().strip()
             # Strip protocol and port
             cfg_host = cfg_host.replace("https://", "").replace("http://", "").split(":")[0].split("/")[0]

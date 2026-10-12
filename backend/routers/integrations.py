@@ -296,7 +296,7 @@ async def api_edit_instance(
     if not cfg or cfg.type != integration_type:
         return JSONResponse({"error": "Instance not found"}, status_code=404)
 
-    existing_config = int_svc.decrypt_config(cfg.config_json)
+    existing_config = await int_svc.decrypt_config(db, cfg)
     body = await request.json()
     name = str(body.get("name", "")).strip() or cfg.name
     config_dict = {}
@@ -474,7 +474,7 @@ async def deploy_agent_to_lxcs(
     if not cfg or cfg.type != "proxmox":
         return JSONResponse({"error": "Proxmox config not found"}, status_code=404)
 
-    config_dict = int_svc.decrypt_config(cfg.config_json)
+    config_dict = await int_svc.decrypt_config(db, cfg)
 
     api = ProxmoxAPI(
         host=config_dict["host"],

@@ -13,6 +13,8 @@ import { AppearanceTab } from '@/components/settings/AppearanceTab';
 import { AuthTab } from '@/components/settings/AuthTab';
 import { BackupTab } from '@/components/settings/BackupTab';
 import { LicenseTab } from '@/components/settings/LicenseTab';
+import { SupportAccessTab } from '@/components/settings/SupportAccessTab';
+import { useFeatures } from '@/hooks/queries/useFeatures';
 import { MonitoringTab, SystemTab } from '@/components/settings/GeneralTabs';
 import { NotificationsTab, type NotifLog } from '@/components/settings/NotificationsTab';
 import { useSaveStatus, useSectionForm } from '@/components/settings/formKit';
@@ -23,9 +25,9 @@ import {
 import { api, apiErrorBody, apiErrorMessage, get, post } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 
-type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'ai' | 'auth' | 'backup' | 'license';
+type Tab = 'system' | 'monitoring' | 'notifications' | 'appearance' | 'api' | 'ai' | 'auth' | 'backup' | 'support' | 'license';
 
-const TAB_IDS: Tab[] = ['system', 'monitoring', 'notifications', 'appearance', 'api', 'ai', 'auth', 'backup', 'license'];
+const TAB_IDS: Tab[] = ['system', 'monitoring', 'notifications', 'appearance', 'api', 'ai', 'auth', 'backup', 'support', 'license'];
 const TAB_LABELS: Record<Tab, string> = {
   system: 'System',
   monitoring: 'Monitoring',
@@ -35,6 +37,7 @@ const TAB_LABELS: Record<Tab, string> = {
   ai: 'AI',
   auth: 'Authentication',
   backup: 'Backup',
+  support: 'Support access',
   license: 'License',
 };
 
@@ -61,6 +64,9 @@ export default function SettingsPage() {
   useEffect(() => { document.title = 'Settings | Nodeglow'; }, []);
   const toast = useToastStore();
   const qc = useQueryClient();
+  // Support access exists only where the multi-tenancy package is installed (ee).
+  const { data: features } = useFeatures();
+  const visibleTabs = TAB_IDS.filter((id) => id !== 'support' || features?.installed?.multi_tenancy === true);
 
   /* ---- Tab, kept in ?tab= so every tab is linkable (audit F-25) ---- */
   const [activeTab, setActiveTab] = useState<Tab>('system');
@@ -185,7 +191,7 @@ export default function SettingsPage() {
 
   /* ---- Render ---- */
 
-  const tabs: TabItem<Tab>[] = TAB_IDS.map((id) => ({
+  const tabs: TabItem<Tab>[] = visibleTabs.map((id) => ({
     id,
     label: (
       <>
@@ -221,7 +227,7 @@ export default function SettingsPage() {
 
       <Tabs<Tab> items={tabs} value={activeTab} onChange={selectTab} label="Settings sections" idBase="settings" className="mb-5" />
 
-      {TAB_IDS.map((id) => (
+      {visibleTabs.map((id) => (
         <TabPanel key={id} idBase="settings" id={id} active={activeTab === id}>
           {id === 'system' && withSettings(() => general.value && (
             <SystemTab
@@ -232,8 +238,9 @@ export default function SettingsPage() {
               onDiscard={general.discard}
             />
           ))}
-          {id === 'monitoring' && withSettings(() => general.value && (
+          {id === 'monitoring' && withSettings((s) => general.value && (
             <MonitoringTab
+              retentionCaps={s.retention_caps}
               form={general.value}
               set={general.set}
               status={generalSave.status}
@@ -266,6 +273,7 @@ export default function SettingsPage() {
             <AuthTab settings={s} ldap={{ ...ldap, value: ldap.value }} onSaved={invalidateSettings} />
           ))}
           {id === 'backup' && <BackupTab />}
+          {id === 'support' && <SupportAccessTab />}
           {id === 'license' && <LicenseTab />}
         </TabPanel>
       ))}

@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-Status: design · 2026-10-10 — phases 1–8 implemented 2026-10-11 (see "Implementation status")
+Status: design · 2026-10-10 — phases 1–9 implemented 2026-10-11; per-tenant envelope keys (owner decision 7, revision 046) and phase 10 (probe syslog relay) implemented 2026-10-11 (see "Implementation status")
 
 ## Why
 
@@ -54,7 +54,9 @@ Owner decisions this design builds on (2026-10-10):
   first.
 - **Billing.** Plan limits are modelled (quotas), invoicing is not.
 - **Per-tenant encryption keys.** Listed as an option for later (crypto-shred on
-  tenant deletion); one `SECRET_KEY` remains.
+  tenant deletion); one `SECRET_KEY` remains. *(Superseded by owner decision 7:
+  envelope encryption per tenant, implemented in revision 046 — see
+  "Implementation status".)*
 
 ## Tenant model
 
@@ -639,6 +641,17 @@ This makes probe-side integrations (Proxmox, UniFi, … — a non-goal of the pr
 spec) a practical prerequisite for a useful SaaS offering; it should be its own
 spec.
 
+That spec is [2026-10-11-probe-side-integrations.md](2026-10-11-probe-side-integrations.md)
+(design, 2026-10-11; recommendation: the existing Python collectors run on the
+probe, host-level primitives native in the agent, no generic proxy).
+
+Phase 9 consequences from that spec: a suspended tenant's probes must still
+reach a minimal lifecycle endpoint (`GET /api/agent/lifecycle`, answering only
+`active` / `suspended` / `wipe`) so they stop collecting and drop cached
+secrets, and the purge must, before deleting agent rows, copy each agent's
+token hash into an installation-level tombstone so the probe can still be told
+to `wipe` (see "Tenant suspension and purge" there).
+
 ## Open Core boundary
 
 ### Principle
@@ -790,8 +803,8 @@ is user-visible until phase 7.
 | 6 ✅ | ClickHouse: step A + helper filtering + row policies + two users; step B rebuild job | core | M + M |
 | 7 ✅ | Postgres RLS + role split; CI job on Postgres asserting policies | core | M |
 | 8 ✅ | Tenant-isolation test suite (built from phase 2 on, gating from phase 4) | core | M |
-| 9 | `ee/` skeleton, licence verification, tenant lifecycle incl. purge, tenant switcher | ee | L |
-| 10 | Probe syslog relay (agent) + `/api/agent/logs` per-entry source + site-scoped resolution | core (agent + backend) | M + S |
+| 9 ✅ | `ee/` skeleton, licence verification, tenant lifecycle incl. purge, tenant switcher | ee | L |
+| 10 ✅ | Probe syslog relay (agent) + `/api/agent/logs` per-entry source + site-scoped resolution | core (agent + backend) | M + S |
 | 11 | MSP portal: cross-tenant overview, incident board, provider roles and keys, provider channels | ee | L |
 | 12 | Export (core) / import (ee), agent `migrate` command | core + ee | L |
 | 13 | SSO: OIDC, SAML, SCIM, home-realm discovery | ee | L |
@@ -1483,8 +1496,8 @@ Deviations / not done:
   `ttl_only_drop_parts = 1`.
 - `site_id` exists on `syslog_messages` but nothing filters on it yet
   (phase 10).
-- ee does not call `clickhouse_rebuild.complete()` yet — there is no tenant
-  creation in ee (phase 9 must gate on it).
+- ~~ee does not call `clickhouse_rebuild.complete()` yet~~ — phase 9's
+  tenant creation gates the second tenant on it.
 - Integration with phases 5 and 8 (`integrate/tenancy-5-8`): every phase-6
   xfail of the isolation suite passed and was removed;
   `cleanup_old_results` reads `ping_retention_days` through phase 5's
@@ -1718,10 +1731,521 @@ Tests (integration branch): 1734 passed, 27 skipped, no xfail (with ee);
 1652 passed, 28 skipped (`NODEGLOW_DISABLE_EE=1`); PostgreSQL module 36
 passed. The isolation files add about 50 s to the suite on SQLite.
 
+### Phase 9 — first sellable multi-tenant install (done)
+
+Migration `045`; core extension points in `services/tenancy.py`,
+`extensions.py`, `services/tenant_jobs.py`, `routers/auth.py`; the logic in
+`ee/backend/nodeglow_ee/tenancy/` (`backend`, `lifecycle`, `purge`,
+`plans`, `support`, `api`, `jobs`); frontend `TenantSwitcher`, `/tenants`,
+Settings → Support access. Bound by the owner decisions of 2026-10-11
+(5, 6, 8, 9; 7 through the envelope keys).
+
+- **Schema (045, core).** `tenants` gains `suspended_at`, `delete_after`,
+  `deletion_requested_at` / `_by`, `purge_started_at`, `purge_state`
+  (`plan` exists since 039). New tenant-owned table `support_grants` (role,
+  reason, `expires_at`, granted / revoked by, `ended_audited_at`) with the
+  `tenant_isolation` policy (045 applies it; `migrate.py` re-applies the
+  live classification on every start — verified on PostgreSQL: policy
+  present, RLS enabled and forced, tenant 1 sees none of tenant 2's grants,
+  down to 044 and up again, `alembic check`). Classification: **30
+  tenant-owned**, 9 global. Schema only in the core, like
+  `provider_memberships`.
+- **Extension points (core).** `TenancyBackend.resolve_login_access` (the
+  tenant a new session starts in) and `list_access_for` (every reachable
+  tenant with role and `via`); `ACTING_VIA_SUPPORT`; registry
+  `retention_policy` (a tenant's cap per retention key, combined with the
+  installation's `<key>_max` in `tenant_jobs.retention_cap` — used by the
+  settings form, the nightly cleanup and the new `retention_caps` of
+  `/settings/json`); feature flag `multi_tenancy`. `/api/auth/me` reports
+  `is_operator`, the active tenant (`id`, `via`) and `tenants` (id, name,
+  role, via); `POST /api/auth/tenant` asks the backend (support access
+  included) and audits with its `via`. `SingleTenancy` behaves as before.
+- **Backend (`MultiTenancy`, ee).** Subclass of `SingleTenancy`, always
+  registered by the plugin (a single-tenant install sees no difference):
+  memberships of every active tenant; `active_tenant_ids` from `tenants`
+  (suspended and deleting tenants are not monitored); operator =
+  `users.is_operator` or the core rule; a login with several tenants and no
+  choice starts in the last used one (newest session's tenant), else the
+  lowest id — the core refuses it; the default site per tenant is cached
+  for the synchronous session filter.
+- **Lifecycle (`/api/tenants`, operators).** Create (default site, first
+  admin — an existing user or a new local one; the operator gets **no**
+  membership), suspend (sessions working in it fall back), resume,
+  schedule deletion with the tenant's name typed as confirmation (status
+  `deleting`, `delete_after` = now + 30 days, decision 6), cancel deletion
+  (back to suspended; refused once the purge has started), rename, plan
+  assignment. The default tenant cannot be suspended or deleted. Every
+  action is audited twice: installation level (`tenant_id` NULL,
+  `acting_via = operator`) and in the tenant's own log. Audit rows are
+  flushed inside their scope — flushed at the commit, in the operator's
+  tenant, the session filter stamped the installation row with that tenant
+  and refused the other tenant's row (found by the isolation walk).
+- **Licence.** Creating tenants and the admin actions need the
+  `multi_tenancy` feature; `max_tenants` counts every existing tenant
+  (`None` = no limit, as the licence page already showed). The **second
+  tenant** additionally needs `clickhouse_rebuild.complete()` and active
+  RLS (`NODEGLOW_RLS` on, every tenant table enabled and forced, the app
+  connection neither superuser nor BYPASSRLS — `pg_rls.runtime_status` /
+  `assess`), or the documented override `NODEGLOW_TENANTS_WITHOUT_RLS=1`
+  (compose passes it; OPERATIONS.md "Tenants"). An expired licence
+  (decision 9) keeps every tenant monitored and reachable; create,
+  suspend, resume, plan changes and new support grants are refused (402);
+  cancelling a deletion, ending support access and scheduled purges keep
+  working.
+- **Purge (`purge.py`, job `ee_tenant_purges`, every 15 min).** Only due
+  tenants. Each step is idempotent, an interrupted purge resumes from the
+  top (`purge_state` records runs and counts): crypto-shred
+  (`services.tenant_keys.destroy_tenant_key(db, tenant_id)`; since the
+  integration with the envelope keys a real destroy — a failure stops the
+  purge before anything is deleted), ClickHouse
+  (per tenant table a scoped count, then a lightweight `DELETE` with
+  `tenant_id = {nodeglow_tenant:UInt32}` on the main connection in the
+  tenant's scope, verified by a second count; also the step-B leftovers
+  `<t>__pre_tenant`), PostgreSQL (every tenant-owned table, children first
+  — `Base.metadata.sorted_tables` reversed, self references cleared — in
+  batches of 5000 with a commit each, in `system_scope`: under RLS the app
+  role deletes with `nodeglow.system = on`; no TRUNCATE, so no owner
+  connection), then memberships, the sessions working in it, the users of
+  this tenant only (not operators, not provider members), the tenant row,
+  and the installation-level audit row `tenant.purged` with the counts.
+  ClickHouse goes first: once the tenant row is gone nothing could resume.
+  Runs whatever the licence says.
+- **Plans (decision 5).** `standard` 30, `professional` 90, `enterprise`
+  365 days; the plan caps every retention key of the tenant (its admins
+  choose within it — form `max` plus the server-side clamp); assigning a
+  plan lowers stored values above it (and "keep forever"). Tenant 1 of an
+  existing install has no plan, so no plan cap. Storage-fixed retention
+  (ClickHouse `ping_checks` 30 days, agent / bandwidth metrics 7 days,
+  syslog severity TTLs) is not extended by a larger tier.
+- **Support access (decision 8, `/api/support-access`).** A tenant admin
+  grants a role (default read-only), a reason and 1 h – 14 days. While it
+  is active, installation operators (`users.is_operator`) and members of
+  the tenant's provider without an own membership resolve to the tenant
+  with that role and `via = support`; an own membership wins, a suspended
+  tenant's grants open nothing. Revocable at once (also without a
+  licence, also by the support user); grants cannot be made or extended
+  through support access. Audit in the tenant's log: `support.grant`,
+  `support.revoke`, `support.expired` (job `ee_support_expiry`, every
+  minute; access itself ends at `expires_at` on every request), and
+  `support.access` for the requests — one row per user, grant, method and
+  path per minute; every write additionally carries `acting_via =
+  support`. Long-lived streams end within the revalidation interval
+  (30 s).
+- **Frontend.** `TenantSwitcher` replaces the "Multi-tenant · Planned"
+  placeholder: hidden with one tenant; lists the user's tenants with role
+  and access (Support access tag); switching posts `/api/auth/tenant`,
+  re-reads `/api/auth/me`, resets every query (nothing of the previous
+  tenant stays on screen) and reconnects the socket. `/tenants`
+  (operators, only with `multi_tenancy` installed): status, plan
+  (assignable), members, licence usage x / max, what blocks a new tenant,
+  create, suspend / resume, delete with typed confirmation and the purge
+  date, cancel deletion. Settings → Support access (grant, history, end);
+  a banner under the top bar for every member while support access is
+  active. The retention fields show the plan cap.
+
+Tests: `ee/backend/tests/test_tenancy_lifecycle.py` (operator-only;
+creation incl. site, admin, name, default site of new hosts, audit;
+validation; the second-tenant gate for RLS and the ClickHouse rebuild, and
+on PostgreSQL that RLS on needs no override; `max_tenants`; feature list;
+expiry; suspend / resume; typed deletion and 30 days; cancel without a
+licence; plans and the settings clamp; login with several tenants; the
+switcher lists only the user's tenants), `test_tenancy_support.py` (no
+access by default; grant, access audit and its dedupe, read-only; editor
+writes audited as support; no grant through support; banner for members;
+revoke; expiry audited once; membership wins; who may use a grant; one
+tenant only; suspended tenant; validation and licence; stream
+revalidation), `test_tenancy_purge.py` (every tenant-owned table of B
+purged and A unchanged; users and memberships; ClickHouse calls scoped;
+refusals; resume after a ClickHouse failure; crypto-shred first; the job;
+end to end through the API). All three also run in the PostgreSQL router
+mode as `nodeglow_app` with RLS on (`ROUTER_TESTS_ON_PG`).
+`test_migrations_tenancy_pg.py::test_045_lifecycle_columns_and_support_grants`;
+a live ClickHouse purge test in `test_live_clickhouse.py` (CI; there is no
+local server, its first run is CI). Gating suite: the walk runs with the
+plugin's backend (marker `ee_tenancy`), seeds `support_grants`, maps
+`grant_id` / `tenant_id`, lists the seven `/api/tenants` routes as
+installation routes (operator-only; the 403 test covers them) and accepts
+in B only the lifecycle audit rows an installation route writes there on
+purpose. Frontend: `lib/tenants.test.ts` (switcher visibility, a switch
+resets the cache, a refused switch keeps it, page helpers, banner),
+`navigation.test.ts` (Tenants only for operators with the feature). The
+core suite pins the core backend (autouse fixture patching
+`services.tenancy.backend`; resetting the registry instead lost the
+plugin's backend whenever `main` was first imported during a test).
+
+Review fixes (phase 9, before merge):
+
+- **Shared identities.** Users are global, and `POST /api/tenants` may make
+  an existing user a tenant's admin, so a tenant admin could reset the
+  password of a user who also reaches other tenants — the operator
+  included — and take the installation over. Now a tenant admin resets a
+  password (`PATCH /api/users/{id}`, `POST /users/{id}/password`) only for
+  an account the request's tenant alone owns: no other membership, no
+  `provider_memberships` row, not `users.is_operator` (else 403
+  `foreign_identity`); an installation operator may for anyone (in the
+  core the admin of the one tenant — unchanged there). Removing such a user
+  from a tenant revokes the membership and keeps the account (a provider
+  member's always; an operator's unless an operator removes it).
+- **Installation AI keys are the operator's** (decision 2). The provider,
+  its endpoint, model and keys (`claude_api_key`, `ai_provider`,
+  `ai_anthropic_model`, `ai_openai_*`) are written only when
+  `request_is_operator`; a tenant admin who changes one gets 403
+  `operator_required` (the unchanged values the form sends back are
+  accepted and not rewritten), keeps the tenant keys (opt-in, redaction,
+  daily summary), and tests the connection with the saved values only.
+  `/settings/ai/config` reports `provider_editable`; the AI tab locks the
+  provider section for tenant admins.
+- **Support access manages no identities.** While `acting_via ==
+  support`, whatever the grant's role: no users created, deleted, re-roled
+  or reset, no API keys (`/settings/api-keys/*`, `/api/v1/keys*`) and no
+  agent install tokens issued or revoked (403 `support_access`;
+  `services.tenancy.request_may_manage_access`, the helpers
+  `require_access_admin` in `routers/settings/_helpers.py` and
+  `routers/api_v1.py`). Reading the user list stays possible. A test
+  enumerates every such route of the app and fails when a new one is not
+  covered.
+- **A support role never makes an operator.** `TenancyBackend.is_operator`
+  takes `via`; the core rule (admin of the default tenant) ignores a role
+  that comes from support access — an admin grant on tenant 1 gave a
+  provider member the installation. `request_is_operator`, `/api/auth/me`
+  and the API's `require_operator` pass it. The `users.is_operator` flag
+  still decides on its own.
+- **The default tenant gets no plan.** `PATCH /api/tenants/1` with a plan
+  is refused (409 `default_tenant`); `plan: null` ("no plan", installation
+  caps only) is accepted for every tenant, so a plan can be taken back. A
+  plan that would lower stored retention values (and so make the nightly
+  cleanup delete history for good) is refused with 409
+  `retention_would_lower` and what would change, unless
+  `confirm_retention_lowering` is true; the Tenants page asks first and
+  disables the plan of the default row.
+- **The plan cap fails closed in the form.** `retention_cap` resolves the
+  tenant outside its error handling (no tenant: `TenantContextError`, never
+  "no plan"); a failing policy raises `RetentionPolicyError` in the
+  settings save, which then saves nothing (503
+  `retention_policy_unavailable`). The nightly cleanup (`strict=False`)
+  logs a WARNING and applies the stored value within the installation cap
+  — the form and plan changes already clamped it to the plan, so a broken
+  policy deletes nothing extra.
+- **No grant query per request.** The active grants are cached per
+  process for 5 s (`support.GRANT_CACHE_SECONDS`); with none (every
+  single-tenant install) resolving access runs no grant query at all, and
+  a non-operator's provider memberships are read only while grants exist.
+  Granting, revoking and every lifecycle action invalidate the cache in
+  this process; `expires_at` is checked on every use.
+
+Tests: `ee/backend/tests/test_tenancy_hardening.py` (also in the
+PostgreSQL router mode).
+
+Deviations / not done:
+
+- **The frontend moves the session**, it does not send
+  `X-Nodeglow-Tenant` per tab: every tab follows a switch (the header
+  would have to go with every request and the socket).
+- **Operators need a home membership** (tenant 1 in practice): the
+  middleware resolves a tenant before any route runs, so an operator
+  without any membership cannot reach `/api/tenants`.
+- **Support access is resolved, not written as a membership**: the grant is
+  checked on every request against the per-process cache of active grants
+  (no query while there is none); no `tenant_memberships` row exists for
+  it. A grant revoked, or a tenant suspended, in **another** worker process
+  is seen here within 5 s.
+- **`ms.revoke` of a default-tenant membership does not clear
+  `users.is_operator`** (only a demotion does, through the mirror); a
+  tenant-1 admin removed from tenant 1 but kept in another tenant stays an
+  operator. Removing the flag needs the operator management that is still
+  open (below).
+- **Provider members** can use support grants already; phase 11 gives them
+  direct provider roles.
+- **ClickHouse purge**: a lightweight DELETE hides the rows at once; they
+  leave the disk with the next merges of their parts.
+- **Not done here:** quotas and limits beyond retention (phase 14); provider
+  management UI (phase 11); a visual check of the new pages in a running
+  stack.
+
+Integration (branch `integrate/phase9-10`): the purge calls the real
+`destroy_tenant_key` (direct import, no fallback: a failing shred fails the
+purge run before ClickHouse or PostgreSQL are touched; the key tombstones go
+with the other tenant-owned rows), and tenant creation gives the new tenant
+its data key at once (`create_tenant_key`). Tests:
+`test_tenancy_purge.py::test_purge_crypto_shreds_the_tenant_key_first` (B's
+seeded secrets decrypt before, raise `TenantKeyDestroyed` right after the
+shred, A's still decrypt) and `test_a_failing_crypto_shred_stops_the_purge`.
+`support_grants` and the other 045 columns hold no secret, so the envelope
+keys need no new secret source.
+
+### Per-tenant envelope keys — owner decision 7 (done)
+
+Revision `046` (chained after phase 9's `045`);
+code in `services/tenant_keys.py`, `models/tenant.py` (`TenantKey`),
+`models/base.py` (`installation_key_material`).
+
+- **Keys.** Every tenant has a data key (DEK, 32 random bytes, a Fernet
+  key). It is stored only wrapped, in `tenant_keys` (`tenant_id`, `key_id`,
+  `kek_id`, `wrapped_dek`, `created_at`, `retired_at`, `destroyed_at`; PK
+  `(tenant_id, key_id)`), by the installation's key-encryption key: `kek_id`
+  `sk1` = HKDF-SHA256 with its own label over the PBKDF2-stretched
+  `SECRET_KEY` (the same 480k-round derivation as the installation Fernet
+  key, run once per process; a different key). A KMS-held KEK later is a new
+  `kek_id`. The wrapped plaintext is bound to its tenant and key id
+  (`ngdek1:<tenant>:<key_id>:` + DEK): a wrapped key copied into another
+  tenant's row does not unwrap there.
+- **What uses it.** Every tenant secret: `integration_configs.config_json`,
+  `credentials.data_json`, `tenant_settings` rows flagged `encrypted` and the
+  keys the registry declares `secret` (channel secrets, `smtp_password`,
+  `phpipam_password` — `settings_registry.secret_tenant_keys()`).
+  Installation secrets in `settings` keep the installation key
+  (`encrypt_value`), as does a tenant's `smtp_password` fallback to the
+  installation relay.
+- **Format.** `v2:<key_id>:<Fernet token>`; anything else is a value from
+  before 046 (installation key, read transparently) or legacy plaintext of
+  the channel secrets (passes through `reveal`, as before). A `v2` value that
+  does not decrypt always raises (`TenantKeyDestroyed`,
+  `TenantKeyUnavailable`) — never handed out as plaintext, also not by
+  `notification_channels.reveal` or `channel_secrets.reveal`.
+- **API.** `tenant_cipher(db, tenant_id=None, write=False)` (sync
+  `encrypt`/`decrypt`/`reveal` for decrypt callbacks), `get_dek`,
+  `encrypt_secret` / `decrypt_secret` / `reveal_secret`,
+  `create_tenant_key` (for ee's tenant creation), `rotate_tenant_key`,
+  `destroy_tenant_key`, `reencrypt_legacy`, `upgrade_legacy_secrets`
+  (startup), `scan`. The tenant must agree with the context
+  (`tenancy.tenant_access`, the rule `get_setting` already had — moved there);
+  keys are read through the tenant filter and RLS like any tenant table.
+  `encrypt_config`/`decrypt_config` and `encrypt_credential`/
+  `decrypt_credential` became async and take the session (and the row, whose
+  tenant decides).
+- **Caching.** The key rows are read once per transaction (`Session.info`,
+  dropped at commit/rollback — another process's destroy or rotation is seen
+  by the next transaction); unwrapped DEKs are cached per process, keyed by
+  tenant, key id and the wrapped value. A key is created lazily on the first
+  encrypt of a tenant (in the caller's transaction) — reads never create one.
+- **Rotate** makes a new active key, re-encrypts every secret of the tenant
+  (also values under the installation key and plaintext secret settings) and
+  retires the previous keys; retired keys stay readable, so a value written
+  concurrently with the old key is not lost. Not committed by itself.
+- **Destroy** (for the phase-9 purge) first moves values still under the
+  installation key to the tenant key, then deletes every wrapped DEK
+  (`wrapped_dek = NULL`, `destroyed_at` — the row stays as a tombstone so the
+  error says "destroyed", not "unknown key"). Afterwards every decrypt of the
+  tenant's secrets raises `TenantKeyDestroyed`, nothing can be encrypted or
+  rotated for it, and `get_setting` of an encrypted key raises. A tenant
+  that never had a key gets a tombstone row (`wrapped_dek` NULL,
+  `destroyed_at` set), so a later encrypt fails closed instead of quietly
+  creating a fresh key.
+- **A key that does not unwrap** (another `SECRET_KEY`, a copied row) fails
+  on use with `TenantKeyUnavailable` — the cipher, `get_dek` and
+  `create_tenant_key` alike, never a fresh key behind the caller's back.
+  `rotate_tenant_key` retires it with the other previous keys.
+- **046** creates `tenant_keys` (policy + RLS state like `tenant_settings`;
+  `migrate.py` re-applies from the live classification) and a key for
+  tenant 1 — and **rewrites no secret**. The updater runs migrations with the
+  new image while the old backend still serves (`step_migrate` before
+  `step_restart`), and a rollback by `NODEGLOW_VERSION` alone runs old code
+  on the migrated database; old code reads every secret with
+  `decrypt_value`. (A first version converted in place; review found the
+  old backend then failed every integration check and sent `v2:…` as the
+  Discord URL until the restart, or for good if the restart failed.) The
+  downgrade re-encrypts every readable `v2` value under the installation key
+  and drops the table — needed before going back to an older version once
+  the new backend has run (OPERATIONS.md).
+- **Startup** (`main.py`): `upgrade_legacy_secrets` moves every value still
+  under the installation key to its tenant's key (keys created as needed;
+  idempotent, one tenant per transaction) — after an upgrade, rows written
+  by the old backend during it, restored pre-046 backups — and the plaintext
+  channel secrets of old installs (`encrypt_plaintext_channel_secrets` now
+  encrypts with the tenant key). Values that do not decrypt (another
+  `SECRET_KEY`) are left exactly as they are and logged with a count.
+- **Backups.** The export decrypts nothing: tenant secrets go out as stored
+  (`v2`), together with the `tenant_keys` rows (wrapped DEKs) — like a
+  `pg_dump`, the file needs `SECRET_KEY` as well as its passphrase. (A first
+  version exported tenant secrets in plaintext inside the passphrase
+  envelope; review: that handed every tenant's credentials to any operator
+  API key with a passphrase of its choosing, against decision 8, and kept a
+  purged tenant's secrets readable without `SECRET_KEY`.) The restore
+  inserts `tenant_keys` with the other tables, then moves old-format values
+  (a pre-046 backup) to the tenant key — only for tenants that exist in the
+  target: `tenants` is not part of a backup, and a key for a missing tenant
+  would violate the foreign key and abort the restore. Rows of missing
+  tenants are restored as before (foreign keys off) and named in the
+  result's `warning`. A restore under another `SECRET_KEY` warns; its
+  tenant secrets do not decrypt (as before 046), `rotate --tenant N` lets
+  credentials be entered again.
+- **Notifications.** Channel secrets are read one by one
+  (`notification_channels.ChannelSecrets`): one that does not decrypt fails
+  only its own channel (logged as a failed notification; a webhook is not
+  sent unsigned, ntfy not without its token) — the other channels still go
+  out. Same in the ee daily summary and the test-send route (which reports
+  only the tested channel's own secret).
+- **CLI.** `python -m services.tenant_keys verify` (owner connection, system
+  scope, read-only): keys per tenant and state, counts per column and format
+  (`v2:<key_id>`, `legacy`, `plaintext`, `undecryptable`, failing `v2`),
+  decrypt failures; exit 1 when any. Also `upgrade [--tenant N]` and
+  `rotate --tenant N`.
+
+Tests: `tests/test_tenant_keys.py` (wrap/unwrap and its binding, KEK ≠
+installation key, formats, fail closed, per-tenant cache, a tenant context
+cannot reach another tenant's key, B's ciphertext and even B's wrapped key
+copied into A give A nothing, rotation incl. rollback, destroy incl. the next
+transaction of another session, settings layer, startup pass, scan without
+secrets, the export decrypts nothing and carries the wrapped keys, 046
+rewrites no secret (old code reads every value) and the startup pass then
+moves them, reversible, frozen key list = registry, destroy without a key
+leaves a tombstone, a key that does not unwrap fails `get_dek` and is
+retired by rotation), `tests/test_routers/test_legacy_channel_secrets.py`
+(one undecryptable channel secret: Discord still sent, webhook and ntfy
+not, both logged failed; the test route reports only the tested channel),
+`tests/test_tenant_keys_pg.py`
+(PostgreSQL: an install at 044 with RLS on and two users, secrets in every
+secret-bearing table — Discord webhook, SMTP, Teams, integration tokens, SNMP
+community, plaintext Telegram token of an old install, a value under a previous
+key, installation secrets; after 046 not one value has changed and
+everything reads the same through the app's paths as `nodeglow_app` with RLS
+on; the startup pass (as `nodeglow_app`) moves them, then everything still
+reads the same, `tenant_keys` is under RLS, re-run changes nothing, `alembic
+check`, `verify` counts without secrets, downgrade back under the
+installation key, upgrade again; backups: a two-tenant export — before and
+after the startup pass — restores into a fresh install with tenant 1 only,
+warning about tenant 2, the opened envelope holds no secret, the restored
+wrapped keys equal the source's, and under another `SECRET_KEY` the restore
+warns and nothing decrypts). The isolation walk seeds a
+`tenant_keys` row per tenant (key id with the canary) and encrypts the seeded
+configs and credentials under it.
+
+Deviations / limits:
+
+- The KEK is derived from `SECRET_KEY`; changing `SECRET_KEY` still makes
+  everything unreadable (no KEK rotation yet — the `kek_id` column is there
+  for it, and for a KMS).
+- A value that was unreadable before 046 (written under another
+  `SECRET_KEY`) stays under no tenant key, so destroying the tenant's key does
+  not shred it — the purge deletes the rows anyway. `verify` lists them.
+- Retired keys are never removed by rotation; only `destroy_tenant_key`
+  removes keys. A "rotate and drop the old key" for a suspected key leak is
+  a follow-up.
+- Other processes may hold an unwrapped DEK until their current
+  transaction ends (≈ request); destroy is immediate for new transactions.
+
+### Phase 10 — probe syslog relay (done)
+
+Revision `047` (chained after `046`: 044 → 045 phase 9 → 046 tenant keys →
+047).
+`tests/test_alembic_heads.py` asserts one alembic head, so a forgotten
+re-chain fails CI instead of the container's startup migration. Code in
+`agent/src/syslog_relay.rs`, `backend/services/syslog.py`,
+`backend/services/probe_syslog.py`, `routers/agents.py`, `routers/api_v1.py`.
+
+- **Agent.** `syslog_relay.rs`: with the relay on (heartbeat config
+  `syslog_relay: {"enabled": true, "port": 514}`, probes only) the agent
+  binds UDP and TCP on `0.0.0.0:<port>`; TCP understands newline/NUL and
+  octet-counted framing (RFC 6587), 64 KiB per message, 64 connections,
+  5 min idle timeout. Received lines (raw, device address, receive time,
+  transport) go into a bounded in-memory buffer (20 000 entries / 16 MiB,
+  oldest dropped and counted); a forwarder sends batches of ≤ 500 entries /
+  ~1 MiB to `POST /api/agent/logs` every 2 s or when a batch is full, puts a
+  failed batch back in front and backs off up to 60 s. Only what the backend
+  stored (`count` of the response) counts as `forwarded`; the rest of the
+  batch (allowlist, invalid, oversized, past the per-request limit) as
+  `rejected`. A permanent 4xx (400, 413, 422, …; not 401/403/404/408/429)
+  discards the batch (counted `rejected`) instead of retrying it forever.
+  A port that cannot be
+  bound is reported (`status.error`) and retried every minute; a changed
+  port rebinds, relay off closes the listeners (the forwarder delivers what
+  is buffered). Counters (`listening`, `port`, `received`, `forwarded`,
+  `rejected`, `dropped`, `buffered`, `send_failures`, `error`) ride the heartbeat as
+  `syslog_relay` once the relay was ever on — a plain agent's heartbeat is
+  byte-for-byte unchanged. The config is read leniently from raw JSON: a
+  malformed value means "off", never a failed heartbeat. No new crates;
+  updater, signing and the agent-build workflow are untouched.
+- **Backend, ingestion.** `/api/agent/logs`: an entry with `raw` is a relayed
+  line. Only a probe whose relay an admin switched on may send them (others:
+  dropped, `relay_not_a_probe` / `relay_disabled`, WARNING — the
+  backend enforces the switch, a tampered probe ignoring its config relays
+  nothing); `services.syslog.parse_relayed_entry` validates the address
+  (`ipaddress`), the size and the allowlist, parses with the existing
+  parser, takes `received_at` from the probe (clamped: ≤ 5 min ahead, ≤ 7 days
+  old, else now) and stamps **the probe's** tenant and site — nothing in the
+  entry can change them. Rows carry `site_id` into ClickHouse
+  (`insert_batch` already wrote it; agent logs now stamp it too, the direct
+  listener keeps 0 = unknown). The agent's *own* logs are attributed to its
+  own host by name inside its tenant and site (spec item 2); failing that
+  (`resolve_agent_host_id`) by the request's address inside the agent's own
+  site only — when the address is private (LAN/VPN), or any address while
+  all of the tenant's hosts are in one site (a host added by IP before the
+  agent, a cloud server). Never tenant-wide, never via reverse DNS; a public
+  address of a multi-site tenant (a customer's NAT) is not used. The
+  relayed marker keeps relayed addresses out of
+  the installation's reverse-DNS loop.
+- **Site-scoped resolution** (`_resolve_host_id(ip, name, tenant, site)`):
+  the host cache is filed per tenant *and* per site (a host without a site
+  counts for its tenant's default site). A site lookup tries the site's
+  hosts (name, address); then the rest of the tenant only for a host name or
+  a public (`is_global`) address that no other site also uses — a private
+  address never resolves outside its site, a name two branches use is never
+  guessed from a third. No reverse DNS for relayed addresses. The listener
+  (no site) resolves tenant-wide exactly as before. The allowlist follows the
+  same rule for relayed syslog.
+- **Direct listener** (`NODEGLOW_SYSLOG_LISTENER`, documented in
+  OPERATIONS.md "Probe syslog relay"): `auto` (default) listens and accepts
+  while the installation has one active tenant — every core install,
+  unchanged; with more than one it refuses messages (counted
+  `listener_disabled`, a warning every 5 min). `on` always accepts into the
+  default tenant; `off` binds no port (SaaS, owner decision 3) while the
+  write pipeline keeps running for agent logs and relays. The tenant count is
+  taken from the host-cache refresh (every 120 s), so a second tenant created
+  at runtime shuts the `auto` listener within two minutes. It fails closed:
+  until a refresh has counted the tenants (the database unreachable at
+  startup) `auto` refuses; the count is stored as soon as it is read, so a
+  later failing step of the refresh does not leave it stale.
+- **Configuration.** `agents.syslog_relay_enabled` (NOT NULL, default false),
+  `syslog_relay_port` (NULL = 514), `syslog_relay_status` (sanitised JSON of
+  the last counters). `PATCH /api/v1/agents/{id}` sets them (admin, audited
+  in `agent.probe`; enabling needs a probe; dropping the probe role switches
+  the relay off); agent responses carry `syslog_relay`. No new route, no new
+  table (the isolation suite needs no new classification; `agents` is
+  already tenant-owned with RLS).
+
+Tests: `tests/test_probe_syslog_relay.py` (two tenants, two sites of tenant
+1 sharing 192.168.1.0/24: per-site resolution, private addresses never leave
+their site, names / public addresses fall back only when unambiguous, other
+tenants never candidates, the listener unchanged, no rDNS, site-scoped
+allowlist, entry parser incl. receive-time clamping, listener modes and
+`off` binding nothing, `auto` failing closed while the tenant count is
+unknown, the agent-host fallback), `tests/test_routers/test_probe_syslog_relay_api.py`
+(HTTP: a probe of A claiming B's tenant/site/host in its entries lands in A
+and A's site; B's probe lands in B; a plain agent cannot relay; malformed
+entries dropped; a probe with the relay off relays nothing; own logs by
+name, an IP-keyed host via the private request address in the agent's site
+only; ClickHouse rows stamped with the probe's
+tenant and site; heartbeat config to probes only; counters sanitised; the
+API switch — admin only, probes only, 404 for another tenant's probe), also
+run against PostgreSQL as `nodeglow_app` with RLS (`ROUTER_TESTS_ON_PG`);
+`test_047_probe_syslog_relay_up_and_down` (PostgreSQL). Rust: buffer bounds
+and requeue order, framing (both framings, split reads, floods, absurd
+lengths), config parsing, wire format, loopback UDP/TCP end to end, a busy
+port reported instead of fatal, heartbeat payload/response compatibility,
+relay responses (`count`/`dropped` → forwarded/rejected, permanent 4xx).
+**The Rust code was written without a local toolchain** (no `cargo` on the
+development machine); `cargo test` / `clippy` first run in CI
+(`agent-build`).
+
+Deviations / not done:
+
+- The buffer is in memory only (the task allowed "on-disk/in-memory"); an
+  agent restart loses what is buffered.
+- The relay binds `0.0.0.0` (IPv4), one port for UDP and TCP; no bind address
+  setting, no IPv6.
+- No UI for the relay yet (API only); the agents page shows nothing of it.
+- Per-tenant syslog rate limits / buckets for relayed messages remain phase
+  14 (a probe sends at most 500 entries per request; the per-IP limiter of
+  the direct listener does not apply to relays).
+- `site_id` is stamped on syslog rows but nothing filters on it yet (syslog
+  UI/API by site), and `site_id` stays nullable on the PostgreSQL tables.
+- TLS syslog with per-tenant client certificates (owner decision 3, "later")
+  is not part of this.
+
 ### Open items (after phases 5–8)
 
-- **Phase 6 (ClickHouse):** done (see above). Left: ee's tenant creation
-  must check `clickhouse_rebuild.complete()`; per-tenant retention beyond
+- **Phase 6 (ClickHouse):** done (see above). Left (the creation gate is
+  done in phase 9): per-tenant retention beyond
   `ping_checks`; CH quotas per tenant (phase 14); `site_id` filtering
   (phase 10); the live tests' first run is CI.
 - **Phase 7 (RLS):** done, see below. Still open from it: production runs
@@ -1734,6 +2258,15 @@ passed. The isolation files add about 50 s to the suite on SQLite.
   otherwise). Log analytics and the self-check still have no required
   effect in the job tests (they need ClickHouse series the fake does not
   serve).
+- **Tenant keys (046) → phase 9:** ee's tenant creation calls
+  `tenant_keys.create_tenant_key(db, tenant_id)` after flushing the tenant
+  (otherwise the first secret creates it lazily); the purge calls
+  `destroy_tenant_key(db, tenant_id)` in system scope **before** deleting the
+  rows and commits it (a later failure of the purge then still leaves the
+  data shredded). Per-tenant export/import (phase 12) needs its own answer
+  for tenant secrets: re-wrap the tenant's DEKs for the target, or an
+  explicit, host-level, audited plaintext export documented as outside
+  crypto-shred — not a plaintext export behind an API key.
 - Still true from phase 2: work spawned with `asyncio.create_task` inherits
   the context; a task started in `system_scope` that writes must set its
   tenant itself (notifications and WebSocket broadcasts now take the
@@ -1742,10 +2275,12 @@ passed. The isolation files add about 50 s to the suite on SQLite.
   switcher or membership revoke could push a close via the hub.
 - Later / ee: drop `users.role` after one release; manage `is_operator`
   (no API yet — set by 043 and the setup wizard only); the AI provider
-  settings (installation keys) are still saved through the tenant admin's
-  AI form — gate them on the operator when tenant admins are not
-  operators; "last used tenant" at login; provider roles and operator
-  access in `resolve_access` (`via = provider_role | operator`);
+  settings (installation keys) were saved through the tenant admin's
+  AI form — ~~gate them on the operator~~ (phase 9 review fixes; an
+  operator with support access is still an operator there, by design); a
+  per-tenant bring-your-own key (decision 2) is open; ~~"last used tenant" at login~~ (phase 9,
+  ee); provider roles in `resolve_access` (`via = provider_role`; operator
+  access is phase 9's support access, `via = support`);
   `audit_logs.provider_id` on the `system_scope.write` rows is NULL.
 
 ## Risks

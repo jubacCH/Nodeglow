@@ -668,6 +668,22 @@ def test_app_sets_the_tenant_per_transaction(pg_db):
     }
 
 
+def test_047_probe_syslog_relay_up_and_down(pg_db):
+    _alembic(pg_db, "upgrade", "044")
+    q(pg_db, "INSERT INTO agents (name, hostname, token, enabled, is_probe, tenant_id, site_id, "
+             "created_at) VALUES ('probe', 'probe', 'tok-047', true, true, 1, 1, now())")
+    _alembic(pg_db, "upgrade", "047")
+    rows = q(pg_db, "SELECT syslog_relay_enabled, syslog_relay_port, syslog_relay_status FROM agents")
+    assert [tuple(r) for r in rows] == [(False, None, None)]
+    q(pg_db, "UPDATE agents SET syslog_relay_enabled = true, syslog_relay_port = 5514")
+    _alembic(pg_db, "downgrade", "044")
+    cols = {r["column_name"] for r in q(
+        pg_db, "SELECT column_name FROM information_schema.columns WHERE table_name = 'agents'")}
+    assert not cols & {"syslog_relay_enabled", "syslog_relay_port", "syslog_relay_status"}
+    assert [r["name"] for r in q(pg_db, "SELECT name FROM agents")] == ["probe"]
+    _alembic(pg_db, "upgrade", "head")
+
+
 # Router tests that run unchanged against PostgreSQL as nodeglow_app with RLS
 # on (tests/test_routers/conftest.py, "PostgreSQL mode").
 ROUTER_TESTS_ON_PG = [
@@ -680,7 +696,45 @@ ROUTER_TESTS_ON_PG = [
     # The phase-8 isolation walk (every route, session / API key / header,
     # reference check, licensed ee walk) as nodeglow_app with RLS on.
     "tests/test_routers/test_tenant_isolation.py",
+    # Phase 9 (ee): lifecycle incl. the RLS check for the second tenant,
+    # support access, and the purge of every tenant-owned table under RLS.
+    "../ee/backend/tests/test_tenancy_lifecycle.py",
+    "../ee/backend/tests/test_tenancy_support.py",
+    "../ee/backend/tests/test_tenancy_purge.py",
+    # Phase 9 hardening: shared identities, installation AI keys, support
+    # access without IAM, default tenant plan, fail-closed retention cap.
+    "../ee/backend/tests/test_tenancy_hardening.py",
+    # Phase 10: probe syslog relay (a probe of A never writes into B, site
+    # scoping) with the composite site FKs and RLS of a real database.
+    "tests/test_routers/test_probe_syslog_relay_api.py",
 ]
+
+
+def test_045_lifecycle_columns_and_support_grants(pg_db):
+    """045: tenant lifecycle columns and support_grants (tenant-owned, with
+    the isolation policy and RLS like every tenant table); down and up."""
+    env = _rls_env(pg_db)
+    _alembic(pg_db, "upgrade", "044", **env)
+    _alembic(pg_db, "upgrade", "045", **env)
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name = 'tenants'")}
+    assert {"suspended_at", "delete_after", "deletion_requested_at", "deletion_requested_by",
+            "purge_started_at", "purge_state"} <= cols
+    assert "support_grants" in _policies(pg_db)
+    assert _rls_flags(pg_db)["support_grants"] == (True, True)
+    q(pg_db, "INSERT INTO tenants (id, provider_id, name, slug, status, created_at) "
+             "VALUES (2, 1, 'B', 'b', 'active', now())")
+    q(pg_db, "INSERT INTO support_grants (tenant_id, role, reason, created_at, expires_at) "
+             "VALUES (2, 'readonly', 'ticket', now(), now() + interval '1 hour')")
+    assert q_app(pg_db, "SELECT count(*) FROM support_grants", tenant=1)[0][0] == 0
+    assert q_app(pg_db, "SELECT count(*) FROM support_grants", tenant=2)[0][0] == 1
+    _alembic(pg_db, "downgrade", "044", **env)
+    assert "support_grants" not in _policies(pg_db)
+    assert not q(pg_db, "SELECT 1 FROM information_schema.tables WHERE table_name = 'support_grants'")
+    assert "delete_after" not in {r[0] for r in q(
+        pg_db, "SELECT column_name FROM information_schema.columns WHERE table_name = 'tenants'")}
+    _alembic(pg_db, "upgrade", "head", **env)
+    _alembic(pg_db, "check", **env)
 
 
 def test_router_tests_against_postgres_with_rls(pg_db):

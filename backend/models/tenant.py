@@ -133,8 +133,20 @@ class Tenant(Base):
     name = Column(String(128), nullable=False)
     slug = Column(String(64), nullable=False)
     status = Column(String(16), nullable=False, default="active")  # active | suspended | deleting
+    # Retention plan tier (ee: nodeglow_ee.tenancy.plans); NULL = no plan cap.
     plan = Column(String(32), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    # Lifecycle (ee, revision 045). A tenant is suspended (status
+    # suspended | deleting) since ``suspended_at``; a scheduled deletion
+    # (status deleting) is purged once ``delete_after`` has passed.
+    # ``purge_started_at`` / ``purge_state`` (JSON) record a purge in
+    # progress, so a restart resumes it.
+    suspended_at = Column(DateTime, nullable=True)
+    delete_after = Column(DateTime, nullable=True)
+    deletion_requested_at = Column(DateTime, nullable=True)
+    deletion_requested_by = Column(Integer, nullable=True)  # user id; no FK (users may be purged)
+    purge_started_at = Column(DateTime, nullable=True)
+    purge_state = Column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("provider_id", "slug", name="uq_tenants_provider_slug"),
@@ -201,6 +213,31 @@ class ProviderMembership(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class SupportGrant(TenantScoped, Base):
+    """Time-limited support access a tenant admin grants to the installation
+    operators (owner decision 8, ee). Without an active grant an operator
+    has no access to the tenant's data.
+
+    Schema only in the core (like ``provider_memberships``); the ee tenancy
+    backend reads it to resolve access ``via = support``.
+    """
+
+    __tablename__ = "support_grants"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    role = Column(String(16), nullable=False, default="readonly")  # admin | editor | readonly
+    reason = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    granted_by = Column(Integer, nullable=True)  # user id (no FK: users may be purged)
+    granted_by_name = Column(String(64), nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(Integer, nullable=True)
+    revoked_by_name = Column(String(64), nullable=True)
+    # Set by the expiry job once the end of the grant has been audited.
+    ended_audited_at = Column(DateTime, nullable=True)
+
+
 class TenantSetting(TenantScoped, Base):
     """Tenant-scoped settings. Empty until the settings split (phase 3)."""
 
@@ -214,6 +251,33 @@ class TenantSetting(TenantScoped, Base):
     key = Column(String(128), primary_key=True)
     value = Column(Text, nullable=True)
     encrypted = Column(Boolean, nullable=False, default=False)
+
+
+class TenantKey(TenantScoped, Base):
+    """A tenant's data-encryption key (DEK), wrapped by the installation's
+    key-encryption key (``services.tenant_keys``, revision 046).
+
+    ``wrapped_dek`` is the Fernet token of the 32 random DEK bytes under the
+    KEK named by ``kek_id``. A tenant has one active key (newest without
+    ``retired_at``); retired keys stay readable until the tenant's keys are
+    destroyed. Destroying (crypto-shred) sets ``wrapped_dek`` to NULL and
+    ``destroyed_at``: the row stays as a tombstone, so a later decrypt fails
+    with "destroyed" rather than "unknown key".
+    """
+
+    __tablename__ = "tenant_keys"
+
+    # Part of the primary key, which covers every tenant_id lookup.
+    tenant_id = Column(
+        Integer, ForeignKey("tenants.id", ondelete="CASCADE", name="fk_tenant_keys_tenant"),
+        primary_key=True,
+    )
+    key_id = Column(String(32), primary_key=True)
+    kek_id = Column(String(16), nullable=False)
+    wrapped_dek = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    retired_at = Column(DateTime, nullable=True)
+    destroyed_at = Column(DateTime, nullable=True)
 
 
 async def ensure_default_tenant(db, *, name: str | None = None) -> None:

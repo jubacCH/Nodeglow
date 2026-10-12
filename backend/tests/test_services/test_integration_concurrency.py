@@ -65,7 +65,7 @@ def fakes():
 async def _cfg(db, type_: str, name: str) -> IntegrationConfig:
     from services.integration import encrypt_config
 
-    cfg = IntegrationConfig(type=type_, name=name, config_json=encrypt_config({}), enabled=True)
+    cfg = IntegrationConfig(type=type_, name=name, config_json=await encrypt_config(db, {}), enabled=True)
     db.add(cfg)
     await db.flush()
     return cfg

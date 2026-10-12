@@ -6,6 +6,7 @@ via `services.clickhouse_client` helpers.
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, func
+from sqlalchemy import false as sa_false
 
 from models.base import Base
 from models.tenant import TenantScoped, tenant_fk, tenant_parent_unique
@@ -32,6 +33,14 @@ class Agent(TenantScoped, Base):
     # rather than only reporting on the machine it sits on.
     is_probe   = Column(Boolean, default=False, nullable=False)
     probe_interval_seconds = Column(Integer, nullable=True)
+    # Syslog relay (probes only, phase 10): the probe listens for syslog
+    # inside the customer network and forwards it over its token. Port NULL
+    # = the agent's default (514). ``syslog_relay_status`` is the relay's
+    # last reported counters (JSON), NULL until a relaying probe reports.
+    syslog_relay_enabled = Column(Boolean, default=False, nullable=False,
+                                  server_default=sa_false())
+    syslog_relay_port = Column(Integer, nullable=True)
+    syslog_relay_status = Column(Text, nullable=True)
     watched_services = Column(Text, nullable=True)
     # Latest reported state of the watched services plus the failure streaks,
     # JSON (see services.agent_services). NULL until the agent first reports

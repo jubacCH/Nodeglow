@@ -16,6 +16,7 @@ import { loginHref } from '@/lib/redirect';
 import { Rail } from './Rail';
 import { TopBar } from './TopBar';
 import { LicenseBanner } from './LicenseBanner';
+import { SupportAccessBanner } from './SupportAccessBanner';
 import { SubNav } from './SubNav';
 import { MobileTabBar } from './MobileTabBar';
 
@@ -78,6 +79,7 @@ export function AppShell({ children }: AppShellProps) {
       <div className="pl-rail max-[759px]:pl-0">
         <TopBar />
         <LicenseBanner />
+        <SupportAccessBanner />
         <main
           id="main"
           tabIndex={-1}

@@ -89,6 +89,82 @@ def _reset_tenant_job_state():
     tenant_jobs.reset_state()
 
 
+@pytest.fixture(autouse=True)
+def _reset_syslog_host_cache():
+    """The syslog host cache (hosts per tenant and site, allowlists, the
+    tenant count the direct listener's "auto" mode reads) is process-global."""
+    from services import syslog
+
+    syslog.reset_host_cache()
+    syslog._listener_mode = "auto"
+    yield
+    syslog.reset_host_cache()
+    syslog._listener_mode = "auto"
+
+
+@pytest.fixture(autouse=True)
+def _core_tenancy_backend(request, monkeypatch):
+    """The core suite specifies the core's tenancy (``SingleTenancy``, no
+    retention policy) — also when the ee plugin is loaded and has registered
+    its own backend. The ee backend is covered by ``ee/backend/tests`` and by
+    core tests marked ``ee_tenancy`` (the isolation walk), which keep
+    whatever the plugin registered."""
+    if request.node.get_closest_marker("ee_tenancy"):
+        yield
+        return
+    import extensions
+    from services import tenancy, tenant_jobs
+
+    # Not by resetting the registry: the plugin registers when main is first
+    # imported — possibly during this test — and must not be lost afterwards.
+    # A backend a test installs itself (monkeypatching the registry) is kept.
+    def _plugin(obj) -> bool:
+        return getattr(type(obj), "__module__", "").startswith("nodeglow_ee") or             getattr(obj, "__module__", "").startswith("nodeglow_ee")
+
+    def core_backend():
+        b = extensions.registry.tenancy_backend
+        return tenancy._SINGLE if b is None or _plugin(b) else b
+
+    def core_retention_policy():
+        p = extensions.registry.retention_policy
+        return None if p is None or _plugin(p) else p
+
+    monkeypatch.setattr(tenancy, "backend", core_backend)
+    monkeypatch.setattr(tenant_jobs, "_retention_policy", core_retention_policy)
+    yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "ee_tenancy: run with the tenancy backend the ee plugin registered (if any)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _reset_tenant_key_cache():
+    """Unwrapped tenant data keys are cached per process; each test's
+    database has its own keys."""
+    from services import tenant_keys
+
+    tenant_keys.clear_cache()
+    yield
+    tenant_keys.clear_cache()
+
+
+@pytest.fixture
+def keyless_tenant_cipher(monkeypatch):
+    """For tests that mock the database session (``AsyncMock``): the tenant
+    cipher is one without tenant keys, so values under the installation key
+    and plaintext still read as before, and a tenant-key value fails."""
+    from services import tenant_keys
+
+    async def fake(db, tenant_id=None, *, write=False):
+        return tenant_keys.TenantCipher(tenant_keys._KeySet(tenant_id=int(tenant_id or 1)))
+
+    monkeypatch.setattr(tenant_keys, "tenant_cipher", fake)
+    return fake
+
+
 @pytest.fixture
 async def db():
     """Provide a fresh in-memory SQLite database session per test."""

@@ -96,6 +96,9 @@ async def test_udp_overflow_is_dropped_and_counted_without_spawning_tasks():
     from services.metrics import SYSLOG_MESSAGES_DROPPED
 
     syslog._udp_queue = asyncio.Queue(maxsize=1)
+    # A single-tenant installation whose tenants were counted: the "auto"
+    # listener accepts (it fails closed while the count is unknown).
+    syslog._active_tenant_count = 1
     proto = syslog.SyslogUDPProtocol()
     before = SYSLOG_MESSAGES_DROPPED.labels(reason="queue_full")._value.get()
     tasks_before = len(asyncio.all_tasks())
