@@ -189,4 +189,8 @@ def test_integrations_import_without_the_backend():
                if not (_stdlib(m) or m in PACK_THIRD_PARTY or m in ("integrations", "utils"))]
     # Packages httpx itself pulls in optionally are fine as long as they are
     # not backend packages (checked by the blocker above).
-    assert set(outside) <= {"typing_extensions", "exceptiongroup"}, outside
+    # httpx also imports its optional compression codecs when they happen to
+    # be installed (zstandard comes with clickhouse-connect in CI); the pack
+    # does not ship them and httpx works without.
+    assert set(outside) <= {"typing_extensions", "exceptiongroup",
+                            "zstandard", "brotli", "brotlicffi"}, outside
