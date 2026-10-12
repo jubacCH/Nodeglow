@@ -24,7 +24,7 @@ pub const PLACEHOLDER: &str = "REPLACE WITH RELEASE KEY";
 
 /// Trusted release public keys, newest first.
 pub const RELEASE_PUBLIC_KEYS: &[&str] = &[
-    // REPLACE WITH RELEASE KEY — paste the 64-hex-char public key printed by
-    // tools/agent-release-key/README.md, step 2, in place of the placeholder.
-    "REPLACE WITH RELEASE KEY",
+    // Nodeglow release key, key id 076473131abe1bba (2026-10-12). Rotate by
+    // adding the new key first, see tools/agent-release-key/README.md.
+    "cefc2dba4de1124898128322920d89cb2309f880da874627b428e7fc034c8d6e",
 ];
