@@ -5,6 +5,7 @@ on:
     paths:
       - "agent/**"
       - ".github/workflows/agent-build.yml"
+      - "tools/agent-release-key/**"
   workflow_dispatch:
 
 permissions:
@@ -103,15 +104,18 @@ jobs:
           path: agent/${{ matrix.artifact }}
           retention-days: 90
 
-  release:
+  # Release signing (spec 2026-10-11 rule 4, P2a). Signs both binaries with
+  # the release key from the secret AGENT_RELEASE_SIGNING_KEY (Ed25519,
+  # PKCS#8 PEM, or that PEM base64-encoded) — see tools/agent-release-key/.
+  # Without the secret (forks, PRs from forks) the job still passes and marks
+  # the artifact as an unsigned dev build.
+  sign:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: main
-          fetch-depth: 1
 
       - name: Download Linux binary
         uses: actions/download-artifact@v8
@@ -125,19 +129,105 @@ jobs:
           name: nodeglow-agent.exe
           path: dist/
 
+      - name: Sign with the release key
+        id: sign
+        env:
+          AGENT_RELEASE_SIGNING_KEY: ${{ secrets.AGENT_RELEASE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${AGENT_RELEASE_SIGNING_KEY:-}" ]; then
+            msg="AGENT_RELEASE_SIGNING_KEY is not set: these are UNSIGNED DEV BUILDS. Agents that require release signatures (probes, multi-tenant) refuse them."
+            echo "::warning title=Unsigned agent build::$msg"
+            printf '%s\n' "UNSIGNED DEV BUILD - not release-signed." "$msg" > dist/UNSIGNED-DEV-BUILD.txt
+            { echo "### Agent binaries: UNSIGNED DEV BUILD"; echo; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          umask 077
+          key="$RUNNER_TEMP/agent-release-key.pem"
+          trap 'rm -f "$key"' EXIT
+          if printf '%s' "$AGENT_RELEASE_SIGNING_KEY" | grep -q -- "-----BEGIN PRIVATE KEY-----"; then
+            printf '%s\n' "$AGENT_RELEASE_SIGNING_KEY" > "$key"
+          else
+            printf '%s' "$AGENT_RELEASE_SIGNING_KEY" | tr -d ' \r\n' | base64 -d > "$key"
+          fi
+
+          read -r pub kid < <(sh tools/agent-release-key/sign.sh pubkey "$key")
+          echo "Release key id: $kid"
+          # Sign only with a key the binaries themselves trust: agents built
+          # from this commit verify their next update against release_keys.rs.
+          if ! grep -q "\"$pub\"" agent/src/release_keys.rs; then
+            echo "::error title=Release key not compiled in::The public key of AGENT_RELEASE_SIGNING_KEY ($pub, id $kid) is not in agent/src/release_keys.rs. Paste it there first (tools/agent-release-key/README.md)."
+            exit 1
+          fi
+
+          sh tools/agent-release-key/sign.sh sign "$key" linux dist/nodeglow-agent-linux
+          sh tools/agent-release-key/sign.sh sign "$key" windows dist/nodeglow-agent.exe
+          sh tools/agent-release-key/sign.sh verify "$key" dist/nodeglow-agent-linux
+          sh tools/agent-release-key/sign.sh verify "$key" dist/nodeglow-agent.exe
+          { echo "### Agent binaries: release-signed (key $kid)"; echo; echo '```'; cat dist/*.sig; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.sign.outputs.signed == 'true' && 'nodeglow-agent-release-signed' || 'nodeglow-agent-UNSIGNED-dev-build' }}
+          path: dist/
+          retention-days: 90
+
+  # Commits the binaries (and their release signatures) to main, where the
+  # backend image picks them up. Never runs for any other ref: a run on a
+  # branch (push or workflow_dispatch) builds, tests and signs only.
+  release:
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.sign.outputs.signed == 'true' && 'nodeglow-agent-release-signed' || 'nodeglow-agent-UNSIGNED-dev-build' }}
+          path: dist/
+
+      - name: Refuse unsigned binaries on the canonical repository
+        if: needs.sign.outputs.signed != 'true' && github.repository == 'jubacCH/Nodeglow'
+        run: |
+          # An unsigned agent on main would be served to every installation;
+          # one built while release_keys.rs holds only the placeholder can
+          # never verify a release signature, so agents that require one
+          # (probes, multi-tenant) would be stuck on it for good. Forks keep
+          # committing their unsigned dev builds.
+          echo "::error title=Release key missing::AGENT_RELEASE_SIGNING_KEY is not set - not committing unsigned agent binaries to main. See tools/agent-release-key/README.md."
+          exit 1
+
       - name: Copy to backend static (for auto-update serving)
         run: |
+          set -e
           mkdir -p backend/static
           cp dist/nodeglow-agent-linux backend/static/nodeglow-agent-linux
           cp dist/nodeglow-agent.exe backend/static/nodeglow-agent.exe
           chmod +x backend/static/nodeglow-agent-linux
+          if [ -f dist/nodeglow-agent-linux.sig ] && [ -f dist/nodeglow-agent.exe.sig ]; then
+            cp dist/nodeglow-agent-linux.sig backend/static/nodeglow-agent-linux.sig
+            cp dist/nodeglow-agent.exe.sig backend/static/nodeglow-agent.exe.sig
+          else
+            # Unsigned (fork): never leave a signature of older bytes behind.
+            rm -f backend/static/nodeglow-agent-linux.sig backend/static/nodeglow-agent.exe.sig
+          fi
           ls -lh dist/ backend/static/nodeglow-agent*
 
       - name: Commit updated binaries
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add backend/static/nodeglow-agent-linux backend/static/nodeglow-agent.exe
+          git add -A backend/static
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
