@@ -49,6 +49,11 @@ pub struct Config {
     /// verification disabled, fall back to the SHA-256 hash check only.
     #[serde(default)]
     pub update_public_key: String,
+    /// Local, customer-controlled switch: accept only release-signed updates
+    /// (no `update_public_key`, no hash-only). The installer of a multi-tenant
+    /// server writes `true`; no server response can turn it off.
+    #[serde(default)]
+    pub require_release_signature: bool,
     #[serde(skip)]
     pub config_path: PathBuf,
 }
@@ -83,6 +88,7 @@ impl Config {
                 enrollment_key: String::new(),
                 allow_insecure_tls: false,
                 update_public_key: String::new(),
+                require_release_signature: false,
                 config_path: PathBuf::new(),
             }
         };
@@ -123,6 +129,7 @@ impl Config {
             enrollment_key: String::new(),
             allow_insecure_tls: false,
             update_public_key: String::new(),
+            require_release_signature: false,
             config_path: PathBuf::new(),
         }
     }
@@ -134,12 +141,20 @@ impl Config {
             server: &'a str,
             token: &'a str,
             interval: u64,
+            // Keep the update trust settings: dropping them on save would
+            // silently relax update verification.
+            #[serde(skip_serializing_if = "str::is_empty")]
+            update_public_key: &'a str,
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            require_release_signature: bool,
         }
 
         let data = serde_json::to_string_pretty(&FileConfig {
             server: &self.server,
             token: &self.token,
             interval: self.interval,
+            update_public_key: &self.update_public_key,
+            require_release_signature: self.require_release_signature,
         })?;
 
         std::fs::write(&self.config_path, data)?;
@@ -184,6 +199,13 @@ pub struct ServerConfig {
     /// relay off instead of failing the whole heartbeat response.
     #[serde(default)]
     pub syslog_relay: Option<serde_json::Value>,
+    /// The backend's view of this agent being a probe. Latched by the
+    /// updater's trust state (see updater.rs): it only ever tightens.
+    #[serde(default)]
+    pub probe: Option<bool>,
+    /// True on a multi-tenant installation; latched like `probe`.
+    #[serde(default)]
+    pub multi_tenant: Option<bool>,
 }
 
 fn default_log_level() -> String {

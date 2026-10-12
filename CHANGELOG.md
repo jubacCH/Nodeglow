@@ -10,6 +10,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Release-signed agent updates: CI signs every agent binary with the agent
+  release key (Ed25519; private key only in the vault and the GitHub secret
+  `AGENT_RELEASE_SIGNING_KEY`), commits the signature next to the binary and
+  attaches it to the GitHub Release. The release public key is compiled into
+  the agent. Every agent of a multi-tenant installation accepts release-signed
+  updates only; probes never apply an unsigned update (release signature or
+  the local `update_public_key`); other single-tenant agents keep the pre-P2a
+  paths. See docs/OPERATIONS.md#agent-updates.
 - Enterprise multi-tenancy (licence feature `multi_tenancy`, `max_tenants`):
   operators create, suspend, resume and delete tenants under Administration →
   Tenants (deletion = 30 days suspended, then every PostgreSQL and ClickHouse

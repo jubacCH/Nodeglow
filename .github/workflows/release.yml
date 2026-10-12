@@ -580,6 +580,17 @@ jobs:
           # this tag — the same files the backend image serves to agents.
           cp backend/static/nodeglow-agent-linux dist/nodeglow-agent-linux-x86_64
           cp backend/static/nodeglow-agent.exe dist/nodeglow-agent-windows-x86_64.exe
+          # Their release signatures (P2a), published outside the SaaS so a
+          # customer can check a binary before installing it. A tag whose
+          # binaries are unsigned dev builds is not released.
+          for sig in nodeglow-agent-linux.sig nodeglow-agent.exe.sig; do
+            if [ ! -f "backend/static/$sig" ]; then
+              echo "::error::backend/static/$sig is missing: the agent binaries at this tag are not release-signed" >&2
+              exit 1
+            fi
+          done
+          cp backend/static/nodeglow-agent-linux.sig dist/nodeglow-agent-linux-x86_64.sig
+          cp backend/static/nodeglow-agent.exe.sig dist/nodeglow-agent-windows-x86_64.exe.sig
           cd dist
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS

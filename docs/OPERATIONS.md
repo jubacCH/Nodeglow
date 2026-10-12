@@ -238,9 +238,43 @@ running new code against an old schema is what it exists to prevent.
   (`docker compose logs updater | grep "scheduled backup"`), and read the
   commit list (git mode) or the [changelog](../CHANGELOG.md) (releases) for
   anything marked as needing an `.env` change.
-- **Agents** update themselves from the server after the server is updated
-  (SHA-256 checked; additionally ed25519-verified when update signing is
-  configured on the server and the agent has the public key).
+- **Agents** update themselves from the server after the server is updated;
+  see [Agent updates](#agent-updates).
+
+### Agent updates
+
+Every 5 minutes an agent compares its own SHA-256 with
+`GET /api/agent/version/<platform>`, downloads the new binary, checks the
+hash and then requires a signature according to its **trust mode**:
+
+| Mode | When | Accepted |
+|---|---|---|
+| release only | the server ever reported multi-tenant mode, or `"require_release_signature": true` in the agent's `config.json` (the multi-tenant installer writes it) | a valid **release signature** only |
+| probe | the agent is or ever was a probe (single-tenant) | release signature, or the server-key signature verified with the local `update_public_key` |
+| standard | every other agent of a single-tenant installation | as probe, plus — only when `config.json` has no `update_public_key` — the SHA-256 check alone (pre-P2a behaviour) |
+
+- The **release signature** is made in CI with the release key
+  (`tools/agent-release-key/README.md`); the public keys are compiled into the
+  agent (`agent/src/release_keys.rs`). The server only relays the `.sig` file
+  committed next to the binary in `backend/static/`; it cannot produce one,
+  and nothing it sends can add or replace a release key.
+- The mode is latched in `update-trust.json` next to `config.json`: a server
+  that once said "multi-tenant" or "probe" cannot relax it later. Deleting the
+  file (as root on the agent host) resets it.
+- Multi-tenant mode means: the enterprise tenancy plugin is installed (feature
+  `multi_tenancy`). Its installers no longer hand out the server-held key, and
+  `GET /api/agent/update-public-key` answers 404.
+- **Transition.** Agents from before release signing (no release key compiled
+  in) keep updating as before: the server still signs with its own key
+  (`DATA_DIR/agent_update_ed25519.key`), in every mode, so they can reach a
+  release-signed build. From that build on, the table above applies.
+  Single-tenant installs keep the server-key path (self-built agents); the
+  release signature is preferred whenever the agent knows the key.
+- A **self-built agent** (no release key, or another one) on a probe or a
+  multi-tenant installation refuses every update it cannot verify against its
+  own compiled keys — reinstall it with an official build.
+- Not covered yet: rollback protection (a server could offer an older
+  release-signed build).
 
 ---
 
