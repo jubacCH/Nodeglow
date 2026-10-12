@@ -201,8 +201,8 @@ irm 'http://YOUR_SERVER:8000/install/windows?token=<INSTALL_TOKEN>' | iex
 ```
 
 The agent enrolls with its token, creates its host, reports every 30 s,
-checks for updates every 5 minutes (SHA-256, plus Ed25519 when update signing
-is configured) and can be switched into probe mode from the UI.
+checks for updates every 5 minutes (SHA-256 plus an Ed25519 release signature
+made in CI, see [docs/OPERATIONS.md](docs/OPERATIONS.md#agent-updates)) and can be switched into probe mode from the UI.
 
 ---
 

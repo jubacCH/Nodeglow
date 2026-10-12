@@ -88,11 +88,23 @@ pub struct EnrollResponse {
 #[derive(Debug, Deserialize)]
 pub struct VersionResponse {
     pub hash: String,
-    /// Optional hex-encoded ed25519 detached signature over the binary bytes.
-    /// Present only if the server has signing enabled (defense-in-depth on top
-    /// of the authenticated TLS channel + SHA-256 hash check).
+    /// Hex ed25519 signature by the server-held key over the raw binary bytes
+    /// (pre-P2a path; used only with a local `update_public_key` on a
+    /// single-tenant installation, see updater.rs).
     #[serde(default)]
     pub signature: Option<String>,
+    /// Hex ed25519 signature by the CI release key over
+    /// `updater::release_message(platform, hash)`, relayed from the `.sig`
+    /// file CI published next to the binary. Absent for unsigned dev builds.
+    #[serde(default)]
+    pub release_signature: Option<String>,
+    /// Key id (16 hex) of the release key that made `release_signature`.
+    #[serde(default)]
+    pub release_key_id: Option<String>,
+    /// True on a multi-tenant installation; latched by the agent (it can
+    /// tighten verification, never relax it).
+    #[serde(default)]
+    pub multi_tenant: Option<bool>,
 }
 
 impl ApiClient {

@@ -1,4 +1,11 @@
-"""Ed25519 signing for agent auto-updates.
+"""Ed25519 signing for agent auto-updates with a server-held key (pre-P2a path).
+
+Since P2a the trust anchor of agent updates is the CI **release key**
+(:mod:`services.agent_release`); this server-held key is no longer one where
+spec rule 4 forbids it: P2a agents of a multi-tenant installation ignore its
+signature, and the installers there do not hand out its public key. It
+remains for single-tenant installs (self-built agents, operator = customer)
+and so that agents from before P2a can update to a release-signed build.
 
 The server holds an ed25519 private key (persisted in ``DATA_DIR``). Agents embed
 the matching public key — delivered inside the server-generated install script,

@@ -19,7 +19,7 @@ from ratelimit import rate_limit
 from models.agent import Agent
 from models.agent_install_token import AgentInstallToken
 from models.tenant import DEFAULT_TENANT_ID
-from services import agent_signing
+from services import agent_release, agent_signing
 from services import tenancy
 from services.tenancy import system_scope, tenant_scope
 from services.agent_services import watched_list
@@ -502,6 +502,10 @@ async def _handle_report(db, agent: Agent, body: dict):
         "agent_log_level": agent.agent_log_level or "errors",
         # Older agents ignore the extra key.
         "watched_services": watched_list(agent),
+        # Update trust (spec rule 4): agents latch both flags — they can only
+        # make an agent's update verification stricter, never relax it.
+        "probe": bool(agent.is_probe),
+        "multi_tenant": agent_release.multi_tenant_mode(),
     }}
     # Probe syslog relay: on/off and port, for probes only (an agent without
     # the key — every non-probe — keeps its relay off).
@@ -912,6 +916,20 @@ async def _authorize_install_request(request: Request) -> tuple[bool, str | None
 
 # ── Install scripts (universal one-liner endpoints) ──────────────────────────
 
+def _install_update_trust_line() -> str:
+    """The update-trust line of the config.json an installer writes.
+
+    Multi-tenant (spec rule 4): the agent must accept release-signed updates
+    only — ``require_release_signature``, and no server-held key is handed out
+    (it would be a server-delivered trust anchor). Single-tenant: the
+    server-held key as before (pre-P2a path, operator = customer); the agent
+    still prefers a release signature when one is relayed.
+    """
+    if agent_release.multi_tenant_mode():
+        return '"require_release_signature": true'
+    return f'"update_public_key": "{agent_signing.public_key_hex()}"'
+
+
 @router.get("/install/linux")
 async def install_linux(request: Request):
     """Universal Linux installer. Usage:
@@ -926,8 +944,7 @@ async def install_linux(request: Request):
     # without a token query-param we emit a placeholder that will visibly
     # fail at enrollment time instead of silently using something valid.
     enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
-    # Embed the update-signing public key so the agent verifies signed updates.
-    update_public_key = agent_signing.public_key_hex()
+    update_trust = _install_update_trust_line()
 
     script = f'''#!/bin/bash
 set -e
@@ -1005,7 +1022,7 @@ cat > "$CONFIG_FILE" << CONF
   "server": "$SERVER",
   "token": "$TOKEN",
   "interval": 30,
-  "update_public_key": "{update_public_key}"
+  {update_trust}
 }}
 CONF
 
@@ -1069,8 +1086,7 @@ async def install_windows(request: Request):
         return JSONResponse({"error": "Valid install token required"}, status_code=401)
     server_url = await resolve_server_url(request)
     enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
-    # Embed the update-signing public key so the agent verifies signed updates.
-    update_public_key = agent_signing.public_key_hex()
+    update_trust = _install_update_trust_line()
 
     script = f'''# ── Nodeglow Agent Installer for Windows ─────────────────────────────────────
 $ErrorActionPreference = "Stop"
@@ -1151,7 +1167,7 @@ Write-Host "  [5/8] Writing configuration..."
   "server": "$Server",
   "token": "$Token",
   "interval": 30,
-  "update_public_key": "{update_public_key}"
+  {update_trust}
 }}
 "@ | Set-Content -Path "$InstallDir\\config.json" -Encoding ASCII -Force
 
@@ -1348,22 +1364,47 @@ def _get_agent_signature(platform: str) -> str:
 
 @router.get("/api/agent/version/{platform}")
 async def agent_version(platform: str):
-    """Returns the current agent version hash + ed25519 signature.
+    """The current agent binary's hash and signatures, for auto-update.
 
-    Agents poll this to check for updates; the signature lets agents that have
-    a configured update_public_key verify the binary before applying it.
+    * ``release_signature`` / ``release_key_id``: the CI release signature
+      committed next to the binary (``<binary>.sig``), relayed unchanged. The
+      server cannot produce one; agents verify it against the release keys
+      compiled into them. ``null`` for an unsigned (dev) build.
+    * ``signature``: the server-held key's signature over the raw bytes — the
+      pre-P2a path, honoured only by single-tenant agents with a local
+      ``update_public_key``. Still sent in multi-tenant mode so agents from
+      before P2a (which know no other path) can update to a release-signed
+      build; P2a agents in multi-tenant mode ignore it.
+    * ``multi_tenant``: agents latch it and then accept release signatures only.
     """
     if platform not in ("windows", "linux"):
         return JSONResponse({"error": "Invalid platform"}, status_code=400)
+    sha = _get_agent_hash(platform)
+    release = None
+    path = _agent_binary_path(platform)
+    if path is not None and sha:
+        release = agent_release.load_release_signature(path, platform, sha)
     return {
-        "hash": _get_agent_hash(platform),
+        "hash": sha,
         "signature": _get_agent_signature(platform),
+        "release_signature": release["signature"] if release else None,
+        "release_key_id": release["key_id"] if release else None,
+        "multi_tenant": agent_release.multi_tenant_mode(),
     }
 
 
 @router.get("/api/agent/update-public-key")
 async def agent_update_public_key():
-    """Public half of the agent-update signing key (hex), for agents to embed."""
+    """Public half of the server-held agent-update key (hex), single-tenant only.
+
+    In multi-tenant mode a server-delivered key must not become an agent's
+    trust anchor (spec rule 4), so it is not handed out.
+    """
+    if agent_release.multi_tenant_mode():
+        return JSONResponse(
+            {"error": "Not available in multi-tenant mode: agents verify release signatures only"},
+            status_code=404,
+        )
     return {"public_key": agent_signing.public_key_hex()}
 
 

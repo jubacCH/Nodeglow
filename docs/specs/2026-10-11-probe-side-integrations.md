@@ -800,6 +800,18 @@ tenancy phase 4 keyed it).
   Until this lands, the spec does **not** claim rule 4: probe-run code is only
   as trustworthy as the SaaS server, D's security score does not apply, and
   `deploy_agents` is not offered.
+
+  **Implemented (P2a, branch `feat/agent-release-signing`):** CI signs both
+  binaries (`tools/agent-release-key/sign.sh`, secret
+  `AGENT_RELEASE_SIGNING_KEY`), commits `backend/static/<binary>.sig` and
+  attaches the signatures to the GitHub Release; the backend relays them as
+  `release_signature` / `release_key_id`. The agent's trust mode (release
+  only / probe / standard, latched in `update-trust.json`) is described in
+  `docs/OPERATIONS.md#agent-updates`. Rule 4 holds for the agent binary once
+  the real release public key replaces the placeholder in
+  `agent/src/release_keys.rs`; the pre-P2a server signature is still sent so
+  older agents (which know no other path) can reach a release-signed build,
+  and P2a agents in multi-tenant mode ignore it.
 - **No server-supplied code or scripts.** No probe command runs a script or
   command line the server sends or serves; `deploy_agents` (on-prem only,
   probe-local opt-in, release-signed payload — see "Proxmox deploy-agent") is
