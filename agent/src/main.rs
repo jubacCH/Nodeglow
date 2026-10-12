@@ -2,6 +2,7 @@ mod config;
 mod collector;
 mod checks;
 mod client;
+mod release_keys;
 mod services;
 mod syslog_relay;
 mod updater;
@@ -93,6 +94,20 @@ async fn main() {
         relay_hostname,
     );
 
+    // Update trust (spec rule 4): latched from what the server reports, it
+    // only ever tightens. See updater.rs.
+    let trust_path = updater::TrustState::path_for(&cfg.config_path);
+    let mut trust = updater::TrustState::load(&trust_path);
+    let release_keys = updater::compiled_release_keys();
+    if release_keys.is_empty() {
+        warn!(
+            "This is a dev build without a release key: release-signed updates cannot be verified (probes and multi-tenant agents refuse all updates)"
+        );
+    } else {
+        let ids: Vec<&str> = release_keys.iter().map(|k| k.id.as_str()).collect();
+        info!(release_keys = ?ids, mode = ?trust.mode(cfg.require_release_signature), "Update trust");
+    }
+
     let interval = std::time::Duration::from_secs(cfg.interval);
 
     info!("Entering main loop (interval={}s)", cfg.interval);
@@ -143,9 +158,15 @@ async fn main() {
                 }
                 pending_results.clear();
 
+                let mut reported_probe = resp.checks.as_ref().is_some_and(|c| !c.is_empty());
                 if let Some(sc) = resp.config {
+                    reported_probe |= sc.probe.unwrap_or(false)
+                        || syslog_relay::RelayConfig::from_server(sc.syslog_relay.as_ref()).is_some();
+                    trust.observe(&trust_path, sc.multi_tenant.unwrap_or(false), reported_probe);
                     let mut guard = server_config.write().await;
                     *guard = sc;
+                } else if reported_probe {
+                    trust.observe(&trust_path, false, true);
                 }
                 // Handle remote commands
                 if let Some(cmd) = resp.command {
@@ -190,7 +211,7 @@ async fn main() {
         let count = update_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let checks_per_update = (300 / cfg.interval).max(1);
         if count % checks_per_update == 0 {
-            match updater::check_and_update(&api, &cfg).await {
+            match updater::check_and_update(&api, &cfg, &mut trust, &trust_path).await {
                 Ok(true) => {
                     info!("Update applied, restarting...");
                     std::process::exit(0);
