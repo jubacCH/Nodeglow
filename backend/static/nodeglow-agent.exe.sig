@@ -1,0 +1,1 @@
+{"format":"nodeglow-agent-signature-v1","alg":"ed25519","platform":"windows","key_id":"076473131abe1bba","sha256":"10e0753f9521b3211ec60a4ca5bbcb842d66ec18762a416788fdce679343e89a","signature":"c1c1f2e1c8d19abc8336537ace8d35b35ecec53799a50606cc5fb13da324e0e67c7d4ebc4b2eef28b45681930a02b1ba55071865f2b0b6c859319bf19b6e3a0d"}
