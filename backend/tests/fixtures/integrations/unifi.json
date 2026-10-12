@@ -1,0 +1,167 @@
+{
+ "_comment": "Recorded-shape UniFi OS (UDM Pro, Network 9.x) responses for UnifiIntegration.collect() with is_udm=true. Documentation addresses and names only (RFC 5737, example.net, 02:00:00 MACs); credentials and tokens are placeholders.",
+ "type": "unifi",
+ "config": {
+  "host": "https://unifi.example.net",
+  "username": "nodeglow-readonly",
+  "password": "fixture-password",
+  "site": "default",
+  "is_udm": true,
+  "verify_ssl": false
+ },
+ "reverse_dns": {
+  "192.0.2.1": "udm.example.net",
+  "192.0.2.2": "usw-core.example.net",
+  "192.0.2.3": "192.0.2.3.in-addr.example.net",
+  "192.0.2.4": null
+ },
+ "requests": [
+  {
+   "method": "POST",
+   "url": "https://unifi.example.net/api/auth/login",
+   "match_json": {"username": "nodeglow-readonly", "password": "fixture-password"},
+   "status": 200,
+   "headers": {"content-type": "application/json; charset=utf-8",
+               "x-csrf-token": "fixture-csrf-0f1e2d3c",
+               "set-cookie": "TOKEN=fixture.jwt.token; path=/; samesite=strict; secure; httponly"},
+   "json": {"unique_id": "00000000-0000-4000-8000-000000000001", "first_name": "Nodeglow", "last_name": "Readonly",
+            "username": "nodeglow-readonly", "isOwner": false, "deviceToken": "fixture-device-token"}
+  },
+  {
+   "method": "GET",
+   "url": "https://unifi.example.net/proxy/network/api/s/default/stat/device",
+   "match_headers": {"x-csrf-token": "fixture-csrf-0f1e2d3c"},
+   "status": 200,
+   "headers": {"content-type": "application/json;charset=UTF-8"},
+   "json": {"meta": {"rc": "ok"}, "data": [
+    {"_id": "650000000000000000000001", "mac": "02:00:00:00:01:01", "name": "UDM Pro", "type": "udm", "model": "UDMPRO",
+     "state": 1, "adopted": true, "ip": "192.0.2.1", "uptime": 2592000, "version": "4.3.6.11367",
+     "system-stats": {"cpu": "12.4", "mem": "61.8", "uptime": "2592000"},
+     "num_sta": 3, "rx_bytes": 9123456789012, "tx_bytes": 1234567890123, "satisfaction": 100,
+     "uplink": {"type": "wire", "up": true, "rx_bytes-r": 1834221, "tx_bytes-r": 412883, "speed": 1000},
+     "port_table": [
+      {"port_idx": 1, "name": "Port 1", "enable": true, "up": true, "speed": 1000, "is_uplink": false,
+       "rx_bytes": 51234567890, "tx_bytes": 412345678901, "rx_bytes-r": 21345, "tx_bytes-r": 1823311,
+       "satisfaction": 100, "op_mode": "switch"},
+      {"port_idx": 2, "name": "Port 2", "enable": true, "up": false, "speed": 0, "is_uplink": false,
+       "rx_bytes": 0, "tx_bytes": 0, "satisfaction": -1, "op_mode": "switch"},
+      {"port_idx": 9, "name": "WAN", "enable": true, "up": true, "speed": 1000, "is_uplink": true,
+       "rx_bytes": 9123456789012, "tx_bytes": 1234567890123, "rx_bytes-r": 1834221, "tx_bytes-r": 412883,
+       "op_mode": "switch"},
+      {"port_idx": 11, "name": "SFP+ 1", "enable": true, "up": true, "speed": 10000, "is_uplink": false,
+       "rx_bytes": 412345678901, "tx_bytes": 51234567890, "rx_bytes-r": 1801120, "tx_bytes-r": 30011,
+       "satisfaction": 100, "op_mode": "switch"}
+     ]},
+    {"_id": "650000000000000000000002", "mac": "02:00:00:00:01:02", "name": "USW Core", "type": "usw", "model": "US24P250",
+     "state": 1, "adopted": true, "ip": "192.0.2.2", "uptime": 1209600, "version": "7.1.26.15869",
+     "system-stats": {"cpu": "7", "mem": "38.2"}, "num_sta": 2, "rx_bytes": 812345678901, "tx_bytes": 712345678901,
+     "satisfaction": 99, "uplink": {"type": "wire", "up": true, "rx_bytes-r": 30011, "tx_bytes-r": 1801120},
+     "port_table": [
+      {"port_idx": 2, "name": "nas01", "enable": true, "up": true, "speed": 2500, "is_uplink": false,
+       "poe_enable": false, "rx_bytes": 112345678901, "tx_bytes": 212345678901, "rx_bytes-r": 1200,
+       "tx_bytes-r": 9800, "satisfaction": 100, "op_mode": "switch"},
+      {"port_idx": 1, "name": "Uplink", "enable": true, "up": true, "speed": 10000, "is_uplink": true,
+       "poe_enable": false, "rx_bytes": 51234567890, "tx_bytes": 412345678901, "rx_bytes-r": 30011,
+       "tx_bytes-r": 1801120, "satisfaction": 100, "op_mode": "switch"},
+      {"port_idx": 5, "name": "AP Office", "enable": true, "up": true, "speed": 1000, "is_uplink": false,
+       "poe_enable": true, "poe_power": "6.84", "rx_bytes": 41234567890, "tx_bytes": 31234567890,
+       "rx_bytes-r": 4400, "tx_bytes-r": 88000, "satisfaction": 98, "op_mode": "switch"},
+      {"port_idx": 6, "name": "Port 6", "enable": false, "up": false, "speed": 0, "is_uplink": false,
+       "poe_enable": false, "poe_power": null, "op_mode": "switch"},
+      {"port_idx": 7, "name": "printer", "enable": true, "up": true, "speed": 100, "is_uplink": false,
+       "poe_enable": false, "rx_bytes": 123456789, "tx_bytes": 987654321, "rx_bytes-r": 0, "tx_bytes-r": 12,
+       "satisfaction": 100, "op_mode": "switch"}
+     ]},
+    {"_id": "650000000000000000000003", "mac": "02:00:00:00:01:03", "name": "AP Office", "type": "uap", "model": "U6PRO",
+     "state": 1, "adopted": true, "ip": "192.0.2.3", "uptime": 864000, "version": "6.6.77.15402",
+     "system-stats": {"cpu": "3.1", "mem": "47.9"}, "num_sta": 2, "rx_bytes": 31234567890, "tx_bytes": 41234567890,
+     "satisfaction": 96, "uplink": {"type": "wire", "up": true, "rx_bytes-r": 88000, "tx_bytes-r": 4400},
+     "radio_table_stats": [{"name": "wifi0", "radio": "ng", "channel": 6, "num_sta": 1},
+                           {"name": "wifi1", "radio": "na", "channel": 36, "num_sta": 1}]},
+    {"_id": "650000000000000000000004", "mac": "02:00:00:00:01:04", "hostname": "U6-Lite-Garden", "type": "uap",
+     "model": "UAL6", "state": 0, "adopted": true, "ip": "192.0.2.4", "uptime": 0, "version": "6.6.77.15402",
+     "system-stats": {}, "satisfaction": -1, "radio_table_stats": []}
+   ]}
+  },
+  {
+   "method": "GET",
+   "url": "https://unifi.example.net/proxy/network/api/s/default/stat/sta",
+   "match_headers": {"x-csrf-token": "fixture-csrf-0f1e2d3c"},
+   "status": 200,
+   "headers": {"content-type": "application/json;charset=UTF-8"},
+   "json": {"meta": {"rc": "ok"}, "data": [
+    {"mac": "02:00:00:00:a0:01", "hostname": "laptop-ada", "ip": "192.0.2.101", "ap_mac": "02:00:00:00:01:03",
+     "essid": "Example-WLAN", "channel": 36, "signal": -54, "rssi": 42, "rx_bytes": 123456789, "tx_bytes": 987654321,
+     "rx_bytes-r": 1520, "tx_bytes-r": 30410, "uptime": 7260, "vlan": 0, "satisfaction": 97, "network": "Default",
+     "is_wired": false},
+    {"mac": "02:00:00:00:a0:02", "name": "phone-grace", "ip": "192.0.2.102", "ap_mac": "02:00:00:00:01:03",
+     "essid": "Example-IoT", "channel": 6, "signal": -71, "rssi": 25, "rx_bytes": 2345678, "tx_bytes": 8765432,
+     "rx_bytes-r": 0, "tx_bytes-r": 0, "uptime": 360, "vlan": 40, "satisfaction": 81, "network": "IoT",
+     "is_wired": false},
+    {"mac": "02:00:00:00:b0:01", "hostname": "nas01", "ip": "192.0.2.20", "sw_mac": "02:00:00:00:01:02",
+     "sw_port": 2, "rx_bytes": 212345678901, "tx_bytes": 112345678901, "rx_bytes-r": 9800, "tx_bytes-r": 1200,
+     "uptime": 1209000, "network": "Default", "is_wired": true},
+    {"mac": "02:00:00:00:b0:02", "ip": "192.0.2.30", "sw_mac": "02:00:00:00:01:02", "sw_port": 7,
+     "rx_bytes": 987654321, "tx_bytes": 123456789, "uptime": 86400, "vlan": 1, "network": "Default", "is_wired": true}
+   ]}
+  },
+  {
+   "method": "GET",
+   "url": "https://unifi.example.net/proxy/network/api/s/default/stat/health",
+   "match_headers": {"x-csrf-token": "fixture-csrf-0f1e2d3c"},
+   "status": 200,
+   "headers": {"content-type": "application/json;charset=UTF-8"},
+   "json": {"meta": {"rc": "ok"}, "data": [
+    {"subsystem": "wlan", "num_user": 2, "num_guest": 0, "num_iot": 0, "num_ap": 2, "num_adopted": 2,
+     "num_disabled": 0, "num_disconnected": 1, "num_pending": 0, "status": "warning",
+     "tx_bytes-r": 30410, "rx_bytes-r": 1520, "satisfaction": 92},
+    {"subsystem": "wan", "num_gw": 1, "num_adopted": 1, "num_disconnected": 0, "num_pending": 0, "status": "ok",
+     "wan_ip": "203.0.113.45", "gateways": ["203.0.113.1"], "netmask": "255.255.255.0",
+     "nameservers": ["192.0.2.53"], "num_sta": 4, "tx_bytes-r": 412883, "rx_bytes-r": 1834221,
+     "gw_mac": "02:00:00:00:01:01", "gw_name": "UDM Pro", "latency_average": 9, "uptime": 2591000},
+    {"subsystem": "www", "status": "ok", "latency": 9, "uptime": 2591000, "drops": 2,
+     "xput_up": 48.3, "xput_down": 921.7, "speedtest_status": "Idle", "speedtest_ping": 8},
+    {"subsystem": "lan", "lan_ip": "192.0.2.1", "status": "ok", "num_user": 2, "num_guest": 0, "num_iot": 0,
+     "num_sw": 1, "num_adopted": 1, "num_disconnected": 0, "num_pending": 0,
+     "tx_bytes-r": 1801120, "rx_bytes-r": 30011},
+    {"subsystem": "vpn", "status": "unknown", "remote_user_enabled": false, "site_to_site_enabled": false}
+   ]}
+  },
+  {
+   "method": "GET",
+   "url": "https://unifi.example.net/proxy/network/api/s/default/stat/event",
+   "params": {"_limit": "200", "_sort": "-time"},
+   "match_headers": {"x-csrf-token": "fixture-csrf-0f1e2d3c"},
+   "status": 200,
+   "headers": {"content-type": "application/json;charset=UTF-8"},
+   "json": {"meta": {"rc": "ok"}, "data": [
+    {"_id": "670800010000000000000001", "key": "EVT_AP_Lost_Contact", "subsystem": "wlan", "ap": "02:00:00:00:01:04",
+     "ap_name": "U6-Lite-Garden", "time": 1791687600000, "datetime": "2026-10-11T03:00:00Z",
+     "msg": "AP[02:00:00:00:01:04] was disconnected"},
+    {"_id": "670800020000000000000002", "key": "EVT_WU_Connected", "subsystem": "wlan", "user": "02:00:00:00:a0:02",
+     "hostname": "phone-grace", "ap": "02:00:00:00:01:03", "ssid": "Example-IoT", "channel": "6",
+     "time": 1791686000000, "datetime": "2026-10-11T02:33:20Z",
+     "msg": "User[02:00:00:00:a0:02] has connected to AP[02:00:00:00:01:03] with SSID \"Example-IoT\" on \"channel 6(ng)\""},
+    {"_id": "670800030000000000000003", "key": "EVT_GW_WANTransition", "subsystem": "wan", "gw": "02:00:00:00:01:01",
+     "gw_name": "UDM Pro", "time": 1791676000000, "datetime": "2026-10-10T23:46:40Z",
+     "msg": "Gateway[02:00:00:00:01:01] WAN iface eth8 transition to state up"},
+    {"_id": "670800040000000000000004", "key": "EVT_AD_Login", "subsystem": "", "admin": "nodeglow-readonly",
+     "ip": "192.0.2.200", "time": 1791666000000, "datetime": "2026-10-10T20:00:00Z",
+     "msg": "Admin[nodeglow-readonly] log in from 192.0.2.200"}
+   ]}
+  },
+  {
+   "method": "POST",
+   "url": "https://unifi.example.net/proxy/network/api/s/default/stat/report/archive.speedtest",
+   "match_json": {"attrs": ["xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"},
+   "match_headers": {"x-csrf-token": "fixture-csrf-0f1e2d3c"},
+   "status": 200,
+   "headers": {"content-type": "application/json;charset=UTF-8"},
+   "json": {"meta": {"rc": "ok"}, "data": [
+    {"_id": "6709a2b0c1d2e3f405162738", "time": 1791684000000, "xput_download": 921.73, "xput_upload": 48.31, "latency": 8},
+    {"_id": "6ac98000c1d2e3f405162737", "xput_download": 897.04, "xput_upload": 47.95, "latency": 9.4},
+    {"_id": "zz", "time": "2026-10-09 01:00", "xput_download": 0, "xput_upload": null, "latency": 0}
+   ]}
+  }
+ ]
+}
