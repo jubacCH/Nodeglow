@@ -419,6 +419,10 @@ async def api_status(
         "data": data,
         "error": snap.error,
         "timestamp": snap.timestamp.isoformat() if snap.timestamp else None,
+        # Probe-side integrations: who collected it (NULL = the server).
+        "collector": cfg.collector,
+        "collected_by": snap.collected_by,
+        "collected_at": snap.collected_at.isoformat() if snap.collected_at else None,
     })
 
 
@@ -440,6 +444,7 @@ async def api_list_integrations(db: AsyncSession = Depends(get_db)):
             "color": cls.color,
             "description": cls.description,
             "single_instance": cls.single_instance,
+            "network_scope": cls.network_scope,
             "configured": counts.get(name, 0),
         }
         for name, cls in sorted(registry.items(), key=lambda x: x[1].display_name)
@@ -473,6 +478,15 @@ async def deploy_agent_to_lxcs(
     cfg = await db.get(IntegrationConfig, config_id)
     if not cfg or cfg.type != "proxmox":
         return JSONResponse({"error": "Proxmox config not found"}, status_code=404)
+    if (cfg.collector or "core") != "core":
+        # A probe collects it: the backend neither reaches the node nor uses
+        # its secrets (probe-side integrations, rule 2). The probe-side
+        # deploy is a separate, on-prem-only command (spec phase P5).
+        return JSONResponse(
+            {"error": "This Proxmox integration is collected by a probe; deploy the agent "
+                      "with the manual install command instead."},
+            status_code=409,
+        )
 
     config_dict = await int_svc.decrypt_config(db, cfg)
 

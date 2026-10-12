@@ -1,0 +1,98 @@
+{
+ "disks": [
+  {
+   "healthy": true,
+   "model": "HAT5300-4T",
+   "name": "Drive 1",
+   "serial": "FIXTUREDISK01",
+   "size_gb": 3726.02,
+   "status": "normal",
+   "temp": 36,
+   "type": "SATA"
+  },
+  {
+   "healthy": true,
+   "model": "HAT5300-4T",
+   "name": "Drive 2",
+   "serial": "FIXTUREDISK02",
+   "size_gb": 3726.02,
+   "status": "normal",
+   "temp": 37,
+   "type": "SATA"
+  },
+  {
+   "healthy": true,
+   "model": "HAT5300-4T",
+   "name": "Drive 3",
+   "serial": "FIXTUREDISK03",
+   "size_gb": 3726.02,
+   "status": "normal",
+   "temp": 38,
+   "type": "SATA"
+  },
+  {
+   "healthy": false,
+   "model": "HAT5300-4T",
+   "name": "Drive 4",
+   "serial": "FIXTUREDISK04",
+   "size_gb": 3726.02,
+   "status": "crashed",
+   "temp": 44,
+   "type": "SATA"
+  },
+  {
+   "healthy": true,
+   "model": "SNV3410-400G",
+   "name": "M.2 Drive 1",
+   "serial": "FIXTURENVME01",
+   "size_gb": 372.61,
+   "status": "normal",
+   "temp": 48,
+   "type": "NVMe"
+  }
+ ],
+ "storage_pools": [
+  {
+   "free_gb": 4078.21,
+   "fs_type": "btrfs",
+   "healthy": true,
+   "id": "/volume1",
+   "name": "Volume 1",
+   "pct": 62.0,
+   "raid_type": "shr_with_1_disk_protect",
+   "size_gb": 10727.18,
+   "status": "normal",
+   "used_gb": 6648.97
+  },
+  {
+   "free_gb": 20.26,
+   "fs_type": "btrfs",
+   "healthy": false,
+   "id": "/volume2",
+   "name": "Volume 2 (SSD)",
+   "pct": 95.4,
+   "raid_type": "raid_1",
+   "size_gb": 439.19,
+   "status": "degraded",
+   "used_gb": 418.93
+  }
+ ],
+ "system": {
+  "cpu_pct": 15.0,
+  "hostname": "nas01",
+  "mem_pct": 67.7,
+  "mem_total_gb": 3.7,
+  "mem_used_gb": 2.5,
+  "uptime_s": 3888000,
+  "version": "72806"
+ },
+ "totals": {
+  "disks_ok": 4,
+  "disks_total": 5,
+  "storage_pct": 63.3,
+  "storage_total_gb": 11166.37,
+  "storage_used_gb": 7067.9,
+  "volumes_healthy": 1,
+  "volumes_total": 2
+ }
+}

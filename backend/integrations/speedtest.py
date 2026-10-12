@@ -143,6 +143,8 @@ class SpeedtestIntegration(BaseIntegration):
     # 1.29 and 176 Mbps on the same line within five minutes, and the uplink was
     # never idle. Hourly is frequent enough to spot a degraded connection.
     default_interval_seconds = 3600
+    # Measures the uplink of wherever it runs: only meaningful at the site.
+    network_scope = "site"
 
     config_fields = [
         ConfigField(key="server_id", label="Server ID (optional)",

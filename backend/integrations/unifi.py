@@ -1,12 +1,14 @@
 """UniFi Network integration – device health, client stats, WAN metrics, speedtest."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import socket
 from datetime import datetime, timezone
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import BaseIntegration, CollectorResult, ConfigField, backend_only
 
 logger = logging.getLogger(__name__)
 
@@ -266,9 +268,52 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
     }
 
 
+# ── Reverse DNS (part of collect) ────────────────────────────────────────────
+
+# The PTR lookup belongs to the collection, not to the host import: it has to
+# run where the customer's DNS is (on a probe, once integrations move there),
+# and on_snapshot must not need the network. Bounded and off the event loop,
+# so a slow resolver cannot stall a collect.
+RDNS_CONCURRENCY = 16
+RDNS_TIMEOUT_SECONDS = 2.0
+
+
+async def reverse_lookup(ip: str) -> str | None:
+    """PTR name of ``ip``, or None (no record, malformed name, timeout)."""
+    loop = asyncio.get_running_loop()
+    try:
+        name = (await asyncio.wait_for(
+            loop.run_in_executor(None, socket.gethostbyaddr, ip), RDNS_TIMEOUT_SECONDS,
+        ))[0]
+    except (OSError, UnicodeError, ValueError, asyncio.TimeoutError):
+        # No PTR record (socket.herror) or a malformed name: keep the short name.
+        logger.debug("reverse DNS failed for %s", ip, exc_info=True)
+        return None
+    return name or None
+
+
+async def enrich_reverse_dns(data: dict) -> dict:
+    """Add ``fqdn`` to every device whose address has a usable PTR record
+    (a dotted name that is not just the address again)."""
+    sem = asyncio.Semaphore(RDNS_CONCURRENCY)
+
+    async def one(device: dict) -> None:
+        ip = (device.get("ip") or "").strip()
+        if not ip:
+            return
+        async with sem:
+            rev = await reverse_lookup(ip)
+        if rev and "." in rev and not rev.startswith(ip):
+            device["fqdn"] = rev
+
+    await asyncio.gather(*(one(d) for d in data.get("devices", [])))
+    return data
+
+
 # ── Host Import ───────────────────────────────────────────────────────────────
 
 
+@backend_only
 async def import_unifi_devices(ctrl_name: str, data: dict, db) -> dict:
     from models.ping import PingHost
     from sqlalchemy import select
@@ -289,16 +334,9 @@ async def import_unifi_devices(ctrl_name: str, data: dict, db) -> dict:
             skipped += 1
             continue
 
-        # Try reverse DNS to get FQDN for the hostname field
-        fqdn = name
-        try:
-            import socket as _socket
-            rev = _socket.gethostbyaddr(ip)[0]
-            if rev and "." in rev and not rev.startswith(ip):
-                fqdn = rev
-        except (OSError, UnicodeError, ValueError):
-            # No PTR record (socket.herror) or a malformed name — keep the short name.
-            logger.debug("reverse DNS failed for %s", ip, exc_info=True)
+        # FQDN from the reverse lookup collect() did where the customer's
+        # DNS is (enrich_reverse_dns); this hook itself needs no network.
+        fqdn = (d.get("fqdn") or "").strip() or name
 
         existing = by_ip.get(ip) or by_mac.get(mac)
         if existing:
@@ -379,7 +417,7 @@ class UnifiIntegration(BaseIntegration):
 
     async def collect(self) -> CollectorResult:
         try:
-            data = await self._api().fetch_all()
+            data = await enrich_reverse_dns(await self._api().fetch_all())
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))

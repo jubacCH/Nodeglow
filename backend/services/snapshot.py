@@ -20,15 +20,27 @@ async def save(
     ok: bool,
     data: Any = None,
     error: str | None = None,
+    *,
+    timestamp: datetime | None = None,
+    collected_by: int | None = None,
+    collected_at: datetime | None = None,
 ) -> Snapshot:
-    """Save a new snapshot."""
+    """Save a new snapshot.
+
+    ``timestamp`` defaults to now (core collections, as before);
+    ``collected_by`` / ``collected_at`` name the probe that collected it and
+    when (probe-side integrations; NULL for the core)."""
     snap = Snapshot(
         entity_type=entity_type,
         entity_id=entity_id,
         ok=ok,
         data_json=json.dumps(data) if data is not None else None,
         error=error,
+        collected_by=collected_by,
+        collected_at=collected_at,
     )
+    if timestamp is not None:
+        snap.timestamp = timestamp
     db.add(snap)
     await db.flush()
     return snap
@@ -64,6 +76,23 @@ async def get_latest(
     result = await db.execute(
         select(Snapshot)
         .where(Snapshot.entity_type == entity_type, Snapshot.entity_id == entity_id)
+        .order_by(Snapshot.timestamp.desc(), Snapshot.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_latest_data(
+    db: AsyncSession,
+    entity_type: str,
+    entity_id: int,
+) -> Snapshot | None:
+    """The most recent successful snapshot that carries data (standby
+    markers and failures have none)."""
+    result = await db.execute(
+        select(Snapshot)
+        .where(Snapshot.entity_type == entity_type, Snapshot.entity_id == entity_id,
+               Snapshot.ok == True, Snapshot.data_json.is_not(None))  # noqa: E712
         .order_by(Snapshot.timestamp.desc(), Snapshot.id.desc())
         .limit(1)
     )

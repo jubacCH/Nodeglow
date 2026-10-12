@@ -1,0 +1,79 @@
+{
+ "_comment": "Synology DSM responses for SynologyIntegration.collect(). Endpoints, parameters and the fields the parser reads follow backend/integrations/synology.py; the DSM.Info hostname field, the storage (vol_info/disk_info) and load (cpu pairs, memory.real_total/avail_real) shapes are what the parser expects and are NOT verified against a recorded DSM 7 device. Documentation names only; credentials, sid and serials are placeholders.",
+ "type": "synology",
+ "config": {
+  "host": "nas01.example.com",
+  "port": 5001,
+  "username": "nodeglow",
+  "password": "fixture-password",
+  "verify_ssl": true
+ },
+ "requests": [
+  {
+   "method": "POST",
+   "url": "https://nas01.example.com:5001/webapi/auth.cgi",
+   "match_form": {"api": "SYNO.API.Auth", "version": "3", "method": "login", "account": "nodeglow",
+                  "passwd": "fixture-password", "session": "Nodeglow", "format": "sid"},
+   "status": 200,
+   "headers": {"content-type": "application/json; charset=\"UTF-8\""},
+   "json": {"data": {"did": "fixture-device-id", "is_portal_port": false, "sid": "fixture-sid-0001"}, "success": true}
+  },
+  {
+   "method": "GET",
+   "url": "https://nas01.example.com:5001/webapi/entry.cgi",
+   "params": {"api": "SYNO.DSM.Info", "version": "2", "method": "getinfo", "_sid": "fixture-sid-0001"},
+   "status": 200,
+   "headers": {"content-type": "application/json; charset=\"UTF-8\""},
+   "json": {"data": {"codepage": "enu", "hostname": "nas01", "model": "DS920+", "ram": 4096,
+                     "serial": "FIXTURE00001", "temperature": 41, "temperature_warn": false,
+                     "time": "Sun Oct 11 12:00:00 2026", "uptime": 3888000, "version": "72806",
+                     "version_string": "DSM 7.2.2-72806 Update 3"}, "success": true}
+  },
+  {
+   "method": "GET",
+   "url": "https://nas01.example.com:5001/webapi/entry.cgi",
+   "params": {"api": "SYNO.Storage.CGI.Storage", "version": "1", "method": "load_info", "_sid": "fixture-sid-0001"},
+   "status": 200,
+   "headers": {"content-type": "application/json; charset=\"UTF-8\""},
+   "json": {"data": {
+    "vol_info": [
+     {"id": "volume_1", "vol_path": "/volume1", "name": "Volume 1", "status": "normal", "fs_type": "btrfs",
+      "raid_type": "shr_with_1_disk_protect", "size_total": "11518220361728", "size_used": "7139275587584"},
+     {"id": "volume_2", "vol_path": "/volume2", "name": "Volume 2 (SSD)", "status": "degraded", "fs_type": "btrfs",
+      "raid_type": "raid_1", "size_total": "471581343744", "size_used": "449823481856"}
+    ],
+    "disk_info": [
+     {"id": "sata1", "name": "Drive 1", "model": "HAT5300-4T", "serial": "FIXTUREDISK01", "status": "normal",
+      "temp": 36, "size_total": "4000787030016", "diskType": "SATA"},
+     {"id": "sata2", "name": "Drive 2", "model": "HAT5300-4T", "serial": "FIXTUREDISK02", "status": "normal",
+      "temp": 37, "size_total": "4000787030016", "diskType": "SATA"},
+     {"id": "sata3", "name": "Drive 3", "model": "HAT5300-4T", "serial": "FIXTUREDISK03", "status": "normal",
+      "temp": 38, "size_total": "4000787030016", "diskType": "SATA"},
+     {"id": "sata4", "name": "Drive 4", "model": "HAT5300-4T", "serial": "FIXTUREDISK04", "status": "crashed",
+      "temp": 44, "size_total": "4000787030016", "diskType": "SATA"},
+     {"id": "nvme0n1", "name": "M.2 Drive 1", "model": "SNV3410-400G", "serial": "FIXTURENVME01", "status": "normal",
+      "temp": 48, "size_total": "400088457216", "type": "NVMe"}
+    ]
+   }, "success": true}
+  },
+  {
+   "method": "GET",
+   "url": "https://nas01.example.com:5001/webapi/entry.cgi",
+   "params": {"api": "SYNO.System.SystemLoad", "version": "1", "method": "get", "_sid": "fixture-sid-0001"},
+   "status": 200,
+   "headers": {"content-type": "application/json; charset=\"UTF-8\""},
+   "json": {"data": {
+    "cpu": [[3, 1], [5, 2], [11, 4]],
+    "memory": {"real_total": 3880612, "avail_real": 1253972, "total_swap": 4194300, "avail_swap": 4012844}
+   }, "success": true}
+  },
+  {
+   "method": "GET",
+   "url": "https://nas01.example.com:5001/webapi/auth.cgi",
+   "params": {"api": "SYNO.API.Auth", "version": "1", "method": "logout", "session": "Nodeglow", "_sid": "fixture-sid-0001"},
+   "status": 200,
+   "headers": {"content-type": "application/json; charset=\"UTF-8\""},
+   "json": {"success": true}
+  }
+ ]
+}

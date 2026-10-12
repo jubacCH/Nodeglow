@@ -28,6 +28,10 @@ Covered:
   downgrade removes the policies; with the flag off nothing changes; a user
   without CREATEROLE upgrades with a warning; and a subset of the router
   tests runs against PostgreSQL as the app role with RLS on.
+* 048 (probe-side integrations P1): existing configs become core-collected
+  at rev 1 and keep collecting identically; the collector/probe constraints,
+  the composite probe FK and the "needs a probe" state after a probe is
+  deleted; the downgrade refuses while a probe collects a config.
 """
 from __future__ import annotations
 
@@ -69,7 +73,8 @@ def pg_db():
     asyncio.run(_admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
 
 
-def _run(args: list[str], dsn: str, **env_overrides: str) -> subprocess.CompletedProcess:
+def _run(args: list[str], dsn: str, *, timeout: float = 300,
+         **env_overrides: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     for key in ("NODEGLOW_DISABLE_EE", "NODEGLOW_RLS", "DATABASE_OWNER_URL",
                 "MIGRATION_DATABASE_URL"):
@@ -80,7 +85,7 @@ def _run(args: list[str], dsn: str, **env_overrides: str) -> subprocess.Complete
     env.update(env_overrides)
     proc = subprocess.run(
         [sys.executable, *args], cwd=BACKEND, env=env,
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=timeout,
     )
     assert proc.returncode == 0, f"{args} failed:\n{proc.stdout}\n{proc.stderr}"
     return proc
@@ -684,6 +689,143 @@ def test_047_probe_syslog_relay_up_and_down(pg_db):
     _alembic(pg_db, "upgrade", "head")
 
 
+# Seeds integration configs the way the app stored them at revision 047:
+# encrypted with each tenant's key, through the app (as nodeglow_app, RLS on).
+SEED_047_CONFIGS = r"""
+import asyncio, json
+from sqlalchemy import text
+from models import AsyncSessionLocal, engine
+from services import tenant_keys
+from services.tenancy import tenant_scope
+
+INSERT = text("INSERT INTO integration_configs (tenant_id, type, name, config_json, enabled, "
+              "created_at) VALUES (:t, 'pgfake', :n, :c, true, now() - interval '1 day')")
+
+async def main():
+    for tid, host in ((1, "https://192.0.2.10:8006"), (2, "https://198.51.100.10:8006")):
+        async with AsyncSessionLocal() as db:
+            with tenant_scope(tid):
+                ct = await tenant_keys.encrypt_secret(
+                    db, json.dumps({"host": host, "token_secret": f"secret-{tid}"}), tenant_id=tid)
+                await db.execute(INSERT, {"t": tid, "n": f"cfg-{tid}", "c": ct})
+                await db.commit()
+    await engine.dispose()
+
+asyncio.run(main())
+"""
+
+# One core integration pass of the real scheduler over both tenants, with a
+# fake integration type standing in for the network.
+COLLECT_048 = r"""
+import asyncio, json
+from unittest.mock import AsyncMock, patch
+from integrations._base import BaseIntegration, CollectorResult
+from models import engine
+from services import tenancy
+import scheduler
+
+seen = []
+
+class PgFake(BaseIntegration):
+    name = "pgfake"
+    display_name = "pg"
+    description = "pg"
+
+    async def collect(self):
+        seen.append(self.config["host"])
+        return CollectorResult(success=True, data={"host": self.config["host"],
+                                                   "secret": self.config["token_secret"]})
+
+async def main():
+    backend_cls = type(tenancy.backend())
+    with patch("integrations.get_registry", return_value={"pgfake": PgFake}), \
+            patch.object(backend_cls, "active_tenant_ids", new=AsyncMock(return_value=[1, 2])):
+        await scheduler.run_integration_checks()
+    await engine.dispose()
+    print(json.dumps(sorted(seen)))
+
+asyncio.run(main())
+"""
+
+
+def test_048_probe_integrations_existing_configs_keep_collecting(pg_db):
+    """048 on a populated 047 database with RLS on: existing configs become
+    collector 'core', rev 1, no probe; the constraints hold (a probe only for
+    a probe collector, never another tenant's probe); deleting a probe
+    leaves its configs at 'probe' with probe_id NULL; and the core keeps
+    collecting exactly the existing configs — same decrypted config, same
+    snapshot shape (no collected_by / collected_at) — and none of a probe's."""
+    import json
+
+    env = _rls_env(pg_db)
+    _alembic(pg_db, "upgrade", "047", **env)
+    _seed_two_tenants(pg_db)
+    _run(["-c", SEED_047_CONFIGS], pg_db, **env)
+    q(pg_db, "INSERT INTO snapshots (tenant_id, entity_type, entity_id, timestamp, ok, data_json) "
+             "SELECT tenant_id, 'pgfake', id, now() - interval '1 hour', true, '{}' "
+             "FROM integration_configs")
+
+    _alembic(pg_db, "upgrade", "048", **env)
+
+    rows = q(pg_db, "SELECT tenant_id, collector, probe_id, config_rev FROM integration_configs "
+                    "ORDER BY tenant_id")
+    assert [tuple(r) for r in rows] == [(1, "core", None, 1), (2, "core", None, 1)]
+    assert [tuple(r) for r in q(pg_db, "SELECT collected_by, collected_at FROM snapshots")] == \
+        [(None, None), (None, None)]
+
+    # Constraints.
+    with pytest.raises(Exception, match="ck_integration_configs_probe_collector"):
+        q(pg_db, "UPDATE integration_configs SET probe_id = 21 WHERE tenant_id = 1")
+    with pytest.raises(Exception, match="ck_integration_configs_collector"):
+        q(pg_db, "UPDATE integration_configs SET collector = 'edge' WHERE tenant_id = 1")
+    with pytest.raises(Exception, match="fk_integration_configs_probe_id"):
+        # Probe 21 belongs to tenant 1.
+        q(pg_db, "UPDATE integration_configs SET collector = 'probe', probe_id = 21 "
+                 "WHERE tenant_id = 2")
+    # A probe config (never decryptable: the core must not even try) and one
+    # whose probe gets deleted.
+    q(pg_db, "INSERT INTO agents (id, tenant_id, name, hostname, token, enabled, is_probe, "
+             "created_at) VALUES (22, 1, 'probe-gone', 'probe-gone', 'tok-gone', true, true, now())")
+    q(pg_db, "INSERT INTO integration_configs (tenant_id, type, name, config_json, enabled, "
+             "collector, probe_id, config_rev) VALUES "
+             "(1, 'pgfake', 'on-probe', 'not-a-ciphertext', true, 'probe', 21, 2), "
+             "(1, 'pgfake', 'probe-deleted', 'not-a-ciphertext', true, 'probe', 22, 2)")
+    q(pg_db, "DELETE FROM agents WHERE id = 22")
+    assert [tuple(r) for r in q(
+        pg_db, "SELECT collector, probe_id FROM integration_configs WHERE name = 'probe-deleted'")] \
+        == [("probe", None)]
+
+    proc = _run(["-c", COLLECT_048], pg_db, **env)
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == [
+        "https://192.0.2.10:8006", "https://198.51.100.10:8006"]
+    fresh = q(pg_db, "SELECT c.name, s.tenant_id, s.ok, s.error, s.data_json, s.collected_by, "
+                     "s.collected_at FROM snapshots s JOIN integration_configs c "
+                     "ON c.id = s.entity_id AND c.tenant_id = s.tenant_id "
+                     "WHERE s.timestamp > now() - interval '5 minutes' ORDER BY c.name")
+    assert [(r[0], r[1], r[2], r[3], json.loads(r[4]), r[5], r[6]) for r in fresh] == [
+        ("cfg-1", 1, True, None, {"host": "https://192.0.2.10:8006", "secret": "secret-1"},
+         None, None),
+        ("cfg-2", 2, True, None, {"host": "https://198.51.100.10:8006", "secret": "secret-2"},
+         None, None),
+    ]
+
+    # Down: refused while a probe collects a config; fine once all are core.
+    proc = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "047"], cwd=BACKEND,
+        env={**os.environ, "SECRET_KEY": "test-secret-key-for-pytest",
+             "DATA_DIR": str(BACKEND / "tests" / ".test_data"), **env},
+        capture_output=True, text=True, timeout=300)
+    assert proc.returncode != 0 and "collected by a probe" in proc.stderr, proc.stderr[-2000:]
+    q(pg_db, "UPDATE integration_configs SET collector = 'core', probe_id = NULL")
+    _alembic(pg_db, "downgrade", "047", **env)
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name IN ('integration_configs', 'snapshots')")}
+    assert not cols & {"collector", "probe_id", "config_rev", "collected_by", "collected_at"}
+    assert q(pg_db, "SELECT count(*) FROM integration_configs")[0][0] == 4
+    _alembic(pg_db, "upgrade", "head", **env)
+    _alembic(pg_db, "check", **env)
+
+
 # Router tests that run unchanged against PostgreSQL as nodeglow_app with RLS
 # on (tests/test_routers/conftest.py, "PostgreSQL mode").
 ROUTER_TESTS_ON_PG = [
@@ -742,6 +884,8 @@ def test_router_tests_against_postgres_with_rls(pg_db):
     template = pg_db.rsplit("/", 1)[1]
     proc = _run(
         ["-m", "pytest", "-q", "-p", "no:cacheprovider", *ROUTER_TESTS_ON_PG], pg_db,
+        # Twelve suites incl. the full isolation walk: ~6 min on a laptop.
+        timeout=1200,
         NODEGLOW_RLS="on",
         # The app's global engine stays on SQLite: a connection to the
         # template would block copying it.
