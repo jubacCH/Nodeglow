@@ -11,6 +11,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useWsStore } from '@/stores/websocket';
 import { useThemeStore } from '@/stores/theme';
 import { cn } from '@/lib/utils';
+import { Logo } from '@/components/brand/Logo';
 import { Menu, X } from 'lucide-react';
 
 interface AppShellProps {
@@ -113,11 +114,7 @@ export function AppShell({ children }: AppShellProps) {
           >
             {mobileOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo-icon.svg" alt="Nodeglow" className="w-6 h-6" />
-          <span className="text-sm font-semibold bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">
-            Nodeglow
-          </span>
+          <Logo className="h-6 w-auto" />
         </div>
         <div
           key={pathname}

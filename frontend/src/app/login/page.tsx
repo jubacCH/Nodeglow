@@ -3,6 +3,7 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
+import { Logo } from '@/components/brand/Logo';
 import { useAuthStore } from '@/stores/auth';
 
 export default function LoginPage() {
@@ -59,8 +60,7 @@ export default function LoginPage() {
       <div className="relative z-10 w-full max-w-sm mx-4">
         {/* Logo */}
         <div className="text-center mb-8">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="Nodeglow" className="w-72 mx-auto mb-4" />
+          <Logo className="h-12 w-auto mx-auto mb-4" />
           <p className="text-sm text-slate-500 mt-1">Infrastructure Monitoring</p>
         </div>
 

@@ -21,6 +21,7 @@ export const metadata: Metadata = {
   description: 'Infrastructure monitoring platform',
   icons: {
     icon: '/favicon.svg',
+    apple: '/apple-touch-icon.png',
   },
 };
 
