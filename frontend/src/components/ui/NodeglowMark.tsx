@@ -2,7 +2,7 @@ import { useId } from 'react';
 import { cn } from '@/lib/utils';
 
 interface MarkProps {
-  /** Pixel size (square). Works from 16 to 64; tested at 20 and 40. */
+  /** Pixel size (square). Works from 16 to 64; tested at 16, 30 and 40. */
   size?: number;
   /** Single colour (currentColor) for monochrome contexts. */
   mono?: boolean;
@@ -11,14 +11,44 @@ interface MarkProps {
   className?: string;
 }
 
-/**
- * The Nodeglow mark (E3 `#ng-mark`, viewBox 32): a node (r 4.6) in the
- * accent, a soft halo (r 10.5), and a thin orbit (r 11.5) with a 40° gap
- * around a satellite (r 2.15) at −45°. Orbit and satellite use currentColor.
+/*
+ * The Nodeglow mark ("Puls-N", viewBox 32): a pulse line that runs in flat and
+ * traces an N, ending in a status dot (r 3.5) in the accent. The line uses
+ * currentColor. The static copies in public/ (favicon.svg, logo-icon.svg,
+ * logo.svg) share this geometry.
  */
+const PULSE = 'M3.5 19H8.5V7L23 25V16.5';
+const DOT = { cx: 23, cy: 8.5, r: 3.5 };
+
+// "nodeglow" in Sora 600, outlined so it renders identically without the font.
+// Font units (1000 upm, baseline y=0), scaled so the ascenders match the N height.
+const WORDMARK =
+  'M79 0V-543H189V-310H179Q179.0 -392.5 200.75 -448.0Q222.5 -503.5 266.25 -531.75Q310 -560 374.5 -560.0H380.5Q478 -560 528.0 -497.25Q578.0 -434.5 578.0 -310.5V0H439V-323Q439 -373 410.25 -404.0Q381.5 -435.0 331.5 -435.0Q280.5 -435.0 249.25 -403.25Q218.0 -371.5 218 -319V0ZM962.5 19.0Q891.0 19 836.0 -4.0Q781.0 -27 743.0 -66.25Q705.0 -105.5 685.5 -155.5Q666.0 -205.5 666.0 -260V-281Q666.0 -336.5 686.25 -387.25Q706.5 -438.0 745.0 -477.25Q783.5 -516.5 838.5 -539.25Q893.5 -562.0 962.5 -562.0Q1032.0 -562 1086.75 -539.25Q1141.5 -516.5 1180.0 -477.25Q1218.5 -438.0 1238.75 -387.25Q1259.0 -336.5 1259.0 -281V-260Q1259.0 -205.5 1239.5 -155.5Q1220.0 -105.5 1182.0 -66.25Q1144.0 -27 1089.0 -4.0Q1034.0 19 962.5 19.0ZM962.5 -100.0Q1013.5 -100.0 1048.5 -122.25Q1083.5 -144.5 1101.75 -183.25Q1120.0 -222 1120.0 -270.5Q1120.0 -320.5 1101.25 -359.25Q1082.5 -398.0 1047.25 -420.5Q1012.0 -443 962.5 -443.0Q913.5 -443.0 878.0 -420.5Q842.5 -398.0 823.75 -359.25Q805.0 -320.5 805.0 -270.5Q805.0 -222 823.25 -183.25Q841.5 -144.5 876.75 -122.25Q912.0 -100 962.5 -100.0ZM1581.0 18Q1523.5 18.0 1475.75 -3.0Q1428.0 -24 1393.0 -61.75Q1358.0 -99.5 1339.0 -150.0Q1320.0 -200.5 1320.0 -259.5V-280.5Q1320.0 -339 1338.25 -389.75Q1356.5 -440.5 1390.25 -478.75Q1424.0 -517 1471.25 -538.5Q1518.5 -560.0 1576.5 -560.0Q1640.5 -560.0 1689.25 -532.5Q1738.0 -505 1766.75 -450.0Q1795.5 -395.0 1798.5 -312.0L1757.5 -359.5V-730.0H1896.5V0.0H1786.5V-230.5H1810.5Q1807.5 -148.0 1776.5 -92.5Q1745.5 -37.0 1695.0 -9.5Q1644.5 18.0 1581.0 18ZM1612.0 -99Q1653.0 -99 1686.75 -117.5Q1720.5 -136.0 1741.0 -171.25Q1761.5 -206.5 1761.5 -255.0V-295.0Q1761.5 -342.5 1740.5 -375.25Q1719.5 -408.0 1685.5 -425.5Q1651.5 -443.0 1611.5 -443.0Q1567.0 -443 1532.5 -421.25Q1498.0 -399.5 1478.5 -360.75Q1459.0 -322 1459.0 -270Q1459.0 -218 1478.75 -179.5Q1498.5 -141.0 1533.25 -120.0Q1568.0 -99 1612.0 -99ZM2273.0 19Q2203.0 19 2150.5 -5.0Q2098.0 -29 2063.5 -69.25Q2029.0 -109.5 2011.5 -159.5Q1994.0 -209.5 1994.0 -262V-281Q1994.0 -335 2011.5 -385.25Q2029.0 -435.5 2063.25 -475.25Q2097.5 -515.0 2148.75 -538.5Q2200.0 -562 2267.0 -562Q2355.0 -562 2414.25 -523.25Q2473.5 -484.5 2503.75 -422.25Q2534.0 -360 2534.0 -288V-237.5H2053.0V-322.5H2446.5L2404.0 -281Q2404.0 -333 2388.75 -370.0Q2373.5 -407.0 2343.25 -427.0Q2313.0 -447 2267.0 -447Q2220.5 -447.0 2188.5 -425.75Q2156.5 -404.5 2140.25 -365.25Q2124.0 -326 2124.0 -271Q2124.0 -219.5 2139.75 -180.0Q2155.5 -140.5 2188.5 -118.25Q2221.5 -96.0 2273.0 -96Q2323.5 -96.0 2355.5 -116.5Q2387.5 -137.0 2396.5 -166.5H2524.5Q2513.0 -111 2478.75 -69.0Q2444.5 -27.0 2392.25 -4.0Q2340.0 19 2273.0 19ZM2836.5 214.5Q2797.5 214.5 2757.0 211.5Q2716.5 208.5 2682.0 203.5V87Q2717.5 91.5 2758.75 95.0Q2800.0 98.5 2835.5 98.5Q2903.0 98.5 2944.5 82.25Q2986.0 66 3005.25 31.75Q3024.5 -2.5 3024.5 -56.0V-163.0L3054.5 -231.0Q3052.0 -155.5 3024.0 -103.0Q2996.0 -50.5 2948.0 -23.25Q2900.0 4 2837.0 4Q2781.0 4 2735.25 -16.75Q2689.5 -37.5 2657.0 -74.75Q2624.5 -112.0 2606.75 -161.75Q2589.0 -211.5 2589.0 -268.5V-289.5Q2589.0 -347 2607.5 -396.5Q2626.0 -446 2660.0 -482.75Q2694.0 -519.5 2741.0 -539.75Q2788.0 -560 2845.0 -560Q2911.5 -560.0 2961.0 -531.0Q3010.5 -502.0 3038.75 -446.75Q3067.0 -391.5 3069.5 -312.0L3045.5 -308.0V-543.0H3155.5V-64.0Q3155.5 35.0 3121.75 96.25Q3088.0 157.5 3017.5 186.0Q2947.0 214.5 2836.5 214.5ZM2876.5 -115.0Q2917.0 -115 2950.0 -133.0Q2983.0 -151 3002.75 -185.0Q3022.5 -219.0 3022.5 -266.5V-301.5Q3022.5 -348.0 3002.0 -380.0Q2981.5 -412.0 2948.5 -428.5Q2915.5 -445.0 2877.0 -445Q2833.0 -445 2799.25 -424.5Q2765.5 -404.0 2746.75 -366.75Q2728.0 -329.5 2728.0 -279Q2728.0 -228.5 2747.0 -191.5Q2766.0 -154.5 2799.5 -134.75Q2833.0 -115 2876.5 -115.0ZM3290.0 0V-730H3429.0V0ZM3222.0 -626V-730H3429.0V-626ZM3823.5 19.0Q3752.0 19 3697.0 -4.0Q3642.0 -27 3604.0 -66.25Q3566.0 -105.5 3546.5 -155.5Q3527.0 -205.5 3527.0 -260V-281Q3527.0 -336.5 3547.25 -387.25Q3567.5 -438.0 3606.0 -477.25Q3644.5 -516.5 3699.5 -539.25Q3754.5 -562.0 3823.5 -562.0Q3893.0 -562 3947.75 -539.25Q4002.5 -516.5 4041.0 -477.25Q4079.5 -438.0 4099.75 -387.25Q4120.0 -336.5 4120.0 -281V-260Q4120.0 -205.5 4100.5 -155.5Q4081.0 -105.5 4043.0 -66.25Q4005.0 -27 3950.0 -4.0Q3895.0 19 3823.5 19.0ZM3823.5 -100.0Q3874.5 -100.0 3909.5 -122.25Q3944.5 -144.5 3962.75 -183.25Q3981.0 -222 3981.0 -270.5Q3981.0 -320.5 3962.25 -359.25Q3943.5 -398.0 3908.25 -420.5Q3873.0 -443 3823.5 -443.0Q3774.5 -443.0 3739.0 -420.5Q3703.5 -398.0 3684.75 -359.25Q3666.0 -320.5 3666.0 -270.5Q3666.0 -222 3684.25 -183.25Q3702.5 -144.5 3737.75 -122.25Q3773.0 -100 3823.5 -100.0ZM4403.0 0 4506.0 -525H4666.0L4785.0 0H4675.0L4554.0 -522H4612.0L4504.5 0.0ZM4361.5 0.0 4361.0 -114H4471.5L4472.0 0ZM4306.0 0 4158.0 -543H4293.0L4433.5 0.0ZM4709.5 0.0 4710.0 -114H4820.5L4820.0 0ZM4754.0 0 4878.5 -543.0H5005.0L4873.5 0.0Z';
+
+function MarkShapes({ mono, gid }: { mono?: boolean; gid: string }) {
+  const accent = 'var(--ng-accent)';
+  return (
+    <>
+      {!mono && (
+        <>
+          <defs>
+            <radialGradient id={`ng-halo-${gid}`} cx={DOT.cx} cy={DOT.cy} r="8.4" gradientUnits="userSpaceOnUse">
+              <stop offset="0" style={{ stopColor: accent, stopOpacity: 0.9 }} />
+              <stop offset="0.45" style={{ stopColor: accent, stopOpacity: 0.3 }} />
+              <stop offset="1" style={{ stopColor: accent, stopOpacity: 0 }} />
+            </radialGradient>
+          </defs>
+          <circle cx={DOT.cx} cy={DOT.cy} r="8.4" style={{ fill: `url(#ng-halo-${gid})`, opacity: 'var(--ng-mark-halo)' }} />
+        </>
+      )}
+      <path d={PULSE} fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
+      <circle {...DOT} style={{ fill: mono ? 'currentColor' : accent }} />
+    </>
+  );
+}
+
 export function NodeglowMark({ size = 30, mono, title, className }: MarkProps) {
   const gid = useId().replace(/:/g, '');
-  const accent = 'var(--ng-accent)';
   return (
     <svg
       width={size}
@@ -30,43 +60,28 @@ export function NodeglowMark({ size = 30, mono, title, className }: MarkProps) {
       aria-hidden={title ? undefined : true}
       focusable="false"
     >
-      {!mono && (
-        <defs>
-          <radialGradient id={`ng-halo-${gid}`} cx="16" cy="16" r="10.5" gradientUnits="userSpaceOnUse">
-            <stop offset="0" style={{ stopColor: accent, stopOpacity: 1 }} />
-            <stop offset="0.45" style={{ stopColor: accent, stopOpacity: 0.45 }} />
-            <stop offset="1" style={{ stopColor: accent, stopOpacity: 0 }} />
-          </radialGradient>
-        </defs>
-      )}
-      <circle
-        cx="16"
-        cy="16"
-        r="10.5"
-        style={mono ? { fill: 'currentColor', opacity: 0.16 } : { fill: `url(#ng-halo-${gid})`, opacity: 'var(--ng-mark-halo)' }}
-      />
-      <path d="M26.42 11.14A11.5 11.5 0 1 1 20.86 5.58" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <circle cx="24.13" cy="7.87" r="2.15" fill="currentColor" />
-      <circle cx="16" cy="16" r="4.6" style={{ fill: mono ? 'currentColor' : accent }} />
+      <MarkShapes mono={mono} gid={gid} />
     </svg>
   );
 }
 
-/** "Nodeglow" in Sora 600; the o of "glow" carries the accent (and glows in dark mode). */
-export function Wordmark({ className }: { className?: string }) {
+/**
+ * Mark + "nodeglow" wordmark as one drawing, so spacing and baseline never drift.
+ * `size` is the rendered height in pixels; the width follows (about 5.3 × size).
+ */
+export function Lockup({ size = 28, mono, className }: { size?: number; mono?: boolean; className?: string }) {
+  const gid = useId().replace(/:/g, '');
   return (
-    <span className={cn('whitespace-nowrap font-display text-[17px] font-semibold leading-none tracking-[-0.035em] text-fg', className)}>
-      Nodegl<span className="text-accent text-shadow-(--ng-wm-glow)">o</span>w
-    </span>
-  );
-}
-
-/** Mark + wordmark. */
-export function Lockup({ size = 28, className, wordmarkClassName }: { size?: number; className?: string; wordmarkClassName?: string }) {
-  return (
-    <span className={cn('inline-flex items-center gap-2 text-fg', className)}>
-      <NodeglowMark size={size} />
-      <Wordmark className={wordmarkClassName} />
-    </span>
+    <svg
+      height={size}
+      viewBox="1 3 154.5 29"
+      className={cn('block w-auto shrink-0 overflow-visible text-fg', className)}
+      role="img"
+      aria-label="Nodeglow"
+      focusable="false"
+    >
+      <MarkShapes mono={mono} gid={gid} />
+      <path transform="translate(30.552 25) scale(0.024658)" fill="currentColor" d={WORDMARK} />
+    </svg>
   );
 }
