@@ -59,7 +59,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-bg px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-2 text-center">
-          <Lockup size={40} wordmarkClassName="text-[26px]" />
+          <Lockup size={36} />
           <h1 className="sr-only">Sign in to Nodeglow</h1>
           <p className="text-ui text-fg-2">Infrastructure monitoring</p>
         </div>

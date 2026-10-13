@@ -65,7 +65,7 @@ function AboutPopover() {
         </button>
       )}
     >
-      <Lockup size={40} wordmarkClassName="text-[22px]" />
+      <Lockup size={28} />
       <p className="mt-3 text-meta leading-normal text-fg-2">
         Infrastructure monitoring. Only what needs attention glows; no light means no data.
       </p>
