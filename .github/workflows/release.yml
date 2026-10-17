@@ -214,10 +214,10 @@ jobs:
             echo "commit=$(git rev-parse --short=12 HEAD)"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -225,7 +225,7 @@ jobs:
 
       - name: Image labels and annotations
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image.image }}
           labels: |
@@ -246,7 +246,7 @@ jobs:
       # Docker for Trivy. Nothing is pushed if it fails. The cache makes the
       # push build below cheap.
       - name: Build for scanning (${{ matrix.platform.arch }})
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.image.context }}
           build-contexts: ${{ matrix.image.build-contexts }}
@@ -282,7 +282,7 @@ jobs:
 
       - name: Build and push by digest (${{ matrix.platform.platform }})
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.image.context }}
           build-contexts: ${{ matrix.image.build-contexts }}
@@ -362,10 +362,10 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/digests
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -373,7 +373,7 @@ jobs:
 
       - name: Image tags and annotations
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         env:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: index
         with:
@@ -461,7 +461,7 @@ jobs:
           exit 1
 
       - name: Build provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
           subject-digest: ${{ steps.list.outputs.digest }}
@@ -502,7 +502,7 @@ jobs:
           cosign-release: ${{ env.COSIGN_VERSION }}
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
