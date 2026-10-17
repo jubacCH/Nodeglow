@@ -1,5 +1,5 @@
 # ── Build stage: install dependencies ────────────────────────────────────────
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /build
 COPY requirements.txt .
@@ -11,11 +11,11 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # (additional_contexts in docker-compose.yml), which replaces this stage. A
 # plain `docker build backend/` has no such context and gets this empty stage
 # instead: a community-edition image. Either way the copy below succeeds.
-FROM python:3.12-slim AS ee
+FROM python:3.14-slim AS ee
 RUN mkdir -p /backend
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 

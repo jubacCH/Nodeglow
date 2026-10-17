@@ -12,10 +12,10 @@ FROM gcr.io/projectsigstore/cosign:v3.1.3 AS cosign
 # them into the installation directory on update, so a release can change its
 # compose file and the files are covered by the image signature. A plain
 # `docker build sidecar/` (git-mode installs) gets this empty stage instead.
-FROM python:3.12-slim AS deploy
+FROM python:3.14-slim AS deploy
 RUN mkdir -p /deploy
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates curl \
