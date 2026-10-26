@@ -169,3 +169,39 @@ async def test_host_cache_refresh_loads_hosts_under_system_scope(db):
         assert "edge-fw" in syslog._host_cache[1]
     finally:
         syslog._host_cache, syslog._host_cache_ts = {}, 0.0
+
+
+async def test_host_cache_files_unambiguous_short_names(db):
+    """Agents report "ipam" for a host configured as "ipam.example.com".
+
+    Without the short name every agent log of such a host had no host_id and
+    was counted under the frontend container's address instead.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from models.ping import PingHost
+
+    ipam = PingHost(name="ipam.example.com", hostname="ipam.example.com")
+    pve = PingHost(name="Proxmox", hostname="https://pve.example.com:8006")
+    web_a = PingHost(name="web-a", hostname="web.a.example")
+    web_b = PingHost(name="web-b", hostname="web.b.example")
+    gw = PingHost(name="gw", hostname="10.0.0.1")
+    gw_fqdn = PingHost(name="gateway", hostname="gw.example.com")
+    db.add_all([ipam, pve, web_a, web_b, gw, gw_fqdn])
+    await db.commit()
+
+    plain = async_sessionmaker(db.bind, expire_on_commit=False)
+    syslog._host_cache, syslog._host_cache_ts = {}, 0.0
+    with patch.object(syslog, "AsyncSessionLocal", plain), \
+         patch.object(syslog, "_resolve_many", new=AsyncMock(return_value={})):
+        await syslog._refresh_host_cache()
+    try:
+        cache = syslog._host_cache[1]
+        assert cache["ipam"] == ipam.id
+        assert cache["pve"] == pve.id            # from the URL's host part
+        assert "web" not in cache                 # two hosts share it
+        assert cache["gw"] == gw.id               # an exact name wins
+        assert "https://pve" not in cache and "https" not in cache
+        assert syslog._resolve_host_id(None, "IPAM", 1, rdns=False) == ipam.id
+    finally:
+        syslog._host_cache, syslog._host_cache_ts = {}, 0.0

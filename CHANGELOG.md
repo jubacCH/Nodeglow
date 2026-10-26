@@ -58,6 +58,16 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   longer by the address the request came from (behind NAT that was the
   customer's router).
 
+### Fixed
+- Agent logs of hosts configured by FQDN (`ipam.example.com`) while the agent
+  reports its short name (`ipam`) had no host. The syslog host cache now also
+  knows a host by the first label of its name, unless two hosts share it.
+- Template diversity is learned and checked per host instead of per source
+  address. Agent logs arrive through the frontend container, so all agent
+  hosts shared its address — which moved with every Docker restart and raised
+  "Template diversity spike" incidents for a container IP. Incidents now name
+  the host.
+
 ## [2.0.0] - 2026-10-11
 
 ### Added

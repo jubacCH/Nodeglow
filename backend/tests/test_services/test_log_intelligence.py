@@ -562,7 +562,7 @@ async def test_template_diversity_loads_baselines_in_one_query(db):
         ))
     await db.commit()
 
-    ch_rows = [{"source_ip": h, "diversity": 20, "error_diversity": 1} for h in hosts]
+    ch_rows = [{"host_key": h, "diversity": 20, "error_diversity": 1} for h in hosts]
 
     select_calls = 0
     original_execute = db.execute
@@ -590,10 +590,47 @@ async def test_template_diversity_ignores_hosts_without_baseline(db):
     """A host seen in syslog but without a baseline row is simply skipped."""
     from services.log_intelligence import compute_template_diversity
 
-    ch_rows = [{"source_ip": "10.9.9.9", "diversity": 5, "error_diversity": 0}]
+    ch_rows = [{"host_key": "10.9.9.9", "diversity": 5, "error_diversity": 0}]
 
     with patch("services.clickhouse_client.query", new=AsyncMock(return_value=ch_rows)):
         await compute_template_diversity(db)  # must not raise
+
+
+async def test_template_diversity_keys_by_host_and_learns_without_volume_pass(db):
+    """Messages attributed to a host count under "host:<id>", not the address.
+
+    Agents ship their logs through the frontend container, so every agent host
+    shared one address that moved with each Docker restart. The volume pass
+    never creates "host:" rows, so the diversity pass must create them and
+    count their samples until the baseline is usable.
+    """
+    from models.log_template import HostBaseline
+    from services.log_intelligence import (
+        BASELINE_MIN_SAMPLES, DIVERSITY_KEY_SQL, compute_template_diversity,
+        load_effective_baselines,
+    )
+
+    ch_rows = [{"host_key": "host:7", "diversity": 4, "error_diversity": 0}]
+    seen = []
+
+    async def fake_query(sql, params=None):
+        seen.append(sql)
+        return ch_rows
+
+    with patch("services.clickhouse_client.query", new=fake_query):
+        for _ in range(BASELINE_MIN_SAMPLES):
+            await compute_template_diversity(db)
+
+    assert DIVERSITY_KEY_SQL in seen[0]
+    rows = (await db.execute(
+        select(HostBaseline).where(HostBaseline.host_key == "host:7")
+    )).scalars().all()
+    assert len(rows) == 2  # weekday slot and any-day slot
+    assert all(r.sample_count == BASELINE_MIN_SAMPLES for r in rows)
+    assert all(r.avg_rate == 0.0 for r in rows)  # never a volume baseline
+
+    usable = await load_effective_baselines(db, require_templates=True)
+    assert usable["host:7"].avg_template_count > 0
 
 
 # ── Precursor learning: batched candidate fetch ──────────────────────────────

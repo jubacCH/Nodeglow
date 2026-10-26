@@ -1441,18 +1441,29 @@ async def compute_severity_trends(db: AsyncSession):
 
 # ── Template Diversity Per Host (periodic) ───────────────────────────────────
 
+# Diversity is a property of a host, not of an address. Agents ship their own
+# logs through the frontend container, so every agent host shared that
+# container's address — and the address moved whenever Docker restarted,
+# leaving a stale baseline behind for the next container to trip over.
+# Messages attributed to a host are counted under "host:<id>", the rest under
+# their source address.
+DIVERSITY_KEY_SQL = (
+    "if(ifNull(host_id, 0) > 0, concat('host:', toString(host_id)), source_ip)"
+)
+
+
 async def compute_template_diversity(db: AsyncSession):
     """Count distinct templates per host and update baselines."""
     from services.clickhouse_client import query as ch_query
 
     rows = await ch_query(
-        """SELECT source_ip,
+        f"""SELECT {DIVERSITY_KEY_SQL} AS host_key,
                   countDistinct(template_hash) AS diversity,
                   countDistinctIf(template_hash, severity <= 3) AS error_diversity
            FROM syslog_messages
-           WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 1 HOUR
+           WHERE tenant_id = {{nodeglow_tenant:UInt32}} AND timestamp >= now() - INTERVAL 1 HOUR
              AND template_hash != ''
-           GROUP BY source_ip""",
+           GROUP BY host_key""",
     )
 
     if not rows:
@@ -1467,7 +1478,7 @@ async def compute_template_diversity(db: AsyncSession):
     # the database, and the cost grew with fleet size for no reason: the rows
     # are all in the same slot. Both the weekday slot and the any-day slot are
     # updated, so content detection has the same fallback as volume detection.
-    host_keys = [r["source_ip"] for r in rows]
+    host_keys = [r["host_key"] for r in rows if r["host_key"]]
     baselines = (await db.execute(
         select(HostBaseline).where(
             HostBaseline.host_key.in_(host_keys),
@@ -1479,9 +1490,29 @@ async def compute_template_diversity(db: AsyncSession):
     for b in baselines:
         by_host[b.host_key].append(b)
 
+    # Address rows are created by the volume pass. "host:" rows have no volume
+    # pass, so this one creates them and counts their samples.
+    for key in host_keys:
+        if not key.startswith("host:"):
+            continue
+        have = {b.day_of_week for b in by_host[key]}
+        for slot in (dow, BASELINE_ANY_DAY):
+            if slot not in have:
+                b = HostBaseline(
+                    host_key=key, hour_of_day=hour, day_of_week=slot,
+                    avg_rate=0.0, std_rate=0.0, sample_count=0,
+                    avg_template_count=0.0, std_template_count=0.0,
+                    updated_at=now,
+                )
+                db.add(b)
+                by_host[key].append(b)
+        for b in by_host[key]:
+            b.sample_count = (b.sample_count or 0) + 1
+            b.updated_at = now
+
     alpha = 0.3
     for r in rows:
-        for baseline in by_host.get(r["source_ip"], ()):
+        for baseline in by_host.get(r["host_key"], ()):
             # Exponential moving average for template diversity
             baseline.avg_template_count = (
                 alpha * r["diversity"] + (1 - alpha) * (baseline.avg_template_count or 0.0)
@@ -1641,29 +1672,31 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
     baselines = await load_effective_baselines(db, now, require_templates=True)
     stable_hosts = {
         k: b for k, b in baselines.items()
-        if not k.startswith("host:")
-        and b.avg_template_count < 10 and b.std_template_count < 3
+        if b.avg_template_count < 10 and b.std_template_count < 3
     }
     if stable_hosts:
         rows = await ch.query(
-            """SELECT source_ip, uniqExact(template_hash) AS diversity
+            f"""SELECT {DIVERSITY_KEY_SQL} AS host_key,
+                      uniqExact(template_hash) AS diversity
                FROM syslog_messages
-               WHERE tenant_id = {nodeglow_tenant:UInt32} AND timestamp >= now() - INTERVAL 1 HOUR
-                 AND source_ip IN ({ips:Array(String)})
+               WHERE tenant_id = {{nodeglow_tenant:UInt32}} AND timestamp >= now() - INTERVAL 1 HOUR
                  AND template_hash != ''
-               GROUP BY source_ip""",
-            {"ips": list(stable_hosts.keys())},
+               GROUP BY host_key
+               HAVING host_key IN ({{keys:Array(String)}})""",
+            {"keys": list(stable_hosts.keys())},
         )
         for r in rows:
-            sip = r["source_ip"]
-            baseline = stable_hosts.get(sip)
+            key = r["host_key"]
+            baseline = stable_hosts.get(key)
             if not baseline:
                 continue
             diversity = int(r["diversity"])
             threshold = baseline.avg_template_count + 3 * max(baseline.std_template_count, 1)
             if diversity > threshold and diversity > 5:
+                part = key.split(":", 1)[1] if key.startswith("host:") else ""
                 anomalies.append({
-                    "source_ip": sip,
+                    "source_ip": key,
+                    "host_id": int(part) if part.isdigit() else None,
                     "type": "template_diversity_spike",
                     "current": diversity,
                     "baseline": round(baseline.avg_template_count, 1),

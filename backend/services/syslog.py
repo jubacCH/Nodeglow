@@ -468,6 +468,27 @@ async def _refresh_host_cache():
             except OSError:
                 pass
 
+        # Agents and most syslog daemons send the short name ("ipam") of a
+        # host configured by its FQDN ("ipam.example.com"). File the first
+        # label as well — unless two of the tenant's hosts share it, or it is
+        # already a key of its own.
+        shorts: dict[tuple[int, str], set[tuple[Optional[int], int]]] = {}
+        for h in hosts:
+            for name in (_raw_host(h.hostname), h.name):
+                if (not name or "." not in name or any(c in name for c in " /:")
+                        or _ip_or_none(name) is not None):
+                    continue
+                label = name.split(".", 1)[0].lower()
+                if label:
+                    shorts.setdefault((h.tenant_id, label), set()).add(
+                        (_host_site(tenancy, h), h.id)
+                    )
+        for (tenant_id, label), owners in shorts.items():
+            if label in cache[tenant_id] or len({hid for _, hid in owners}) != 1:
+                continue
+            for site_id, host_id in owners:
+                _file(tenant_id, site_id, label, host_id)
+
         # Forward DNS: resolve hostname to IP (catches FQDNs → IPs). These ran
         # one after another, so a few unresolvable names (each waiting for the
         # resolver timeout) stalled the refresh for minutes. Now concurrent,

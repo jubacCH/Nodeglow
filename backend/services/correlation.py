@@ -712,22 +712,35 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
     from services.log_intelligence import detect_content_anomalies
 
     anomalies = await detect_content_anomalies(db)
+    spike_host_ids = [
+        a["host_id"] for a in anomalies
+        if a["type"] == "template_diversity_spike" and a.get("host_id")
+    ]
+    hosts_by_id: dict[int, PingHost] = {}
+    if spike_host_ids:
+        hosts_by_id = {h.id: h for h in (await db.execute(
+            select(PingHost).where(PingHost.id.in_(spike_host_ids))
+        )).scalars().all()}
+
     for anomaly in anomalies:
         if anomaly["type"] == "template_diversity_spike":
+            host_id = anomaly.get("host_id")
             # Per-source discriminator so each source_ip tracks its own
             # consecutive count rather than collapsing into one shared key.
-            if not _track_rule_hit(db, 
-                f"content_anomaly_diversity_{anomaly['source_ip']}", [0], min_cycles
+            if not _track_rule_hit(db,
+                f"content_anomaly_diversity_{anomaly['source_ip']}", [host_id or 0], min_cycles
             ):
                 continue
+            host = hosts_by_id.get(host_id) if host_id else None
+            host_label = host.name if host else anomaly["source_ip"]
             await _find_or_create_incident(
                 db,
                 rule="content_anomaly",
-                title=f"Template diversity spike: {anomaly['source_ip']}",
+                title=f"Template diversity spike: {host_label}",
                 severity="warning",
-                host_ids=[0],
+                host_ids=[host.id] if host else [0],
                 event_type="content_anomaly",
-                summary=f"{anomaly['source_ip']}: {anomaly['current']} distinct templates "
+                summary=f"{host_label}: {anomaly['current']} distinct templates "
                         f"(baseline: {anomaly['baseline']})",
             )
         elif anomaly["type"] == "severity_upgrade":

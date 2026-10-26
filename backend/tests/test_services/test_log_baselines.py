@@ -292,8 +292,8 @@ async def test_content_anomalies_fire_on_fallback_slot(db):
 
     async def fake_query(sql, params=None):
         if "uniqExact" in sql:
-            assert params["ips"] == ["10.0.0.5"]
-            return [{"source_ip": "10.0.0.5", "diversity": 25}]
+            assert params["keys"] == ["10.0.0.5"]
+            return [{"host_key": "10.0.0.5", "diversity": 25}]
         assert "HAVING cnt >= {min_cnt:UInt32}" in sql
         return [
             {"template_hash": "sevup00000000001", "min_sev": 2, "cnt": 7},
@@ -308,6 +308,31 @@ async def test_content_anomalies_fire_on_fallback_slot(db):
     # Only the template that is normally info-level counts as an upgrade.
     upgrades = [a for a in anomalies if a["type"] == "severity_upgrade"]
     assert [a["template_hash"] for a in upgrades] == ["sevup00000000001"]
+
+
+async def test_content_anomaly_on_host_key_carries_host_id(db):
+    """A spike under "host:<id>" names the host, so the incident can too."""
+    now = datetime.utcnow()
+    db.add(HostBaseline(
+        host_key="host:7", hour_of_day=now.hour, day_of_week=li.BASELINE_ANY_DAY,
+        avg_rate=0.0, std_rate=0.0, sample_count=3,
+        avg_template_count=1.0, std_template_count=1.0,
+    ))
+    await db.commit()
+
+    async def fake_query(sql, params=None):
+        if "uniqExact" in sql:
+            assert li.DIVERSITY_KEY_SQL in sql
+            assert params["keys"] == ["host:7"]
+            return [{"host_key": "host:7", "diversity": 15}]
+        return []
+
+    with patch("services.clickhouse_client.query", new=fake_query):
+        anomalies = await li.detect_content_anomalies(db)
+
+    spike = next(a for a in anomalies if a["type"] == "template_diversity_spike")
+    assert spike["host_id"] == 7
+    assert spike["current"] == 15
 
 
 # ── template flush ──────────────────────────────────────────────────────────
