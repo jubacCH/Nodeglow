@@ -156,7 +156,7 @@ async def ingest(
         if not result.success:
             await snap_svc.save(db, integration_type, cfg.id, ok=False, error=result.error,
                                 **stamp_kw)
-            await _alerting(db, cfg, lambda: integration_alerts.record_failure(db, cfg, result.error))
+            await _alerting(db, cfg, lambda: integration_alerts.record_failure(db, cfg, result.error, config))
             return Outcome.FAILED
 
         # Auto-populate cluster_group from cluster_name for Proxmox
@@ -219,16 +219,18 @@ async def ingest(
         logger.error("Integration collect [%s/%s]: %s", integration_type, cfg.name, exc2)
         error = str(exc2)
         await snap_svc.save(db, integration_type, cfg.id, ok=False, error=error, **stamp_kw)
-        await _alerting(db, cfg, lambda: integration_alerts.record_failure(db, cfg, error))
+        await _alerting(db, cfg, lambda: integration_alerts.record_failure(db, cfg, error, config))
         return Outcome.FAILED
 
 
 async def _alerting(db, cfg: IntegrationConfig, step) -> None:
     """Run one incident step in a savepoint. A failure there must not cost the
     snapshot, but it is an error: alerting that silently stops is the worst
-    failure mode."""
+    failure mode. Notifications the step queued go with its savepoint."""
+    queued = integration_alerts.pending_count(db)
     try:
         async with db.begin_nested():
             await step()
     except Exception:
+        integration_alerts.drop_since(db, queued)
         logger.error("Integration alerting failed [%s/%s]", cfg.type, cfg.name, exc_info=True)

@@ -15,7 +15,7 @@ import extensions
 from database import AsyncSessionLocal, PingHost
 from models.integration import COLLECTOR_CORE, IntegrationConfig
 from services import integration as int_svc
-from services import integration_ingest
+from services import integration_alerts, integration_ingest
 from services import snapshot as snap_svc
 from services.metrics import instrument_job
 from services import tenant_jobs
@@ -208,6 +208,10 @@ async def _run_unit(
                         db, integration_type, m, instance, result, exc, cluster_owners,
                     )
                 await db.commit()
+                notes = integration_alerts.take_notifications(db)
+        # Outside the write lock: a slow notification channel must not hold
+        # up every other integration's snapshot.
+        await integration_alerts.send_notifications(notes)
     except Exception:
         logger.error(
             "Integration unit [%s: %s] failed", integration_type,

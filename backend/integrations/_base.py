@@ -66,6 +66,10 @@ class Alert:
     title: str = ""
     detail: str = ""
     entity: str = ""              # e.g. "node: pve01" or "VM: 100"
+    # Hostname or IP of the affected device when it is not the integration's
+    # own endpoint (a Proxmox node, a UniFi switch). Links the incident to that
+    # ping host and honours its maintenance window.
+    host: str = ""
 
 
 class BaseIntegration(ABC):

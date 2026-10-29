@@ -1129,6 +1129,7 @@ async def run_correlation():
         try:
             await integration_alerts.resolve_orphans(db)
             await db.commit()
+            await integration_alerts.send_notifications(integration_alerts.take_notifications(db))
         except Exception as e:
             log.error("Resolving orphaned integration incidents failed: %s", e, exc_info=True)
             await db.rollback()
