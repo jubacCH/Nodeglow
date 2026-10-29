@@ -206,17 +206,22 @@ class UnasIntegration(BaseIntegration):
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         for pool in data.get("storage_pools", []):
-            pct = pool.get("pct", 0)
+            pct = pool.get("pct") or 0
             if pct >= 95:
                 alerts.append(Alert(severity="critical", title="Storage pool nearly full",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
             elif pct >= 90:
                 alerts.append(Alert(severity="warning", title="Storage pool filling up",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
-            if not pool.get("healthy", True):
+            if pool.get("healthy") is False:
                 alerts.append(Alert(severity="critical", title="Unhealthy storage pool",
                                     detail=f"{pool.get('name', '?')}",
                                     entity=pool.get("name", "")))
+        for raid in data.get("raids", []):
+            if raid.get("healthy") is False:
+                alerts.append(Alert(severity="critical", title="RAID degraded",
+                                    detail=f"{raid.get('name', '?')}: {raid.get('state') or 'unknown'}",
+                                    entity=raid.get("name", "")))
         for disk in data.get("disks", []):
             if disk.get("ok") is False:
                 alerts.append(Alert(severity="critical", title="Disk error",

@@ -545,18 +545,18 @@ class ProxmoxIntegration(BaseIntegration):
 
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
-        if not data.get("quorum_ok", True):
+        if data.get("quorum_ok") is False:
             alerts.append(Alert(severity="critical", title="Cluster quorum lost",
                                 detail=f"Cluster: {data.get('cluster_name', '?')}"))
         for node in data.get("nodes", []):
-            if not node.get("online", True):
+            if node.get("online") is False:
                 alerts.append(Alert(severity="critical", title="Node offline",
                                     detail=node.get("name", "?"), entity=f"node: {node.get('name', '?')}"))
-            if node.get("cpu_pct", 0) >= 95:
+            if (node.get("cpu_pct") or 0) >= 95:
                 alerts.append(Alert(severity="warning", title="Node CPU critical",
                                     detail=f"{node.get('name', '?')}: {node.get('cpu_pct')}%",
                                     entity=f"node: {node.get('name', '?')}"))
-            if node.get("mem_pct", 0) >= 95:
+            if (node.get("mem_pct") or 0) >= 95:
                 alerts.append(Alert(severity="warning", title="Node memory critical",
                                     detail=f"{node.get('name', '?')}: {node.get('mem_pct')}%",
                                     entity=f"node: {node.get('name', '?')}"))

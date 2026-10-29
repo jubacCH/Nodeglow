@@ -163,24 +163,26 @@ class TruenasIntegration(BaseIntegration):
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         for pool in data.get("storage_pools", []):
-            pct = pool.get("pct", 0)
+            pct = pool.get("pct") or 0
             if pct >= 95:
                 alerts.append(Alert(severity="critical", title="Storage pool nearly full",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
             elif pct >= 90:
                 alerts.append(Alert(severity="warning", title="Storage pool filling up",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
-            if not pool.get("healthy", True):
+            if pool.get("healthy") is False:
                 alerts.append(Alert(severity="critical", title="Unhealthy storage pool",
                                     detail=f"{pool.get('name', '?')}: {pool.get('status', 'unknown')}",
                                     entity=pool.get("name", "")))
         for alert in data.get("alerts", []):
             if alert.get("level") in ("CRITICAL", "ERROR"):
                 alerts.append(Alert(severity="critical", title="TrueNAS alert",
-                                    detail=alert.get("message", "")))
+                                    detail=alert.get("message", ""),
+                                    entity=(alert.get("message") or "")[:120]))
             elif alert.get("level") == "WARNING":
                 alerts.append(Alert(severity="warning", title="TrueNAS alert",
-                                    detail=alert.get("message", "")))
+                                    detail=alert.get("message", ""),
+                                    entity=(alert.get("message") or "")[:120]))
         return alerts
 
     async def health_check(self) -> bool:

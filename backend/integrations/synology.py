@@ -223,19 +223,19 @@ class SynologyIntegration(BaseIntegration):
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         for vol in data.get("storage_pools", []):
-            pct = vol.get("pct", 0)
+            pct = vol.get("pct") or 0
             if pct >= 95:
                 alerts.append(Alert(severity="critical", title="Volume nearly full",
                                     detail=f"{vol.get('name', '?')}: {pct}%", entity=vol.get("name", "")))
             elif pct >= 90:
                 alerts.append(Alert(severity="warning", title="Volume filling up",
                                     detail=f"{vol.get('name', '?')}: {pct}%", entity=vol.get("name", "")))
-            if not vol.get("healthy", True):
+            if vol.get("healthy") is False:
                 alerts.append(Alert(severity="critical", title="Unhealthy volume",
                                     detail=f"{vol.get('name', '?')}: {vol.get('status', 'unknown')}",
                                     entity=vol.get("name", "")))
         for disk in data.get("disks", []):
-            if not disk.get("healthy", True):
+            if disk.get("healthy") is False:
                 alerts.append(Alert(severity="critical", title="Disk unhealthy",
                                     detail=f"{disk.get('name', '?')}: {disk.get('status', 'unknown')}",
                                     entity=disk.get("name", "")))

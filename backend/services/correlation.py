@@ -23,6 +23,7 @@ from sqlalchemy import delete, func, select
 from models.base import AsyncSessionLocal
 from models.ping import PingHost
 from services import clickhouse_client as _ch
+from services import integration_alerts
 from services.clickhouse_client import query as ch_query
 from services.clickhouse_client import query_scalar as ch_scalar
 from services.maintenance import without_maintenance
@@ -946,6 +947,11 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
         if incident.rule == "agent_service":
             continue
 
+        # Integration incidents carry no hosts either; the ingest path resolves
+        # them from the next snapshot, resolve_orphans when the config is gone.
+        if incident.rule in integration_alerts.RULES:
+            continue
+
         if not incident.host_ids_hash:
             continue
 
@@ -1105,6 +1111,14 @@ async def run_correlation():
     # Auto-resolve with an unknown offline set would resolve every host-down
     # incident as "back online"; skip it rather than guess.
     postmortem_ids: list[int] = []
+    async with AsyncSessionLocal() as db:
+        try:
+            await integration_alerts.resolve_orphans(db)
+            await db.commit()
+        except Exception as e:
+            log.error("Resolving orphaned integration incidents failed: %s", e, exc_info=True)
+            await db.rollback()
+            all_ok = False
     if offline_hosts is not None:
         async with AsyncSessionLocal() as db:
             try:

@@ -284,15 +284,15 @@ class NpmIntegration(BaseIntegration):
             if days is not None and days <= 0:
                 alerts.append(Alert(
                     severity="critical",
-                    title=f"SSL certificate expired: {cert['nice_name']}",
+                    title=f"SSL certificate expired: {cert.get('nice_name', '?')}",
                     detail=f"Expired on {cert.get('expires_on', 'unknown')}",
-                    entity=f"cert: {cert['nice_name']}",
+                    entity=f"cert: {cert.get('nice_name', '?')}",
                 ))
             elif days is not None and days <= 7:
                 alerts.append(Alert(
                     severity="warning",
-                    title=f"SSL certificate expiring soon: {cert['nice_name']}",
+                    title=f"SSL certificate expiring soon: {cert.get('nice_name', '?')}",
                     detail=f"{days} days remaining",
-                    entity=f"cert: {cert['nice_name']}",
+                    entity=f"cert: {cert.get('nice_name', '?')}",
                 ))
         return alerts

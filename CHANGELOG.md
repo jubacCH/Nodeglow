@@ -10,6 +10,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Integration incidents. What an integration reports as a problem (a failed
+  disk, a degraded RAID or pool, an expiring certificate, a UPS on battery, an
+  unreachable DNS cluster node, ...) now opens an incident after two
+  consecutive snapshots and resolves when it is gone (`integration_alert`).
+  An integration that fails three collections in a row opens
+  `integration_failed`, resolved by the next successful collection. Incidents
+  of deleted or disabled integrations are resolved. Before, `parse_alerts()`
+  was never called and these problems showed only on the detail page.
 - Release-signed agent updates: CI signs every agent binary with the agent
   release key (Ed25519; private key only in the vault and the GitHub secret
   `AGENT_RELEASE_SIGNING_KEY`), commits the signature next to the binary and

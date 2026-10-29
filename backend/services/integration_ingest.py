@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Any
 
 from models.integration import COLLECTOR_CORE, COLLECTOR_PROBE, IntegrationConfig
+from services import integration_alerts
 from services import snapshot as snap_svc
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ async def ingest(
         if not result.success:
             await snap_svc.save(db, integration_type, cfg.id, ok=False, error=result.error,
                                 **stamp_kw)
+            await _alerting(db, cfg, lambda: integration_alerts.record_failure(db, cfg, result.error))
             return Outcome.FAILED
 
         # Auto-populate cluster_group from cluster_name for Proxmox
@@ -182,6 +184,7 @@ async def ingest(
                 "Standby skip [%s/%s] — primary already wrote group=%s",
                 integration_type, cfg.name, cfg.cluster_group,
             )
+            await _alerting(db, cfg, lambda: integration_alerts.record_success(db, cfg))
             return Outcome.STANDBY
         if group_key is not None:
             cluster_owners.add(group_key)
@@ -193,10 +196,17 @@ async def ingest(
             logger.warning(
                 "Bandwidth extraction failed [%s/%s]: %s", integration_type, cfg.name, bw_exc,
             )
+        if instance is None and integration_cls is not None:
+            try:
+                instance = integration_cls(config=config or {})
+            except Exception as init_exc:
+                logger.error(
+                    "Integration init failed [%s/%s]: %s", integration_type, cfg.name, init_exc,
+                )
+        await _alerting(db, cfg, lambda: integration_alerts.record_success(db, cfg))
+        await _alerting(db, cfg, lambda: integration_alerts.evaluate_alerts(db, cfg, instance, result.data))
         # Post-snapshot hook (e.g. auto-import hosts).
         try:
-            if instance is None and integration_cls is not None:
-                instance = integration_cls(config=config or {})
             if instance is not None:
                 instance.config_id = cfg.id
                 await instance.on_snapshot(result.data, config or {}, db)
@@ -207,5 +217,18 @@ async def ingest(
         return Outcome.STORED
     except Exception as exc2:
         logger.error("Integration collect [%s/%s]: %s", integration_type, cfg.name, exc2)
-        await snap_svc.save(db, integration_type, cfg.id, ok=False, error=str(exc2), **stamp_kw)
+        error = str(exc2)
+        await snap_svc.save(db, integration_type, cfg.id, ok=False, error=error, **stamp_kw)
+        await _alerting(db, cfg, lambda: integration_alerts.record_failure(db, cfg, error))
         return Outcome.FAILED
+
+
+async def _alerting(db, cfg: IntegrationConfig, step) -> None:
+    """Run one incident step in a savepoint. A failure there must not cost the
+    snapshot, but it is an error: alerting that silently stops is the worst
+    failure mode."""
+    try:
+        async with db.begin_nested():
+            await step()
+    except Exception:
+        logger.error("Integration alerting failed [%s/%s]", cfg.type, cfg.name, exc_info=True)
