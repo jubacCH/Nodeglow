@@ -83,8 +83,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   switch); the client totals now come from the controller's client list.
 - UniFi NAS: a RAID without a reported state (UniFi OS 6) showed as down, and
   an empty drive bay counted as a disk error. Both are now unknown / ignored.
-- Cloudflare showed 0 requests, bandwidth and threats when analytics were
-  unavailable; it now shows no value and logs a warning.
+- Cloudflare analytics come from the GraphQL Analytics API (24 h, hourly
+  groups); the REST dashboard endpoint was retired by Cloudflare and had been
+  shown as 0 requests. When analytics are unavailable the values are empty
+  and a warning is logged. The SSL/TLS mode is read from the zone setting
+  (was always "unknown"). Blocked threats no longer count as an alert.
 - Swisscom Internet-Box listed its telephony accounts as connected devices.
 - Speedtest showed server and location swapped; phpIPAM showed 1970 as "last
   seen" for addresses never seen.

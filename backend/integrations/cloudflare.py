@@ -14,6 +14,34 @@ log = logging.getLogger(__name__)
 
 API_BASE = "https://api.cloudflare.com/client/v4"
 
+# Without dimensions the hourly groups collapse into one total for the window.
+# httpRequests1hGroups is available on every plan, Free included.
+_ANALYTICS_QUERY = """
+query ($zone: String!, $since: Time!, $until: Time!) {
+  viewer {
+    zones(filter: {zoneTag: $zone}) {
+      httpRequests1hGroups(limit: 24, filter: {datetime_geq: $since, datetime_lt: $until}) {
+        sum { requests cachedRequests bytes cachedBytes threats }
+      }
+    }
+  }
+}
+"""
+
+
+def parse_graphql_analytics(body: dict) -> dict | None:
+    """Sum the hourly groups of an analytics answer; None on errors or no zone."""
+    if body.get("errors"):
+        raise ValueError(f"GraphQL errors: {body['errors']}")
+    zones = ((body.get("data") or {}).get("viewer") or {}).get("zones") or []
+    if not zones:
+        return None
+    total = {"requests": 0, "cachedRequests": 0, "bytes": 0, "cachedBytes": 0, "threats": 0}
+    for group in zones[0].get("httpRequests1hGroups") or []:
+        for key in total:
+            total[key] += (group.get("sum") or {}).get(key) or 0
+    return total
+
 
 # ── API Client ────────────────────────────────────────────────────────────────
 
@@ -64,24 +92,32 @@ class CloudflareAPI:
         return records
 
     async def get_zone_analytics(self, client: httpx.AsyncClient, zone_id: str) -> dict | None:
-        """Fetch 24h analytics for a zone via the dashboard endpoint.
+        """24h traffic totals of a zone from the GraphQL Analytics API.
 
-        None when unavailable: Cloudflare has retired this endpoint, and an
+        None when unavailable (token without Analytics:Read, API error): an
         empty answer must not turn into "0 requests"."""
-        now = datetime.now(timezone.utc)
-        since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        until = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        since = until - timedelta(hours=24)
         try:
-            resp = await self._get(
-                client,
-                f"/zones/{zone_id}/analytics/dashboard",
-                params={"since": since, "until": until},
-            )
-            result = resp.get("result")
-            return result if isinstance(result, dict) and result.get("totals") else None
+            resp = await client.post(f"{API_BASE}/graphql", headers=self.headers, json={
+                "query": _ANALYTICS_QUERY,
+                "variables": {"zone": zone_id, "since": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                              "until": until.strftime("%Y-%m-%dT%H:%M:%SZ")},
+            })
+            resp.raise_for_status()
+            return parse_graphql_analytics(resp.json())
         except Exception as exc:
             log.warning("Analytics unavailable for zone %s: %s", zone_id, exc)
             return None
+
+    async def get_ssl_mode(self, client: httpx.AsyncClient, zone_id: str) -> str:
+        """The zone's SSL/TLS mode (off, flexible, full, strict), or "unknown"."""
+        try:
+            resp = await self._get(client, f"/zones/{zone_id}/settings/ssl")
+            return str((resp.get("result") or {}).get("value") or "unknown")
+        except Exception as exc:
+            log.warning("SSL mode unavailable for zone %s: %s", zone_id, exc)
+            return "unknown"
 
     async def get_firewall_events(self, client: httpx.AsyncClient, zone_id: str, limit: int = 20) -> list[dict]:
         """Fetch recent firewall events."""
@@ -128,7 +164,7 @@ class CloudflareAPI:
                 zname = zone.get("name", "")
                 zstatus = zone.get("status", "unknown")
                 zplan = zone.get("plan", {}).get("name", "Unknown")
-                ssl_mode = zone.get("ssl", {}).get("mode", "unknown") if isinstance(zone.get("ssl"), dict) else "unknown"
+                ssl_mode = await self.get_ssl_mode(client, zid)
 
                 # DNS records
                 dns_records = await self.get_dns_records(client, zid)
@@ -151,16 +187,11 @@ class CloudflareAPI:
                         "bandwidth_all": None, "bandwidth_cached": None, "threats": None,
                     }
                 else:
-                    totals = analytics.get("totals", {})
-                    req = totals.get("requests", {})
-                    bw = totals.get("bandwidth", {})
-                    threats_data = totals.get("threats", {})
-
-                    requests_all = req.get("all", 0)
-                    requests_cached = req.get("cached", 0)
-                    bandwidth_all = bw.get("all", 0)
-                    bandwidth_cached = bw.get("cached", 0)
-                    threats_count = threats_data.get("all", 0)
+                    requests_all = analytics["requests"]
+                    requests_cached = analytics["cachedRequests"]
+                    bandwidth_all = analytics["bytes"]
+                    bandwidth_cached = analytics["cachedBytes"]
+                    threats_count = analytics["threats"]
 
                     total_requests += requests_all
                     total_bandwidth += bandwidth_all
@@ -241,7 +272,7 @@ class CloudflareIntegration(BaseIntegration):
             key="api_token",
             label="API Token",
             field_type="password",
-            placeholder="Cloudflare API token (not Global API Key)",
+            placeholder="API token with Zone, DNS and Analytics read (not the Global API Key)",
             encrypted=True,
             required=True,
         ),
@@ -272,9 +303,11 @@ class CloudflareIntegration(BaseIntegration):
                     entity=f"zone: {zname}",
                 ))
             threats = zone.get("analytics", {}).get("threats") or 0
+            # Threats are requests Cloudflare already blocked; a public zone
+            # sees hundreds a day. Worth showing, not worth an incident.
             if threats > 100:
                 alerts.append(Alert(
-                    severity="warning",
+                    severity="info",
                     title=f"High threat count on {zname}",
                     detail=f"{threats} threats in last 24h",
                     entity=f"zone: {zname}",
