@@ -44,9 +44,15 @@ def test_ookla_ping_comes_from_the_nested_latency():
 
 def test_ookla_server_and_isp():
     result = parse_ookla_result(OOKLA)
-    assert result["server_name"] == "Hamburg, Germany"
-    assert result["server_location"] == "Netzwerge GmbH"
+    assert result["server_name"] == "Netzwerge GmbH"
+    assert result["server_location"] == "Hamburg, Germany"
     assert result["isp"] == "Swisscom"
+
+
+def test_legacy_server_and_location():
+    result = parse_legacy_result(LEGACY)
+    assert result["server_name"] == "Netzwerge GmbH"
+    assert result["server_location"] == "Hamburg, Germany"
 
 
 def test_legacy_bandwidth_is_bits_per_second():

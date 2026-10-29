@@ -96,8 +96,10 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   dip to 0 into the chart. Results are sorted newest first and empty runs
   dropped; the page shows the age of the last test and says when there is no
   newer result.
-- Speedtest showed server and location swapped; phpIPAM showed 1970 as "last
-  seen" for addresses never seen.
+- Speedtest: `server_name` is now the server's operator and `server_location`
+  its city and country; both parsers had them the other way round. Migration
+  049 swaps the two fields in stored speedtest snapshots. phpIPAM showed 1970
+  as "last seen" for addresses never seen.
 
 ## [2.0.0] - 2026-10-11
 

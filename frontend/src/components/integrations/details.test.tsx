@@ -102,8 +102,8 @@ describe('integration detail views', () => {
 
   it('speedtest names the server operator and its location correctly', () => {
     const t = text(SpeedtestDetail, speedtest);
-    expect(t).toContain(`Server | ${speedtest.server_location}`);
-    expect(t).toContain(`Location | ${speedtest.server_name}`);
+    expect(t).toContain(`Server | ${speedtest.server_name}`);
+    expect(t).toContain(`Location | ${speedtest.server_location}`);
     expect(t).toContain(`${speedtest.download_mbps.toFixed(1)} | Mbps | Download`);
   });
 

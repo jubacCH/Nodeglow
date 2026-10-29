@@ -73,8 +73,8 @@ def parse_ookla_result(raw: dict) -> dict:
         "download_mbps": round(_num(_as_dict(raw.get("download")).get("bandwidth")) * 8 / 1_000_000, 2),
         "upload_mbps": round(_num(_as_dict(raw.get("upload")).get("bandwidth")) * 8 / 1_000_000, 2),
         "ping_ms": plausible_ping(_as_dict(raw.get("ping")).get("latency")),
-        "server_name": location,
-        "server_location": server.get("name", ""),
+        "server_name": server.get("name", ""),
+        "server_location": location,
         "isp": raw.get("isp", "") or "",
         "timestamp": raw.get("timestamp", "") or "",
     }
@@ -84,15 +84,16 @@ def parse_legacy_result(raw: dict) -> dict:
     """Parse `speedtest-cli --json` output, where bandwidth is bits per second."""
     raw = _as_dict(raw)
     server = _as_dict(raw.get("server"))
-    name = ", ".join(
+    # speedtest-cli: "name" is the city, "sponsor" the operator.
+    location = ", ".join(
         p for p in (server.get("name", ""), server.get("country", "")) if p
     )
     return {
         "download_mbps": round(_num(raw.get("download")) / 1_000_000, 2),
         "upload_mbps": round(_num(raw.get("upload")) / 1_000_000, 2),
         "ping_ms": plausible_ping(raw.get("ping")),
-        "server_name": name,
-        "server_location": server.get("sponsor", ""),
+        "server_name": server.get("sponsor", ""),
+        "server_location": location,
         "isp": _as_dict(raw.get("client")).get("isp", ""),
         "timestamp": raw.get("timestamp", "") or "",
     }
