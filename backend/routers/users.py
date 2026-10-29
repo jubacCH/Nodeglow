@@ -7,6 +7,7 @@ exactly the old user management. ``users.role`` is kept as a mirror of the
 default tenant's role for one release (rollback safety, see
 ``services.memberships``).
 """
+from services.host_state import iso
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete as sa_delete, select
@@ -142,7 +143,7 @@ def _user_json(u: User, role: str, *, full: bool = True) -> dict:
     if full:
         out["auth_source"] = getattr(u, "auth_source", "local") or "local"
         out["display_name"] = getattr(u, "display_name", None)
-    out["created_at"] = u.created_at.isoformat() if u.created_at else None
+    out["created_at"] = iso(u.created_at)
     return out
 
 

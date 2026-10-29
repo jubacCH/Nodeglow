@@ -106,6 +106,10 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   integration endpoints sent snapshot times without a time zone, which browsers
   read as local time, so each snapshot looked an hour (summer: two) old. They
   now send UTC with `Z`.
+- All API timestamps are UTC with `Z` (incidents, agents, hosts, API keys,
+  users, syslog, SNMP, notifications, digest, ...). Several pages read the bare
+  values as local time and were an hour off. A test refuses new bare
+  `.isoformat()` calls in routers.
 - UniFi counted wired clients once per device on the path (gateway and every
   switch); the client totals now come from the controller's client list.
 - UniFi NAS: a RAID without a reported state (UniFi OS 6) showed as down, and

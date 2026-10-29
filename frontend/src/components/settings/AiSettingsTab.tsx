@@ -1,5 +1,6 @@
 'use client';
 
+import { parseServerDate } from '@/lib/incidents';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plug, Send } from 'lucide-react';
@@ -271,7 +272,7 @@ export function AiSettingsTab() {
           />
           {cfg?.ai_enabled && cfg.ai_enabled_by && (
             <p className="mt-2 text-meta text-fg-3">
-              Enabled by {cfg.ai_enabled_by}{cfg.ai_enabled_at ? ` on ${new Date(cfg.ai_enabled_at + 'Z').toLocaleString()}` : ''}.
+              Enabled by {cfg.ai_enabled_by}{cfg.ai_enabled_at ? ` on ${parseServerDate(cfg.ai_enabled_at)?.toLocaleString()}` : ''}.
             </p>
           )}
           <div className="mt-4 space-y-1 rounded-ctl border border-border-2 bg-surface-2 px-3 py-2 text-meta text-fg-2" data-testid="ai-data-notice">

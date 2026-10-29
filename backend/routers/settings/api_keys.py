@@ -1,4 +1,5 @@
 """API key management — list, create, delete."""
+from services.host_state import iso
 import hashlib
 import hmac
 import os
@@ -24,8 +25,8 @@ async def api_keys_list(request: Request, db: AsyncSession = Depends(get_db)):
     return JSONResponse([
         {"id": k.id, "name": k.name, "prefix": k.prefix, "role": k.role,
          "enabled": k.enabled,
-         "last_used": k.last_used.isoformat() if k.last_used else None,
-         "created_at": k.created_at.isoformat() if k.created_at else None}
+         "last_used": iso(k.last_used),
+         "created_at": iso(k.created_at)}
         for k in keys
     ])
 

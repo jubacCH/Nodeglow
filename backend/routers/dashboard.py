@@ -1,3 +1,4 @@
+from services.host_state import iso
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -1340,7 +1341,7 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     _last_perf = {
         "total_ms": total_ms,
         "sections": sections,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": iso(datetime.utcnow()),
     }
     return JSONResponse(ctx, headers={"Cache-Control": "no-cache"})
 

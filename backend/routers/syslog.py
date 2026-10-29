@@ -1,4 +1,5 @@
 """Syslog log viewer – filterable, searchable, sortable, paginated, live tail."""
+from services.host_state import iso
 import asyncio
 import json
 import re
@@ -446,8 +447,8 @@ async def root_cause_suggestions(
         "total_count": total_count,
         "hosts_affected": len(hosts_seen),
         "template": tpl_row or "",
-        "first_seen": first_seen.isoformat() if first_seen else None,
-        "last_seen": last_seen.isoformat() if last_seen else None,
+        "first_seen": iso(first_seen),
+        "last_seen": iso(last_seen),
         "aftermath": aftermath_list[:10],  # top 10 patterns
         "sample_size": len(sample),
     }

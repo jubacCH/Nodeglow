@@ -269,8 +269,8 @@ async def list_api_keys(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ApiKey).order_by(ApiKey.created_at.desc()))
     return [
         {"id": k.id, "name": k.name, "prefix": k.prefix, "role": k.role,
-         "enabled": k.enabled, "last_used": k.last_used.isoformat() if k.last_used else None,
-         "created_at": k.created_at.isoformat() if k.created_at else None}
+         "enabled": k.enabled, "last_used": iso(k.last_used),
+         "created_at": iso(k.created_at)}
         for k in result.scalars().all()
     ]
 
@@ -387,7 +387,7 @@ async def list_hosts(
             "source": h.source or "manual",
             "source_detail": h.source_detail,
             "latency_ms": round(float(_lat), 2) if _lat is not None else None,
-            "last_check": _ts.isoformat() if _ts is not None else None,
+            "last_check": iso(_ts) if _ts is not None else None,
             "uptime": {
                 "h24": um.get("h24"),
                 "d7": um.get("d7"),
@@ -456,7 +456,7 @@ async def get_host(
                 "platform": agent.platform,
                 "arch": agent.arch,
                 "agent_version": agent.agent_version,
-                "last_seen": agent.last_seen.isoformat() if agent.last_seen else None,
+                "last_seen": iso(agent.last_seen),
                 "cpu_pct": snap.get("cpu_pct") if snap else None,
                 "mem_pct": snap.get("mem_pct") if snap else None,
                 "mem_used_mb": snap.get("mem_used_mb") if snap else None,
@@ -468,7 +468,7 @@ async def get_host(
                 "uptime_s": snap.get("uptime_s") if snap else None,
                 "rx_bytes": snap.get("rx_bytes") if snap else None,
                 "tx_bytes": snap.get("tx_bytes") if snap else None,
-                "snapshot_time": snap["timestamp"].isoformat() if snap and snap.get("timestamp") else None,
+                "snapshot_time": iso(snap["timestamp"]) if snap and snap.get("timestamp") else None,
                 "extra": json.loads(snap["data_json"]) if snap and snap.get("data_json") else None,
             }
 
@@ -544,7 +544,7 @@ async def get_host(
         **_state.fields(),
         "probe_id": host.probe_id,
         **_maint,
-        "maintenance_until": host.maintenance_until.isoformat() if host.maintenance_until else None,
+        "maintenance_until": iso(host.maintenance_until),
         "source": host.source or "manual",
         "source_detail": host.source_detail,
         "latency_threshold_ms": host.latency_threshold_ms,
@@ -555,11 +555,11 @@ async def get_host(
         "check_detail": json.loads(host.check_detail) if host.check_detail else None,
         "check_errors": _json_or_none(host.check_errors),
         "http_options": http_opts.load(host.http_options).to_dict(),
-        "created_at": host.created_at.isoformat() if host.created_at else None,
+        "created_at": iso(host.created_at),
         "latest": {
             "online": bool(lr.get("success")) if lr else None,
             "latency_ms": round(float(lr["latency_ms"]), 2) if lr and lr.get("latency_ms") is not None else None,
-            "timestamp": lr["timestamp"].isoformat() if lr and lr.get("timestamp") else None,
+            "timestamp": iso(lr["timestamp"]) if lr and lr.get("timestamp") else None,
         },
         "uptime": {
             "h24": um.get("uptime_pct"),
@@ -594,7 +594,7 @@ async def host_history(
         "count": len(rows),
         "results": [
             {
-                "timestamp": r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"],
+                "timestamp": iso(r["timestamp"]) if isinstance(r["timestamp"], datetime) else r["timestamp"],
                 "success": bool(r["success"]),
                 "latency_ms": round(float(r["latency_ms"]), 2) if r.get("latency_ms") is not None else None,
             }
@@ -667,7 +667,7 @@ async def host_timeline(
                 title = "Host went offline"
                 severity = "critical"
             events.append({
-                "ts": t["timestamp"].isoformat() if isinstance(t["timestamp"], datetime) else t["timestamp"],
+                "ts": iso(t["timestamp"]) if isinstance(t["timestamp"], datetime) else t["timestamp"],
                 "type": "status",
                 "severity": severity,
                 "title": title,
@@ -699,7 +699,7 @@ async def host_timeline(
         )
         for inc in iq.scalars().all():
             events.append({
-                "ts": inc.created_at.isoformat() if inc.created_at else None,
+                "ts": iso(inc.created_at),
                 "type": "incident",
                 "severity": inc.severity or "info",
                 "title": inc.title or inc.rule or "Incident",
@@ -711,7 +711,7 @@ async def host_timeline(
                     "incident_id": inc.id,
                     "rule": inc.rule,
                     "status": inc.status,
-                    "resolved_at": inc.resolved_at.isoformat() if inc.resolved_at else None,
+                    "resolved_at": iso(inc.resolved_at),
                 },
             })
 
@@ -737,7 +737,7 @@ async def host_timeline(
         for r in rows:
             sev_int = int(r.get("severity") or 6)
             events.append({
-                "ts": r["received_at"].isoformat() if isinstance(r["received_at"], datetime) else r["received_at"],
+                "ts": iso(r["received_at"]) if isinstance(r["received_at"], datetime) else r["received_at"],
                 "type": "syslog",
                 "severity": sev_map.get(sev_int, "info"),
                 "title": (r.get("app_name") or "syslog") + (f": {r.get('message', '')[:80]}" if r.get("message") else ""),
@@ -771,7 +771,7 @@ async def host_timeline(
                 detail = {}
             changes = detail.get("changes") or {}
             events.append({
-                "ts": row.timestamp.isoformat() if row.timestamp else None,
+                "ts": iso(row.timestamp),
                 "type": "change",
                 "severity": "info",
                 "title": _CHANGE_TITLES.get(row.action, row.action),
@@ -786,7 +786,7 @@ async def host_timeline(
         logged_creation = any(r.action == "host.create" for r in audit_rows)
         if not logged_creation and host.created_at and host.created_at >= since_naive:
             events.append({
-                "ts": host.created_at.isoformat(),
+                "ts": iso(host.created_at),
                 "type": "change",
                 "severity": "info",
                 "title": "Host created",
@@ -808,7 +808,7 @@ async def host_timeline(
         "host_id": host_id,
         "host_name": host.name,
         "hours": hours,
-        "since": since.isoformat(),
+        "since": iso(since),
         "sources": sorted(wanted),
         "total": len(events),
         "events": events,
@@ -1162,7 +1162,7 @@ async def list_agents(
             "arch": a.arch,
             "agent_version": a.agent_version,
             "online": a.last_seen is not None and (now - a.last_seen).total_seconds() < 120,
-            "last_seen": a.last_seen.isoformat() if a.last_seen else None,
+            "last_seen": iso(a.last_seen),
             "enabled": a.enabled,
             "cpu_pct": s.get("cpu_pct") if s else None,
             "mem_pct": s.get("mem_pct") if s else None,
@@ -1201,7 +1201,7 @@ async def get_agent(
         "arch": agent.arch,
         "agent_version": agent.agent_version,
         "online": agent.last_seen is not None and (now - agent.last_seen).total_seconds() < 120,
-        "last_seen": agent.last_seen.isoformat() if agent.last_seen else None,
+        "last_seen": iso(agent.last_seen),
         "enabled": agent.enabled,
         "log_levels": agent.log_levels or "",
         "log_channels": agent.log_channels or "",
@@ -1212,7 +1212,7 @@ async def get_agent(
         "snapshots": [
             {
                 "agent_id": agent_id,
-                "timestamp": s["timestamp"].isoformat() if isinstance(s.get("timestamp"), datetime) else s.get("timestamp"),
+                "timestamp": iso(s["timestamp"]) if isinstance(s.get("timestamp"), datetime) else s.get("timestamp"),
                 "cpu_pct": s.get("cpu_pct"),
                 "mem_pct": s.get("mem_pct"),
                 "mem_used_mb": s.get("mem_used_mb"),
@@ -1542,9 +1542,9 @@ async def list_incidents(
             "status": i.status,
             "acknowledged": i.status == "acknowledged",
             "summary": summary_map.get(i.id),
-            "created_at": i.created_at.isoformat(),
-            "updated_at": i.updated_at.isoformat(),
-            "resolved_at": i.resolved_at.isoformat() if i.resolved_at else None,
+            "created_at": iso(i.created_at),
+            "updated_at": iso(i.updated_at),
+            "resolved_at": iso(i.resolved_at),
             "acknowledged_by": i.acknowledged_by,
             **iv.host_fields(i, summaries),
         }
@@ -1757,7 +1757,7 @@ async def get_incident(
         for r in rows:
             ts = r.get("timestamp")
             related_logs.append({
-                "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                "timestamp": iso(ts) if hasattr(ts, "isoformat") else str(ts),
                 "hostname": r.get("hostname", ""),
                 "severity": r.get("severity", 0),
                 "app_name": r.get("app_name", ""),
@@ -1782,18 +1782,18 @@ async def get_incident(
         "title": incident.title,
         "severity": incident.severity,
         "status": incident.status,
-        "created_at": incident.created_at.isoformat(),
-        "updated_at": incident.updated_at.isoformat(),
-        "resolved_at": incident.resolved_at.isoformat() if incident.resolved_at else None,
+        "created_at": iso(incident.created_at),
+        "updated_at": iso(incident.updated_at),
+        "resolved_at": iso(incident.resolved_at),
         "acknowledged_by": incident.acknowledged_by,
         "postmortem": incident.postmortem,
-        "postmortem_generated_at": incident.postmortem_generated_at.isoformat() if incident.postmortem_generated_at else None,
+        "postmortem_generated_at": iso(incident.postmortem_generated_at),
         "feedback": incident.feedback,
-        "feedback_at": incident.feedback_at.isoformat() if incident.feedback_at else None,
+        "feedback_at": iso(incident.feedback_at),
         "feedback_by": incident.feedback_by,
         "events": [
             {
-                "timestamp": e.timestamp.isoformat(),
+                "timestamp": iso(e.timestamp),
                 "type": e.event_type,
                 "summary": e.summary,
                 "detail": e.detail,
@@ -1919,7 +1919,7 @@ async def incident_feedback(
         "title": incident.title,
         "status": incident.status,
         "feedback": incident.feedback,
-        "feedback_at": incident.feedback_at.isoformat() if incident.feedback_at else None,
+        "feedback_at": iso(incident.feedback_at),
         "feedback_by": incident.feedback_by,
         "blacklisted": blacklisted,
     }
@@ -2021,7 +2021,7 @@ async def syslog_stats(
         ]
         result["message_rate"] = [
             {
-                "bucket": r["bucket"].isoformat() if hasattr(r["bucket"], "isoformat") else str(r["bucket"]),
+                "bucket": iso(r["bucket"]) if hasattr(r["bucket"], "isoformat") else str(r["bucket"]),
                 "count": r["cnt"],
                 "errors": r["errors"],
             }
@@ -2247,7 +2247,7 @@ async def query_audit(
         "logs": [
             {
                 "id": l.id,
-                "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+                "timestamp": iso(l.timestamp),
                 "user_id": l.user_id,
                 "username": l.username,
                 "action": l.action,
@@ -2417,12 +2417,12 @@ async def schedule_maintenance(
                 host.maintenance_until = None
 
     await log_action(db, request, "maintenance.toggle", "host", host_id, host.name,
-                     {"maintenance": host.maintenance, "until": host.maintenance_until.isoformat() if host.maintenance_until else None})
+                     {"maintenance": host.maintenance, "until": iso(host.maintenance_until)})
     await db.commit()
     return {
         "ok": True,
         "maintenance": host.maintenance,
-        "maintenance_until": host.maintenance_until.isoformat() if host.maintenance_until else None,
+        "maintenance_until": iso(host.maintenance_until),
     }
 
 

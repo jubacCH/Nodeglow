@@ -1,6 +1,7 @@
 """SNMP monitoring routes – MIB management, host config, polling."""
 from __future__ import annotations
 
+from services.host_state import iso
 import json
 from datetime import datetime
 
@@ -449,7 +450,7 @@ async def api_get_results(host_id: int, limit: int = 60,
     for r in q.scalars().all():
         data = json.loads(r.data_json) if r.data_json else {}
         results.append({
-            "timestamp": r.timestamp.isoformat(),
+            "timestamp": iso(r.timestamp),
             "data": data,
         })
     return JSONResponse({"results": list(reversed(results))})

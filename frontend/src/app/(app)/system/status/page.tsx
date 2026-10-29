@@ -1,5 +1,6 @@
 'use client';
 
+import { parseServerDate } from '@/lib/incidents';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Download, RefreshCw } from 'lucide-react';
@@ -631,7 +632,7 @@ export default function SystemStatusPage() {
                     <CardHeader
                       title="Dashboard API performance"
                       titleId="h-perf"
-                      meta={perf.timestamp ? `Last run ${new Date(perf.timestamp + 'Z').toLocaleTimeString()}` : undefined}
+                      meta={perf.timestamp ? `Last run ${parseServerDate(perf.timestamp)?.toLocaleTimeString()}` : undefined}
                     />
                     <div className="mb-4 flex items-end gap-3">
                       <BigNumber size="sm" value={perf.total_ms} unit="ms" />

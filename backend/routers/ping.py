@@ -1,3 +1,4 @@
+from services.host_state import iso
 import asyncio
 import ipaddress
 import json
@@ -168,7 +169,7 @@ async def api_status(db: AsyncSession = Depends(get_db)):
             "uptime_d7":  up_7d.get(host.id, {}).get("uptime_pct"),
             "uptime_d30": up_30d.get(host.id, {}).get("uptime_pct"),
             "last_seen": (
-                last_seen_by_host[host.id].isoformat()
+                iso(last_seen_by_host[host.id])
                 if host.id in last_seen_by_host and isinstance(last_seen_by_host[host.id], datetime)
                 else None
             ),

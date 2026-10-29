@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Iterable
 
 from services import probes as probe_svc
@@ -92,10 +92,13 @@ class HostState:
         }
 
 
-def iso(value: datetime | None) -> str | None:
-    """Naive UTC → ISO-8601 with Z, the format the rest of the API uses for UTC."""
+def iso(value: datetime | date | None) -> str | None:
+    """Naive UTC → ISO-8601 with Z, the format the rest of the API uses for UTC.
+    A plain date has no time of day and stays a bare date."""
     if value is None:
         return None
+    if not isinstance(value, datetime):
+        return value.isoformat()
     if value.tzinfo is not None:
         value = value.replace(tzinfo=None) - (value.utcoffset() or timedelta())
     return value.isoformat() + "Z"

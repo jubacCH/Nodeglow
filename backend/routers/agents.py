@@ -1,6 +1,7 @@
 """
 Agent router — register agents, receive metrics, serve UI + WebSocket live feed.
 """
+from services.host_state import iso
 import hashlib
 import hmac
 import json
@@ -825,7 +826,7 @@ async def create_install_token(request: Request):
         "id": token_row.id,
         "token": raw,
         "prefix": token_row.prefix,
-        "expires_at": token_row.expires_at.isoformat(),
+        "expires_at": iso(token_row.expires_at),
         "install_linux": f"curl -sSL '{server_url}/install/linux?token={raw}' | sudo bash",
         "install_windows": f"irm '{server_url}/install/windows?token={raw}' | iex",
     }
@@ -847,12 +848,12 @@ async def list_install_tokens(request: Request):
             "prefix": r.prefix,
             "note": r.note,
             "hostname_pattern": r.hostname_pattern,
-            "expires_at": r.expires_at.isoformat(),
+            "expires_at": iso(r.expires_at),
             "expired": r.expires_at <= now,
             "revoked": bool(r.revoked),
             "used_count": r.used_count or 0,
-            "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "last_used_at": iso(r.last_used_at),
+            "created_at": iso(r.created_at),
             "created_by": r.created_by,
         }
         for r in rows
@@ -1426,6 +1427,6 @@ async def api_agents_list(request: Request):
                 "hostname": a.hostname,
                 "platform": a.platform,
                 "online": online,
-                "last_seen": a.last_seen.isoformat() if a.last_seen else None,
+                "last_seen": iso(a.last_seen),
             })
     return out

@@ -1,4 +1,5 @@
 """Notification settings: channel config, digest schedule, test, history."""
+from services.host_state import iso
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
@@ -303,7 +304,7 @@ async def notification_history(db: AsyncSession = Depends(get_db)):
     return JSONResponse([
         {
             "id": n.id,
-            "timestamp": n.timestamp.isoformat() if n.timestamp else None,
+            "timestamp": iso(n.timestamp),
             "channel": n.channel,
             "title": n.title,
             "severity": n.severity,

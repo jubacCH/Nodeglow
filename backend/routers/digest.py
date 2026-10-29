@@ -1,4 +1,5 @@
 """Weekly Digest API — summary of the last 7 days."""
+from services.host_state import iso
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,8 +46,8 @@ async def digest_api(
                 "failures": getattr(h, "failures", 0),
             })
     result = {
-        "period_start": data["period_start"].isoformat(),
-        "period_end": data["period_end"].isoformat(),
+        "period_start": iso(data["period_start"]),
+        "period_end": iso(data["period_end"]),
         "incidents": {
             "total": data["incidents"]["total"],
             "by_severity": data["incidents"]["by_severity"],

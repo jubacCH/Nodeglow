@@ -5,9 +5,8 @@ The schema stores naive UTC. ``dt.isoformat()`` on such a value gives
 integration look an hour old and "Stale" (fixed 2026-10-29). Routers format
 datetimes with ``services.host_state.iso()``.
 
-The baseline lists the bare ``.isoformat()`` calls that still exist. Some are
-dates or aware values, most are the same bug waiting to be noticed. A file may
-only go down; a new bare call fails this test.
+The baseline lists the bare ``.isoformat()`` calls that remain on purpose.
+A new bare call fails this test.
 """
 import re
 from pathlib import Path
@@ -16,17 +15,9 @@ ROUTERS = Path(__file__).resolve().parent.parent / "routers"
 BARE_ISOFORMAT = re.compile(r"\.isoformat\(\)(?!\s*\+\s*[\"']Z[\"'])")
 
 BASELINE = {
-    "agents.py": 5,
-    "api_v1.py": 35,
-    "dashboard.py": 1,
-    "digest.py": 2,
-    "ping.py": 1,
-    "settings/api_keys.py": 2,
-    "settings/general.py": 1,
-    "settings/notifications.py": 1,
-    "snmp.py": 2,
-    "syslog.py": 2,
-    "users.py": 1,
+    "api_v1.py": 1,             # _audit_value: stored in the audit log's JSON
+    "settings/general.py": 1,   # geoip_last_updated: a stored setting value
+    "snmp.py": 1,               # _iso_utc appends the Z itself (pattern false positive)
 }
 
 
