@@ -33,6 +33,7 @@ from services import snapshot as snap_svc
 from services import maintenance as maint_svc
 from services import tenancy
 from services.audit import log_action
+from services.host_state import iso
 from services.probe_syslog import relay_view
 from services.agent_services import (
     apply_watch_list_change,
@@ -493,7 +494,7 @@ async def get_host(
                     "config_id": cfg.id,
                     "config_name": cfg.name,
                     "ok": snap.ok,
-                    "timestamp": snap.timestamp.isoformat(),
+                    "timestamp": iso(snap.timestamp),
                     "data": device_data if device_data else raw,
                     "device": device_data,
                 }
@@ -1401,9 +1402,9 @@ async def list_integrations(
             "enabled": cfg.enabled,
             "cluster_group": cfg.cluster_group,
             "is_standby": is_standby,
-            "created_at": cfg.created_at.isoformat() if hasattr(cfg, "created_at") and cfg.created_at else None,
+            "created_at": iso(cfg.created_at),
             "status": status,
-            "last_check": snap.timestamp.isoformat() if snap else None,
+            "last_check": iso(snap.timestamp) if snap else None,
             "error": display_error,
         })
     return out
@@ -1432,7 +1433,7 @@ async def get_integration(
         "cluster_group": cfg.cluster_group,
         "is_standby": is_standby,
         "ok": snap.ok if snap else False,
-        "timestamp": snap.timestamp.isoformat() if snap else None,
+        "timestamp": iso(snap.timestamp) if snap else None,
         "error": (snap.error if snap and not snap.ok else None) if not is_standby else None,
         "data_json": data,
     }

@@ -7,12 +7,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import httpx
 
 from utils.net_safety import safe_async_client
 
 from integrations._base import BaseIntegration, CollectorResult, ConfigField
+
+# Devices are keyed by MAC; the box also lists its telephony accounts
+# ("Account1", ...) under Devices/Device, which are not network devices.
+_MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +144,8 @@ class InternetBoxAPI:
                         continue
                     tags = p.get("Tags", "")
                     if "voice" in tags and "physical" in tags and "lan" not in tags:
+                        continue
+                    if not _MAC_RE.match(p.get("Key", "")):
                         continue
 
                     active = bool(p.get("Active", False))

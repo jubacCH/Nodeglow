@@ -200,7 +200,8 @@ class PhpIpamIntegration(BaseIntegration):
                 all_addrs.append({
                     "ip": a.get("ip", ""),
                     "hostname": a.get("hostname") or a.get("description") or "",
-                    "last_seen": a.get("lastSeen") or "",
+                    # phpIPAM stores "never seen" as the epoch, not as NULL.
+                    "last_seen": "" if (a.get("lastSeen") or "").startswith("1970-01-01") else a.get("lastSeen") or "",
                     "mac": a.get("mac") or "",
                     "subnet_id": a.get("subnetId") or "",
                 })

@@ -247,6 +247,31 @@ async def test_integration_not_found(client):
     assert resp.status_code == 404
 
 
+async def test_integration_timestamps_are_utc(client):
+    """Snapshot times carry a Z: the UI reads a bare ISO string as local time,
+    which made every fresh integration look an hour old and "Stale"."""
+    from datetime import datetime, timedelta
+    from database import AsyncSessionLocal
+    from models.integration import IntegrationConfig, Snapshot
+
+    ts = datetime(2026, 10, 29, 11, 14, 5)
+    async with AsyncSessionLocal() as s:
+        bind_session(s, 1)  # seed/assert as tenant 1
+        cfg = IntegrationConfig(type="speedtest", name="tz", config_json="{}", enabled=True,
+                                created_at=ts - timedelta(days=1))
+        s.add(cfg)
+        await s.flush()
+        s.add(Snapshot(entity_type="speedtest", entity_id=cfg.id, ok=True, data_json="{}", timestamp=ts))
+        await s.commit()
+        cfg_id = cfg.id
+
+    listed = next(i for i in (await client.get("/api/v1/integrations")).json() if i["id"] == cfg_id)
+    assert listed["last_check"] == "2026-10-29T11:14:05Z"
+    assert listed["created_at"] == "2026-10-28T11:14:05Z"
+    detail = (await client.get(f"/api/v1/integrations/{cfg_id}")).json()
+    assert detail["timestamp"] == "2026-10-29T11:14:05Z"
+
+
 # ── Incidents ────────────────────────────────────────────────────────────────
 
 

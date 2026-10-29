@@ -85,7 +85,9 @@ def parse_unas_data(raw_system: dict) -> dict:
         healthy = (d.get("healthy") or "").lower()
         size_gb = round((d.get("size") or 0) / 1024**3, 2)
         temp = d.get("temperature")
-        ok = healthy == "good" and state in ("normal", "spare", "")
+        # An empty bay is not a disk: neither healthy nor failed.
+        empty = state == "nodisk"
+        ok = None if empty else (healthy == "good" and state in ("normal", "spare", ""))
         disks.append({
             "id": d.get("serial") or f"slot{d.get('slot', '')}",
             "name": f"Slot {d.get('slot', '')}", "serial": d.get("serial", ""),
@@ -93,7 +95,8 @@ def parse_unas_data(raw_system: dict) -> dict:
             "size_tb": round(size_gb / 1024, 2) if size_gb >= 1024 else 0.0,
             "temp": temp, "temp_ok": temp is None or temp < 45,
             "status": state, "status_label": _DISK_STATUS_LABELS.get(state, state.title() or "Unknown"),
-            "ok": ok, "smart_ok": (d.get("bad_sector") or 0) == 0,
+            "ok": ok, "smart_ok": None if empty else (d.get("bad_sector") or 0) == 0,
+            "empty": empty,
             "type": d.get("type") or "SSD", "life_span": d.get("life_span"),
             "power_on_hrs": d.get("poweronhrs"),
         })
@@ -114,7 +117,8 @@ def parse_unas_data(raw_system: dict) -> dict:
             "name": s.get("mountPoint") or f"RAID {rtype.upper()}",
             "type": rtype, "type_label": _RAID_TYPE_LABELS.get(rtype, rtype.upper() or "RAID"),
             "state": state,
-            "healthy": state in ("healthy", "clean", "active", "ok", "normal"),
+            # UniFi OS 6 reports no RAID state at all: that is unknown, not down.
+            "healthy": state in ("healthy", "clean", "active", "ok", "normal") if state else None,
             "size_gb": size_gb, "used_gb": used_gb, "pct": pct,
             "disk_ids": [dev.get("serial", "") for dev in (s.get("devices") or [])],
             "active_devices": r.get("activeDevices", ""),
@@ -144,13 +148,15 @@ def parse_unas_data(raw_system: dict) -> dict:
     storage_used = sum(p["used_gb"] for p in pools)
     storage_total = sum(p["size_gb"] for p in pools)
 
+    present = [d for d in disks if not d["empty"]]
     totals = {
-        "disks_total": len(disks),
-        "disks_ok": sum(1 for d in disks if d["ok"] and d["smart_ok"]),
-        "disks_error": sum(1 for d in disks if not d["ok"] or not d["smart_ok"]),
+        "disks_total": len(present),
+        "disks_ok": sum(1 for d in present if d["ok"] and d["smart_ok"]),
+        "disks_error": sum(1 for d in present if not d["ok"] or not d["smart_ok"]),
         "disks_hot": sum(1 for d in disks if d["temp"] is not None and d["temp"] >= 45),
         "raids_total": len(raids),
-        "raids_healthy": sum(1 for r in raids if r["healthy"]),
+        "raids_healthy": (None if any(r["healthy"] is None for r in raids)
+                          else sum(1 for r in raids if r["healthy"])),
         "pools_total": len(pools), "shares_total": len(shares),
         "storage_used_gb": round(storage_used, 1),
         "storage_total_gb": round(storage_total, 1),
@@ -212,7 +218,7 @@ class UnasIntegration(BaseIntegration):
                                     detail=f"{pool.get('name', '?')}",
                                     entity=pool.get("name", "")))
         for disk in data.get("disks", []):
-            if not disk.get("ok", True):
+            if disk.get("ok") is False:
                 alerts.append(Alert(severity="critical", title="Disk error",
                                     detail=f"{disk.get('name', '?')}: {disk.get('status_label', disk.get('status', 'unknown'))}",
                                     entity=disk.get("name", "")))

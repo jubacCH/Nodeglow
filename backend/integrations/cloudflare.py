@@ -63,8 +63,11 @@ class CloudflareAPI:
             page += 1
         return records
 
-    async def get_zone_analytics(self, client: httpx.AsyncClient, zone_id: str) -> dict:
-        """Fetch 24h analytics for a zone via the dashboard endpoint."""
+    async def get_zone_analytics(self, client: httpx.AsyncClient, zone_id: str) -> dict | None:
+        """Fetch 24h analytics for a zone via the dashboard endpoint.
+
+        None when unavailable: Cloudflare has retired this endpoint, and an
+        empty answer must not turn into "0 requests"."""
         now = datetime.now(timezone.utc)
         since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
         until = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -74,10 +77,11 @@ class CloudflareAPI:
                 f"/zones/{zone_id}/analytics/dashboard",
                 params={"since": since, "until": until},
             )
-            return resp.get("result", {})
+            result = resp.get("result")
+            return result if isinstance(result, dict) and result.get("totals") else None
         except Exception as exc:
-            log.debug("Analytics unavailable for zone %s: %s", zone_id, exc)
-            return {}
+            log.warning("Analytics unavailable for zone %s: %s", zone_id, exc)
+            return None
 
     async def get_firewall_events(self, client: httpx.AsyncClient, zone_id: str, limit: int = 20) -> list[dict]:
         """Fetch recent firewall events."""
@@ -112,6 +116,7 @@ class CloudflareAPI:
             total_threats = 0
             total_cached = 0
             total_all = 0
+            analytics_missing = False
 
             for zone in zones:
                 # Guard against malformed zone records: a single bad entry must
@@ -139,22 +144,37 @@ class CloudflareAPI:
 
                 # Analytics (24h)
                 analytics = await self.get_zone_analytics(client, zid)
-                totals = analytics.get("totals", {})
-                req = totals.get("requests", {})
-                bw = totals.get("bandwidth", {})
-                threats_data = totals.get("threats", {})
+                if analytics is None:
+                    analytics_missing = True
+                    zone_analytics = {
+                        "requests_all": None, "requests_cached": None, "cache_pct": None,
+                        "bandwidth_all": None, "bandwidth_cached": None, "threats": None,
+                    }
+                else:
+                    totals = analytics.get("totals", {})
+                    req = totals.get("requests", {})
+                    bw = totals.get("bandwidth", {})
+                    threats_data = totals.get("threats", {})
 
-                requests_all = req.get("all", 0)
-                requests_cached = req.get("cached", 0)
-                bandwidth_all = bw.get("all", 0)
-                bandwidth_cached = bw.get("cached", 0)
-                threats_count = threats_data.get("all", 0)
+                    requests_all = req.get("all", 0)
+                    requests_cached = req.get("cached", 0)
+                    bandwidth_all = bw.get("all", 0)
+                    bandwidth_cached = bw.get("cached", 0)
+                    threats_count = threats_data.get("all", 0)
 
-                total_requests += requests_all
-                total_bandwidth += bandwidth_all
-                total_threats += threats_count
-                total_cached += requests_cached
-                total_all += requests_all
+                    total_requests += requests_all
+                    total_bandwidth += bandwidth_all
+                    total_threats += threats_count
+                    total_cached += requests_cached
+                    total_all += requests_all
+                    zone_analytics = {
+                        "requests_all": requests_all,
+                        "requests_cached": requests_cached,
+                        "cache_pct": round(requests_cached / requests_all * 100, 1) if requests_all else 0,
+                        "bandwidth_all": bandwidth_all,
+                        "bandwidth_cached": bandwidth_cached,
+                        "threats": threats_count,
+                    }
 
                 # Firewall events
                 fw_events = await self.get_firewall_events(client, zid)
@@ -178,21 +198,17 @@ class CloudflareAPI:
                     "ssl_mode": ssl_mode,
                     "dns_records": dns_summary,
                     "dns_count": len(dns_summary),
-                    "analytics": {
-                        "requests_all": requests_all,
-                        "requests_cached": requests_cached,
-                        "cache_pct": round(requests_cached / requests_all * 100, 1) if requests_all else 0,
-                        "bandwidth_all": bandwidth_all,
-                        "bandwidth_cached": bandwidth_cached,
-                        "threats": threats_count,
-                    },
+                    "analytics": zone_analytics,
                     "firewall_events": fw_summary,
                 })
 
             return {
                 "zone_count": len(zone_data),
                 "zones": zone_data,
+                # A sum over zones with missing analytics would understate.
                 "totals": {
+                    "requests": None, "bandwidth": None, "threats": None, "cache_pct": None,
+                } if analytics_missing else {
                     "requests": total_requests,
                     "bandwidth": total_bandwidth,
                     "threats": total_threats,
@@ -255,7 +271,7 @@ class CloudflareIntegration(BaseIntegration):
                     detail=f"Zone status: {zone.get('status')}",
                     entity=f"zone: {zname}",
                 ))
-            threats = zone.get("analytics", {}).get("threats", 0)
+            threats = zone.get("analytics", {}).get("threats") or 0
             if threats > 100:
                 alerts.append(Alert(
                     severity="warning",

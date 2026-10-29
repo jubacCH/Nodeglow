@@ -50,8 +50,20 @@ interface SpeedtestResult {
   latency_ms: number;
 }
 
+interface UnifiClient {
+  is_wireless?: boolean;
+}
+
+interface UnifiTotals {
+  clients_wifi?: number;
+  clients_wired?: number;
+  clients?: number;
+}
+
 interface UnifiData {
   devices: UnifiDevice[];
+  clients?: UnifiClient[];
+  totals?: UnifiTotals;
   speedtest?: SpeedtestResult[];
   speedtest_latest?: SpeedtestResult | null;
 }
@@ -116,8 +128,12 @@ function SpeedtestChart({ results, latest }: { results: SpeedtestResult[]; lates
 
 export function UnifiDetail({ data }: { data: UnifiData }) {
   const devices = data.devices ?? [];
-  const totalWifi = devices.reduce((sum, d) => sum + (d.clients_wifi ?? 0), 0);
-  const totalWired = devices.reduce((sum, d) => sum + (d.clients_wired ?? 0), 0);
+  // Client totals come from the controller's client list. Summing the
+  // per-device counters double-counts: the gateway and every switch on the
+  // path report the same wired client.
+  const clients = data.clients ?? [];
+  const totalWifi = data.totals?.clients_wifi ?? clients.filter((c) => c.is_wireless).length;
+  const totalWired = data.totals?.clients_wired ?? clients.filter((c) => !c.is_wireless).length;
   const latest = data.speedtest_latest;
 
   return (

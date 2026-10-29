@@ -26,6 +26,7 @@ from ratelimit import rate_limit
 from routers.api_v1 import require_admin
 from services import integration as int_svc
 from services import snapshot as snap_svc
+from services.host_state import iso
 
 
 def _endpoint_summary(fields, config: dict) -> dict:
@@ -418,11 +419,11 @@ async def api_status(
         "ok": snap.ok,
         "data": data,
         "error": snap.error,
-        "timestamp": snap.timestamp.isoformat() if snap.timestamp else None,
+        "timestamp": iso(snap.timestamp),
         # Probe-side integrations: who collected it (NULL = the server).
         "collector": cfg.collector,
         "collected_by": snap.collected_by,
-        "collected_at": snap.collected_at.isoformat() if snap.collected_at else None,
+        "collected_at": iso(snap.collected_at),
     })
 
 

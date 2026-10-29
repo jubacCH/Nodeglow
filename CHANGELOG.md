@@ -67,6 +67,19 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   hosts shared its address — which moved with every Docker restart and raised
   "Template diversity spike" incidents for a container IP. Incidents now name
   the host.
+- Every integration showed as "Stale" and the catalogue as "no data": the
+  integration endpoints sent snapshot times without a time zone, which browsers
+  read as local time, so each snapshot looked an hour (summer: two) old. They
+  now send UTC with `Z`.
+- UniFi counted wired clients once per device on the path (gateway and every
+  switch); the client totals now come from the controller's client list.
+- UniFi NAS: a RAID without a reported state (UniFi OS 6) showed as down, and
+  an empty drive bay counted as a disk error. Both are now unknown / ignored.
+- Cloudflare showed 0 requests, bandwidth and threats when analytics were
+  unavailable; it now shows no value and logs a warning.
+- Swisscom Internet-Box listed its telephony accounts as connected devices.
+- Speedtest showed server and location swapped; phpIPAM showed 1970 as "last
+  seen" for addresses never seen.
 
 ## [2.0.0] - 2026-10-11
 

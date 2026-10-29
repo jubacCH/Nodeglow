@@ -38,8 +38,10 @@ export function SpeedtestDetail({ data }: { data: SpeedtestData }) {
       <Card as="section">
         <CardHeader title="Connection details" />
         <KVGrid>
-          <KV label="Server">{data.server_name}</KV>
-          <KV label="Location">{data.server_location}</KV>
+          {/* The collector names these the other way round: server_name is
+              "City, Country", server_location the operator of the server. */}
+          <KV label="Server">{data.server_location}</KV>
+          <KV label="Location">{data.server_name}</KV>
           <KV label="ISP">{data.isp}</KV>
           <KV label="Tested">{formatDate(data.timestamp)}</KV>
         </KVGrid>
