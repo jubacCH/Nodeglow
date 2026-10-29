@@ -67,7 +67,8 @@ interface ProxmoxData {
   nodes: ProxmoxNode[];
   vms: ProxmoxGuest[];
   containers: ProxmoxGuest[];
-  backups?: Record<string, BackupFile[]>;
+  /** null: the backup storages could not be read (see the page notice). */
+  backups?: Record<string, BackupFile[]> | null;
   tasks?: Array<{ type?: string; status?: string; starttime?: number; node?: string; id?: string }>;
 }
 
@@ -256,7 +257,9 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
                     </Td>
                     <Td muted>{g.node || '—'}</Td>
                     <Td className="whitespace-nowrap">
-                      {!bk || !age ? (
+                      {data.backups === null ? (
+                        <span className="text-meta text-fg-3" title="Backups could not be read">—</span>
+                      ) : !bk || !age ? (
                         <span className="text-meta text-fg-3">No backup</span>
                       ) : (
                         <span className="flex items-center gap-1.5">

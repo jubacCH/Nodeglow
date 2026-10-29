@@ -78,6 +78,10 @@ describe('integration detail views', () => {
     expect(t).toContain(`${totals.lxc_running}/${totals.lxc_total} | LXCs running`);
   });
 
+  it('proxmox does not claim "No backup" when the backups could not be read', () => {
+    expect(text(ProxmoxDetail, { ...proxmox, backups: null })).not.toContain('No backup');
+  });
+
   it('unifi takes client totals from the controller, not from summing devices', () => {
     const t = text(UnifiDetail, unifi);
     expect(t).toContain(`${unifi.totals.clients_wifi} | WiFi clients`);

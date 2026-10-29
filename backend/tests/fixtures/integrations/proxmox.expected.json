@@ -189,6 +189,7 @@
   "vms_running": 2,
   "vms_total": 3
  },
+ "unavailable": [],
  "vms": [
   {
    "cpu_pct": 15.3,

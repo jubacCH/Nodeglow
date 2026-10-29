@@ -27,16 +27,16 @@ class PortainerAPI:
             return {"X-API-Key": self.api_key}
         return {}
 
-    async def _fetch_containers(self, client: httpx.AsyncClient, endpoint_id: int) -> list:
+    async def _fetch_containers(self, client: httpx.AsyncClient, endpoint_id: int) -> list | None:
         try:
             resp = await client.get(
                 f"{self.base}/api/endpoints/{endpoint_id}/docker/containers/json",
                 headers=self._headers(), params={"all": "true"})
             resp.raise_for_status()
             return resp.json()
-        except Exception:
-            logger.debug("Portainer containers unavailable for endpoint %s", endpoint_id, exc_info=True)
-            return []
+        except Exception as exc:
+            logger.warning("Portainer containers unavailable for endpoint %s: %s", endpoint_id, exc)
+            return None
 
     async def fetch_all(self) -> dict:
         async with safe_async_client(verify=self.verify_ssl, timeout=20.0, follow_redirects=True) as client:
@@ -45,6 +45,7 @@ class PortainerAPI:
             raw_endpoints: list = resp.json()
 
             raw_containers: dict[int, list] = {}
+            unavailable: list[str] = []
             tasks = []
             for ep in raw_endpoints:
                 ep_id = ep.get("Id")
@@ -54,9 +55,14 @@ class PortainerAPI:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for ep, result in zip(raw_endpoints, results):
                 ep_id = ep.get("Id")
-                raw_containers[ep_id] = result if not isinstance(result, Exception) else []
+                if isinstance(result, Exception) or result is None:
+                    unavailable.append(f"containers of {ep.get('Name') or ep_id}")
+                    result = []
+                raw_containers[ep_id] = result
 
-        return parse_portainer_data(raw_endpoints, raw_containers)
+        data = parse_portainer_data(raw_endpoints, raw_containers)
+        data["unavailable"] = unavailable
+        return data
 
     async def health_check(self) -> bool:
         try:

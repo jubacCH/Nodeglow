@@ -39,6 +39,8 @@ class ProxmoxAPI:
         self.base = host.rstrip("/")
         self._headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
         self._verify_ssl = verify_ssl
+        # Parts of the last fetch that could not be read (shown as such, not as empty).
+        self.unavailable: set[str] = set()
 
     async def get(self, path: str) -> list | dict:
         url = f"{self.base}/api2/json{path}"
@@ -146,23 +148,25 @@ class ProxmoxAPI:
         try:
             return await self.get("/cluster/tasks")
         except Exception as exc:
-            logger.debug("Failed to fetch cluster tasks: %s", exc)
+            logger.warning("Failed to fetch cluster tasks: %s", exc)
+            self.unavailable.add("tasks")
             return []
 
-    async def node_storages(self, node: str) -> list[dict]:
-        """Fetch storage list for a node."""
+    async def node_storages(self, node: str) -> list[dict] | None:
+        """Fetch storage list for a node; None when it could not be read."""
         try:
             return await self.get(f"/nodes/{node}/storage")
         except Exception as exc:
-            logger.debug("Failed to fetch storages for node %s: %s", node, exc)
-            return []
+            logger.warning("Failed to fetch storages for node %s: %s", node, exc)
+            return None
 
     async def storage_backup_content(self, node: str, storage: str) -> list[dict]:
         """Fetch backup files from a specific storage on a node."""
         try:
             return await self.get(f"/nodes/{node}/storage/{storage}/content?content=backup")
         except Exception as exc:
-            logger.debug("Failed to fetch backup content %s/%s: %s", node, storage, exc)
+            logger.warning("Failed to fetch backup content %s/%s: %s", node, storage, exc)
+            self.unavailable.add(f"backups on {storage} ({node})")
             return []
 
     async def fetch_backup_data(self, resources: list[dict]) -> dict[str, list[dict]]:
@@ -175,11 +179,14 @@ class ProxmoxAPI:
             return {}
 
         # Fetch storages from the first available node (storage list is cluster-wide)
-        storages = []
+        storages = None
         for node in nodes:
             storages = await self.node_storages(node)
             if storages:
                 break
+        if storages is None:
+            # No node answered: whether guests have backups is unknown, not "none".
+            raise RuntimeError("no node returned its storage list")
 
         # Find backup-capable storages (content includes "backup")
         backup_storages: list[str] = []
@@ -537,7 +544,9 @@ class ProxmoxIntegration(BaseIntegration):
                 data["backups"] = backup_data
             except Exception as bk_exc:
                 logger.warning("Failed to fetch backup data: %s", bk_exc)
-                data["backups"] = {}
+                data["backups"] = None
+                api.unavailable.add("backups")
+            data["unavailable"] = sorted(api.unavailable)
 
             return CollectorResult(success=True, data=data)
         except Exception as exc:

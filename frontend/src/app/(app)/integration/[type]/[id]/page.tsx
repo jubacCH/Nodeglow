@@ -79,6 +79,10 @@ export default function IntegrationDetailPage() {
   useEffect(() => { document.title = `${name} | Nodeglow`; }, [name]);
 
   const DetailComponent = detailComponents[type];
+  // Collectors list the parts they could not fetch, so "no events" and
+  // "could not ask" do not look the same.
+  const rawUnavailable = (snapshot?.data_json as { unavailable?: unknown } | null | undefined)?.unavailable;
+  const unavailable = Array.isArray(rawUnavailable) ? rawUnavailable.filter((u): u is string => typeof u === 'string') : [];
   const timestamp = snapshot?.timestamp || null;
   const health = snapshot
     ? integrationHealth(
@@ -149,6 +153,18 @@ export default function IntegrationDetailPage() {
                     {snapshot.data_json ? 'Data below may be incomplete or outdated.' : 'No data was collected in this attempt.'}
                   </p>
                 </div>
+              </div>
+            </Card>
+          )}
+
+          {unavailable.length > 0 && (
+            <Card className="mb-4 border-warning/30" role="status">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+                <p className="text-ui text-fg-2">
+                  Not available in the last collection: <span className="text-fg">{unavailable.join(', ')}</span>.
+                  These parts are left out below rather than shown as empty.
+                </p>
               </div>
             </Card>
           )}

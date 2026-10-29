@@ -29,6 +29,31 @@ query ($zone: String!, $since: Time!, $until: Time!) {
 """
 
 
+_FIREWALL_QUERY = """
+query ($zone: String!, $since: Time!, $limit: Int!) {
+  viewer {
+    zones(filter: {zoneTag: $zone}) {
+      firewallEventsAdaptive(limit: $limit, filter: {datetime_geq: $since}, orderBy: [datetime_DESC]) {
+        action clientIP clientCountryName clientRequestPath clientRequestHTTPHost datetime ruleId source
+      }
+    }
+  }
+}
+"""
+
+
+def summarize_firewall_event(ev: dict) -> dict:
+    return {
+        "action": ev.get("action") or "",
+        "source": ev.get("clientIP") or "",
+        "country": ev.get("clientCountryName") or "",
+        "rule": (ev.get("ruleId") or ev.get("source") or "")[:16],
+        "host": ev.get("clientRequestHTTPHost") or "",
+        "uri": (ev.get("clientRequestPath") or "")[:60],
+        "timestamp": ev.get("datetime") or "",
+    }
+
+
 def parse_graphql_analytics(body: dict) -> dict | None:
     """Sum the hourly groups of an analytics answer; None on errors or no zone."""
     if body.get("errors"):
@@ -119,19 +144,27 @@ class CloudflareAPI:
             log.warning("SSL mode unavailable for zone %s: %s", zone_id, exc)
             return "unknown"
 
-    async def get_firewall_events(self, client: httpx.AsyncClient, zone_id: str, limit: int = 20) -> list[dict]:
-        """Fetch recent firewall events."""
+    async def get_firewall_events(self, client: httpx.AsyncClient, zone_id: str,
+                                  limit: int = 10) -> list[dict] | None:
+        """The zone's latest firewall events (24 h) from the GraphQL API.
+
+        None when unavailable: the REST /security/events endpoint was retired
+        (404), and "no events" must not stand in for "could not ask"."""
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
-            resp = await self._get(
-                client,
-                f"/zones/{zone_id}/security/events",
-                params={"per_page": limit},
-            )
-            return resp.get("result", [])
-        except Exception:
-            # Firewall events API may not be available on all plans
-            log.debug("Firewall events unavailable for zone %s", zone_id, exc_info=True)
-            return []
+            resp = await client.post(f"{API_BASE}/graphql", headers=self.headers, json={
+                "query": _FIREWALL_QUERY,
+                "variables": {"zone": zone_id, "since": since, "limit": limit},
+            })
+            resp.raise_for_status()
+            body = resp.json()
+            if body.get("errors"):
+                raise ValueError(f"GraphQL errors: {body['errors']}")
+            zones = ((body.get("data") or {}).get("viewer") or {}).get("zones") or []
+            return (zones[0].get("firewallEventsAdaptive") or []) if zones else []
+        except Exception as exc:
+            log.warning("Firewall events unavailable for zone %s: %s", zone_id, exc)
+            return None
 
     async def fetch_all(self) -> dict:
         async with safe_async_client(timeout=30.0) as client:
@@ -153,6 +186,7 @@ class CloudflareAPI:
             total_cached = 0
             total_all = 0
             analytics_missing = False
+            unavailable: set[str] = set()
 
             for zone in zones:
                 # Guard against malformed zone records: a single bad entry must
@@ -182,6 +216,7 @@ class CloudflareAPI:
                 analytics = await self.get_zone_analytics(client, zid)
                 if analytics is None:
                     analytics_missing = True
+                    unavailable.add("analytics")
                     zone_analytics = {
                         "requests_all": None, "requests_cached": None, "cache_pct": None,
                         "bandwidth_all": None, "bandwidth_cached": None, "threats": None,
@@ -209,17 +244,9 @@ class CloudflareAPI:
 
                 # Firewall events
                 fw_events = await self.get_firewall_events(client, zid)
-                fw_summary = []
-                for ev in fw_events[:10]:
-                    fw_summary.append({
-                        "action": ev.get("action", ""),
-                        "source": ev.get("clientIP", ""),
-                        "country": ev.get("clientCountry", ""),
-                        "rule": ev.get("ruleId", "")[:16] if ev.get("ruleId") else "",
-                        "host": ev.get("host", ""),
-                        "uri": (ev.get("clientRequestPath") or "")[:60],
-                        "timestamp": ev.get("datetime", ""),
-                    })
+                if fw_events is None:
+                    unavailable.add("firewall events")
+                fw_summary = None if fw_events is None else [summarize_firewall_event(e) for e in fw_events[:10]]
 
                 zone_data.append({
                     "id": zid,
@@ -236,6 +263,7 @@ class CloudflareAPI:
             return {
                 "zone_count": len(zone_data),
                 "zones": zone_data,
+                "unavailable": sorted(unavailable),
                 # A sum over zones with missing analytics would understate.
                 "totals": {
                     "requests": None, "bandwidth": None, "threats": None, "cache_pct": None,

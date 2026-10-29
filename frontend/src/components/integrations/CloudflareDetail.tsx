@@ -47,7 +47,8 @@ interface Zone {
   dns_records: DnsRecord[];
   dns_count: number;
   analytics: ZoneAnalytics;
-  firewall_events: FirewallEvent[];
+  /** null: the events could not be fetched (see the page notice). */
+  firewall_events: FirewallEvent[] | null;
 }
 
 interface CloudflareData {

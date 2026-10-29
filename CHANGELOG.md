@@ -114,6 +114,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   and a warning is logged. The SSL/TLS mode is read from the zone setting
   (was always "unknown"). Blocked threats no longer count as an alert.
 - Swisscom Internet-Box listed its telephony accounts as connected devices.
+- Parts an integration could not fetch are named on its page ("Not available
+  in the last collection") instead of showing as empty, and logged as a
+  warning: Cloudflare firewall events (now from the GraphQL API; the REST
+  endpoint answers 404 and the events had always been empty), Proxmox tasks
+  and backup storages (an unreadable storage list showed "No backup" for every
+  guest), Portainer containers per environment, UniFi events and speedtest.
 - UniFi gateway speedtest: "latest" was the oldest result (the controller
   ignored the sort order), and an all-zero run next to every real one drew a
   dip to 0 into the chart. Results are sorted newest first and empty runs

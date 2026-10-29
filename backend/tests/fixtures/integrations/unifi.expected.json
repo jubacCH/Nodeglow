@@ -426,6 +426,7 @@
   "wired_clients": 2,
   "wireless_clients": 2
  },
+ "unavailable": [],
  "wan": {
   "ip": "203.0.113.45",
   "latency": 9,

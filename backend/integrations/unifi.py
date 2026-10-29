@@ -60,16 +60,23 @@ class UnifiAPI:
             devices_r.raise_for_status()
             clients_r.raise_for_status()
             health_r.raise_for_status()
+            unavailable = []
+            for label, resp in (("events", events_r), ("gateway speedtest", speedtest_r)):
+                if not resp.is_success:
+                    logger.warning("UniFi %s unavailable: HTTP %s", label, resp.status_code)
+                    unavailable.append(label)
             raw_events = events_r.json().get("data", []) if events_r.is_success else []
             raw_speedtest = speedtest_r.json().get("data", []) if speedtest_r.is_success else []
 
-            return parse_unifi_data(
+            data = parse_unifi_data(
                 devices_r.json().get("data", []),
                 clients_r.json().get("data", []),
                 health_r.json().get("data", []),
                 raw_events,
                 raw_speedtest,
             )
+            data["unavailable"] = unavailable
+            return data
 
     async def health_check(self) -> bool:
         try:
