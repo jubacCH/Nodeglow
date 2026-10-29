@@ -318,6 +318,21 @@ async def open_incidents_for(db, cfg: IntegrationConfig) -> list[Incident]:
             + await _open(db, FAILED_RULE, failed_key(cfg), exact=True))
 
 
+def _belongs(cfg: IntegrationConfig, incident: Incident) -> bool:
+    key = incident.host_ids_hash or ""
+    if incident.rule == FAILED_RULE:
+        return key == failed_key(cfg)
+    return incident.rule == ALERT_RULE and key.startswith(alert_prefix(cfg))
+
+
+async def open_counts(db, configs) -> dict[int, int]:
+    """Open integration incidents per config id, with one query."""
+    incidents = (await db.execute(
+        select(Incident).where(Incident.rule.in_(RULES), Incident.status.in_(["open", "acknowledged"]))
+    )).scalars().all()
+    return {c.id: sum(1 for i in incidents if _belongs(c, i)) for c in configs}
+
+
 async def resolve_orphans(db) -> int:
     """Resolve integration incidents whose config was deleted or disabled."""
     configs = (await db.execute(

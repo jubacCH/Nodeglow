@@ -1376,6 +1376,8 @@ async def list_integrations(
     all_snaps = await snap_svc.get_latest_batch_all(db)
 
     from scheduler import _STANDBY_MARKER
+    from services.integration_alerts import open_counts
+    incident_counts = await open_counts(db, configs)
     out = []
     for cfg in configs:
         snap = all_snaps.get(cfg.type, {}).get(cfg.id)
@@ -1406,6 +1408,7 @@ async def list_integrations(
             "status": status,
             "last_check": iso(snap.timestamp) if snap else None,
             "error": display_error,
+            "open_incidents": incident_counts.get(cfg.id, 0),
         })
     return out
 
@@ -1423,7 +1426,10 @@ async def get_integration(
     data = json.loads(snap.data_json) if snap and snap.data_json else None
 
     from scheduler import _STANDBY_MARKER
+    from services.integration_alerts import open_incidents_for
     is_standby = bool(snap and snap.ok and snap.error == _STANDBY_MARKER)
+    incidents = sorted(await open_incidents_for(db, cfg),
+                       key=lambda i: (i.severity != "critical", i.created_at or datetime.min))
     return {
         "id": cfg.id,
         "entity_type": cfg.type,
@@ -1436,6 +1442,11 @@ async def get_integration(
         "timestamp": iso(snap.timestamp) if snap else None,
         "error": (snap.error if snap and not snap.ok else None) if not is_standby else None,
         "data_json": data,
+        "open_incidents": [
+            {"id": i.id, "title": i.title, "severity": i.severity, "status": i.status,
+             "rule": i.rule, "created_at": iso(i.created_at)}
+            for i in incidents
+        ],
     }
 
 

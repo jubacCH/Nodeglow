@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filtersFromParams, filtersToParams, formatDuration, hasActiveFilters, hostHealth,
-  incidentDurationMs, incidentNeedsGlow, incidentQueryString, parseServerDate, severityState,
+  incidentDurationMs, incidentNeedsGlow, incidentQueryString, parseServerDate, ruleLabel, severityState,
 } from './incidents';
 
 describe('incident filters', () => {
@@ -90,5 +90,13 @@ describe('incident states', () => {
     expect(hostHealth('maintenance')).toBe('maint');
     expect(hostHealth('disabled')).toBe('disabled');
     expect(hostHealth(null)).toBe('unknown');
+  });
+});
+
+describe('ruleLabel', () => {
+  it('names the integration rules plainly and derives the rest', () => {
+    expect(ruleLabel('integration_failed')).toBe('Integration not collecting');
+    expect(ruleLabel('integration_alert')).toBe('Integration alert');
+    expect(ruleLabel('multi_host_down')).toBe('Multi host down');
   });
 });

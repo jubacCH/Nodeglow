@@ -40,7 +40,8 @@ export const TIME_RANGES: { value: TimeRange; label: string; hours: number | nul
  *  rules appear as `alert_rule_<id>`; anything seen in the data is added. */
 export const KNOWN_RULES = [
   'agent_service', 'content_anomaly', 'disk_space', 'fleet_wide_issue', 'host_down_syslog',
-  'integration_host', 'log_anomaly', 'multi_host_down', 'port_error', 'self_check',
+  'integration_alert', 'integration_failed', 'integration_host', 'log_anomaly', 'multi_host_down',
+  'port_error', 'self_check',
   'severity_trend', 'syslog_spike', 'upstream_failure',
 ];
 
@@ -239,8 +240,16 @@ export function hostLabel(h: IncidentHost): string {
   return h.name || h.hostname || `Host #${h.id}`;
 }
 
+/** Rules whose generated label would mislead. */
+const RULE_LABEL: Record<string, string> = {
+  integration_alert: 'Integration alert',
+  integration_failed: 'Integration not collecting',
+  integration_host: 'Integration host down',
+};
+
 /** "multi_host_down" -> "Multi host down"; alert_rule_7 -> "Alert rule 7". */
 export function ruleLabel(rule: string): string {
+  if (RULE_LABEL[rule]) return RULE_LABEL[rule];
   const s = rule.replace(/_/g, ' ').trim();
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : rule;
 }

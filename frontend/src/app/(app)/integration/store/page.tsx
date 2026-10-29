@@ -29,14 +29,15 @@ interface IntegrationMeta {
   configured: number;
 }
 
-interface TypeHealth { problems: number; noData: number }
+interface TypeHealth { problems: number; noData: number; incidents: number }
 
 function summarize(instances: IntegrationConfig[] | undefined): Map<string, TypeHealth> {
   const out = new Map<string, TypeHealth>();
   const now = Date.now();
   for (const i of instances ?? []) {
     const h = integrationHealth(i, i.last_check, now);
-    const t = out.get(i.type) ?? { problems: 0, noData: 0 };
+    const t = out.get(i.type) ?? { problems: 0, noData: 0, incidents: 0 };
+    t.incidents += i.open_incidents ?? 0;
     if (h.status === 'down') t.problems += 1;
     if (h.status === 'unknown') t.noData += 1;
     out.set(i.type, t);
@@ -182,6 +183,8 @@ function IntegrationCard({ integration: int, health }: { integration: Integratio
           <div className="flex shrink-0 flex-col items-end gap-1">
             {health && health.problems > 0 ? (
               <StatusPill status="down" size="sm">{health.problems} failing</StatusPill>
+            ) : health && health.incidents > 0 ? (
+              <StatusPill status="down" size="sm">{health.incidents} open incident{health.incidents === 1 ? '' : 's'}</StatusPill>
             ) : health && health.noData > 0 ? (
               <StatusPill status="unknown" size="sm">{health.noData} no data</StatusPill>
             ) : null}

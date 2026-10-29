@@ -273,6 +273,13 @@ export default function IntegrationListPage() {
                           </Link>
                           <div className="mt-1 flex flex-wrap items-center gap-1">
                             {int.is_standby && <Badge tone="maint">Standby</Badge>}
+                            {!!int.open_incidents && (
+                              <Link href={`/integration/${type}/${int.id}`}>
+                                <StatusPill status="down" size="sm">
+                                  {int.open_incidents} open incident{int.open_incidents === 1 ? '' : 's'}
+                                </StatusPill>
+                              </Link>
+                            )}
                             {int.cluster_group && (
                               <Tag title="Cluster group — instances sharing this name run as one HA source">
                                 Cluster · <span className="ml-1 font-mono">{int.cluster_group}</span>

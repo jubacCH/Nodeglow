@@ -198,6 +198,18 @@ export interface IntegrationConfig {
   status: 'ok' | 'error' | 'no_data' | 'standby';
   last_check: string | null;
   error: string | null;
+  /** Open integration_alert / integration_failed incidents of this instance. */
+  open_incidents?: number;
+}
+
+/** An open incident of one integration (detail endpoint). */
+export interface IntegrationIncident {
+  id: number;
+  title: string;
+  severity: 'critical' | 'warning' | 'info';
+  status: 'open' | 'acknowledged' | 'resolved';
+  rule: string;
+  created_at: string | null;
 }
 
 export interface IntegrationSnapshot {
@@ -210,6 +222,7 @@ export interface IntegrationSnapshot {
   ok: boolean;
   data_json: Record<string, unknown> | null;
   error: string | null;
+  open_incidents?: IntegrationIncident[];
 }
 
 export interface IntegrationMeta {

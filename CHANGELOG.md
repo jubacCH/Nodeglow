@@ -29,6 +29,10 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   (stopped, filtering off), Pi-hole (blocking off), firewalls (CPU, memory)
   and speedtest (minimum download/upload, off by default). Proxmox also
   checks the node root disk.
+- Open integration incidents show on the integration's page (with links),
+  as a count in the instance list and in the integration catalogue; the
+  integration endpoints return them (`open_incidents`). Incident rules have
+  plain names ("Integration not collecting").
 - Integration alert limits per tenant (Settings → Monitoring → Integration
   alert limits): Proxmox node CPU/memory/disk, pool usage (Synology, TrueNAS,
   UniFi NAS), disk temperature (UniFi NAS), certificate expiry (NPM), UPS

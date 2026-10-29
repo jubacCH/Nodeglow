@@ -307,3 +307,4 @@ def test_endpoint_and_host_matching():
     assert idx.find("nas").id == 1
     assert idx.find("a") is None  # ambiguous short name
     assert idx.find("") is None
+

@@ -8,6 +8,7 @@ import { QueryState, formatAsOf } from '@/components/ui/QueryState';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { Badge } from '@/components/ui/Badge';
 import { get } from '@/lib/api';
+import { ruleLabel } from '@/lib/incidents';
 import { timeAgo } from '@/lib/utils';
 import type { HealthState } from '@/lib/status';
 import type { Incident } from '@/types';
@@ -74,7 +75,7 @@ export function HostIncidentsCard({ hostId, className }: { hostId: number; class
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-ui text-fg">{inc.title}</span>
                       <span className="block truncate text-meta text-fg-3">
-                        {STATUS_LABEL[inc.status]} · {inc.rule} · {timeAgo(inc.status === 'resolved' && inc.resolved_at ? inc.resolved_at : inc.created_at)}
+                        {STATUS_LABEL[inc.status]} · {ruleLabel(inc.rule)} · {timeAgo(inc.status === 'resolved' && inc.resolved_at ? inc.resolved_at : inc.created_at)}
                       </span>
                     </span>
                     <Badge variant="severity" severity={inc.severity}>{inc.severity}</Badge>

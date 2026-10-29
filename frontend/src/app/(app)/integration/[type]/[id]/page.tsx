@@ -7,6 +7,7 @@ import { AlertTriangle, ArrowLeft, Database } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { StatusDot } from '@/components/ui/StatusDot';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { Tag } from '@/components/ui/Tag';
 import { buttonClasses } from '@/components/ui/Button';
@@ -79,6 +80,7 @@ export default function IntegrationDetailPage() {
   useEffect(() => { document.title = `${name} | Nodeglow`; }, [name]);
 
   const DetailComponent = detailComponents[type];
+  const openIncidents = snapshot?.open_incidents ?? [];
   // Collectors list the parts they could not fetch, so "no events" and
   // "could not ask" do not look the same.
   const rawUnavailable = (snapshot?.data_json as { unavailable?: unknown } | null | undefined)?.unavailable;
@@ -154,6 +156,25 @@ export default function IntegrationDetailPage() {
                   </p>
                 </div>
               </div>
+            </Card>
+          )}
+
+          {openIncidents.length > 0 && (
+            <Card className="mb-4 border-down/30" role="status" padding="sm">
+              <CardHeader
+                title={`${openIncidents.length} open incident${openIncidents.length === 1 ? '' : 's'}`}
+                actions={<Link href="/alerts" className="text-meta text-accent hover:underline">All incidents</Link>}
+              />
+              <ul className="space-y-1.5">
+                {openIncidents.map((inc) => (
+                  <li key={inc.id} className="flex min-w-0 items-center gap-2 text-ui">
+                    <StatusDot status={inc.severity === 'critical' ? 'down' : 'warning'} label={inc.severity} />
+                    <Link href={`/incidents/${inc.id}`} className="min-w-0 flex-1 truncate text-fg hover:text-accent">{inc.title}</Link>
+                    {inc.status === 'acknowledged' && <Tag>Acknowledged</Tag>}
+                    {inc.created_at && <span className="shrink-0 text-meta text-fg-3">{timeAgo(inc.created_at)}</span>}
+                  </li>
+                ))}
+              </ul>
             </Card>
           )}
 
