@@ -17,7 +17,7 @@ import logging
 import shutil
 import subprocess
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +158,22 @@ class SpeedtestIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    alert_thresholds = (
+        Threshold("min_download_mbps", "Minimum download (0 = off)", 0, "Mbit/s", 0, zero_disables=True),
+        Threshold("min_upload_mbps", "Minimum upload (0 = off)", 0, "Mbit/s", 0, zero_disables=True),
+    )
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        for field, key, title in (("download_mbps", "min_download_mbps", "Download below minimum"),
+                                  ("upload_mbps", "min_upload_mbps", "Upload below minimum")):
+            limit, value = self.threshold(key), data.get(field)
+            # A failed run reports 0; that is a collection problem, not a slow line.
+            if limit > 0 and isinstance(value, (int, float)) and 0 < value < limit:
+                alerts.append(Alert(severity="warning", title=title,
+                                    detail=f"{value} Mbit/s, minimum {limit:g} Mbit/s"))
+        return alerts
 
     async def health_check(self) -> bool:
         return await check_speedtest_available()

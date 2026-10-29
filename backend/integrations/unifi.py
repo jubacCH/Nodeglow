@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField, backend_only
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, backend_only
 
 logger = logging.getLogger(__name__)
 
@@ -428,6 +428,23 @@ class UnifiIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        wan = data.get("wan") or {}
+        if wan.get("status") and wan["status"] != "ok":
+            alerts.append(Alert(severity="critical", title="WAN down",
+                                detail=f"WAN status: {wan['status']}", entity="wan"))
+        for dev in data.get("devices", []):
+            # 1 = connected; 0 = disconnected. Other states (adopting,
+            # upgrading, provisioning) are transitions, not failures.
+            if dev.get("state") == 0:
+                name = dev.get("name") or dev.get("mac") or "?"
+                alerts.append(Alert(severity="critical", title="Device disconnected",
+                                    detail=f"{dev.get('type_label') or 'Device'} {name} is not connected",
+                                    entity=f"device: {dev.get('mac') or name}",
+                                    host=dev.get("ip") or dev.get("fqdn") or ""))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

@@ -5,7 +5,7 @@ import base64
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -124,6 +124,13 @@ class AdguardIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        if data.get("status") == "stopped":
+            return [Alert(severity="critical", title="DNS service stopped", detail="AdGuard Home is not running")]
+        if data.get("filtering_enabled") is False:
+            return [Alert(severity="warning", title="Filtering disabled", detail="DNS filtering is turned off")]
+        return []
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

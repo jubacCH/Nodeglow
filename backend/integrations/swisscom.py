@@ -13,7 +13,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 # Devices are keyed by MAC; the box also lists its telephony accounts
 # ("Account1", ...) under Devices/Device, which are not network devices.
@@ -246,6 +246,13 @@ class SwisscomIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        status = ((data.get("device") or {}).get("status") or "").strip()
+        if status and status.lower() != "up":
+            return [Alert(severity="critical", title="Internet connection down",
+                          detail=f"Internet-Box status: {status}", entity="wan")]
+        return []
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

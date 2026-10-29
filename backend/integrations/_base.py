@@ -72,6 +72,20 @@ class Alert:
     host: str = ""
 
 
+@dataclass(frozen=True)
+class Threshold:
+    """A limit parse_alerts() compares against, adjustable per tenant
+    (setting ``integration_alert_thresholds``, Settings -> Monitoring)."""
+    key: str
+    label: str
+    default: float
+    unit: str = ""
+    minimum: float = 0
+    maximum: float | None = None
+    # A limit of 0 turns the check off (e.g. a minimum download speed).
+    zero_disables: bool = False
+
+
 class BaseIntegration(ABC):
     """
     Base class for all integrations.
@@ -108,9 +122,24 @@ class BaseIntegration(ABC):
     # and matching every config of its type.
     config_id: Optional[int] = None
 
+    # The limits parse_alerts() uses; see Threshold.
+    alert_thresholds: tuple[Threshold, ...] = ()
+
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize with decrypted config dict."""
         self.config = config or {}
+        # Tenant overrides by Threshold.key, set by the alerting before parse_alerts().
+        self.threshold_overrides: dict[str, float] = {}
+
+    def threshold(self, key: str) -> float:
+        """The tenant's value of one of ``alert_thresholds``, else its default."""
+        overrides = getattr(self, "threshold_overrides", None) or {}
+        if key in overrides:
+            return overrides[key]
+        for t in self.alert_thresholds:
+            if t.key == key:
+                return t.default
+        raise KeyError(f"{self.name} declares no threshold {key!r}")
 
     # ── Required methods ─────────────────────────────────────────────────────
 

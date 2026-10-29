@@ -8,7 +8,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +154,25 @@ class PortainerIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        for env in data.get("environments", []):
+            ename = env.get("name", "?")
+            if env.get("healthy") is False:
+                alerts.append(Alert(severity="critical", title="Environment unreachable",
+                                    detail=f"{ename}: {env.get('status', 'down')}", entity=f"environment: {ename}"))
+                continue
+            for c in env.get("containers", []):
+                # Stopped containers are usually intentional; crash loops and
+                # failing health checks are not.
+                state, status = c.get("state", ""), c.get("status") or ""
+                if state == "restarting" or "(unhealthy)" in status:
+                    alerts.append(Alert(severity="warning",
+                                        title="Container restarting" if state == "restarting" else "Container unhealthy",
+                                        detail=f"{ename}/{c.get('name', '?')}: {status or state}",
+                                        entity=f"container: {ename}/{c.get('name', '?')}"))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

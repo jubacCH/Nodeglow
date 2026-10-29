@@ -8,7 +8,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +267,18 @@ class FirewallIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    alert_thresholds = (
+        Threshold("cpu_pct", "CPU", 90, "%", 1, 100),
+        Threshold("mem_pct", "Memory", 90, "%", 1, 100),
+    )
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        alerts: list[Alert] = []
+        for field, title in (("cpu_pct", "Firewall CPU high"), ("mem_pct", "Firewall memory high")):
+            if (data.get(field) or 0) >= self.threshold(field):
+                alerts.append(Alert(severity="warning", title=title, detail=f"{data.get(field)}%"))
+        return alerts
 
     async def health_check(self) -> bool:
         fw_type = self.config.get("fw_type", "opnsense")

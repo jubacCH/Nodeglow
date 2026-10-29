@@ -150,6 +150,8 @@ _DEFS: tuple[SettingDef, ...] = (
     _t("syslog_allowlist_only", "bool", "0"),
     _t("log_baseline_done_through", note="state: last hour folded into the volume baselines"),
     _t("agent_service_fail_reports", "int", "3"),
+    _t("integration_alert_thresholds", "json", "{}",
+       note='per-integration alert limits a tenant changed, {"<type>.<key>": number}'),
     # Notifications
     _t("notify_enabled", "bool", "0"),
     _t("notify_grace_minutes", "int", "5"),

@@ -232,8 +232,11 @@ async def _open(db, rule: str, key: str, exact: bool = False) -> list[Incident]:
 
 async def evaluate_alerts(db, cfg: IntegrationConfig, instance, data) -> None:
     """Open, update and resolve the alert incidents of one successful snapshot."""
+    from services import integration_thresholds
+
     if instance is None or not isinstance(data, dict):
         return
+    instance.threshold_overrides = await integration_thresholds.overrides_for(db, cfg.type)
     alerts = [a for a in instance.parse_alerts(data) if a.severity in _INCIDENT_SEVERITIES]
     tenant = cfg.tenant_id
     prefix = alert_prefix(cfg)

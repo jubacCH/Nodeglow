@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 _DISK_STATUS_LABELS: dict[str, str] = {
     "normal": "Normal", "spare": "Spare", "error": "Error",
@@ -222,14 +222,20 @@ class UnasIntegration(BaseIntegration):
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
 
+    alert_thresholds = (
+        Threshold("pool_warn_pct", "Pool usage warning", 90, "%", 1, 100),
+        Threshold("pool_crit_pct", "Pool usage critical", 95, "%", 1, 100),
+        Threshold("disk_temp_c", "Disk temperature", 50, "°C", 20, 90),
+    )
+
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         for pool in data.get("storage_pools", []):
             pct = pool.get("pct") or 0
-            if pct >= 95:
+            if pct >= self.threshold("pool_crit_pct"):
                 alerts.append(Alert(severity="critical", title="Storage pool nearly full",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
-            elif pct >= 90:
+            elif pct >= self.threshold("pool_warn_pct"):
                 alerts.append(Alert(severity="warning", title="Storage pool filling up",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
             if pool.get("healthy") is False:
@@ -247,7 +253,7 @@ class UnasIntegration(BaseIntegration):
                                     detail=f"{disk.get('name', '?')}: {disk.get('status_label', disk.get('status', 'unknown'))}",
                                     entity=disk.get("name", "")))
             temp = disk.get("temp")
-            if temp is not None and not disk.get("temp_ok", True):
+            if temp is not None and temp >= self.threshold("disk_temp_c"):
                 alerts.append(Alert(severity="warning", title="Disk overheating",
                                     detail=f"{disk.get('name', '?')}: {temp}°C",
                                     entity=disk.get("name", "")))

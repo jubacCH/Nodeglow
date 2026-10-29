@@ -7,7 +7,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 logger = logging.getLogger(__name__)
 
@@ -220,14 +220,19 @@ class SynologyIntegration(BaseIntegration):
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
 
+    alert_thresholds = (
+        Threshold("pool_warn_pct", "Volume usage warning", 90, "%", 1, 100),
+        Threshold("pool_crit_pct", "Volume usage critical", 95, "%", 1, 100),
+    )
+
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         for vol in data.get("storage_pools", []):
             pct = vol.get("pct") or 0
-            if pct >= 95:
+            if pct >= self.threshold("pool_crit_pct"):
                 alerts.append(Alert(severity="critical", title="Volume nearly full",
                                     detail=f"{vol.get('name', '?')}: {pct}%", entity=vol.get("name", "")))
-            elif pct >= 90:
+            elif pct >= self.threshold("pool_warn_pct"):
                 alerts.append(Alert(severity="warning", title="Volume filling up",
                                     detail=f"{vol.get('name', '?')}: {pct}%", entity=vol.get("name", "")))
             if vol.get("healthy") is False:

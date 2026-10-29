@@ -306,6 +306,7 @@ def test_migration_042_moved_exactly_the_tenant_keys():
     # existing rows); this pins the list 042 froze to today's registry.
     added_later = {
         "digest_last_sent",  # phase 5: new state, no rows before it existed
+        "integration_alert_thresholds",  # 2026-10: new, no rows before it existed
     }
     assert set(m.TENANT_KEYS) == reg.tenant_keys() - added_later
 

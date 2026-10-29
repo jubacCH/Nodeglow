@@ -10,7 +10,7 @@ from utils.net_safety import safe_async_client
 
 logger = logging.getLogger(__name__)
 
-from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, backend_only
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold, backend_only
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -543,23 +543,30 @@ class ProxmoxIntegration(BaseIntegration):
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
 
+    alert_thresholds = (
+        Threshold("node_cpu_pct", "Node CPU", 95, "%", 1, 100),
+        Threshold("node_mem_pct", "Node memory", 95, "%", 1, 100),
+        Threshold("node_disk_pct", "Node root disk", 90, "%", 1, 100),
+    )
+
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         if data.get("quorum_ok") is False:
             alerts.append(Alert(severity="critical", title="Cluster quorum lost",
                                 detail=f"Cluster: {data.get('cluster_name', '?')}"))
         for node in data.get("nodes", []):
+            name = node.get("name", "?")
             if node.get("online") is False:
                 alerts.append(Alert(severity="critical", title="Node offline",
-                                    detail=node.get("name", "?"), entity=f"node: {node.get('name', '?')}"))
-            if (node.get("cpu_pct") or 0) >= 95:
-                alerts.append(Alert(severity="warning", title="Node CPU critical",
-                                    detail=f"{node.get('name', '?')}: {node.get('cpu_pct')}%",
-                                    entity=f"node: {node.get('name', '?')}"))
-            if (node.get("mem_pct") or 0) >= 95:
-                alerts.append(Alert(severity="warning", title="Node memory critical",
-                                    detail=f"{node.get('name', '?')}: {node.get('mem_pct')}%",
-                                    entity=f"node: {node.get('name', '?')}"))
+                                    detail=name, entity=f"node: {name}", host=name))
+                continue
+            for field, key, title in (("cpu_pct", "node_cpu_pct", "Node CPU critical"),
+                                      ("mem_pct", "node_mem_pct", "Node memory critical"),
+                                      ("disk_pct", "node_disk_pct", "Node root disk filling up")):
+                if (node.get(field) or 0) >= self.threshold(key):
+                    alerts.append(Alert(severity="warning", title=title,
+                                        detail=f"{name}: {node.get(field)}%",
+                                        entity=f"node: {name}", host=name))
         return alerts
 
     async def health_check(self) -> bool:

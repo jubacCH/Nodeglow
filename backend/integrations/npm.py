@@ -8,7 +8,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 log = logging.getLogger(__name__)
 
@@ -277,6 +277,10 @@ class NpmIntegration(BaseIntegration):
     async def health_check(self) -> bool:
         return await self._api().health_check()
 
+    alert_thresholds = (
+        Threshold("cert_warn_days", "Certificate expiry warning", 7, "days", 1, 90),
+    )
+
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         for cert in data.get("certificates", []):
@@ -288,7 +292,7 @@ class NpmIntegration(BaseIntegration):
                     detail=f"Expired on {cert.get('expires_on', 'unknown')}",
                     entity=f"cert: {cert.get('nice_name', '?')}",
                 ))
-            elif days is not None and days <= 7:
+            elif days is not None and days <= self.threshold("cert_warn_days"):
                 alerts.append(Alert(
                     severity="warning",
                     title=f"SSL certificate expiring soon: {cert.get('nice_name', '?')}",

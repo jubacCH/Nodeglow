@@ -2,6 +2,7 @@
 
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/Field';
 import { SaveBar, SettingsSection, type SaveStatus } from './formKit';
+import { IntegrationThresholds } from './IntegrationThresholds';
 import type { GeneralForm } from './settingsForm';
 
 const TIMEZONES = [
@@ -163,6 +164,8 @@ export function MonitoringTab({
       </SettingsSection>
 
       <SaveBar status={status} onSave={onSave} onDiscard={onDiscard} note={SHARED_NOTE} />
+
+      <IntegrationThresholds />
     </div>
   );
 }

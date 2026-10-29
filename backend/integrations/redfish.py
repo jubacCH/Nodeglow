@@ -9,7 +9,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +248,24 @@ class RedfishIntegration(BaseIntegration):
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
+
+    def parse_alerts(self, data: dict) -> list[Alert]:
+        bad = {"Warning": "warning", "Critical": "critical"}
+        alerts: list[Alert] = []
+        status = data.get("status")
+        if status in bad:
+            alerts.append(Alert(severity=bad[status], title="Server health degraded",
+                                detail=data.get("health_summary") or f"System health: {status}"))
+        if (data.get("power_state") or "").lower() == "off":
+            alerts.append(Alert(severity="critical", title="Server powered off",
+                                detail=f"{data.get('hostname') or 'Server'} reports power state Off"))
+        for kind, rows in (("Temperature", data.get("temperatures")), ("Fan", data.get("fans"))):
+            for row in rows or []:
+                if row.get("status") in bad:
+                    alerts.append(Alert(severity=bad[row["status"]], title=f"{kind} sensor {row['status'].lower()}",
+                                        detail=f"{row.get('name', '?')}: {row['status']}",
+                                        entity=f"{kind.lower()}: {row.get('name', '?')}"))
+        return alerts
 
     async def health_check(self) -> bool:
         return await self._api().health_check()

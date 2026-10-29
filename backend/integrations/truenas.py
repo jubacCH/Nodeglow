@@ -5,7 +5,7 @@ import asyncio
 
 from utils.net_safety import safe_async_client
 
-from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -160,14 +160,19 @@ class TruenasIntegration(BaseIntegration):
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
 
+    alert_thresholds = (
+        Threshold("pool_warn_pct", "Pool usage warning", 90, "%", 1, 100),
+        Threshold("pool_crit_pct", "Pool usage critical", 95, "%", 1, 100),
+    )
+
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         for pool in data.get("storage_pools", []):
             pct = pool.get("pct") or 0
-            if pct >= 95:
+            if pct >= self.threshold("pool_crit_pct"):
                 alerts.append(Alert(severity="critical", title="Storage pool nearly full",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
-            elif pct >= 90:
+            elif pct >= self.threshold("pool_warn_pct"):
                 alerts.append(Alert(severity="warning", title="Storage pool filling up",
                                     detail=f"{pool.get('name', '?')}: {pct}%", entity=pool.get("name", "")))
             if pool.get("healthy") is False:

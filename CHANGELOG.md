@@ -18,6 +18,21 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   `integration_failed`, resolved by the next successful collection. Incidents
   of deleted or disabled integrations are resolved. Before, `parse_alerts()`
   was never called and these problems showed only on the detail page.
+- Integration incidents name the affected ping host (the device an alert is
+  about, else the integration's endpoint) and honour its maintenance window.
+  Notifications go out after the commit, outside the snapshot write lock.
+  `integration_failed` opens after two failed collections once the last
+  success is ten minutes old.
+- Alerts for UniFi (device disconnected, WAN down), Swisscom (connection
+  down), Redfish (health, power off, temperature and fan sensors), Portainer
+  (unreachable environment, restarting or unhealthy container), AdGuard
+  (stopped, filtering off), Pi-hole (blocking off), firewalls (CPU, memory)
+  and speedtest (minimum download/upload, off by default). Proxmox also
+  checks the node root disk.
+- Integration alert limits per tenant (Settings → Monitoring → Integration
+  alert limits): Proxmox node CPU/memory/disk, pool usage (Synology, TrueNAS,
+  UniFi NAS), disk temperature (UniFi NAS), certificate expiry (NPM), UPS
+  load, firewall CPU/memory, speedtest minimums.
 - Release-signed agent updates: CI signs every agent binary with the agent
   release key (Ed25519; private key only in the vault and the GitHub secret
   `AGENT_RELEASE_SIGNING_KEY`), commits the signature next to the binary and

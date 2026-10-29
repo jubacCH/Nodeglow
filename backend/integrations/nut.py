@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField
+from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,11 @@ class NutIntegration(BaseIntegration):
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc))
 
+    alert_thresholds = (
+        Threshold("load_warn_pct", "UPS load warning", 90, "%", 1, 100),
+        Threshold("load_crit_pct", "UPS load critical", 95, "%", 1, 100),
+    )
+
     def parse_alerts(self, data: dict) -> list[Alert]:
         alerts: list[Alert] = []
         status = (data.get("status") or "").lower()
@@ -190,9 +195,9 @@ class NutIntegration(BaseIntegration):
                 detail=f"Model: {data.get('model', '?')}",
             ))
         load = data.get("load_pct")
-        if load is not None and load >= 90:
+        if load is not None and load >= self.threshold("load_warn_pct"):
             alerts.append(Alert(
-                severity="critical" if load >= 95 else "warning",
+                severity="critical" if load >= self.threshold("load_crit_pct") else "warning",
                 title="UPS high load",
                 detail=f"Load: {load}%",
             ))
