@@ -55,7 +55,7 @@ class UnifiAPI:
             events_r = await client.get(f"{base}/stat/event", headers=hdrs,
                                         params={"_limit": 200, "_sort": "-time"})
             speedtest_r = await client.post(f"{base}/stat/report/archive.speedtest",
-                                            headers=hdrs, json={"attrs": ["xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"})
+                                            headers=hdrs, json={"attrs": ["time", "xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"})
 
             devices_r.raise_for_status()
             clients_r.raise_for_status()
@@ -241,6 +241,10 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
         download = float(st.get("xput_download", 0) or 0)
         upload = float(st.get("xput_upload", 0) or 0)
         latency = float(st.get("latency", 0) or 0)
+        # The gateway records an all-zero run next to every real one (an unused
+        # second WAN): nothing was measured, so it is not a result.
+        if not download and not upload:
+            continue
 
         speedtest_results.append({
             "timestamp": ts_str,
@@ -249,7 +253,10 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
             "latency_ms": round(latency, 0),
         })
 
-    # Latest speedtest for quick summary
+    # Newest first, whatever order the controller answered in ("YYYY-MM-DD HH:MM"
+    # sorts as text). It ignored _sort while "time" was not among the attrs,
+    # so the "latest" result used to be the oldest one.
+    speedtest_results.sort(key=lambda r: r["timestamp"], reverse=True)
     speedtest_latest = speedtest_results[0] if speedtest_results else None
 
     access_points = sum(1 for d in devices if d.get("type") == "uap")

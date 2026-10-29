@@ -85,6 +85,15 @@ describe('integration detail views', () => {
     expect(t).toContain(`${unifi.totals.clients_wifi + unifi.totals.clients_wired} | Total clients`);
   });
 
+  it('unifi says when the newest speedtest is days old', () => {
+    const utc = (d: Date) => d.toISOString().slice(0, 16).replace('T', ' ');
+    const old = { ...unifi, speedtest_latest: { ...unifi.speedtest_latest, timestamp: utc(new Date(Date.now() - 6 * 86_400_000)) } };
+    const fresh = { ...unifi, speedtest_latest: { ...unifi.speedtest_latest, timestamp: utc(new Date(Date.now() - 3_600_000)) } };
+    expect(text(UnifiDetail, old)).toContain('no newer result');
+    expect(text(UnifiDetail, fresh)).not.toContain('no newer result');
+    expect(text(UnifiDetail, fresh)).toContain('1h ago');
+  });
+
   it('unas counts disks and shows an empty bay as no data', () => {
     const t = text(UnasDetail, unas);
     expect(t).toContain(`${unas.totals.disks_ok}/${unas.totals.disks_total} OK`);

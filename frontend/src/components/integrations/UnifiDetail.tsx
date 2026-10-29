@@ -9,7 +9,8 @@ import { EChart } from '@/components/charts/LazyEChart';
 import { useChartTheme } from '@/lib/chart-theme';
 import type { HealthState } from '@/lib/status';
 import Link from 'next/link';
-import { KV, KVGrid, SectionTitle, StatGrid, StatTile, TableCard, UsageBar, fixed, formatBytes, isNum } from './parts';
+import { timeAgo } from '@/lib/utils';
+import { KV, KVGrid, SectionTitle, StatGrid, StatTile, TableCard, UsageBar, fixed, formatBytes, formatDate, isNum } from './parts';
 
 interface UnifiPort {
   idx: number;
@@ -68,6 +69,27 @@ interface UnifiData {
   speedtest_latest?: SpeedtestResult | null;
 }
 
+/** The gateway runs a test a day; older than this means no newer result. */
+const SPEEDTEST_STALE_MS = 36 * 3600_000;
+
+/** "YYYY-MM-DD HH:MM" in UTC (the collector's format) → ISO with Z, or null. */
+function speedtestIso(ts: string | undefined): string | null {
+  if (!ts) return null;
+  const iso = `${ts.replace(' ', 'T')}${ts.length === 16 ? ':00' : ''}Z`;
+  return Number.isNaN(new Date(iso).getTime()) ? null : iso;
+}
+
+function SpeedtestAge({ timestamp }: { timestamp: string | undefined }) {
+  const iso = speedtestIso(timestamp);
+  if (!iso) return null;
+  const stale = Date.now() - new Date(iso).getTime() > SPEEDTEST_STALE_MS;
+  return (
+    <span className={stale ? 'text-warning' : undefined}>
+      Last test {formatDate(iso)} · {timeAgo(iso)}{stale ? ' · no newer result' : ''}
+    </span>
+  );
+}
+
 /** UniFi device state: 1 = connected, 0 = disconnected; anything else is shown as unknown. */
 function deviceState(state: number | null | undefined): { status: HealthState; label: string } {
   if (state === 1) return { status: 'ok', label: 'Connected' };
@@ -75,7 +97,7 @@ function deviceState(state: number | null | undefined): { status: HealthState; l
   return { status: 'unknown', label: isNum(state) ? `State ${state}` : 'No data' };
 }
 
-function SpeedtestChart({ results, latest }: { results: SpeedtestResult[]; latest: SpeedtestResult }) {
+function SpeedtestChart({ results }: { results: SpeedtestResult[] }) {
   const t = useChartTheme();
   const ordered = [...results].reverse();
   return (
@@ -121,7 +143,6 @@ function SpeedtestChart({ results, latest }: { results: SpeedtestResult[]; lates
           ],
         }}
       />
-      {latest.timestamp && <p className="mt-2 text-right text-micro text-fg-3">Last test: {latest.timestamp}</p>}
     </Card>
   );
 }
@@ -149,13 +170,13 @@ export function UnifiDetail({ data }: { data: UnifiData }) {
       {/* Speedtest */}
       {latest && (
         <section>
-          <SectionTitle>Gateway speedtest</SectionTitle>
+          <SectionTitle meta={<SpeedtestAge timestamp={latest.timestamp} />}>Gateway speedtest</SectionTitle>
           <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Card padding="sm"><BigNumber size="sm" label="Download" value={fixed(latest.download_mbps)} unit="Mbps" /></Card>
             <Card padding="sm"><BigNumber size="sm" label="Upload" value={fixed(latest.upload_mbps)} unit="Mbps" /></Card>
             <Card padding="sm"><BigNumber size="sm" label="Latency" value={isNum(latest.latency_ms) ? latest.latency_ms : null} unit="ms" /></Card>
           </div>
-          {data.speedtest && data.speedtest.length > 1 && <SpeedtestChart results={data.speedtest} latest={latest} />}
+          {data.speedtest && data.speedtest.length > 1 && <SpeedtestChart results={data.speedtest} />}
         </section>
       )}
 

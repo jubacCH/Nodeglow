@@ -89,6 +89,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   and a warning is logged. The SSL/TLS mode is read from the zone setting
   (was always "unknown"). Blocked threats no longer count as an alert.
 - Swisscom Internet-Box listed its telephony accounts as connected devices.
+- UniFi gateway speedtest: "latest" was the oldest result (the controller
+  ignored the sort order), and an all-zero run next to every real one drew a
+  dip to 0 into the chart. Results are sorted newest first and empty runs
+  dropped; the page shows the age of the last test and says when there is no
+  newer result.
 - Speedtest showed server and location swapped; phpIPAM showed 1970 as "last
   seen" for addresses never seen.
 
