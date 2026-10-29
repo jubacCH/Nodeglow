@@ -91,18 +91,20 @@ def parse_unas_data(raw_system: dict) -> dict:
         disks.append({
             "id": d.get("serial") or f"slot{d.get('slot', '')}",
             "name": f"Slot {d.get('slot', '')}", "serial": d.get("serial", ""),
-            "model": (d.get("model") or "").strip(), "size_gb": size_gb,
+            "model": (d.get("model") or "").strip(), "size_gb": None if empty else size_gb,
             "size_tb": round(size_gb / 1024, 2) if size_gb >= 1024 else 0.0,
             "temp": temp, "temp_ok": temp is None or temp < 45,
-            "status": state, "status_label": _DISK_STATUS_LABELS.get(state, state.title() or "Unknown"),
+            "status": state,
+            "status_label": "Empty" if empty else _DISK_STATUS_LABELS.get(state, state.title() or "Unknown"),
             "ok": ok, "smart_ok": None if empty else (d.get("bad_sector") or 0) == 0,
             "empty": empty,
-            "type": d.get("type") or "SSD", "life_span": d.get("life_span"),
+            "type": None if empty else d.get("type") or "SSD", "life_span": d.get("life_span"),
             "power_on_hrs": d.get("poweronhrs"),
         })
     disks.sort(key=lambda d: d["name"])
 
     raids = []
+    raid_bytes: list[tuple[dict, int]] = []
     for idx, s in enumerate(storage):
         if s.get("type") != "raid":
             continue
@@ -123,10 +125,12 @@ def parse_unas_data(raw_system: dict) -> dict:
             "disk_ids": [dev.get("serial", "") for dev in (s.get("devices") or [])],
             "active_devices": r.get("activeDevices", ""),
             "failed_devices": r.get("failedDevices", "0"),
+            "pool": None,
         })
-    raids.sort(key=lambda r: r["name"])
+        raid_bytes.append((raids[-1], s.get("size") or 0))
 
     pools = []
+    pool_by_bytes: dict[int, dict] = {}
     for idx, sp in enumerate(ustorage.get("space") or []):
         if sp.get("space_type") != "primary":
             continue
@@ -141,7 +145,22 @@ def parse_unas_data(raw_system: dict) -> dict:
             "healthy": health in ("health", "healthy", "ok", ""),
             "members": (sp.get("raid") or {}).get("members", []),
         })
+        if sp.get("total_bytes"):
+            pool_by_bytes[sp["total_bytes"]] = pools[-1]
     pools.sort(key=lambda p: p["name"])
+
+    # A RAID volume is the filesystem on one storage pool: same size to the
+    # byte. UniFi OS 6 gives the volume no name and no state, the pool both.
+    for raid, size in raid_bytes:
+        pool = pool_by_bytes.get(size)
+        if pool is None:
+            continue
+        raid["pool"] = pool["name"]
+        raid["name"] = pool["name"]
+        if raid["healthy"] is None:
+            raid["healthy"] = pool["healthy"]
+            raid["state"] = "healthy" if pool["healthy"] else "degraded"
+    raids.sort(key=lambda r: r["name"])
 
     shares: list = []
 

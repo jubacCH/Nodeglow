@@ -46,3 +46,25 @@ def test_raid_with_state_is_judged():
     data = parse_unas_data(raw)
     assert data["raids"][0]["healthy"] is False
     assert data["totals"]["raids_healthy"] == 0
+
+
+def test_raid_takes_name_and_health_from_its_pool():
+    """The volume and its pool are the same size to the byte."""
+    pool = {"device": "vg1", "space_type": "primary", "health": "health",
+            "total_bytes": 100 * GiB, "used_bytes": 50 * GiB, "raid": {"members": ["sdb5"]}}
+    data = parse_unas_data({**RAW, "ustorage": {**RAW["ustorage"], "space": [pool]}})
+    [raid] = data["raids"]
+    assert (raid["name"], raid["pool"], raid["healthy"], raid["state"]) == ("Pool 1", "Pool 1", True, "healthy")
+    assert data["totals"]["raids_healthy"] == 1
+
+
+def test_raid_of_a_degraded_pool_is_unhealthy():
+    pool = {"device": "vg1", "space_type": "primary", "health": "degraded",
+            "total_bytes": 100 * GiB, "used_bytes": 50 * GiB}
+    data = parse_unas_data({**RAW, "ustorage": {**RAW["ustorage"], "space": [pool]}})
+    assert data["raids"][0]["healthy"] is False
+
+
+def test_empty_bay_has_no_type_or_size():
+    bay = next(d for d in parse_unas_data(RAW)["disks"] if d["name"] == "Slot 2")
+    assert (bay["status_label"], bay["type"], bay["size_gb"]) == ("Empty", None, None)

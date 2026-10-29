@@ -43,6 +43,8 @@ interface UnasRaid {
   pct: number;
   active_devices: number;
   failed_devices: number;
+  /** Storage pool this volume lives on; its card already shows the volume. */
+  pool?: string | null;
 }
 
 interface UnasPool {
@@ -86,7 +88,10 @@ function gb(used: unknown, total: unknown, free?: unknown): string | undefined {
 }
 
 export function UnasDetail({ data }: { data: UnasData }) {
-  const { disks, raids, storage_pools } = data;
+  const { disks, storage_pools } = data;
+  // A volume on a known pool would repeat the pool's card (same name, usage
+  // and health); only volumes the collector could not place get their own.
+  const raids = (data.raids ?? []).filter((r) => !r.pool);
   const system = data.system ?? ({} as UnasSystem);
   const totals = data.totals ?? ({} as UnasTotals);
 
@@ -162,7 +167,7 @@ export function UnasDetail({ data }: { data: UnasData }) {
       {/* RAID arrays */}
       {raids && raids.length > 0 && (
         <section>
-          <SectionTitle meta={isNum(totals.raids_healthy) && isNum(totals.raids_total) ? `${totals.raids_healthy}/${totals.raids_total} healthy` : undefined}>
+          <SectionTitle>
             RAID arrays
           </SectionTitle>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

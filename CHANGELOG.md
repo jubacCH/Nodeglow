@@ -82,7 +82,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - UniFi counted wired clients once per device on the path (gateway and every
   switch); the client totals now come from the controller's client list.
 - UniFi NAS: a RAID without a reported state (UniFi OS 6) showed as down, and
-  an empty drive bay counted as a disk error. Both are now unknown / ignored.
+  an empty drive bay counted as a disk error. A RAID volume now takes name and
+  health from its storage pool (matched by size) and is no longer shown twice;
+  an empty bay shows as "Empty" and does not count as a disk.
 - Cloudflare analytics come from the GraphQL Analytics API (24 h, hourly
   groups); the REST dashboard endpoint was retired by Cloudflare and had been
   shown as 0 requests. When analytics are unavailable the values are empty
