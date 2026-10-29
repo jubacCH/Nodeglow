@@ -1,0 +1,232 @@
+{
+ "quorum_ok": true,
+ "cluster_name": "cluster_name-1",
+ "nodes": [
+  {
+   "name": "name-1",
+   "status": "online",
+   "online": true,
+   "cpu_pct": 6.0,
+   "mem_pct": 57.2,
+   "mem_used_gb": 17.8,
+   "mem_total_gb": 31.1,
+   "disk_used_gb": 40.7,
+   "disk_total_gb": 93.9,
+   "disk_pct": 43.4,
+   "netin": 0,
+   "netout": 0,
+   "uptime_s": 785949
+  },
+  {
+   "name": "name-2",
+   "status": "online",
+   "online": true,
+   "cpu_pct": 4.9,
+   "mem_pct": 69.6,
+   "mem_used_gb": 21.6,
+   "mem_total_gb": 31.1,
+   "disk_used_gb": 15.4,
+   "disk_total_gb": 93.9,
+   "disk_pct": 16.4,
+   "netin": 0,
+   "netout": 0,
+   "uptime_s": 786027
+  }
+ ],
+ "vms": [
+  {
+   "id": 114,
+   "name": "name-3",
+   "node": "node-1",
+   "status": "running",
+   "running": true,
+   "cpu_pct": 2.8,
+   "mem_used_gb": 4.15,
+   "mem_total_gb": 7.91,
+   "disk_used_gb": 0.0,
+   "disk_total_gb": 4.0,
+   "disk_pct": 0.0,
+   "netin": 9533646121,
+   "netout": 1059455465,
+   "diskread": 1096513024,
+   "diskwrite": 18553446912,
+   "uptime_s": 785928,
+   "type": "VM"
+  },
+  {
+   "id": 107,
+   "name": "name-4",
+   "node": "node-2",
+   "status": "stopped",
+   "running": false,
+   "cpu_pct": 0,
+   "mem_used_gb": 0.0,
+   "mem_total_gb": 7.86,
+   "disk_used_gb": 0.0,
+   "disk_total_gb": 100.0,
+   "disk_pct": 0.0,
+   "netin": 0,
+   "netout": 0,
+   "diskread": 0,
+   "diskwrite": 0,
+   "uptime_s": 0,
+   "type": "VM"
+  },
+  {
+   "id": 102,
+   "name": "name-5",
+   "node": "node-3",
+   "status": "running",
+   "running": true,
+   "cpu_pct": 0.9,
+   "mem_used_gb": 4.62,
+   "mem_total_gb": 6.0,
+   "disk_used_gb": 0.0,
+   "disk_total_gb": 100.0,
+   "disk_pct": 0.0,
+   "netin": 1362558893,
+   "netout": 790764356,
+   "diskread": 1184335406,
+   "diskwrite": 66167976960,
+   "uptime_s": 785931,
+   "type": "VM"
+  }
+ ],
+ "containers": [
+  {
+   "id": 134,
+   "name": "name-6",
+   "node": "node-4",
+   "status": "running",
+   "running": true,
+   "cpu_pct": 0.4,
+   "mem_used_gb": 0.16,
+   "mem_total_gb": 6.0,
+   "disk_used_gb": 18.39,
+   "disk_total_gb": 78.44,
+   "disk_pct": 23.4,
+   "netin": 1730162859,
+   "netout": 27080358,
+   "diskread": 13566287872,
+   "diskwrite": 13866442752,
+   "uptime_s": 785836,
+   "type": "LXC",
+   "ip": "192.0.2.1"
+  },
+  {
+   "id": 139,
+   "name": "name-7",
+   "node": "node-5",
+   "status": "running",
+   "running": true,
+   "cpu_pct": 3.0,
+   "mem_used_gb": 0.34,
+   "mem_total_gb": 2.0,
+   "disk_used_gb": 3.31,
+   "disk_total_gb": 23.46,
+   "disk_pct": 14.1,
+   "netin": 719139994,
+   "netout": 16569947,
+   "diskread": 1841119232,
+   "diskwrite": 15173107712,
+   "uptime_s": 8442,
+   "type": "LXC",
+   "ip": "192.0.2.2"
+  },
+  {
+   "id": 140,
+   "name": "name-8",
+   "node": "node-6",
+   "status": "running",
+   "running": true,
+   "cpu_pct": 2.4,
+   "mem_used_gb": 0.41,
+   "mem_total_gb": 3.0,
+   "disk_used_gb": 5.81,
+   "disk_total_gb": 31.2,
+   "disk_pct": 18.6,
+   "netin": 3299608625,
+   "netout": 15362892,
+   "diskread": 1927069696,
+   "diskwrite": 62167752704,
+   "uptime_s": 8440,
+   "type": "LXC",
+   "ip": "192.0.2.3"
+  }
+ ],
+ "totals": {
+  "nodes_total": 2,
+  "nodes_online": 2,
+  "vms_total": 6,
+  "vms_running": 4,
+  "lxc_total": 34,
+  "lxc_running": 33,
+  "cpu_avg_pct": 5.5,
+  "mem_used_gb": 39.4,
+  "mem_total_gb": 62.2,
+  "mem_pct": 63.3
+ },
+ "tasks": [
+  {
+   "starttime": "2026-10-29 11:32:05",
+   "node": "node-7",
+   "user": "user-1",
+   "type": "push_file",
+   "id": "id-1",
+   "status": "OK",
+   "ok": true
+  },
+  {
+   "starttime": "2026-10-29 11:24:32",
+   "node": "node-8",
+   "user": "user-2",
+   "type": "vzsnapshot",
+   "id": "id-2",
+   "status": "OK",
+   "ok": true
+  },
+  {
+   "starttime": "2026-10-29 11:21:32",
+   "node": "node-9",
+   "user": "user-3",
+   "type": "push_file",
+   "id": "id-3",
+   "status": "OK",
+   "ok": true
+  }
+ ],
+ "backups": {
+  "nfs-backup": [
+   {
+    "size": 1279044913,
+    "subtype": "subtype-1",
+    "content": "content-1",
+    "ctime": 1756148444,
+    "format": "format-1",
+    "vmid": 101,
+    "volid": "volid-1",
+    "notes": "notes-1"
+   },
+   {
+    "content": "content-2",
+    "ctime": 1790794800,
+    "size": 1401122410,
+    "subtype": "subtype-2",
+    "notes": "notes-2",
+    "volid": "volid-2",
+    "vmid": 101,
+    "format": "format-2"
+   },
+   {
+    "notes": "notes-3",
+    "volid": "volid-3",
+    "vmid": 101,
+    "format": "format-3",
+    "content": "content-3",
+    "ctime": 1792090803,
+    "size": 1402846346,
+    "subtype": "subtype-3"
+   }
+  ]
+ }
+}

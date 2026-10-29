@@ -1,0 +1,51 @@
+{
+ "zone_count": 1,
+ "zones": [
+  {
+   "id": "id-1",
+   "name": "name-1",
+   "status": "active",
+   "plan": "Free Website",
+   "ssl_mode": "unknown",
+   "dns_records": [
+    {
+     "type": "CNAME",
+     "name": "name-2",
+     "content": "content-1",
+     "proxied": true,
+     "ttl": 1
+    },
+    {
+     "type": "CNAME",
+     "name": "name-3",
+     "content": "content-2",
+     "proxied": false,
+     "ttl": 1
+    },
+    {
+     "type": "CNAME",
+     "name": "name-4",
+     "content": "content-3",
+     "proxied": true,
+     "ttl": 1
+    }
+   ],
+   "dns_count": 32,
+   "analytics": {
+    "requests_all": null,
+    "requests_cached": null,
+    "cache_pct": null,
+    "bandwidth_all": null,
+    "bandwidth_cached": null,
+    "threats": null
+   },
+   "firewall_events": []
+  }
+ ],
+ "totals": {
+  "requests": null,
+  "bandwidth": null,
+  "threats": null,
+  "cache_pct": null
+ }
+}

@@ -1,0 +1,30 @@
+{
+ "addresses_total": 72,
+ "addresses_active": 72,
+ "addresses_inactive": 0,
+ "subnets_count": 8,
+ "addresses": [
+  {
+   "ip": "192.0.2.10",
+   "hostname": "hostname-1",
+   "last_seen": "2026-10-29 11:45:01",
+   "mac": "",
+   "subnet_id": 8
+  },
+  {
+   "ip": "192.0.2.11",
+   "hostname": "hostname-2",
+   "last_seen": "2026-08-07 16:15:01",
+   "mac": "",
+   "subnet_id": 8
+  },
+  {
+   "ip": "192.0.2.5",
+   "hostname": "hostname-3",
+   "last_seen": "2026-10-29 11:45:01",
+   "mac": "",
+   "subnet_id": 8
+  }
+ ],
+ "source_url": "source_url-1"
+}

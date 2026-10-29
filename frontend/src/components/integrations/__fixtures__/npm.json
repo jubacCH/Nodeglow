@@ -1,0 +1,125 @@
+{
+ "proxy_hosts": [
+  {
+   "id": 13,
+   "domains": [
+    "domains-1"
+   ],
+   "domain_primary": "domain_primary-1",
+   "enabled": true,
+   "ssl_forced": true,
+   "certificate_id": 34,
+   "forward": "forward-1",
+   "has_access_list": false,
+   "advanced_config": true,
+   "meta": {
+    "letsencrypt_agree": false,
+    "dns_challenge": false,
+    "nginx_online": true,
+    "nginx_err": null
+   }
+  },
+  {
+   "id": 25,
+   "domains": [
+    "domains-2"
+   ],
+   "domain_primary": "domain_primary-2",
+   "enabled": true,
+   "ssl_forced": true,
+   "certificate_id": 33,
+   "forward": "forward-2",
+   "has_access_list": false,
+   "advanced_config": true,
+   "meta": {
+    "letsencrypt_agree": false,
+    "dns_challenge": false,
+    "nginx_online": true,
+    "nginx_err": null
+   }
+  },
+  {
+   "id": 22,
+   "domains": [
+    "domains-3"
+   ],
+   "domain_primary": "domain_primary-3",
+   "enabled": true,
+   "ssl_forced": true,
+   "certificate_id": 33,
+   "forward": "forward-3",
+   "has_access_list": false,
+   "advanced_config": true,
+   "meta": {
+    "letsencrypt_agree": false,
+    "dns_challenge": false,
+    "nginx_online": true,
+    "nginx_err": null
+   }
+  }
+ ],
+ "proxy_count": 22,
+ "online_count": 21,
+ "offline_count": 1,
+ "ssl_host_count": 22,
+ "certificates": [
+  {
+   "id": 23,
+   "nice_name": "nice_name-1",
+   "provider": "letsencrypt",
+   "domains": [
+    "domains-4"
+   ],
+   "expires_on": "2026-12-19 05:51:47",
+   "days_left": 50
+  },
+  {
+   "id": 24,
+   "nice_name": "nice_name-2",
+   "provider": "letsencrypt",
+   "domains": [
+    "domains-5"
+   ],
+   "expires_on": "2026-12-19 06:51:47",
+   "days_left": 50
+  },
+  {
+   "id": 22,
+   "nice_name": "nice_name-3",
+   "provider": "letsencrypt",
+   "domains": [
+    "domains-6"
+   ],
+   "expires_on": "2026-12-19 07:51:47",
+   "days_left": 50
+  }
+ ],
+ "cert_count": 7,
+ "certs_expiring_soon": 0,
+ "certs_expired": 0,
+ "redirections": [],
+ "redir_count": 0,
+ "streams": [
+  {
+   "id": 2,
+   "incoming_port": 7777,
+   "forwarding_host": "192.0.2.13",
+   "forwarding_port": 7777,
+   "enabled": true,
+   "tcp": true,
+   "udp": true
+  },
+  {
+   "id": 1,
+   "incoming_port": 25565,
+   "forwarding_host": "192.0.2.14",
+   "forwarding_port": 25565,
+   "enabled": true,
+   "tcp": true,
+   "udp": false
+  }
+ ],
+ "stream_count": 2,
+ "dead_hosts": [],
+ "dead_count": 0
+}

@@ -1,0 +1,59 @@
+{
+ "device": {
+  "model": "IB5-P-00",
+  "serial": "serial-1",
+  "firmware": "15.21.28",
+  "mac": "00:00:5e:00:53:08",
+  "uptime_s": 794402,
+  "manufacturer": "Arcadyan",
+  "external_ip": "192.0.2.12",
+  "hardware": "3.1",
+  "status": "Up",
+  "reboots": 2,
+  "first_use": "first_use-1",
+  "mem_total_kb": 2032200,
+  "mem_free_kb": 1268240,
+  "mem_pct": 37.6
+ },
+ "wan": {
+  "interface": "XGS-PON",
+  "physical": "Ethernet",
+  "link_FTTH": "Ethernet",
+  "link_GPON_DHCP": "GPON"
+ },
+ "wifi": {
+  "enabled": true,
+  "scheduler": false
+ },
+ "hosts": [
+  {
+   "name": "name-1",
+   "mac": "00:00:5e:00:53:09",
+   "active": true,
+   "device_type": "Access Point",
+   "ip": "192.0.2.9",
+   "first_seen": "2026-09-23T01:05:07Z",
+   "last_connection": "2026-10-29T00:00:29Z"
+  },
+  {
+   "name": "name-2",
+   "mac": "00:00:5e:00:53:0a",
+   "active": false,
+   "device_type": "iPhone",
+   "ip": "",
+   "first_seen": "2026-09-23T01:05:54Z",
+   "last_connection": "2026-10-27T17:11:24Z"
+  },
+  {
+   "name": "name-3",
+   "mac": "00:00:5e:00:53:0b",
+   "active": false,
+   "device_type": "Computer",
+   "ip": "",
+   "first_seen": "2026-09-23T01:05:54Z",
+   "last_connection": "2026-10-06T15:29:00Z"
+  }
+ ],
+ "hosts_active": 1,
+ "hosts_total": 6
+}

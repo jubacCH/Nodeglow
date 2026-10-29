@@ -1,0 +1,82 @@
+{
+ "status": "enabled",
+ "version": "15.6.2",
+ "server_domain": "server_domain-1",
+ "update_available": false,
+ "update_version": "15.6.2",
+ "queries_today": 141241,
+ "blocked_today": 2873,
+ "blocked_pct": 2.0,
+ "server_failures_today": 104,
+ "nxdomain_today": 19657,
+ "clients": 81,
+ "domains_blocked": 201382,
+ "zones": 76,
+ "cached_entries": 10012,
+ "blocklist_next_update": "2026-10-30T07:29:26.5873936Z",
+ "top_queries": [
+  {
+   "domain": "domain-1",
+   "count": 6741
+  },
+  {
+   "domain": "domain-2",
+   "count": 5291
+  },
+  {
+   "domain": "domain-3",
+   "count": 4104
+  }
+ ],
+ "top_blocked": [
+  {
+   "domain": "domain-4",
+   "count": 150
+  },
+  {
+   "domain": "domain-5",
+   "count": 150
+  },
+  {
+   "domain": "domain-6",
+   "count": 149
+  }
+ ],
+ "top_clients": [
+  {
+   "client": "192.0.2.15",
+   "count": 73726
+  },
+  {
+   "client": "192.0.2.16",
+   "count": 17905
+  },
+  {
+   "client": "192.0.2.17",
+   "count": 8710
+  }
+ ],
+ "cluster_initialized": true,
+ "cluster_domain": "cluster_domain-1",
+ "cluster_nodes": [
+  {
+   "name": "name-1",
+   "type": "Primary",
+   "state": "Self",
+   "version": "15.6.2",
+   "ip": "192.0.2.18",
+   "last_seen": null
+  },
+  {
+   "name": "name-2",
+   "type": "Secondary",
+   "state": "Connected",
+   "version": "15.6.2",
+   "ip": "192.0.2.19",
+   "last_seen": "2026-10-29T11:52:19.8975504Z"
+  }
+ ],
+ "cluster_nodes_unhealthy": 0,
+ "cluster_unhealthy_names": [],
+ "cluster_version_mismatch": false
+}

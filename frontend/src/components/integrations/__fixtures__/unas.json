@@ -1,0 +1,141 @@
+{
+ "system": {
+  "hostname": "hostname-1",
+  "version": "v6.0.11+f63375a",
+  "uptime_s": 794386.85,
+  "cpu_pct": 0.1,
+  "temp_c": 67,
+  "mem_used_gb": 6.4,
+  "mem_total_gb": 7.9,
+  "mem_pct": 81.0
+ },
+ "disks": [
+  {
+   "id": "id-1",
+   "name": "name-1",
+   "serial": "serial-1",
+   "model": "WDC  WDS100T1R0A-68A4W0",
+   "size_gb": 931.51,
+   "size_tb": 0.0,
+   "temp": 35,
+   "temp_ok": true,
+   "status": "normal",
+   "status_label": "Normal",
+   "ok": true,
+   "smart_ok": true,
+   "empty": false,
+   "type": "SSD",
+   "life_span": 100,
+   "power_on_hrs": 11330
+  },
+  {
+   "id": "id-2",
+   "name": "name-2",
+   "serial": "serial-2",
+   "model": "WDC  WDS100T1R0A-68A4W0",
+   "size_gb": 931.51,
+   "size_tb": 0.0,
+   "temp": 35,
+   "temp_ok": true,
+   "status": "normal",
+   "status_label": "Normal",
+   "ok": true,
+   "smart_ok": true,
+   "empty": false,
+   "type": "SSD",
+   "life_span": 100,
+   "power_on_hrs": 11330
+  },
+  {
+   "id": "id-3",
+   "name": "name-3",
+   "serial": "serial-3",
+   "model": "WDC  WDS100T1R0A-68A4W0",
+   "size_gb": 931.51,
+   "size_tb": 0.0,
+   "temp": 35,
+   "temp_ok": true,
+   "status": "normal",
+   "status_label": "Normal",
+   "ok": true,
+   "smart_ok": true,
+   "empty": false,
+   "type": "SSD",
+   "life_span": 100,
+   "power_on_hrs": 11330
+  }
+ ],
+ "raids": [
+  {
+   "id": "id-4",
+   "name": "name-4",
+   "type": "",
+   "type_label": "RAID",
+   "state": "",
+   "healthy": null,
+   "size_gb": 1780.36,
+   "used_gb": 1139.09,
+   "pct": 64.0,
+   "disk_ids": [],
+   "active_devices": "",
+   "failed_devices": "failed_devices-1"
+  },
+  {
+   "id": "id-5",
+   "name": "name-5",
+   "type": "",
+   "type_label": "RAID",
+   "state": "",
+   "healthy": null,
+   "size_gb": 1846.76,
+   "used_gb": 1537.59,
+   "pct": 83.3,
+   "disk_ids": [],
+   "active_devices": "",
+   "failed_devices": "failed_devices-2"
+  }
+ ],
+ "storage_pools": [
+  {
+   "id": "id-6",
+   "name": "name-6",
+   "size_gb": 1846.76,
+   "used_gb": 1537.59,
+   "free_gb": 309.17,
+   "pct": 83.3,
+   "healthy": true,
+   "members": [
+    "members-1",
+    "members-2",
+    "members-3"
+   ]
+  },
+  {
+   "id": "id-7",
+   "name": "name-7",
+   "size_gb": 1780.36,
+   "used_gb": 1139.09,
+   "free_gb": 641.27,
+   "pct": 64.0,
+   "healthy": true,
+   "members": [
+    "members-4",
+    "members-5"
+   ]
+  }
+ ],
+ "shares": [],
+ "totals": {
+  "disks_total": 6,
+  "disks_ok": 6,
+  "disks_error": 0,
+  "disks_hot": 0,
+  "raids_total": 2,
+  "raids_healthy": null,
+  "pools_total": 2,
+  "shares_total": 0,
+  "storage_used_gb": 2676.7,
+  "storage_total_gb": 3627.1,
+  "storage_pct": 73.8
+ }
+}
