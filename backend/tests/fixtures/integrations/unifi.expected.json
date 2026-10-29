@@ -406,12 +406,6 @@
    "latency_ms": 9.0,
    "timestamp": "2026-10-10 00:00",
    "upload_mbps": 48.0
-  },
-  {
-   "download_mbps": 0.0,
-   "latency_ms": 0.0,
-   "timestamp": "2026-10-09 01:00",
-   "upload_mbps": 0.0
   }
  ],
  "speedtest_latest": {

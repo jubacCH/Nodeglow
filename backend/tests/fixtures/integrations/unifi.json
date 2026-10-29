@@ -153,7 +153,7 @@
   {
    "method": "POST",
    "url": "https://unifi.example.net/proxy/network/api/s/default/stat/report/archive.speedtest",
-   "match_json": {"attrs": ["xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"},
+   "match_json": {"attrs": ["time", "xput_download", "xput_upload", "latency"], "_limit": 20, "_sort": "-time"},
    "match_headers": {"x-csrf-token": "fixture-csrf-0f1e2d3c"},
    "status": 200,
    "headers": {"content-type": "application/json;charset=UTF-8"},
