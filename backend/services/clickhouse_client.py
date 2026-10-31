@@ -1055,46 +1055,36 @@ async def count_syslog_by_host(
     return {int(r["host_id"]): int(r["cnt"]) for r in rows if r.get("host_id") is not None}
 
 
-async def count_syslog_received_by_source(
-    since: datetime, source_ips: list[str] | None = None,
+# Who a syslog message belongs to: the host when ingest could attribute it,
+# otherwise the sender address. Agents deliver through the frontend container,
+# so their source_ip is a Docker bridge address shared by every agent host.
+HOST_KEY_SQL = (
+    "if(ifNull(host_id, 0) > 0, concat('host:', toString(host_id)), source_ip)"
+)
+
+
+async def count_syslog_received_by_key(
+    since: datetime, keys: list[str] | None = None,
 ) -> dict[str, int]:
-    """{source_ip: messages ingested since ``since``} in one query.
+    """{host key: messages ingested since ``since``} in one query.
 
-    Uses received_at — these counts are compared against the hourly volume
-    baselines, which are learned on ingest time as well. ``source_ips=None``
-    counts every source.
+    Keys follow HOST_KEY_SQL (``host:<id>`` or a source address), like the
+    volume baselines they are compared with. Uses received_at — the baselines
+    are learned on ingest time as well. ``keys=None`` counts every key.
     """
-    if source_ips is not None and not source_ips:
+    if keys is not None and not keys:
         return {}
     since_sql, params = received_since_clause(since)
     where = f"{tenant_clause(params)} AND {since_sql}"
-    if source_ips is not None:
-        where += " AND source_ip IN ({ips:Array(String)})"
-        params["ips"] = list(source_ips)
+    if keys is not None:
+        where += f" AND {HOST_KEY_SQL} IN ({{keys:Array(String)}})"
+        params["keys"] = list(keys)
     rows = await query(
-        f"SELECT source_ip, count() AS cnt FROM syslog_messages "
-        f"WHERE {where} GROUP BY source_ip",
+        f"SELECT {HOST_KEY_SQL} AS host_key, count() AS cnt FROM syslog_messages "
+        f"WHERE {where} GROUP BY host_key",
         params,
     )
-    return {r["source_ip"]: int(r["cnt"]) for r in rows}
-
-
-async def count_syslog_received_by_host(
-    since: datetime, host_ids: list[int],
-) -> dict[int, int]:
-    """{host_id: messages ingested since ``since``} in one query."""
-    if not host_ids:
-        return {}
-    since_sql, params = received_since_clause(since)
-    where = f"{tenant_clause(params)} AND {since_sql}"
-    params["hids"] = [int(h) for h in host_ids]
-    rows = await query(
-        f"SELECT host_id, count() AS cnt FROM syslog_messages "
-        f"WHERE {where} AND host_id IN ({{hids:Array(Int32)}}) "
-        f"GROUP BY host_id",
-        params,
-    )
-    return {int(r["host_id"]): int(r["cnt"]) for r in rows if r.get("host_id") is not None}
+    return {r["host_key"]: int(r["cnt"]) for r in rows if r.get("host_key")}
 
 
 async def get_syslog_events_for_host(

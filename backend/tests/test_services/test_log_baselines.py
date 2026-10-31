@@ -45,7 +45,7 @@ class FakeSyslog:
         h = start
         while h < end:
             for ip, cnt in self.rate.items():
-                rows.append({"source_ip": ip, "hour_ts": _epoch(h), "cnt": cnt})
+                rows.append({"host_key": ip, "hour_ts": _epoch(h), "cnt": cnt})
             h += timedelta(hours=1)
         return rows
 
@@ -226,7 +226,7 @@ async def test_log_anomaly_rule_fires_on_learned_baselines(db):
 
     # 60 messages in 10 minutes = 360/h against a ~100/h baseline.
     counts = AsyncMock(return_value={"10.0.0.1": 60})
-    with patch("services.clickhouse_client.count_syslog_received_by_source", new=counts), \
+    with patch("services.clickhouse_client.count_syslog_received_by_key", new=counts), \
          patch("notifications.notify", new=AsyncMock()):
         await corr._rule_log_anomaly(db, min_cycles=1)
         await db.commit()
@@ -248,7 +248,7 @@ async def test_log_anomaly_rule_stays_quiet_at_normal_volume(db):
     corr._rule_hit_counts.clear()
     corr._current_cycle_hits.clear()
 
-    with patch("services.clickhouse_client.count_syslog_received_by_source",
+    with patch("services.clickhouse_client.count_syslog_received_by_key",
                new=AsyncMock(return_value={"10.0.0.1": 17})), \
          patch("notifications.notify", new=AsyncMock()):
         await corr._rule_log_anomaly(db, min_cycles=1)
@@ -265,7 +265,7 @@ async def test_detect_baseline_anomalies_reports_spike_and_silence(db):
         b.std_rate = 10.0
     await db.commit()
 
-    with patch("services.clickhouse_client.count_syslog_received_by_source",
+    with patch("services.clickhouse_client.count_syslog_received_by_key",
                new=AsyncMock(return_value={"10.0.0.1": 500})):
         anomalies = await li.detect_baseline_anomalies(db)
 
@@ -425,3 +425,42 @@ def test_trend_from_counts():
     assert li.trend_from_counts([10, 20, 30, 40])[0] == "rising"
     assert li.trend_from_counts([40, 30, 20, 10])[0] == "falling"
     assert li.trend_from_counts([10, 10, 10, 10])[0] == "stable"
+
+
+async def test_agent_hosts_behind_one_container_learn_their_own_baseline(db):
+    """Agents deliver through the frontend container, so their messages share
+    one Docker source_ip. Keyed by source_ip, five hosts summed into one
+    baseline that flapped around its threshold; keyed by host they do not."""
+    fake = FakeSyslog({"host:182": 100, "host:179": 100, "10.0.0.1": 50})
+    with patch("services.clickhouse_client.query", new=fake):
+        await li.compute_baselines(db, now=datetime(2026, 10, 5, 12, 5))
+
+    assert li.HOST_KEY_SQL in fake.calls[0][0]
+    assert "GROUP BY host_key, hour_ts" in fake.calls[0][0]
+    keys = {k for (k,) in (await db.execute(select(HostBaseline.host_key).distinct())).all()}
+    assert keys == {"host:182", "host:179", "10.0.0.1"}
+
+
+async def test_log_anomaly_rule_names_the_host_behind_a_host_key(db):
+    from models.incident import Incident
+    from models.ping import PingHost
+    from services import correlation as corr
+
+    db.add(PingHost(id=182, name="paperless", hostname="paperless.b8n.ch"))
+    await db.commit()
+    await _learn(db, {"host:182": 100, "host:179": 100})
+    corr._rule_hit_counts.clear()
+    corr._current_cycle_hits.clear()
+
+    # Only paperless spikes; n8n stays at its normal ~17 per 10 minutes.
+    counts = AsyncMock(return_value={"host:182": 60, "host:179": 17})
+    with patch("services.clickhouse_client.count_syslog_received_by_key", new=counts), \
+         patch("notifications.notify", new=AsyncMock()):
+        await corr._rule_log_anomaly(db, min_cycles=1)
+        await db.commit()
+
+    incidents = (await db.execute(
+        select(Incident).where(Incident.rule == "log_anomaly")
+    )).scalars().all()
+    assert [i.title for i in incidents] == ["Log volume anomaly: paperless"]
+    assert sorted(counts.await_args.args[1]) == ["host:179", "host:182"]

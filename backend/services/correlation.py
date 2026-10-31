@@ -579,28 +579,21 @@ async def _rule_log_anomaly(db, min_cycles: int = 2):
 
     window_10m = now - timedelta(minutes=10)
 
-    by_source: dict[str, HostBaseline] = {}
+    counts = await _ch.count_syslog_received_by_key(
+        window_10m, [bl.host_key for bl in baselines],
+    )
+
     by_host_id: dict[int, HostBaseline] = {}
+    candidates: list[tuple[HostBaseline, int, int | None]] = []
     for bl in baselines:
+        host_id = None
         if bl.host_key.startswith("host:"):
             part = bl.host_key.split(":", 1)[1]
-            if part.isdigit():
-                by_host_id[int(part)] = bl
-        else:
-            by_source[bl.host_key] = bl
-
-    source_counts = await _ch.count_syslog_received_by_source(
-        window_10m, list(by_source),
-    ) if by_source else {}
-    host_counts = await _ch.count_syslog_received_by_host(
-        window_10m, list(by_host_id),
-    ) if by_host_id else {}
-
-    candidates: list[tuple[HostBaseline, int, int | None]] = [
-        (bl, source_counts.get(ip, 0), None) for ip, bl in by_source.items()
-    ] + [
-        (bl, host_counts.get(hid, 0), hid) for hid, bl in by_host_id.items()
-    ]
+            if not part.isdigit():
+                continue
+            host_id = int(part)
+            by_host_id[host_id] = bl
+        candidates.append((bl, counts.get(bl.host_key, 0), host_id))
 
     hosts_by_id: dict[int, PingHost] = {}
     if by_host_id:
@@ -878,6 +871,29 @@ async def _rule_precursor_observed(
 
 # ── Auto-Resolve ────────────────────────────────────────────────────────────
 
+# Rules without hosts to watch resolve once they stopped refreshing the incident
+# for ten minutes. Each says what that means for it; all of them used to report
+# "error rate returned to normal".
+_TIMEOUT_RESOLVE_REASONS = {
+    "syslog_spike": "Auto-resolved: error rate returned to normal",
+    "log_anomaly": "Auto-resolved: log volume back within its baseline",
+    "fleet_wide_issue": "Auto-resolved: pattern no longer seen across hosts",
+    "severity_trend": "Auto-resolved: severity trend no longer rising",
+    "content_anomaly": "Auto-resolved: log content back to normal",
+}
+
+
+def _timeout_resolve_reason(rule: str) -> str | None:
+    """Resolve text for a rule that resolves on inactivity, else None."""
+    if rule in _TIMEOUT_RESOLVE_REASONS:
+        return _TIMEOUT_RESOLVE_REASONS[rule]
+    if rule.startswith("learned_precursor"):
+        return "Auto-resolved: precursor not seen again for 10 minutes"
+    if rule.startswith("alert_rule_"):
+        return "Auto-resolved: rule condition no longer met"
+    return None
+
+
 async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list[int]:
     """Auto-resolve incidents where all affected hosts are back online.
 
@@ -906,10 +922,8 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
 
     for incident in open_incidents:
         # Skip syslog/fleet/trend/content/precursor rules – auto-resolve after timeout
-        if incident.rule in ("syslog_spike", "log_anomaly", "fleet_wide_issue",
-                             "severity_trend", "content_anomaly") \
-                or incident.rule.startswith("learned_precursor") \
-                or incident.rule.startswith("alert_rule_"):
+        timeout_reason = _timeout_resolve_reason(incident.rule)
+        if timeout_reason is not None:
             # Resolve if last update was > 10min ago (no new activity)
             if incident.updated_at < datetime.utcnow() - timedelta(minutes=10):
                 incident.status = "resolved"
@@ -917,13 +931,13 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
                 db.add(IncidentEvent(
                     incident_id=incident.id,
                     event_type="resolved",
-                    summary="Auto-resolved: error rate returned to normal",
+                    summary=timeout_reason,
                 ))
                 try:
                     from notifications import notify
                     await notify(
                         f"✅ Resolved: {incident.title}",
-                        "Auto-resolved: error rate returned to normal",
+                        timeout_reason,
                         severity="info",
                         link_path=f"/incidents/{incident.id}",
                     )

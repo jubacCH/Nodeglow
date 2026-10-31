@@ -67,6 +67,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Log volume baselines are learned per host (`host:<id>`) when a message has
+  one, like the template diversity, instead of per sender address. Agents
+  deliver through the frontend container, so every agent host shared one
+  Docker address and their summed volume raised "Log volume anomaly" on a
+  `172.18.0.x` source, flapping open and resolved around its threshold.
+- Incidents resolved after ten quiet minutes no longer all say "error rate
+  returned to normal": log anomalies, predictions, fleet patterns, severity
+  trends, content anomalies and alert rules each name their own reason.
 - Agent logs of hosts configured by FQDN (`ipam.example.com`) while the agent
   reports its short name (`ipam`) had no host. The syslog host cache now also
   knows a host by the first label of its name, unless two hosts share it.

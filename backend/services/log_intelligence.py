@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.log_template import HostBaseline, LogTemplate, PrecursorPattern
 from services._stats import wilson_lower_bound
-from services.clickhouse_client import query as ch_query
+from services.clickhouse_client import HOST_KEY_SQL, query as ch_query
 from services.predictor_config import get_blacklist_regexes, is_template_blacklisted
 from services.tenancy import current_tenant_id, session_tenant_id
 
@@ -598,7 +598,10 @@ async def load_template_cache(db: AsyncSession):
 # ── Baseline Computation (periodic) ──────────────────────────────────────────
 #
 # One HostBaseline row per (host_key, hour_of_day, day_of_week) holds a running
-# estimate of how many messages a source sends in that hour of the day.
+# estimate of how many messages a source sends in that hour of the day. The key
+# is HOST_KEY_SQL: ``host:<id>`` when ingest attributed the message to a host,
+# else the sender address. Keying on source_ip alone lumped every agent host
+# behind the frontend container's Docker address into one source.
 #
 # * day_of_week 0-6 is the weekday slot. It gets one sample a week.
 # * day_of_week BASELINE_ANY_DAY (7) is an hour-of-day slot shared by every
@@ -732,7 +735,7 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
     """Fold every completed, not yet processed hour into the volume baselines.
 
     Cheap no-op until an hour completes. Returns the number of hours folded in.
-    Uses source_ip as host_key.
+    Keyed by HOST_KEY_SQL, like the template diversity.
     """
     st = _tenant_state(session_tenant_id(db))
     now = now or datetime.utcnow()
@@ -754,20 +757,20 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
     since_sql, params = ch.received_since_clause(start, param="start")
     params["end"] = end
     ch_rows = await ch.query(
-        f"""SELECT source_ip,
+        f"""SELECT {HOST_KEY_SQL} AS host_key,
                    toUnixTimestamp(toStartOfHour(received_at)) AS hour_ts,
                    count() AS cnt
             FROM syslog_messages
             WHERE {ch.TENANT_FILTER} AND {since_sql}
               AND received_at < {{end:DateTime64(3)}}
-            GROUP BY source_ip, hour_ts""",
+            GROUP BY host_key, hour_ts""",
         params,
     )
 
     counts: dict[datetime, dict[str, int]] = defaultdict(dict)
     first_hour: dict[str, datetime] = {}
     for r in ch_rows:
-        ip = r.get("source_ip")
+        ip = r.get("host_key")
         if not ip:
             continue
         h = datetime.fromtimestamp(int(r["hour_ts"]), tz=timezone.utc).replace(tzinfo=None)
@@ -788,7 +791,7 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
     # start at the first hour they were seen.
     known = {
         k for (k,) in (await db.execute(select(HostBaseline.host_key).distinct())).all()
-        if k and not k.startswith("host:")
+        if k
     }
 
     written = 0
@@ -901,14 +904,11 @@ async def detect_baseline_anomalies(db: AsyncSession) -> list[dict]:
     now = datetime.utcnow()
     window_start = _floor_hour(now)
 
-    baseline_map = {
-        k: b for k, b in (await load_effective_baselines(db, now)).items()
-        if not k.startswith("host:")
-    }
+    baseline_map = await load_effective_baselines(db, now)
     if not baseline_map:
         return []
 
-    current_counts = await ch.count_syslog_received_by_source(window_start)
+    current_counts = await ch.count_syslog_received_by_key(window_start)
 
     anomalies = []
     for source_ip, cnt in current_counts.items():
@@ -1447,9 +1447,7 @@ async def compute_severity_trends(db: AsyncSession):
 # leaving a stale baseline behind for the next container to trip over.
 # Messages attributed to a host are counted under "host:<id>", the rest under
 # their source address.
-DIVERSITY_KEY_SQL = (
-    "if(ifNull(host_id, 0) > 0, concat('host:', toString(host_id)), source_ip)"
-)
+DIVERSITY_KEY_SQL = HOST_KEY_SQL
 
 
 async def compute_template_diversity(db: AsyncSession):

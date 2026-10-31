@@ -102,3 +102,26 @@ async def test_syslog_spike_auto_resolve(db):
 
         assert incident.status == "resolved"
         mock_notify.assert_called_once()
+
+
+async def test_timeout_resolve_says_what_ended(db):
+    """Each inactivity-resolved rule names its own reason, not the syslog one."""
+    stale = datetime.utcnow() - timedelta(minutes=15)
+    for rule, title in (("log_anomaly", "Log volume anomaly: paperless"),
+                        ("learned_precursor_integration_fail", "Predicted: Integration Fail")):
+        db.add(Incident(rule=rule, title=title, severity="warning",
+                        host_ids_hash=rule, status="open",
+                        created_at=stale, updated_at=stale))
+    await db.flush()
+
+    with patch("notifications.notify", new_callable=AsyncMock) as mock_notify, \
+         patch("services.correlation._get_offline_hosts", new_callable=AsyncMock, return_value=[]):
+        await _auto_resolve(db)
+        await db.commit()
+
+    bodies = {c.args[0]: c.args[1] for c in mock_notify.call_args_list}
+    assert bodies["✅ Resolved: Log volume anomaly: paperless"] == \
+        "Auto-resolved: log volume back within its baseline"
+    assert bodies["✅ Resolved: Predicted: Integration Fail"] == \
+        "Auto-resolved: precursor not seen again for 10 minutes"
+    assert not any("error rate" in b for b in bodies.values())

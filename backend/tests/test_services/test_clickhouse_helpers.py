@@ -526,24 +526,18 @@ async def test_count_syslog_by_host_short_circuits(fake_query):
     assert fake_query.calls == []
 
 
-async def test_count_syslog_received_by_source(fake_query):
-    fake_query.returns([{"source_ip": "10.0.0.1", "cnt": 42}])
+async def test_count_syslog_received_by_key(fake_query):
+    fake_query.returns([{"host_key": "10.0.0.1", "cnt": 42}, {"host_key": "host:9", "cnt": 5}])
     since = datetime(2026, 4, 10, 12, 0)
-    result = await ch.count_syslog_received_by_source(since, ["10.0.0.1", "10.0.0.2"])
+    result = await ch.count_syslog_received_by_key(since, ["10.0.0.1", "host:9"])
 
     sql = fake_query.last_sql
     assert "received_at >= {since:DateTime64(3)}" in sql
     assert "timestamp >= {since_prune:DateTime64(3)}" in sql
-    assert "source_ip IN ({ips:Array(String)})" in sql
-    assert "GROUP BY source_ip" in sql
-    assert result == {"10.0.0.1": 42}
+    assert f"{ch.HOST_KEY_SQL} IN ({{keys:Array(String)}})" in sql
+    assert "GROUP BY host_key" in sql
+    assert fake_query.last_params["keys"] == ["10.0.0.1", "host:9"]
+    assert result == {"10.0.0.1": 42, "host:9": 5}
     # An explicitly empty filter means "nobody", not "everybody".
-    assert await ch.count_syslog_received_by_source(since, []) == {}
+    assert await ch.count_syslog_received_by_key(since, []) == {}
     assert len(fake_query.calls) == 1
-
-
-async def test_count_syslog_received_by_host(fake_query):
-    fake_query.returns([{"host_id": 9, "cnt": 5}])
-    result = await ch.count_syslog_received_by_host(datetime(2026, 4, 10), [9])
-    assert "host_id IN ({hids:Array(Int32)})" in fake_query.last_sql
-    assert result == {9: 5}
