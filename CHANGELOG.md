@@ -86,6 +86,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- "Template diversity spike" no longer fires on a busy hour of templates the
+  host sends anyway (hourly cron, apt, a batch job). Only templates the host
+  has not sent in the past week count towards the spike, and the incident says
+  how many there were. Docker veth names (`veth74c2188`) are masked in
+  templates, so a container restart no longer mints a fresh set of templates
+  on every guest that shares the node's kernel log.
 - The syslog TCP listener no longer closes a connection after 60 seconds
   without a message. rsyslog and syslog-ng keep one persistent connection and
   only notice the close on their next send, which failed ("omfwd: remote

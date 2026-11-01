@@ -294,6 +294,8 @@ async def test_content_anomalies_fire_on_fallback_slot(db):
         if "uniqExact" in sql:
             assert params["keys"] == ["10.0.0.5"]
             return [{"host_key": "10.0.0.5", "diversity": 25}]
+        if "first_seen" in sql:
+            return [{"host_key": "10.0.0.5", "novel": 20}]
         assert "HAVING cnt >= {min_cnt:UInt32}" in sql
         return [
             {"template_hash": "sevup00000000001", "min_sev": 2, "cnt": 7},
@@ -325,6 +327,10 @@ async def test_content_anomaly_on_host_key_carries_host_id(db):
             assert li.DIVERSITY_KEY_SQL in sql
             assert params["keys"] == ["host:7"]
             return [{"host_key": "host:7", "diversity": 15}]
+        if "first_seen" in sql:
+            assert li.DIVERSITY_KEY_SQL in sql
+            assert params["keys"] == ["host:7"]
+            return [{"host_key": "host:7", "novel": 12}]
         return []
 
     with patch("services.clickhouse_client.query", new=fake_query):
@@ -333,6 +339,56 @@ async def test_content_anomaly_on_host_key_carries_host_id(db):
     spike = next(a for a in anomalies if a["type"] == "template_diversity_spike")
     assert spike["host_id"] == 7
     assert spike["current"] == 15
+    assert spike["new"] == 12
+
+
+async def test_busy_hour_of_known_templates_is_not_a_diversity_spike(db):
+    """paperless, 2026-11-01: 11 templates against a 3.3 baseline learned from
+    three Sunday samples, all of them cron and apt jobs it sends every day."""
+    now = datetime.utcnow()
+    db.add(HostBaseline(
+        host_key="host:182", hour_of_day=now.hour, day_of_week=now.weekday(),
+        avg_rate=0.0, std_rate=0.0, sample_count=3,
+        avg_template_count=3.3, std_template_count=1.54,
+    ))
+    await db.commit()
+
+    asked_novelty = []
+
+    async def fake_query(sql, params=None):
+        if "uniqExact" in sql:
+            return [{"host_key": "host:182", "diversity": 11}]
+        if "first_seen" in sql:
+            asked_novelty.append(params["keys"])
+            return [{"host_key": "host:182", "novel": 0}]
+        return []
+
+    with patch("services.clickhouse_client.query", new=fake_query):
+        anomalies = await li.detect_content_anomalies(db)
+
+    assert asked_novelty == [["host:182"]]
+    assert not [a for a in anomalies if a["type"] == "template_diversity_spike"]
+
+
+async def test_novelty_scan_skipped_when_no_host_crosses_threshold(db):
+    now = datetime.utcnow()
+    db.add(HostBaseline(
+        host_key="host:9", hour_of_day=now.hour, day_of_week=li.BASELINE_ANY_DAY,
+        avg_rate=0.0, std_rate=0.0, sample_count=3,
+        avg_template_count=6.0, std_template_count=2.0,
+    ))
+    await db.commit()
+
+    async def fake_query(sql, params=None):
+        assert "first_seen" not in sql, "week-long scan ran without a candidate"
+        if "uniqExact" in sql:
+            return [{"host_key": "host:9", "diversity": 8}]
+        return []
+
+    with patch("services.clickhouse_client.query", new=fake_query):
+        anomalies = await li.detect_content_anomalies(db)
+
+    assert anomalies == []
 
 
 # ── template flush ──────────────────────────────────────────────────────────

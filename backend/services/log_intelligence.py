@@ -40,6 +40,10 @@ _VARIABLE_PATTERNS = [
     # Docker container IDs (12 or 64 hex chars)
     (re.compile(r'\b[0-9a-f]{64}\b'), '<CONTAINER_ID>'),
     (re.compile(r'\b[0-9a-f]{12}\b'), '<SHORT_ID>'),
+    # Docker veth pairs get a random name per container start; LXC guests on
+    # the same node see them in the shared kernel log, and every restart
+    # minted a fresh set of templates.
+    (re.compile(r'\bveth[0-9a-f]{7}\b'), 'veth<ID>'),
     # MAC addresses
     (re.compile(r'\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b'), '<MAC>'),
     # IPv6 (simplified)
@@ -1653,6 +1657,36 @@ SEVERITY_UPGRADE_NORMAL_MIN = 5
 SEVERITY_UPGRADE_MIN_COUNT = 3
 
 
+DIVERSITY_NOVELTY_DAYS = 7
+
+
+async def _count_novel_templates(host_keys: list[str]) -> dict[str, int]:
+    """{host_key: templates seen in the last hour but not in the week before}.
+
+    Scans a week of syslog, so it runs only for hosts whose distinct count
+    already crossed the threshold.
+    """
+    from services import clickhouse_client as ch
+
+    rows = await ch.query(
+        f"""SELECT host_key,
+                  countIf(first_seen >= now() - INTERVAL 1 HOUR) AS novel
+           FROM (
+               SELECT {DIVERSITY_KEY_SQL} AS host_key, template_hash,
+                      min(timestamp) AS first_seen
+               FROM syslog_messages
+               WHERE tenant_id = {{nodeglow_tenant:UInt32}}
+                 AND timestamp >= now() - INTERVAL {{days:UInt32}} DAY
+                 AND template_hash != ''
+                 AND {DIVERSITY_KEY_SQL} IN {{keys:Array(String)}}
+               GROUP BY host_key, template_hash
+           )
+           GROUP BY host_key""",
+        {"keys": host_keys, "days": DIVERSITY_NOVELTY_DAYS},
+    )
+    return {r["host_key"]: int(r["novel"]) for r in rows}
+
+
 async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
     """Detect template diversity spikes on stable hosts and severity upgrades.
 
@@ -1683,6 +1717,7 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
                HAVING host_key IN ({{keys:Array(String)}})""",
             {"keys": list(stable_hosts.keys())},
         )
+        candidates: dict[str, int] = {}
         for r in rows:
             key = r["host_key"]
             baseline = stable_hosts.get(key)
@@ -1691,14 +1726,27 @@ async def detect_content_anomalies(db: AsyncSession) -> list[dict]:
             diversity = int(r["diversity"])
             threshold = baseline.avg_template_count + 3 * max(baseline.std_template_count, 1)
             if diversity > threshold and diversity > 5:
-                part = key.split(":", 1)[1] if key.startswith("host:") else ""
-                anomalies.append({
-                    "source_ip": key,
-                    "host_id": int(part) if part.isdigit() else None,
-                    "type": "template_diversity_spike",
-                    "current": diversity,
-                    "baseline": round(baseline.avg_template_count, 1),
-                })
+                candidates[key] = diversity
+
+        # A busy hour reuses templates the host sends anyway (hourly cron, apt,
+        # a document batch) and lifts the distinct count well past a band
+        # learned from a handful of samples. Only templates the host has not
+        # sent in the past week make the spike; the rest is its normal mix.
+        novel_by_key = await _count_novel_templates(list(candidates)) if candidates else {}
+        for key, diversity in candidates.items():
+            baseline = stable_hosts[key]
+            novel = novel_by_key.get(key, 0)
+            if novel <= 3 * max(baseline.std_template_count, 1):
+                continue
+            part = key.split(":", 1)[1] if key.startswith("host:") else ""
+            anomalies.append({
+                "source_ip": key,
+                "host_id": int(part) if part.isdigit() else None,
+                "type": "template_diversity_spike",
+                "current": diversity,
+                "new": novel,
+                "baseline": round(baseline.avg_template_count, 1),
+            })
 
     # ── Severity upgrade: independent of host baselines ──
     # (It used to sit behind the baseline early-returns, so it could only run

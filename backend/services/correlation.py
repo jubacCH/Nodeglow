@@ -734,7 +734,8 @@ async def _rule_content_anomaly(db, min_cycles: int = 2):
                 severity="warning",
                 host_ids=[host.id] if host else [0],
                 event_type="content_anomaly",
-                summary=f"{host_label}: {anomaly['current']} distinct templates "
+                summary=f"{host_label}: {anomaly['current']} distinct templates, "
+                        f"{anomaly['new']} not seen in the past week "
                         f"(baseline: {anomaly['baseline']})",
             )
         elif anomaly["type"] == "severity_upgrade":

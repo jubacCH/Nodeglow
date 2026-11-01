@@ -93,6 +93,16 @@ def test_extract_template_keeps_identifiers_with_digits():
     assert h_eth0 != h_eth1
 
 
+def test_extract_template_masks_docker_veth_names():
+    # Kernel log from a Docker restart, as seen inside an LXC guest.
+    _, h1 = extract_template("[1031582.224030] docker0: port 2(veth74c2188) entered blocking state")
+    _, h2 = extract_template("[1031642.532919] docker0: port 1(vethb682439) entered blocking state")
+    assert h1 == h2
+    # Proxmox names its LXC veths after the container; those stay put.
+    tpl, _ = extract_template("fwbr116i0: port 2(veth116i0) entered forwarding state")
+    assert "veth116i0" in tpl
+
+
 def test_extract_template_port_and_pid_keep_their_labels():
     tpl, _ = extract_template("sshd pid=42 listening on port 22")
     assert "pid=<PID>" in tpl
