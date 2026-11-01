@@ -1049,6 +1049,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `NODEGLOW_PING_LOOKBACK_HOURS` | `nodeglow` | `24` | How far back the "latest check" lookup searches |
 | `NODEGLOW_SYSLOG_LISTENER` | `nodeglow` | `auto` | The server's own syslog listener: `auto` (default tenant while there is one tenant), `on`, `off` (probe-only, SaaS) — [Probe syslog relay](#the-direct-listener) |
 | `NODEGLOW_SYSLOG_CLOCK_SKEW_HOURS` | `nodeglow` | `24` | How far a sender's clock may lag and its messages still show up in time-window queries |
+| `NODEGLOW_SYSLOG_TCP_IDLE_TIMEOUT` | `nodeglow` | `0` | Seconds a syslog TCP sender may stay silent before its connection is closed; `0` keeps it open. Persistent senders (rsyslog, syslog-ng) lose a message on every server-side close |
 | `NODEGLOW_CLICKHOUSE_COMPRESSION` | `nodeglow` | `lz4` | ClickHouse client compression |
 | `DNS_CACHE_TTL` | `nodeglow` | `60` | Seconds DNS lookups of check targets are cached; `0` disables |
 | `LDAP_CA_CERTS_FILE` | `nodeglow` | unset | CA bundle for LDAPS when not set in the LDAP settings |

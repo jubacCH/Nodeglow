@@ -38,6 +38,15 @@ def _env_float(name: str, default: float, minimum: float = 0.05) -> float:
 
 _MAX_MSG_SIZE = 64 * 1024       # 64 KB max syslog message
 _MAX_TCP_CONNECTIONS = _env_int("NODEGLOW_SYSLOG_MAX_TCP_CONNECTIONS", 100)
+# Seconds a TCP sender may stay silent before the connection is closed; 0 keeps
+# it open. rsyslog and syslog-ng hold one persistent connection and only notice
+# a server-side close on the next send, which then fails (omfwd error 2027,
+# itself forwarded back to us) and loses that message. So no idle timeout by
+# default, like rsyslog's imtcp; TCP keepalive reaps peers that went away.
+_TCP_IDLE_TIMEOUT = _env_int("NODEGLOW_SYSLOG_TCP_IDLE_TIMEOUT", 0, minimum=0)
+_TCP_KEEPALIVE_IDLE = 300       # seconds before the first keepalive probe
+_TCP_KEEPALIVE_INTERVAL = 60
+_TCP_KEEPALIVE_COUNT = 5
 # Rate limits, configurable for fleets that legitimately send more.
 _SYSLOG_RATE_WINDOW = _env_int("NODEGLOW_SYSLOG_RATE_WINDOW", 10)          # seconds
 _SYSLOG_RATE_MAX = _env_int("NODEGLOW_SYSLOG_RATE_MAX", 500)               # per IP per window
@@ -891,6 +900,23 @@ class SyslogUDPProtocol(asyncio.DatagramProtocol):
             _count_drop("queue_full")
 
 
+def _enable_keepalive(writer: asyncio.StreamWriter) -> None:
+    """Turn on TCP keepalive so a vanished sender frees its connection slot."""
+    sock = writer.get_extra_info("socket")
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # Linux-only knobs; elsewhere the OS defaults apply.
+        for opt, value in (("TCP_KEEPIDLE", _TCP_KEEPALIVE_IDLE),
+                           ("TCP_KEEPINTVL", _TCP_KEEPALIVE_INTERVAL),
+                           ("TCP_KEEPCNT", _TCP_KEEPALIVE_COUNT)):
+            if hasattr(socket, opt):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), value)
+    except OSError as exc:
+        log.debug("Syslog TCP keepalive not set: %s", exc)
+
+
 class SyslogTCPHandler:
     """Handle one TCP connection (one message per line)."""
 
@@ -912,11 +938,15 @@ class SyslogTCPHandler:
                 self.writer.close()
                 return
             _tcp_connection_count += 1
+        _enable_keepalive(self.writer)
         try:
             while True:
-                line = await asyncio.wait_for(
-                    self.reader.readline(), timeout=60
-                )
+                if _TCP_IDLE_TIMEOUT:
+                    line = await asyncio.wait_for(
+                        self.reader.readline(), timeout=_TCP_IDLE_TIMEOUT
+                    )
+                else:
+                    line = await self.reader.readline()
                 if not line:
                     break
                 if len(line) > _MAX_MSG_SIZE:

@@ -86,6 +86,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- The syslog TCP listener no longer closes a connection after 60 seconds
+  without a message. rsyslog and syslog-ng keep one persistent connection and
+  only notice the close on their next send, which failed ("omfwd: remote
+  server ... seems to have closed connection", thousands a day per quiet
+  host), lost that message and forwarded the error back as new noise.
+  Connections now stay open (TCP keepalive frees the slots of senders that
+  vanished); `NODEGLOW_SYSLOG_TCP_IDLE_TIMEOUT` restores an idle limit.
 - Log volume baselines are learned per host (`host:<id>`) when a message has
   one, like the template diversity, instead of per sender address. Agents
   deliver through the frontend container, so every agent host shared one
