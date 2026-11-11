@@ -86,6 +86,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- "Log volume anomaly" no longer flaps on hosts at their normal volume. The
+  volume baseline and the template diversity shared one sample counter, so a
+  host's first real hour was folded in at a fifth of its weight and its
+  baseline sat far below the real rate (a host steady at 570/hr alerted
+  against "112/hr ± 224"). Each now counts its own samples
+  (`template_sample_count`, migration 050). The migration starts the volume
+  baselines of host-keyed sources over; volume detection for them resumes
+  after three days.
 - "Template diversity spike" no longer fires on a busy hour of templates the
   host sends anyway (hourly cron, apt, a batch job). Only templates the host
   has not sent in the past week count towards the spike, and the incident says

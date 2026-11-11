@@ -107,6 +107,19 @@ def test_pick_baseline_prefers_weekday_slot_and_falls_back():
     assert li.pick_baseline(weekday, any_day) is None
 
 
+def test_pick_baseline_counts_each_estimator_separately():
+    weekday = HostBaseline(
+        host_key="a", hour_of_day=1, day_of_week=2,
+        sample_count=0, template_sample_count=5,
+    )
+    any_day = HostBaseline(
+        host_key="a", hour_of_day=1, day_of_week=7,
+        sample_count=4, template_sample_count=0,
+    )
+    assert li.pick_baseline(weekday, any_day) is any_day
+    assert li.pick_baseline(weekday, any_day, templates=True) is weekday
+
+
 # ── compute_baselines against a real schema ────────────────────────────────
 
 
@@ -176,6 +189,51 @@ async def test_compute_baselines_records_silence_for_known_sources(db):
     # the silent hour is a real sample, not a gap.
     assert row.sample_count == 2
     assert row.avg_rate == pytest.approx(40.0)
+
+
+async def test_diversity_pass_does_not_dilute_the_volume_baseline(db):
+    """The first real hour of a host weighs 1, however often diversity ran.
+
+    Both passes used to count in ``sample_count``. The diversity pass runs
+    several times an hour and never sets a rate, so a "host:" slot reached
+    n = 4 at 0/hr; the first real sample x then weighed 0.2 and the baseline
+    read 0.2x +- 0.4x. In production a host steady at ~570/hr alerted against
+    "112/hr +- 224" all day.
+    """
+    now = datetime(2026, 10, 5, 12, 5)  # a Monday
+    diversity = [{"host_key": "host:7", "diversity": 4, "error_diversity": 0}]
+
+    class At(datetime):
+        @classmethod
+        def utcnow(cls):
+            return datetime(2026, 10, 5, 11, 30)
+
+    with patch("services.clickhouse_client.query", new=AsyncMock(return_value=diversity)),          patch.object(li, "datetime", At):
+        for _ in range(4):
+            await li.compute_template_diversity(db)
+
+    with patch("services.clickhouse_client.query", new=FakeSyslog({"host:7": 570})):
+        await li.compute_baselines(db, now=now)
+
+    rows = (await db.execute(
+        select(HostBaseline).where(
+            HostBaseline.host_key == "host:7", HostBaseline.hour_of_day == 11,
+        )
+    )).scalars().all()
+    by_dow = {r.day_of_week: r for r in rows}
+    for r in by_dow.values():
+        await db.refresh(r)
+
+    weekday, any_day = by_dow[0], by_dow[li.BASELINE_ANY_DAY]
+    assert weekday.sample_count == 1
+    assert weekday.avg_rate == pytest.approx(570.0)
+    assert weekday.std_rate == pytest.approx(0.0)
+    assert any_day.avg_rate == pytest.approx(570.0)
+    # The volume upsert leaves the diversity statistics alone.
+    assert weekday.template_sample_count == 4
+    assert weekday.avg_template_count > 0
+    # One volume sample is not a usable volume baseline, whatever diversity counted.
+    assert li.pick_baseline(weekday, None) is None
 
 
 async def test_first_run_resets_statistics_from_the_old_algorithm(db):
@@ -281,7 +339,7 @@ async def test_content_anomalies_fire_on_fallback_slot(db):
     now = datetime.utcnow()
     db.add(HostBaseline(
         host_key="10.0.0.5", hour_of_day=now.hour, day_of_week=li.BASELINE_ANY_DAY,
-        avg_rate=10.0, std_rate=1.0, sample_count=3,
+        avg_rate=10.0, std_rate=1.0, sample_count=3, template_sample_count=3,
         avg_template_count=4.0, std_template_count=1.0,
     ))
     db.add(LogTemplate(template_hash="sevup00000000001", template="link <*> flapped",
@@ -317,7 +375,7 @@ async def test_content_anomaly_on_host_key_carries_host_id(db):
     now = datetime.utcnow()
     db.add(HostBaseline(
         host_key="host:7", hour_of_day=now.hour, day_of_week=li.BASELINE_ANY_DAY,
-        avg_rate=0.0, std_rate=0.0, sample_count=3,
+        avg_rate=0.0, std_rate=0.0, sample_count=0, template_sample_count=3,
         avg_template_count=1.0, std_template_count=1.0,
     ))
     await db.commit()
@@ -348,7 +406,7 @@ async def test_busy_hour_of_known_templates_is_not_a_diversity_spike(db):
     now = datetime.utcnow()
     db.add(HostBaseline(
         host_key="host:182", hour_of_day=now.hour, day_of_week=now.weekday(),
-        avg_rate=0.0, std_rate=0.0, sample_count=3,
+        avg_rate=0.0, std_rate=0.0, sample_count=0, template_sample_count=3,
         avg_template_count=3.3, std_template_count=1.54,
     ))
     await db.commit()
@@ -374,7 +432,7 @@ async def test_novelty_scan_skipped_when_no_host_crosses_threshold(db):
     now = datetime.utcnow()
     db.add(HostBaseline(
         host_key="host:9", hour_of_day=now.hour, day_of_week=li.BASELINE_ANY_DAY,
-        avg_rate=0.0, std_rate=0.0, sample_count=3,
+        avg_rate=0.0, std_rate=0.0, sample_count=0, template_sample_count=3,
         avg_template_count=6.0, std_template_count=2.0,
     ))
     await db.commit()
