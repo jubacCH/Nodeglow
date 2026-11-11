@@ -20,7 +20,13 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # iputils-ping for ICMP checks, snmp for SNMP monitoring, gosu for privilege drop
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# `apt-get upgrade` first: the python:3.12-slim tag is rebuilt on its own
+# schedule and lags behind Debian security updates (zlib1g CVE-2026-76844 /
+# CVE-2026-85091 were fixed in Debian while the current tag still shipped the
+# old package). Upgrading here picks up fixes the base image does not carry yet.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
         iputils-ping snmp gosu libcap2-bin ca-certificates curl \
     && setcap cap_net_raw+ep /usr/bin/ping \
     && rm -rf /var/lib/apt/lists/*

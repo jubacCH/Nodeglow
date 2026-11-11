@@ -151,6 +151,16 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   049 swaps the two fields in stored speedtest snapshots. phpIPAM showed 1970
   as "last seen" for addresses never seen.
 
+### Security
+- Dependency updates for new advisories. Frontend: Next.js 15.5.29
+  (GHSA-2464-fhr4-w9xw, remote code execution in the Image Optimization API
+  with SVG files; GHSA-p3m5-59mp-jv5r), DOMPurify 3.4.17 and undici 8.12.4.
+  Agent: quinn-proto 0.11.19, rustls 0.23.46, rustls-webpki 0.103.16 and
+  webpki-roots 1.0.12 (RUSTSEC-2026-0338 to -0342, -0346 to -0349, -0381,
+  -0382). Backend: OpenTelemetry 1.45.2 / 0.66b2 (CVE-2026-114603). The
+  backend image now applies pending Debian security updates at build time,
+  which brings in the fixed zlib1g (CVE-2026-76844, CVE-2026-85091).
+
 ## [2.0.0] - 2026-10-11
 
 ### Added
