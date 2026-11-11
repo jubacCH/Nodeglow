@@ -836,6 +836,7 @@ async def compute_baselines(db: AsyncSession, now: Optional[datetime] = None) ->
                     "sample_count": n,
                     "avg_template_count": 0.0,
                     "std_template_count": 0.0,
+                    "template_sample_count": 0,
                     "updated_at": now,
                 })
         await _upsert_baselines(db, values)
@@ -859,10 +860,21 @@ def pick_baseline(
     weekday_slot: Optional[HostBaseline],
     any_day_slot: Optional[HostBaseline],
     min_samples: int = BASELINE_MIN_SAMPLES,
+    templates: bool = False,
 ) -> Optional[HostBaseline]:
-    """Prefer the weekday-specific slot; fall back to the hour-of-day slot."""
+    """Prefer the weekday-specific slot; fall back to the hour-of-day slot.
+
+    A slot is usable once the estimator asked for has enough samples: the
+    volume statistics by default, the template diversity with ``templates``.
+    Each has its own counter. They used to share ``sample_count``, so the
+    diversity pass made a slot look trained for volume while its rate was
+    still zero, and the first real hour was folded in at a fifth of its weight.
+    """
     for b in (weekday_slot, any_day_slot):
-        if b is not None and (b.sample_count or 0) >= min_samples:
+        if b is None:
+            continue
+        n = b.template_sample_count if templates else b.sample_count
+        if (n or 0) >= min_samples:
             return b
     return None
 
@@ -874,8 +886,9 @@ async def load_effective_baselines(
 ) -> dict[str, HostBaseline]:
     """{host_key: usable baseline for the current hour}, one query.
 
-    ``require_templates`` additionally requires learned template diversity
-    (avg_template_count > 0) on the chosen slot.
+    ``require_templates`` picks by the template diversity instead of the
+    volume statistics: the slot needs learned diversity (avg_template_count > 0)
+    and enough diversity samples.
     """
     now = now or datetime.utcnow()
     dow = now.weekday()
@@ -892,7 +905,9 @@ async def load_effective_baselines(
         by_key[b.host_key][b.day_of_week] = b
     out: dict[str, HostBaseline] = {}
     for key, slots in by_key.items():
-        chosen = pick_baseline(slots.get(dow), slots.get(BASELINE_ANY_DAY))
+        chosen = pick_baseline(
+            slots.get(dow), slots.get(BASELINE_ANY_DAY), templates=require_templates,
+        )
         if chosen is not None:
             out[key] = chosen
     return out
@@ -1492,24 +1507,26 @@ async def compute_template_diversity(db: AsyncSession):
     for b in baselines:
         by_host[b.host_key].append(b)
 
-    # Address rows are created by the volume pass. "host:" rows have no volume
-    # pass, so this one creates them and counts their samples.
+    # A host can show up here before the volume pass has folded its first
+    # hour, so missing "host:" rows are created with empty volume statistics.
+    # This pass counts its samples in template_sample_count and never touches
+    # sample_count, which belongs to compute_baselines.
     for key in host_keys:
-        if not key.startswith("host:"):
-            continue
-        have = {b.day_of_week for b in by_host[key]}
-        for slot in (dow, BASELINE_ANY_DAY):
-            if slot not in have:
-                b = HostBaseline(
-                    host_key=key, hour_of_day=hour, day_of_week=slot,
-                    avg_rate=0.0, std_rate=0.0, sample_count=0,
-                    avg_template_count=0.0, std_template_count=0.0,
-                    updated_at=now,
-                )
-                db.add(b)
-                by_host[key].append(b)
-        for b in by_host[key]:
-            b.sample_count = (b.sample_count or 0) + 1
+        if key.startswith("host:"):
+            have = {b.day_of_week for b in by_host[key]}
+            for slot in (dow, BASELINE_ANY_DAY):
+                if slot not in have:
+                    b = HostBaseline(
+                        host_key=key, hour_of_day=hour, day_of_week=slot,
+                        avg_rate=0.0, std_rate=0.0, sample_count=0,
+                        avg_template_count=0.0, std_template_count=0.0,
+                        template_sample_count=0,
+                        updated_at=now,
+                    )
+                    db.add(b)
+                    by_host[key].append(b)
+        for b in by_host.get(key, ()):
+            b.template_sample_count = (b.template_sample_count or 0) + 1
             b.updated_at = now
 
     alpha = 0.3

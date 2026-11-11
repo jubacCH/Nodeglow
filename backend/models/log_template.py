@@ -47,9 +47,12 @@ class HostBaseline(TenantScoped, Base):
     day_of_week = Column(SmallInteger, nullable=False)  # 0=Mon, 6=Sun
     avg_rate = Column(Float, default=0.0)            # messages per hour
     std_rate = Column(Float, default=0.0)            # standard deviation
-    sample_count = Column(Integer, default=0)        # how many weeks of data
+    sample_count = Column(Integer, default=0)        # samples behind avg_rate/std_rate
     avg_template_count = Column(Float, default=0.0)  # baseline distinct template count
     std_template_count = Column(Float, default=0.0)  # std dev of template count
+    # Samples behind the template columns. Kept apart from sample_count: the
+    # two estimators are fed by different passes at different rates.
+    template_sample_count = Column(Integer, default=0, server_default="0", nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (

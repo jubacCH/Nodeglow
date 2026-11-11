@@ -611,8 +611,8 @@ async def test_template_diversity_keys_by_host_and_learns_without_volume_pass(db
 
     Agents ship their logs through the frontend container, so every agent host
     shared one address that moved with each Docker restart. The volume pass
-    never creates "host:" rows, so the diversity pass must create them and
-    count their samples until the baseline is usable.
+    may not have seen the host yet, so the diversity pass creates the rows and
+    counts its own samples until the diversity baseline is usable.
     """
     from models.log_template import HostBaseline
     from services.log_intelligence import (
@@ -636,8 +636,10 @@ async def test_template_diversity_keys_by_host_and_learns_without_volume_pass(db
         select(HostBaseline).where(HostBaseline.host_key == "host:7")
     )).scalars().all()
     assert len(rows) == 2  # weekday slot and any-day slot
-    assert all(r.sample_count == BASELINE_MIN_SAMPLES for r in rows)
-    assert all(r.avg_rate == 0.0 for r in rows)  # never a volume baseline
+    assert all(r.template_sample_count == BASELINE_MIN_SAMPLES for r in rows)
+    # The volume statistics, counter included, are not this pass's to touch.
+    assert all(r.sample_count == 0 and r.avg_rate == 0.0 for r in rows)
+    assert await load_effective_baselines(db) == {}
 
     usable = await load_effective_baselines(db, require_templates=True)
     assert usable["host:7"].avg_template_count > 0
