@@ -60,12 +60,12 @@ CI.
 | ldap3 | 2.9.1 | LGPL-3.0 |
 | redis | 8.1.0 | MIT (Python client only; no Redis server is shipped) |
 | prometheus-client | 0.26.0 | Apache-2.0 AND BSD-2-Clause |
-| opentelemetry-api | 1.29.0 | Apache-2.0 |
-| opentelemetry-sdk | 1.29.0 | Apache-2.0 |
-| opentelemetry-exporter-otlp-proto-http | 1.29.0 | Apache-2.0 |
-| opentelemetry-instrumentation-fastapi | 0.50b0 | Apache-2.0 |
-| opentelemetry-instrumentation-sqlalchemy | 0.50b0 | Apache-2.0 |
-| opentelemetry-instrumentation-httpx | 0.50b0 | Apache-2.0 |
+| opentelemetry-api | 1.45.2 | Apache-2.0 |
+| opentelemetry-sdk | 1.45.2 | Apache-2.0 |
+| opentelemetry-exporter-otlp-proto-http | 1.45.2 | Apache-2.0 |
+| opentelemetry-instrumentation-fastapi | 0.66b2 | Apache-2.0 |
+| opentelemetry-instrumentation-sqlalchemy | 0.66b2 | Apache-2.0 |
+| opentelemetry-instrumentation-httpx | 0.66b2 | Apache-2.0 |
 
 The sidecar and the Python agents (`backend/static/*.py`) use the Python
 standard library only.
@@ -86,7 +86,7 @@ Versions as resolved in `frontend/package-lock.json`.
 | framer-motion | 14.0.0 | MIT |
 | isomorphic-dompurify | 4.5.0 | MIT |
 | lucide-react | 1.52.0 | ISC |
-| next | 15.5.27 | MIT |
+| next | 15.5.29 | MIT |
 | react | 19.3.0 | MIT |
 | react-dom | 19.3.0 | MIT |
 | tailwind-merge | 3.7.0 | MIT |
