@@ -982,7 +982,11 @@ _HOST_RESOLVE_REASONS = {
 }
 
 # Rules resolved by the code that raises them; auto-resolve leaves them alone.
-_SELF_RESOLVING_RULES = frozenset({"self_check", "agent_service", "disk_space"})
+_SELF_RESOLVING_RULES = frozenset({
+    "self_check", "agent_service", "disk_space",
+    # services.condition_incidents: the job that raises them resolves them.
+    "ssl_expiry", "backup",
+})
 
 # Which correlation rule (as named in run_correlation) raises which incidents.
 _RAISED_BY = {"upstream_failure": "host_down"}

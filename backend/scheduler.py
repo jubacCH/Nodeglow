@@ -613,14 +613,20 @@ async def update_ssl_expiry():
     from sqlalchemy import update as sa_update
 
     async with AsyncSessionLocal() as db:
+        # check_type is a comma list ("https,icmp"); matching the bare
+        # value skipped every host that has more than the one check.
         result = await db.execute(
-            select(PingHost).where(PingHost.enabled == True, PingHost.check_type == "https")
+            select(PingHost).where(PingHost.enabled == True, PingHost.check_type.like("%https%"))
         )
-        hosts = result.scalars().all()
+        hosts = [h for h in result.scalars().all()
+                 if "https" in [t.strip() for t in (h.check_type or "").split(",")]]
 
     if not hosts:
         return
 
+    from services import condition_incidents as cond
+
+    expiring: dict[str, cond.Condition] = {}
     async with AsyncSessionLocal() as db:
         for host in hosts:
             hostname = host.hostname
@@ -634,7 +640,43 @@ async def update_ssl_expiry():
                 await db.execute(
                     sa_update(PingHost).where(PingHost.id == host.id).values(ssl_expiry_days=days)
                 )
+            else:
+                # Unreadable this time: judge by the last known value rather
+                # than drop an incident that is already open.
+                days = host.ssl_expiry_days
+            condition = certificate_condition(host.name, hostname, days)
+            if condition is not None:
+                condition.host_ids = [host.id]
+                expiring[f"ssl:{host.id}"] = condition
+        notes = await cond.sync_rule(
+            db, "ssl_expiry", expiring, event_type="certificate_expiring",
+            resolved_summary="Auto-resolved: the certificate is valid for longer again",
+        )
         await db.commit()
+    await cond.send(notes)
+
+
+# A certificate with this many days left opens a warning; this many, a
+# critical incident. Fourteen days is two renewal attempts of an ACME client.
+CERT_WARNING_DAYS = 14
+CERT_CRITICAL_DAYS = 3
+
+
+def certificate_condition(name: str, hostname: str, days: int | None):
+    """The incident a certificate with ``days`` left calls for, or None."""
+    from services.condition_incidents import Condition
+
+    if days is None or days > CERT_WARNING_DAYS:
+        return None
+    if days < 0:
+        return Condition(f"Certificate expired: {name}", "critical",
+                         f"The TLS certificate of {name} ({hostname}) expired {-days} day(s) ago. "
+                         f"Browsers and clients refuse the connection.")
+    left = "today" if days == 0 else f"in {days} day(s)"
+    severity = "critical" if days <= CERT_CRITICAL_DAYS else "warning"
+    return Condition(f"Certificate expires {left}: {name}", severity,
+                     f"The TLS certificate of {name} ({hostname}) expires {left}. "
+                     f"Renew it, or check why the automatic renewal did not run.")
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
@@ -1164,8 +1206,14 @@ async def resolve_host_dns():
                 # Scanner/manual hosts with IP as hostname: try rDNS
                 if h.source in ("scanner", "manual"):
                     # Check if this IP already belongs to a non-scanner host → merge
+                    # Only what the scanner found by itself is a duplicate to
+                    # clean up. A host somebody added by hand on an address
+                    # another host has (a second check on the same machine, a
+                    # VM an integration also lists) is deliberate: deleting it
+                    # here took its checks, and the monitoring, with it.
                     check_ip = h.ip_address or hostname
-                    if check_ip in ip_to_host and ip_to_host[check_ip].id != h.id:
+                    if (h.source == "scanner" and check_ip in ip_to_host
+                            and ip_to_host[check_ip].id != h.id):
                         logger.info("DNS merge: removing duplicate scanner host %s (covered by %s)",
                                     h.name, ip_to_host[check_ip].name)
                         to_delete.append(h.id)
@@ -1180,7 +1228,8 @@ async def resolve_host_dns():
                         )
                         fqdn = rdns_result[0]
                         short = fqdn.split(".")[0] if "." in fqdn else fqdn
-                        if short and short != hostname:
+                        # A name the user gave is never overwritten.
+                        if short and short != hostname and (h.name or "").strip() in ("", hostname):
                             h.name = short
                             changed = True
                             logger.info("DNS resolve: %s → %s", hostname, short)
@@ -1347,8 +1396,29 @@ async def cleanup_legacy_api_keys():
 @instrument_job("backup_compliance")
 @per_tenant_job
 async def run_backup_compliance():
-    """Check all backup jobs for compliance (overdue/failed) and log issues."""
-    from services.backup_monitor import check_backup_compliance
+    """Check all backup jobs for compliance (overdue/failed) and raise
+    incidents. This job used to write its findings to the log and nowhere
+    else: a backup that stopped running was never an alert."""
+    from services import condition_incidents as cond
+    from services.backup_monitor import check_backup_compliance, get_compliance_groups
+    async with AsyncSessionLocal() as db:
+        groups = await get_compliance_groups(db)
+        wanted: dict[str, cond.Condition] = {}
+        for job in groups["failed"]:
+            wanted[f"bk:{job['id']}"] = cond.Condition(
+                f"Backup failed: {job['target_name']}", "critical",
+                f"Backup {job['name']} of {job['target_name']}: {job['status_reason']}")
+        for job in groups["overdue"]:
+            wanted.setdefault(f"bk:{job['id']}", cond.Condition(
+                f"Backup overdue: {job['target_name']}", "warning",
+                f"Backup {job['name']} of {job['target_name']}: {job['status_reason']}"))
+        notes = await cond.sync_rule(
+            db, "backup", wanted, event_type="backup_issue",
+            resolved_summary="Auto-resolved: a backup ran successfully and on schedule",
+        )
+        await db.commit()
+    await cond.send(notes)
+
     async with AsyncSessionLocal() as db:
         issues = await check_backup_compliance(db)
         if issues:

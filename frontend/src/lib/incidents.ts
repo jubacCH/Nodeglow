@@ -39,9 +39,9 @@ export const TIME_RANGES: { value: TimeRange; label: string; hours: number | nul
 /** Correlation rules the backend opens incidents for (services/*). Alert
  *  rules appear as `alert_rule_<id>`; anything seen in the data is added. */
 export const KNOWN_RULES = [
-  'agent_service', 'content_anomaly', 'disk_space', 'fleet_wide_issue', 'host_down',
+  'agent_service', 'backup', 'content_anomaly', 'disk_space', 'fleet_wide_issue', 'host_down',
   'integration_alert', 'integration_failed', 'integration_host', 'log_anomaly', 'multi_host_down',
-  'port_error', 'self_check',
+  'port_error', 'self_check', 'ssl_expiry',
   'severity_trend', 'syslog_spike', 'upstream_failure',
 ];
 

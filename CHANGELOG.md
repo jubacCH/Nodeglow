@@ -10,6 +10,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Certificate expiry incidents (`ssl_expiry`): a warning at 14 days left,
+  critical at 3 days and when expired, resolved once the certificate is valid
+  for longer again. Until now the days left were shown and never alerted on.
+- Backup incidents (`backup`): a failed or overdue backup job opens an
+  incident and resolves with the next successful run on schedule. The
+  compliance job used to write its findings to the log only.
+- Bulk "Maintenance for…" on the host list takes a duration
+  (`maintenance_hours` on `PATCH /api/v1/hosts/bulk`).
 - Host-down incidents. A host that fails its checks opens a `host_down`
   incident, for hosts the core checks, hosts behind a probe and agent hosts
   alike, after the offline grace period, and resolves when the host answers
@@ -126,6 +134,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- The DNS job deleted manually added hosts whose address another host also
+  has, every 30 minutes and without a trace, and renamed hosts to their
+  reverse-DNS name even when the user had named them. It now merges only
+  what the scanner found, and keeps a given name.
+- Certificate expiry was only read for hosts whose sole check is HTTPS.
+- The heartbeat's database check raised a NameError and always answered
+  "down", so the heartbeat would never have been sent.
 - Incidents resolved as "back online" while the host was still down
   (`host_down_syslog` looked for fresh syslog errors, which a dead host does
   not send), and `upstream_failure` and `disk_space` were resolved a minute
