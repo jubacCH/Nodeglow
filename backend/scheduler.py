@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import delete, select
 
 import config
@@ -1251,9 +1252,12 @@ async def _postgres_answers() -> bool:
 
     try:
         async with AsyncSessionLocal() as db:
-            await _asyncio.wait_for(db.execute(text("SELECT 1")), timeout=5)
+            await asyncio.wait_for(db.execute(text("SELECT 1")), timeout=5)
         return True
-    except Exception:  # noqa: BLE001
+    except (asyncio.TimeoutError, OSError, SQLAlchemyError) as exc:
+        # Only what "the database does not answer" looks like. A blanket
+        # except hid a NameError in here, and the heartbeat was never sent.
+        logger.warning("Heartbeat: Postgres check failed: %s", exc)
         return False
 
 

@@ -505,3 +505,27 @@ async def test_heartbeat_is_withheld_while_postgres_is_down(monkeypatch):
     monkeypatch.setattr(scheduler, "_postgres_answers", AsyncMock(return_value=True))
     await scheduler.send_heartbeat()
     assert calls == ["https://hc.example.com/ping/abc"]
+
+
+async def test_postgres_check_of_the_heartbeat_really_asks_the_database(db):
+    """The check itself, unpatched: the heartbeat test above replaces it, and
+    so missed that it raised a NameError and always answered "down"."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.exc import OperationalError
+
+    import scheduler
+
+    @asynccontextmanager
+    async def working():
+        yield db
+
+    @asynccontextmanager
+    async def broken():
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+        yield  # pragma: no cover
+
+    with patch.object(scheduler, "AsyncSessionLocal", working):
+        assert await scheduler._postgres_answers() is True
+    with patch.object(scheduler, "AsyncSessionLocal", broken):
+        assert await scheduler._postgres_answers() is False
