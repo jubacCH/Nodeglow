@@ -10,6 +10,24 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Thirteen integrations: Proxmox Backup Server, Veeam Backup & Replication,
+  Synology Hyper Backup / Active Backup, Prometheus exporter scrape with
+  alert rules, domain expiry (RDAP), Microsoft 365 / Entra ID, VMware
+  vSphere, FortiGate, Kubernetes, NetBox (with optional host import),
+  Hetzner Cloud, Infomaniak and Exoscale. They were built from the
+  vendors' API documentation and tested against recorded-shape responses,
+  not yet against live systems.
+- On-call channels: PagerDuty (Events API v2), Opsgenie and Jira Service
+  Management. One alert per incident (stable deduplication key), resolved
+  when the incident resolves. A resolve reaches these channels regardless of
+  the channel's minimum severity, so an alert is never left open there.
+- Inbound events: `POST /api/v1/events` and an Alertmanager webhook receiver
+  at `/api/v1/events/alertmanager` let other systems open, update and resolve
+  incidents (rule `external_event`). See docs/API.md.
+- API keys are also accepted as `Authorization: Bearer ng_…`, for senders
+  that cannot set a custom header.
+- Integration settings can have multi-line fields (alert rules, domain
+  lists).
 - Integration incidents. What an integration reports as a problem (a failed
   disk, a degraded RAID or pool, an expiring certificate, a UPS on battery, an
   unreachable DNS cluster node, ...) now opens an incident after two

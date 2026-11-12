@@ -35,6 +35,19 @@ import { SwisscomDetail } from '@/components/integrations/SwisscomDetail';
 import { CloudflareDetail } from '@/components/integrations/CloudflareDetail';
 import { NpmDetail } from '@/components/integrations/NpmDetail';
 import { TechnitiumDetail } from '@/components/integrations/TechnitiumDetail';
+import { PbsDetail } from '@/components/integrations/PbsDetail';
+import { VeeamDetail } from '@/components/integrations/VeeamDetail';
+import { SynobackupDetail } from '@/components/integrations/SynobackupDetail';
+import { PrometheusDetail } from '@/components/integrations/PrometheusDetail';
+import { DomainDetail } from '@/components/integrations/DomainDetail';
+import { M365Detail } from '@/components/integrations/M365Detail';
+import { VsphereDetail } from '@/components/integrations/VsphereDetail';
+import { FortigateDetail } from '@/components/integrations/FortigateDetail';
+import { KubernetesDetail } from '@/components/integrations/KubernetesDetail';
+import { NetboxDetail } from '@/components/integrations/NetboxDetail';
+import { HetznerDetail } from '@/components/integrations/HetznerDetail';
+import { InfomaniakDetail } from '@/components/integrations/InfomaniakDetail';
+import { ExoscaleDetail } from '@/components/integrations/ExoscaleDetail';
 import { integrationHealth } from '../../_components/health';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -58,6 +71,19 @@ const detailComponents: Record<string, React.ComponentType<{ data: any; configId
   cloudflare: CloudflareDetail,
   npm: NpmDetail,
   technitium: TechnitiumDetail,
+  pbs: PbsDetail,
+  veeam: VeeamDetail,
+  synobackup: SynobackupDetail,
+  prometheus: PrometheusDetail,
+  domain: DomainDetail,
+  m365: M365Detail,
+  vsphere: VsphereDetail,
+  fortigate: FortigateDetail,
+  kubernetes: KubernetesDetail,
+  netbox: NetboxDetail,
+  hetzner: HetznerDetail,
+  infomaniak: InfomaniakDetail,
+  exoscale: ExoscaleDetail,
 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
