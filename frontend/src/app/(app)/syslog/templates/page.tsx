@@ -141,7 +141,7 @@ function TagEditor({ templateHash, currentTags, onSaved }: { templateHash: strin
 function RootCausePanel({ templateHash }: { templateHash: string }) {
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['root-cause', templateHash],
-    queryFn: () => get<RootCauseResponse>(`/api/root-cause/${templateHash}`),
+    queryFn: () => get<RootCauseResponse>(`/syslog/api/root-cause/${templateHash}`),
   });
 
   if (isLoading) {

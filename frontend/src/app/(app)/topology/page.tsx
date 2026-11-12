@@ -60,11 +60,8 @@ export default function TopologyPage() {
   const shown = useMemo(() => applyFilter(all.trees, all.orphans, matcher(filter, debounced)), [all, filter, debounced]);
 
   const counts = useMemo(() => {
-    const c = { ok: 0, down: 0, unknown: 0, maint: 0 };
-    for (const n of data?.nodes ?? []) {
-      const s = nodeState(n);
-      if (s === 'ok' || s === 'down' || s === 'unknown' || s === 'maint') c[s] += 1;
-    }
+    const c = { ok: 0, degraded: 0, warning: 0, down: 0, unknown: 0, maint: 0 };
+    for (const n of data?.nodes ?? []) c[nodeState(n)] += 1;
     return c;
   }, [data]);
 
@@ -101,9 +98,10 @@ export default function TopologyPage() {
         {(d) => (
           <div className="space-y-4">
             <Card>
-              <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="grid grid-cols-2 gap-6 sm:grid-cols-4 lg:grid-cols-7">
                 <BigNumber size="sm" value={d.nodes.length} label="Nodes" />
                 <BigNumber size="sm" value={counts.ok} label="OK" />
+                <BigNumber size="sm" value={counts.degraded + counts.warning} state={counts.warning > 0 ? 'warning' : counts.degraded > 0 ? 'degraded' : undefined} label="Warning" />
                 <BigNumber size="sm" value={counts.down} state={counts.down > 0 ? 'down' : undefined} label="Down" />
                 <BigNumber size="sm" value={counts.unknown} state={counts.unknown > 0 ? 'unknown' : undefined} label="No data" />
                 <BigNumber size="sm" value={counts.maint} state={counts.maint > 0 ? 'maint' : undefined} label="Maintenance" />
@@ -128,7 +126,7 @@ export default function TopologyPage() {
                   onChange={changeFilter}
                   options={[
                     { value: 'all', label: 'All' },
-                    { value: 'problems', label: `Problems · ${counts.down + counts.unknown}` },
+                    { value: 'problems', label: `Problems · ${counts.degraded + counts.warning + counts.down + counts.unknown}` },
                   ]}
                 />
                 <Input
@@ -145,7 +143,7 @@ export default function TopologyPage() {
                 <EmptyState
                   variant="no-results"
                   icon={SearchX}
-                  title={filter === 'problems' && !debounced.trim() ? 'No down or unobserved hosts' : 'No hosts match the filter'}
+                  title={filter === 'problems' && !debounced.trim() ? 'No hosts with a problem' : 'No hosts match the filter'}
                   description={filter === 'problems' && !debounced.trim() ? 'Every node has a fresh result or is in maintenance.' : undefined}
                   action={<Button variant="secondary" size="sm" onClick={resetFilters}>Show all</Button>}
                 />

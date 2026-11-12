@@ -141,8 +141,11 @@ async def test_webhook_send_revalidates_at_connect_time():
 
 async def test_webhook_send_blocks_unsafe_url_before_sending():
     with patch.object(net_safety, "safe_async_client") as client_factory:
-        await notifications._send_webhook("http://169.254.169.254/", "", "t", "m")
-        await notifications._send_discord("http://localhost/hook", "t", "m")
+        # Blocked is a failure the caller logs as such, never a silent "sent".
+        with pytest.raises(ValueError):
+            await notifications._send_webhook("http://169.254.169.254/", "", "t", "m")
+        with pytest.raises(ValueError):
+            await notifications._send_discord("http://localhost/hook", "t", "m")
     client_factory.assert_not_called()
 
 

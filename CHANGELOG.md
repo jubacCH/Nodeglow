@@ -81,11 +81,42 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- Telegram, Discord, webhook and e-mail notifications now carry a link into
+  Nodeglow when the public URL is set (webhook payload field `url`). Before,
+  only Teams, Slack and ntfy did. Host offline and back-online notifications
+  link to the host list.
+- Manual maintenance on a host defaults to two hours. "Until I end it" has to
+  be chosen on purpose.
+- The first-run welcome no longer prints install commands. Its links open the
+  "Add host" and "Add agent" dialogs directly (`/hosts?add=1`, `/agents?add=1`).
 - An agent's own log entries are attributed to its own host by name, no
   longer by the address the request came from (behind NAT that was the
   customer's router).
 
 ### Fixed
+- "Add agent" crashed the Agents page: the dialog read an enrollment key the
+  server no longer sends. It now creates a per-install token (valid 24 hours,
+  7 or 30 days), shows the finished command once, and says when the new agent
+  has reported in. The install commands on the first-run welcome had no token
+  and were answered with 401.
+- Self-check incidents no longer swallow each other. Every self-check problem
+  shared one dedup key, so while one incident was open or acknowledged (say
+  "syslog stale"), a second problem ("ping_checks not completing") only became
+  an event on it: no incident, no notification. Each problem now has its own
+  incident; incidents under the old key are closed and reopened under the new.
+- One host whose check cannot run (a hostname that is not a valid name, a
+  malformed check type) no longer stops the ping cycle for every host of the
+  tenant. That host is recorded as failed with the reason; the rest are
+  checked and written as usual.
+- SMTP connections have a 15 second timeout. A mail server that accepted the
+  connection and then went silent held the notifying job indefinitely.
+- A webhook or Discord URL refused by the address guard is logged as a failed
+  notification, not as sent.
+- The Topology page showed degraded and warning hosts as OK, because it read
+  the old up/down status instead of the host state the rest of the app uses.
+  It now counts them under "Warning" and includes them in "Problems".
+- "Root cause" on the log patterns page always answered "Not found" (wrong
+  API path).
 - "Log volume anomaly" no longer flaps on hosts at their normal volume. The
   volume baseline and the template diversity shared one sample counter, so a
   host's first real hour was folded in at a fifth of its weight and its
@@ -160,6 +191,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   as "last seen" for addresses never seen.
 
 ### Security
+- CSV exports keep cells that start with `=`, `+`, `-` or `@` as text. A
+  hostname or syslog message, which any device on the network can set, could
+  otherwise run as a formula when the export is opened in a spreadsheet.
 - Dependency updates for new advisories. Frontend: Next.js 15.5.29
   (GHSA-2464-fhr4-w9xw, remote code execution in the Image Optimization API
   with SVG files; GHSA-p3m5-59mp-jv5r), DOMPurify 3.4.17 and undici 8.12.4.

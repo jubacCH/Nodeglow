@@ -410,7 +410,7 @@ async def run_ping_checks():
     # this, and a conditional import would leave the name unbound on any fleet
     # without agent-sourced hosts.
     from services.clickhouse_client import insert_ping_checks
-    from utils.ping import check_host
+    from utils.ping import HostCheck, check_host
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(PingHost).where(PingHost.enabled == True))
@@ -507,7 +507,17 @@ async def run_ping_checks():
 
     async def _check_one(host):
         async with sem.slot():
-            res = await check_host(host)
+            try:
+                res = await check_host(host)
+            except Exception as exc:  # noqa: BLE001
+                # One host whose check cannot even run (a hostname that is
+                # not a valid name, a malformed check type) must not take the
+                # whole cycle with it: every other host would go unchecked.
+                # It counts as failed, with the reason on the host.
+                logger.warning("Check for host %s (id=%s) could not run: %s",
+                               host.name, host.id, exc)
+                reason = f"check could not run: {type(exc).__name__}: {exc}"[:200]
+                res = HostCheck(False, False, None, {"check": False}, errors={"check": reason})
             online, port_error, latency, detail = res
             errors_by_host[host.id] = getattr(res, "errors", None) or {}
             return host, online, port_error, latency, detail
@@ -635,12 +645,12 @@ async def run_ping_checks():
         names = ", ".join(went_offline)
         title = f"Host offline: {went_offline[0]}" if len(went_offline) == 1 \
             else f"{len(went_offline)} hosts went offline"
-        _asyncio.create_task(notify(title, names, "critical"))
+        _asyncio.create_task(notify(title, names, "critical", link_path="/hosts?state=down"))
     if came_online:
         names = ", ".join(came_online)
         title = f"Host back online: {came_online[0]}" if len(came_online) == 1 \
             else f"{len(came_online)} hosts back online"
-        _asyncio.create_task(notify(title, names, "info"))
+        _asyncio.create_task(notify(title, names, "info", link_path="/hosts"))
 
     logger.debug("Ping check done for %d hosts (concurrent)", len(active_hosts))
 

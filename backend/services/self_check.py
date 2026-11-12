@@ -389,6 +389,19 @@ async def collect_problems(db, scheduler, now: float, process_start: float) -> l
     return problems
 
 
+_KEY_PREFIX = "sc:"
+
+
+def _dedup_key(problem: Problem) -> str:
+    """Dedup key of a self-check incident, within ``Incident.host_ids_hash``."""
+    import hashlib
+
+    key = f"{_KEY_PREFIX}{problem.key}"
+    if len(key) <= 64:
+        return key
+    return _KEY_PREFIX + hashlib.sha256(problem.key.encode()).hexdigest()[:48]
+
+
 async def run_self_check(db, scheduler, now: float, process_start: float) -> list[Problem]:
     """Raise incidents for self-detected problems, resolve those that cleared."""
     from sqlalchemy import select
@@ -409,6 +422,10 @@ async def run_self_check(db, scheduler, now: float, process_start: float) -> lis
             event_type="self_check",
             summary=problem.summary,
             affected_host_ids=list(problem.host_ids),
+            # One incident per problem. Without its own key every problem
+            # shares the hash of the empty host list, and an open or
+            # acknowledged self-check incident swallows all later ones.
+            key_hash=_dedup_key(problem),
         )
 
     # Clear self-check incidents whose cause is gone.
@@ -422,7 +439,10 @@ async def run_self_check(db, scheduler, now: float, process_start: float) -> lis
     from datetime import datetime
 
     for incident in open_self:
-        if incident.title not in seen_titles:
+        # Incidents from before the per-problem key carry the shared hash;
+        # the pass above has opened their replacement, so they close here.
+        legacy = not (incident.host_ids_hash or "").startswith(_KEY_PREFIX)
+        if legacy or incident.title not in seen_titles:
             incident.status = "resolved"
             incident.resolved_at = datetime.utcnow()
 

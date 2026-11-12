@@ -184,3 +184,60 @@ async def test_rate_limiting():
         await _notify("Duplicate alert", "First")
         await _notify("Duplicate alert", "Second")  # Should be rate-limited
         assert mock_tg.call_count == 1  # Only first call went through
+
+
+async def test_every_classic_channel_carries_the_link():
+    """Telegram, Discord, webhook and e-mail link to the incident.
+
+    Only Teams, Slack and ntfy used to: an alert at night came without any way
+    to open what it was about.
+    """
+    _clear_rate_limit()
+    settings = {
+        "notify_enabled": "1", "public_url": "https://monitor.example.com/",
+        "telegram_bot_token": "123:ABC", "telegram_chat_id": "456",
+        "discord_webhook_url": "https://discord.com/api/webhooks/test",
+        "webhook_url": "https://hooks.example.com/x", "webhook_secret": "",
+        "smtp_host": "smtp.example.com", "smtp_port": "587", "smtp_user": "u",
+        "smtp_password": "pw", "smtp_from": "", "smtp_to": "ops@example.com",
+    }
+
+    async def fake_get_setting(db, key, default="", **_kw):
+        return settings.get(key, default)
+
+    link = "https://monitor.example.com/incidents/42"
+    with patch("database.AsyncSessionLocal") as mock_cls, \
+         patch("database.get_setting", side_effect=fake_get_setting), \
+         patch.object(notifications, "_send_telegram", new_callable=AsyncMock) as mock_tg, \
+         patch.object(notifications, "_send_discord", new_callable=AsyncMock) as mock_dc, \
+         patch.object(notifications, "_send_webhook", new_callable=AsyncMock) as mock_wh, \
+         patch.object(notifications, "_send_email", new_callable=AsyncMock) as mock_mail, \
+         patch.object(notifications, "_log_notification", new_callable=AsyncMock):
+        mock_db = AsyncMock()
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        await _notify("Host offline: nas", "nas", link_path="/incidents/42")
+
+    assert link in mock_tg.await_args.args[2]
+    assert mock_dc.await_args.args[4] == link
+    assert mock_wh.await_args.args[5] == link
+    text_body, html_body = mock_mail.await_args.args[7], mock_mail.await_args.args[8]
+    assert link in text_body and link in html_body
+
+
+async def test_blocked_webhook_is_a_failure_not_a_delivery():
+    """A webhook URL the SSRF guard refuses must not be logged as sent."""
+    with patch.object(notifications, "_url_is_safe", new=AsyncMock(return_value=False)):
+        with pytest.raises(ValueError):
+            await notifications._send_webhook("http://127.0.0.1/x", "", "t", "m")
+        with pytest.raises(ValueError):
+            await notifications._send_discord("http://127.0.0.1/x", "t", "m")
+
+
+async def test_smtp_connections_have_a_timeout():
+    """A mail server that never answers must not hold the job for good."""
+    with patch("notifications.smtplib.SMTP") as smtp:
+        await notifications._send_email(
+            "smtp.example.com", 587, "u", "pw", "a@example.com", "b@example.com",
+            "s", "t", "<p>t</p>")
+    assert smtp.call_args.kwargs["timeout"] == notifications.SMTP_TIMEOUT

@@ -119,11 +119,14 @@ async def _send_telegram(bot_token: str, chat_id: str, text: str) -> None:
         resp.raise_for_status()
 
 
-async def _send_discord(webhook_url: str, title: str, message: str, color: int = 0xe74c3c) -> None:
+async def _send_discord(webhook_url: str, title: str, message: str, color: int = 0xe74c3c,
+                        link: str | None = None) -> None:
     if not await _url_is_safe(webhook_url):
-        logger.warning("Blocked webhook to unsafe URL: %s", webhook_url)
-        return
-    payload = {"embeds": [{"title": title, "description": message, "color": color}]}
+        raise ValueError("blocked: the webhook URL points to an address that is not allowed")
+    embed: dict = {"title": title, "description": message, "color": color}
+    if link:
+        embed["url"] = link
+    payload = {"embeds": [embed]}
     async with _webhook_client() as client:
         for attempt in range(4):  # initial + 3 retries
             resp = await client.post(webhook_url, json=payload)
@@ -138,12 +141,13 @@ async def _send_discord(webhook_url: str, title: str, message: str, color: int =
 
 
 async def _send_webhook(url: str, secret: str, title: str, message: str,
-                        severity: str = "critical") -> None:
+                        severity: str = "critical", link: str | None = None) -> None:
     if not await _url_is_safe(url):
-        logger.warning("Blocked webhook to unsafe URL: %s", url)
-        return
+        raise ValueError("blocked: the webhook URL points to an address that is not allowed")
     payload = {"title": title, "message": message, "severity": severity,
                "timestamp": int(time.time()), "source": "nodeglow"}
+    if link:
+        payload["url"] = link
     body = json.dumps(payload, separators=(",", ":"))
     headers = {"Content-Type": "application/json"}
     if secret:
@@ -154,10 +158,19 @@ async def _send_webhook(url: str, secret: str, title: str, message: str,
         resp.raise_for_status()
 
 
-def _build_html_email(title: str, message: str, severity: str) -> str:
+def _build_html_email(title: str, message: str, severity: str,
+                      link: str | None = None) -> str:
     """Build a styled HTML email body."""
     title = html_escape(title)
     message = html_escape(message)
+    link_block = ""
+    if link:
+        href = html_escape(link, quote=True)
+        link_block = (
+            '<p style="margin:20px 0 0"><a href="' + href + '" style="display:inline-block;'
+            'padding:9px 16px;border-radius:8px;background:#7C6CFF;color:#FFFFFF;'
+            'font-size:13px;font-weight:600;text-decoration:none">Open in Nodeglow</a></p>'
+        )
     colors = {
         "critical": ("#FB7185", "#1a0a0e"),
         "warning":  ("#FBBF24", "#1a1408"),
@@ -175,13 +188,18 @@ def _build_html_email(title: str, message: str, severity: str) -> str:
       <h1 style="color:#E2E8F0;font-size:18px;font-weight:600;margin:0;line-height:1.4">{title}</h1>
     </div>
     <div style="padding:20px 28px">
-      <p style="color:#94A3B8;font-size:14px;line-height:1.6;margin:0;white-space:pre-line">{message}</p>
+      <p style="color:#94A3B8;font-size:14px;line-height:1.6;margin:0;white-space:pre-line">{message}</p>{link_block}
     </div>
     <div style="padding:16px 28px;border-top:1px solid #1E293B;text-align:center">
       <span style="color:#475569;font-size:11px;letter-spacing:3px;font-weight:500">NODEGLOW</span>
     </div>
   </div>
 </div>"""
+
+
+# A mail server that accepts the connection and then says nothing would
+# otherwise hold its executor thread, and the job awaiting it, for good.
+SMTP_TIMEOUT = 15
 
 
 async def _send_email(host: str, port: int, user: str, password: str,
@@ -198,11 +216,11 @@ async def _send_email(host: str, port: int, user: str, password: str,
 
     def _send():
         if port == 465:
-            with smtplib.SMTP_SSL(host, port, context=ctx) as s:
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=SMTP_TIMEOUT) as s:
                 s.login(user, password)
                 s.sendmail(from_addr, [to_addr], msg.as_string())
         else:
-            with smtplib.SMTP(host, port) as s:
+            with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT) as s:
                 s.starttls(context=ctx)
                 s.login(user, password)
                 s.sendmail(from_addr, [to_addr], msg.as_string())
@@ -294,26 +312,31 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         extra_cfg = await _load_extra_channels(db, get_setting, cipher.decrypt, secrets)
 
     channels_list = []  # (name, coroutine) pairs
+    from notification_channels import build_link
+    link = build_link(extra_cfg.public_url, link_path)
     color = {"critical": 0xe74c3c, "warning": 0xf39c12, "info": 0x2ecc71}.get(severity, 0x2ecc71)
 
     if tg_token and tg_chat and _severity_passes(severity, min_sev_telegram):
         tg_text = f"<b>{html_escape(title)}</b>\n{html_escape(message)}"
+        if link:
+            tg_text += f'\n<a href="{html_escape(link, quote=True)}">Open in Nodeglow</a>'
         channels_list.append(("telegram", _send_telegram(tg_token, tg_chat, tg_text)))
     if dc_webhook and _severity_passes(severity, min_sev_discord):
-        channels_list.append(("discord", _send_discord(dc_webhook, title, message, color)))
+        channels_list.append(("discord", _send_discord(dc_webhook, title, message, color, link)))
     if wh_url and "webhook" not in secrets.errors and _severity_passes(severity, min_sev_webhook):
-        channels_list.append(("webhook", _send_webhook(wh_url, wh_secret, title, message, severity)))
+        channels_list.append(("webhook", _send_webhook(wh_url, wh_secret, title, message, severity, link)))
     if smtp_host and smtp_user and smtp_pw_enc and smtp_to and _severity_passes(severity, min_sev_email):
         # A value under the installation key (the installation SMTP relay
         # this tenant falls back to, or a row from before revision 046)
         # decrypts as well; plaintext passes through as before.
         smtp_pw = secrets.get("email", smtp_pw_enc)
         if "email" not in secrets.errors:
-            html_body = _build_html_email(title, message, severity)
+            html_body = _build_html_email(title, message, severity, link)
+            text_body = f"{title}\n{message}" + (f"\n\n{link}" if link else "")
             channels_list.append(("email", _send_email(
                 smtp_host, int(smtp_port), smtp_user, smtp_pw,
                 smtp_from or smtp_user, smtp_to,
-                f"[Nodeglow] {title}", f"{title}\n{message}", html_body,
+                f"[Nodeglow] {title}", text_body, html_body,
             )))
 
     from notification_channels import build_sends as _extra_channel_sends
