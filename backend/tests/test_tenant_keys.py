@@ -506,7 +506,10 @@ async def test_revision_046_rewrites_no_secret_so_the_old_backend_keeps_reading(
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     rev = _load_046()
-    assert set(rev.SECRET_SETTING_KEYS) == tk._secret_setting_keys(), \
+    # Secrets introduced after 046 are written under the tenant key from their
+    # first save (encrypt_secret), so the frozen list does not need them.
+    added_later = {"pagerduty_routing_key", "opsgenie_api_key", "jsm_api_key"}
+    assert set(rev.SECRET_SETTING_KEYS) == tk._secret_setting_keys() - added_later, \
         "frozen list in 046 must match the registry at this revision"
     with tenant_scope(A):
         db.add(IntegrationConfig(type="proxmox", name="p",
