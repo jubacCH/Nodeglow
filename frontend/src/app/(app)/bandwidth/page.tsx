@@ -124,12 +124,15 @@ export default function BandwidthPage() {
   });
   const interfacesQ = useQuery({
     queryKey: ['bandwidth-interfaces'],
-    queryFn: () => get<BandwidthInterface[]>('/api/bandwidth/interfaces'),
+    // The endpoint answers { interfaces, count }; the page used to treat the
+    // envelope as the list and showed "No interfaces reporting yet".
+    queryFn: async () => (await get<{ interfaces?: BandwidthInterface[] }>('/api/bandwidth/interfaces')).interfaces ?? [],
     refetchInterval: 15_000,
   });
   const historyQ = useQuery({
     queryKey: ['bandwidth-history', hours],
-    queryFn: () => get<HistoryPoint[]>(`/api/bandwidth/history?hours=${hours}`),
+    // { samples, count }: the total over all interfaces per time bucket.
+    queryFn: async () => (await get<{ samples?: HistoryPoint[] }>(`/api/bandwidth/history?hours=${hours}`)).samples ?? [],
     refetchInterval: 15_000,
   });
 

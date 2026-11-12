@@ -317,6 +317,45 @@ async def _probe_problems(db, now: float) -> list[Problem]:
     ]
 
 
+# A channel counts as failing when this many deliveries in a row failed
+# (each of them after its retries).
+NOTIFY_FAILURES_IN_A_ROW = 3
+
+
+async def _notification_problems(db) -> list[Problem]:
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import select
+
+    from models.notification import NotificationLog
+
+    since = datetime.utcnow() - timedelta(hours=24)
+    rows = (await db.execute(
+        select(NotificationLog.channel, NotificationLog.status, NotificationLog.error)
+        .where(NotificationLog.timestamp >= since)
+        .order_by(NotificationLog.id.desc()).limit(500)
+    )).all()
+    newest: dict[str, list[tuple[str, str | None]]] = {}
+    for channel, status, error in rows:
+        newest.setdefault(channel, []).append((status, error))
+
+    problems: list[Problem] = []
+    for channel, entries in sorted(newest.items()):
+        head = entries[:NOTIFY_FAILURES_IN_A_ROW]
+        if len(head) < NOTIFY_FAILURES_IN_A_ROW or any(status != "failed" for status, _ in head):
+            continue
+        error = (head[0][1] or "no error text")[:300]
+        problems.append(Problem(
+            key=f"notify:{channel}",
+            title=f"Notifications via {channel} are failing",
+            severity="critical",
+            summary=(f"The last {len(head)} notifications via {channel} could not be delivered: "
+                     f"{error}. Alerts do not reach this channel until it works again; check it "
+                     f"under Settings, Notifications and send a test."),
+        ))
+    return problems
+
+
 async def collect_problems(db, scheduler, now: float, process_start: float) -> list[Problem]:
     """Gather everything currently wrong with Nodeglow itself."""
     problems: list[Problem] = []
@@ -350,7 +389,16 @@ async def collect_problems(db, scheduler, now: float, process_start: float) -> l
     except Exception as exc:  # noqa: BLE001
         log.warning("Self-check probe pass failed: %s", exc)
 
-    # 3. Jobs that stopped completing.
+    # 3. Notification channels that stopped delivering. Whoever relies on a
+    # channel whose token was revoked would otherwise never hear of anything
+    # again, this problem included; the incident shows in the UI and goes
+    # out on every other channel.
+    try:
+        problems.extend(await _notification_problems(db))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Self-check notification pass failed: %s", exc)
+
+    # 4. Jobs that stopped completing.
     try:
         from prometheus_client import REGISTRY
 

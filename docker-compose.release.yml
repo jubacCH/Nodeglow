@@ -80,6 +80,9 @@ services:
       # POSTGRES_APP_USER (every install before 2026-10) both URLs are the
       # same user, exactly as before.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-${POSTGRES_USER:-nodeglow}}:${POSTGRES_APP_PASSWORD:-${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}}@db:5432/${POSTGRES_DB:-nodeglow}
+      # Dead-man check: requested once a minute while the scheduler and
+      # Postgres work (docs/OPERATIONS.md). Empty = off.
+      NODEGLOW_HEARTBEAT_URL: ${NODEGLOW_HEARTBEAT_URL:-}
       # The owner URL is used only when POSTGRES_APP_USER is set (or an
       # explicit DATABASE_OWNER_URL): an override that points DATABASE_URL at
       # another server keeps migrating that server (backend/config.py).

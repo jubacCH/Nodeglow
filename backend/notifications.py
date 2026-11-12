@@ -252,6 +252,41 @@ def _severity_passes(incident_severity: str, min_severity: str) -> bool:
     return actual <= threshold
 
 
+# ── Retry ─────────────────────────────────────────────────────────────────────
+
+# A delivery that fails is tried again after these pauses (seconds), in the
+# background: the caller, often a correlation rule inside its transaction,
+# does not wait. One failed HTTP call used to be the end of an alert.
+RETRY_DELAYS: tuple[float, ...] = (5, 30, 120)
+_retry_tasks: set[asyncio.Task] = set()
+
+
+def _is_permanent(exc: BaseException) -> bool:
+    """Failures another attempt cannot fix (a URL the address guard refuses)."""
+    return isinstance(exc, ValueError)
+
+
+async def _retry_delivery(name: str, factory, title: str, message: str, severity: str,
+                          tenant_id: int, first_error: BaseException) -> None:
+    from services.tenancy import tenant_scope
+
+    last: BaseException = first_error
+    for delay in RETRY_DELAYS:
+        await asyncio.sleep(delay)
+        try:
+            with tenant_scope(tenant_id):
+                await factory()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            continue
+        await _log_notification(name, title, message, severity, "sent", tenant_id=tenant_id)
+        return
+    attempts = len(RETRY_DELAYS) + 1
+    logger.warning("Notification %s failed after %d attempts: %s", name, attempts, last)
+    await _log_notification(name, title, message, severity, "failed",
+                            f"{last} (after {attempts} attempts)", tenant_id=tenant_id)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def notify(title: str, message: str, severity: str = "critical",
@@ -312,6 +347,7 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         extra_cfg = await _load_extra_channels(db, get_setting, cipher.decrypt, secrets)
 
     channels_list = []  # (name, coroutine) pairs
+    retry: dict = {}    # name -> callable building the same send again
     from notification_channels import build_link
     link = build_link(extra_cfg.public_url, link_path)
     color = {"critical": 0xe74c3c, "warning": 0xf39c12, "info": 0x2ecc71}.get(severity, 0x2ecc71)
@@ -321,10 +357,13 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         if link:
             tg_text += f'\n<a href="{html_escape(link, quote=True)}">Open in Nodeglow</a>'
         channels_list.append(("telegram", _send_telegram(tg_token, tg_chat, tg_text)))
+        retry["telegram"] = lambda: _send_telegram(tg_token, tg_chat, tg_text)
     if dc_webhook and _severity_passes(severity, min_sev_discord):
         channels_list.append(("discord", _send_discord(dc_webhook, title, message, color, link)))
+        retry["discord"] = lambda: _send_discord(dc_webhook, title, message, color, link)
     if wh_url and "webhook" not in secrets.errors and _severity_passes(severity, min_sev_webhook):
         channels_list.append(("webhook", _send_webhook(wh_url, wh_secret, title, message, severity, link)))
+        retry["webhook"] = lambda: _send_webhook(wh_url, wh_secret, title, message, severity, link)
     if smtp_host and smtp_user and smtp_pw_enc and smtp_to and _severity_passes(severity, min_sev_email):
         # A value under the installation key (the installation SMTP relay
         # this tenant falls back to, or a row from before revision 046)
@@ -333,16 +372,23 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
         if "email" not in secrets.errors:
             html_body = _build_html_email(title, message, severity, link)
             text_body = f"{title}\n{message}" + (f"\n\n{link}" if link else "")
-            channels_list.append(("email", _send_email(
-                smtp_host, int(smtp_port), smtp_user, smtp_pw,
-                smtp_from or smtp_user, smtp_to,
-                f"[Nodeglow] {title}", text_body, html_body,
-            )))
+            def _mail():
+                return _send_email(
+                    smtp_host, int(smtp_port), smtp_user, smtp_pw,
+                    smtp_from or smtp_user, smtp_to,
+                    f"[Nodeglow] {title}", text_body, html_body,
+                )
+            channels_list.append(("email", _mail()))
+            retry["email"] = _mail
 
     from notification_channels import build_sends as _extra_channel_sends
-    channels_list.extend(_extra_channel_sends(
+    extra_sends = _extra_channel_sends(
         extra_cfg, title, message, severity, link_path=link_path, channels=channels,
-    ))
+    )
+    channels_list.extend(extra_sends)
+    from notification_channels import make_send as _make_send
+    for extra_name, _coro in extra_sends:
+        retry[extra_name] = (lambda n=extra_name: _make_send(extra_cfg, n, title, message, severity, link))
 
     # A channel whose secret does not decrypt is not sent (an ntfy topic
     # without its token, a webhook without its signing secret) and is logged
@@ -374,6 +420,14 @@ async def _notify_tenant_channels(tenant_id: int, title: str, message: str, seve
     # Log results to DB
     for (ch_name, _), result in zip(channels_list, results):
         if isinstance(result, Exception):
+            if RETRY_DELAYS and ch_name in retry and not _is_permanent(result):
+                logger.warning("Notification %s failed, will retry: %s", ch_name, result)
+                task = asyncio.create_task(_retry_delivery(
+                    ch_name, retry[ch_name], title, message, severity, tenant_id, result))
+                # Keep a reference: a task nobody holds can be collected mid-flight.
+                _retry_tasks.add(task)
+                task.add_done_callback(_retry_tasks.discard)
+                continue
             logger.warning("Notification %s failed: %s", ch_name, result)
             await _log_notification(ch_name, title, message, severity, "failed", str(result),
                                     tenant_id=tenant_id)

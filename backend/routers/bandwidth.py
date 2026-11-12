@@ -30,8 +30,16 @@ async def bandwidth_history(
     interface: Optional[str] = Query(None),
     hours: int = Query(24, ge=1, le=168),
 ):
-    """Return time-series bandwidth data for charting."""
+    """Return time-series bandwidth data for charting.
+
+    Without a filter: the total over all interfaces, one point per time
+    bucket. With ``source_type`` / ``source_id`` / ``interface``: the raw
+    samples of that selection.
+    """
     try:
+        if not (source_type or source_id or interface):
+            data = await bw_svc.get_bandwidth_total_history(hours=hours)
+            return {"samples": data, "count": len(data), "aggregated": True}
         data = await bw_svc.get_bandwidth_history(
             source_type=source_type,
             source_id=source_id,

@@ -241,3 +241,65 @@ async def test_smtp_connections_have_a_timeout():
             "smtp.example.com", 587, "u", "pw", "a@example.com", "b@example.com",
             "s", "t", "<p>t</p>")
     assert smtp.call_args.kwargs["timeout"] == notifications.SMTP_TIMEOUT
+
+
+async def test_a_failed_delivery_is_retried_and_then_logged_as_sent(monkeypatch):
+    """One failed HTTP call is not the end of an alert."""
+    _clear_rate_limit()
+    monkeypatch.setattr(notifications, "RETRY_DELAYS", (0, 0))
+    settings = {
+        "notify_enabled": "1", "telegram_bot_token": "123:ABC", "telegram_chat_id": "456",
+        "smtp_port": "587",
+    }
+
+    async def fake_get_setting(db, key, default="", **_kw):
+        return settings.get(key, default)
+
+    attempts = []
+
+    async def flaky(*_args):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("502 Bad Gateway")
+
+    logged = AsyncMock()
+    with patch("database.AsyncSessionLocal") as mock_cls, \
+         patch("database.get_setting", side_effect=fake_get_setting), \
+         patch.object(notifications, "_send_telegram", new=flaky), \
+         patch.object(notifications, "_log_notification", new=logged):
+        mock_db = AsyncMock()
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        await _notify("Host down: nas", "nas")
+        for task in list(notifications._retry_tasks):
+            await task
+
+    assert len(attempts) == 3
+    assert [call.args[4] for call in logged.await_args_list] == ["sent"]
+
+
+async def test_a_delivery_that_keeps_failing_is_logged_once_with_the_attempts(monkeypatch):
+    _clear_rate_limit()
+    monkeypatch.setattr(notifications, "RETRY_DELAYS", (0, 0))
+    settings = {"notify_enabled": "1", "telegram_bot_token": "123:ABC", "telegram_chat_id": "456",
+                "smtp_port": "587"}
+
+    async def fake_get_setting(db, key, default="", **_kw):
+        return settings.get(key, default)
+
+    logged = AsyncMock()
+    with patch("database.AsyncSessionLocal") as mock_cls, \
+         patch("database.get_setting", side_effect=fake_get_setting), \
+         patch.object(notifications, "_send_telegram",
+                      new=AsyncMock(side_effect=RuntimeError("401 Unauthorized"))), \
+         patch.object(notifications, "_log_notification", new=logged):
+        mock_db = AsyncMock()
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        await _notify("Host down: nas", "nas")
+        for task in list(notifications._retry_tasks):
+            await task
+
+    assert logged.await_count == 1
+    assert logged.await_args.args[4] == "failed"
+    assert "after 3 attempts" in logged.await_args.args[5]

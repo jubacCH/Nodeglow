@@ -1,5 +1,6 @@
 """Tests for the correlation engine helpers."""
 
+import json
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -297,7 +298,7 @@ def _session_factory(db):
 
 
 _RULES = [
-    "_rule_host_down_syslog", "_rule_multi_host_down", "_rule_integration_host",
+    "_rule_host_down", "_rule_multi_host_down", "_rule_integration_host",
     "_rule_port_error", "_rule_syslog_spike", "_rule_log_anomaly",
     "_rule_fleet_wide", "_rule_severity_trend", "_rule_content_anomaly",
     "_rule_precursor_observed",
@@ -331,7 +332,7 @@ async def test_offline_hosts_are_computed_once_per_cycle(db):
         await corr.run_correlation()
 
     assert get_offline.await_count == 1
-    for name in ("_rule_host_down_syslog", "_rule_multi_host_down", "_rule_integration_host"):
+    for name in ("_rule_host_down", "_rule_multi_host_down", "_rule_integration_host"):
         assert mocks[name].await_args.kwargs["offline_hosts"] is offline
     assert auto_resolve.await_args.kwargs["offline_hosts"] is offline
 
@@ -386,34 +387,205 @@ async def test_unknown_offline_state_skips_host_rules_and_auto_resolve(db):
         mocks = _patch_rules(stack)
         await corr.run_correlation()
 
-    assert mocks["_rule_host_down_syslog"].await_count == 0
+    assert mocks["_rule_host_down"].await_count == 0
     assert mocks["_rule_multi_host_down"].await_count == 0
     assert mocks["_rule_port_error"].await_count == 1
     assert auto_resolve.await_count == 0
 
 
-async def test_host_down_syslog_counts_errors_in_one_query(db):
+def _host(i, name=None, hostname=None, **extra):
     from types import SimpleNamespace
 
-    from models.incident import Incident
+    fields = {"ip_address": None, "source": "manual", "check_errors": None, **extra}
+    return SimpleNamespace(id=i, name=name or f"h{i}", hostname=hostname or f"10.0.{i}.1", **fields)
+
+
+def _reset_streaks():
     from services import correlation as corr
-    from sqlalchemy import select
 
     corr._rule_hit_counts.clear()
     corr._current_cycle_hits.clear()
-    hosts = [SimpleNamespace(id=i, name=f"h{i}", hostname=f"10.0.0.{i}") for i in (1, 2, 3)]
+
+
+async def _open(db, rule):
+    from models.incident import Incident
+    from sqlalchemy import select
+
+    return (await db.execute(
+        select(Incident).where(Incident.rule == rule,
+                               Incident.status.in_(["open", "acknowledged"]))
+    )).scalars().all()
+
+
+async def test_a_single_host_down_opens_an_incident(db):
+    """One host down on its own is an incident, with or without syslog errors.
+
+    It used to be nothing at all for hosts behind a probe and for agent hosts,
+    and a notification without an incident for the rest.
+    """
+    from services import correlation as corr
+
+    _reset_streaks()
+    hosts = [_host(1, check_errors='{"icmp": "timeout"}'), _host(2, source="agent")]
     counts = AsyncMock(return_value={2: 4})
+    notify = AsyncMock()
 
     with patch("services.clickhouse_client.count_syslog_by_host", new=counts), \
          patch.object(corr, "_get_topology", new=AsyncMock(return_value={})), \
-         patch("notifications.notify", new=AsyncMock()):
-        await corr._rule_host_down_syslog(db, min_cycles=1, offline_hosts=hosts)
+         patch("notifications.notify", new=notify):
+        await corr._rule_host_down(db, min_cycles=1, offline_hosts=hosts)
         await db.commit()
 
-    assert counts.await_count == 1
-    assert sorted(counts.await_args.args[0]) == [1, 2, 3]
-    incidents = (await db.execute(select(Incident).where(Incident.rule == "host_down_syslog"))).scalars().all()
-    assert [i.title for i in incidents] == ["h2 offline with syslog errors"]
+    assert counts.await_count == 1, "syslog errors are counted in one query"
+    incidents = {i.title: i for i in await _open(db, "host_down")}
+    assert set(incidents) == {"Host down: h1", "Host down: h2"}
+    assert all(i.severity == "critical" for i in incidents.values())
+    assert notify.await_count == 2
+    summaries = [call.args[1] for call in notify.await_args_list]
+    assert any("icmp: timeout" in text for text in summaries)
+    assert any("agent has stopped reporting" in text and "4 syslog errors" in text
+               for text in summaries)
+
+
+async def test_host_down_waits_for_the_grace_period(db):
+    from services import correlation as corr
+
+    _reset_streaks()
+    with patch("services.clickhouse_client.count_syslog_by_host", new=AsyncMock(return_value={})), \
+         patch.object(corr, "_get_topology", new=AsyncMock(return_value={})), \
+         patch("notifications.notify", new=AsyncMock()):
+        for cycle in range(1, 5):
+            await corr._rule_host_down(db, min_cycles=2, offline_hosts=[_host(1)], grace_cycles=4)
+            await db.commit()
+            assert len(await _open(db, "host_down")) == (1 if cycle >= 4 else 0), cycle
+
+
+async def test_hosts_of_a_group_outage_get_no_incident_each(db):
+    """Three hosts down in one subnet are one multi_host_down, not three more."""
+    from services import correlation as corr
+
+    _reset_streaks()
+    hosts = [_host(i, hostname=f"10.0.0.{i}") for i in (1, 2, 3)]
+    with patch("services.clickhouse_client.count_syslog_by_host", new=AsyncMock(return_value={})), \
+         patch.object(corr, "_get_topology", new=AsyncMock(return_value={})), \
+         patch("notifications.notify", new=AsyncMock()):
+        await corr._rule_host_down(db, min_cycles=1, offline_hosts=hosts)
+        await corr._rule_multi_host_down(db, min_cycles=1, offline_hosts=hosts)
+        await db.commit()
+
+    assert await _open(db, "host_down") == []
+    assert [i.title for i in await _open(db, "multi_host_down")] == [
+        "Network issue: 3 hosts down in 10.0.0.0/24"]
+
+
+async def test_an_outage_that_grows_stays_one_incident(db):
+    """The key is the subnet: a fourth host does not open a second incident."""
+    from services import correlation as corr
+
+    _reset_streaks()
+    notify = AsyncMock()
+    with patch.object(corr, "_get_topology", new=AsyncMock(return_value={})), \
+         patch("notifications.notify", new=notify):
+        for n in (3, 4, 5):
+            hosts = [_host(i, hostname=f"10.0.0.{i}") for i in range(1, n + 1)]
+            await corr._rule_multi_host_down(db, min_cycles=1, offline_hosts=hosts)
+            await db.commit()
+
+    incidents = await _open(db, "multi_host_down")
+    assert [i.title for i in incidents] == ["Network issue: 5 hosts down in 10.0.0.0/24"]
+    assert json.loads(incidents[0].host_ids) == [1, 2, 3, 4, 5]
+    assert notify.await_count == 1
+
+
+async def test_host_down_stays_open_while_the_host_is_down(db):
+    """No "back online" while the host is still offline, however quiet it is."""
+    from models.incident import Incident
+    from services import correlation as corr
+
+    _reset_streaks()
+    host = _host(7)
+    for rule in ("host_down", "host_down_syslog"):
+        db.add(Incident(rule=rule, title=f"{rule} h7", severity="critical", status="open",
+                        host_ids_hash=corr._host_ids_hash([7]), host_ids="[7]"))
+    await db.commit()
+
+    notify = AsyncMock()
+    with patch("notifications.notify", new=notify):
+        await corr._auto_resolve(db, offline_hosts=[host])
+        await db.commit()
+        assert len(await _open(db, "host_down")) == 1
+        assert len(await _open(db, "host_down_syslog")) == 1
+        assert notify.await_count == 0
+
+        await corr._auto_resolve(db, offline_hosts=[])
+        await db.commit()
+    assert await _open(db, "host_down") == []
+    assert await _open(db, "host_down_syslog") == []
+    assert notify.await_count == 2
+
+
+async def test_group_incidents_resolve_when_the_rule_stops_reporting_them(db):
+    from services import correlation as corr
+
+    _reset_streaks()
+    hosts = [_host(i, hostname=f"10.0.0.{i}") for i in (1, 2, 3)]
+    with patch.object(corr, "_get_topology", new=AsyncMock(return_value={})), \
+         patch("notifications.notify", new=AsyncMock()):
+        await corr._rule_multi_host_down(db, min_cycles=1, offline_hosts=hosts)
+        await db.commit()
+        await corr._auto_resolve(db, offline_hosts=hosts)
+        await db.commit()
+        assert len(await _open(db, "multi_host_down")) == 1, "still reported this cycle"
+
+        # A cycle in which the rule failed says nothing about the outage.
+        _reset_streaks()
+        await corr._auto_resolve(db, offline_hosts=hosts, failed_rules={"multi_host_down"})
+        await db.commit()
+        assert len(await _open(db, "multi_host_down")) == 1
+
+        await corr._auto_resolve(db, offline_hosts=hosts[:2])
+        await db.commit()
+    assert await _open(db, "multi_host_down") == []
+
+
+async def test_auto_resolve_leaves_self_resolving_and_unknown_rules_alone(db):
+    """disk_space resolves itself; a rule nobody wrote a test for stays open.
+
+    Both used to fall through to "affected hosts are back online" a minute
+    after they were raised, and were raised again on the next run.
+    """
+    from models.incident import Incident
+    from services import correlation as corr
+
+    for rule in ("disk_space", "some_future_rule"):
+        db.add(Incident(rule=rule, title=rule, severity="warning", status="open",
+                        host_ids_hash="abc", host_ids="[]"))
+    await db.commit()
+    with patch("notifications.notify", new=AsyncMock()):
+        await corr._auto_resolve(db, offline_hosts=[])
+        await db.commit()
+    assert len(await _open(db, "disk_space")) == 1
+    assert len(await _open(db, "some_future_rule")) == 1
+
+
+async def test_an_unchanged_incident_does_not_grow_its_timeline(db):
+    """One event per change, not one per minute of an outage."""
+    from models.incident import IncidentEvent
+    from services import correlation as corr
+    from sqlalchemy import func, select
+
+    with patch("notifications.notify", new=AsyncMock()):
+        for summary in ("3 hosts offline", "3 hosts offline", "3 hosts offline", "4 hosts offline"):
+            incident = await corr._find_or_create_incident(
+                db, rule="multi_host_down", title="t", severity="critical", host_ids=[1],
+                event_type="host_down", summary=summary, key_hash="mhd:10.0.0.0/24",
+                affected_host_ids=[1])
+            await db.commit()
+
+    count = (await db.execute(
+        select(func.count()).select_from(IncidentEvent)
+        .where(IncidentEvent.incident_id == incident.id))).scalar()
+    assert count == 2
 
 
 async def test_cleanup_incident_events_disabled_with_zero(db):

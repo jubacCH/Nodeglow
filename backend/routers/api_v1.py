@@ -1774,8 +1774,11 @@ async def get_incident(
     from services import incident_view as iv
     host_summary = await iv.host_summaries(db, [incident], limit_per_item=None)
 
+    from services import integration_alerts
+
     return {
         **iv.host_fields(incident, host_summary),
+        "integration": await integration_alerts.integration_of(db, incident),
         "acknowledged": incident.status == "acknowledged",
         "id": incident.id,
         "rule": incident.rule,

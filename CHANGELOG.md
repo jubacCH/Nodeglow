@@ -10,6 +10,25 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Host-down incidents. A host that fails its checks opens a `host_down`
+  incident, for hosts the core checks, hosts behind a probe and agent hosts
+  alike, after the offline grace period, and resolves when the host answers
+  again. Before, a single host going down was a notification without an
+  incident for core-checked hosts, and nothing at all for the others. The
+  incident replaces the "Host offline" / "Host back online" notifications of
+  the ping job and the rule `host_down_syslog` (syslog errors of the host are
+  named in the summary).
+- Heartbeat to an external monitor: with `NODEGLOW_HEARTBEAT_URL` set,
+  Nodeglow requests that URL once a minute while its scheduler runs and
+  Postgres answers. `/readyz` reports `scheduler_last_tick_seconds_ago`.
+- A failed notification is retried after 5, 30 and 120 seconds. A channel
+  that fails three deliveries in a row raises a self-check incident.
+- The disk-space incident notifies when it opens and when it resolves.
+- Incidents link to what they are about: "Open host" (one affected host) or
+  "Open integration" in the header, and a link on every affected host. The
+  incident API returns `integration` (id, type, name) for integration rules.
+- Backups: every job says why it has its status (`status_reason`: overdue by
+  how long, last run failed with which error, never ran).
 - Integration incidents. What an integration reports as a problem (a failed
   disk, a degraded RAID or pool, an expiring certificate, a UPS on battery, an
   unreachable DNS cluster node, ...) now opens an incident after two
@@ -81,6 +100,19 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- `multi_host_down` is keyed by subnet and `upstream_failure` by the failed
+  parent, no longer by the exact set of hosts: an outage that spreads stays
+  one incident, with its host list and count kept current. Incidents open
+  under the old keys resolve once and reopen under the new ones.
+- An incident's timeline gets an entry when something changed, not one per
+  cycle. A day-long outage used to collect over a thousand identical lines.
+- A backup job counts as overdue after its interval plus a quarter (at least
+  two hours), not at the bare interval.
+- The reason of an integration failure is cleaned of the web-reference link
+  and followed by what the error usually means (login rejected, not
+  reachable, certificate not trusted).
+- Unfiltered `/api/bandwidth/history` returns the total over all interfaces
+  per time bucket instead of the first 2000 raw samples.
 - Telegram, Discord, webhook and e-mail notifications now carry a link into
   Nodeglow when the public URL is set (webhook payload field `url`). Before,
   only Teams, Slack and ntfy did. Host offline and back-online notifications
@@ -94,6 +126,19 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Incidents resolved as "back online" while the host was still down
+  (`host_down_syslog` looked for fresh syslog errors, which a dead host does
+  not send), and `upstream_failure` and `disk_space` were resolved a minute
+  after every time they were raised. Each rule now resolves on its own
+  condition, and a rule without one is left open.
+- Two open incidents for one key no longer make the rule fail on every cycle.
+- Backups page: the summary tiles showed dashes, "Needs attention" never
+  appeared and no job was marked overdue, because the page read fields the
+  API did not send. Every daily job showed "Warning" in the hours before its
+  next run.
+- Traffic page: the chart and the interface list stayed empty although data
+  existed (the page took the response envelope for the list), and "0
+  reporting" came from timestamps without a time zone.
 - "Add agent" crashed the Agents page: the dialog read an enrollment key the
   server no longer sends. It now creates a per-install token (valid 24 hours,
   7 or 30 days), shows the finished command once, and says when the new agent

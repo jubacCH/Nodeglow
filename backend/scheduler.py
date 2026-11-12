@@ -361,10 +361,6 @@ async def run_integration_checks():
 # Concurrent ping checks (all tenants together).
 PING_CONCURRENCY = 50
 
-# Grace period tracker: host_id -> first_seen_offline timestamp
-_offline_since: dict[int, datetime] = {}
-_grace_notified: set[int] = set()  # host_ids already notified after grace
-
 # Hysteresis for the host.port_error flag. The raw single-cycle result from
 # check_host() flaps for borderline hosts (e.g. external HTTPS endpoints with
 # transient TLS / rate-limit issues), which causes the correlation engine to
@@ -490,17 +486,6 @@ async def run_ping_checks():
 
     active_hosts = ping_hosts
 
-    # Load previous success state per host from ClickHouse (for state-change detection)
-    from services.clickhouse_client import get_latest_ping_per_host
-    try:
-        latest_map = await get_latest_ping_per_host([h.id for h in active_hosts])
-        prev_success: dict[int, bool] = {
-            hid: bool(rec.get("success")) for hid, rec in latest_map.items()
-        }
-    except Exception as ch_exc:
-        logger.warning("ClickHouse previous-state lookup failed: %s", ch_exc)
-        prev_success = {}
-
     # Run all checks concurrently, at most PING_CONCURRENCY at once across
     # every tenant's pass, the free slots shared round-robin between tenants.
     sem = tenant_jobs.limiter("ping_checks", PING_CONCURRENCY)
@@ -531,8 +516,6 @@ async def run_ping_checks():
     import json as _json
     from services.metrics import PING_CHECKS_TOTAL
     now = datetime.utcnow()
-    went_offline: list[str] = []
-    came_online: list[str] = []
     icmp_rows: list[dict] = []
     ws_updates: list[tuple] = []
     async with AsyncSessionLocal() as db:
@@ -595,20 +578,6 @@ async def run_ping_checks():
 
             ws_updates.append((host.id, host.name, online, latency))
 
-            # Track state changes for grace-period notification
-            if not online:
-                if host.id not in _offline_since:
-                    _offline_since[host.id] = now
-            else:
-                # Host is back online — clear grace tracking
-                was_tracked = host.id in _offline_since
-                was_notified = host.id in _grace_notified
-                _offline_since.pop(host.id, None)
-                _grace_notified.discard(host.id)
-                prev = prev_success.get(host.id)
-                if prev is False and online and was_notified:
-                    came_online.append(host.name)
-
         await db.commit()
 
     # Broadcast live updates via WebSocket — one task for the whole cycle
@@ -623,34 +592,11 @@ async def run_ping_checks():
         except Exception as ch_exc:
             logger.error("ClickHouse insert (ping_checks) failed: %s", ch_exc)
 
-    # Grace period: only notify after host has been offline for N minutes
-    from models.settings import get_setting
-    async with AsyncSessionLocal() as db:
-        grace_str = await get_setting(db, "notify_grace_minutes", "5")
-    try:
-        grace_minutes = max(0, int(grace_str))
-    except (ValueError, TypeError):
-        grace_minutes = 5
-
-    for host, online, port_error, latency, detail in results:
-        if not online and host.id in _offline_since and host.id not in _grace_notified:
-            elapsed = (now - _offline_since[host.id]).total_seconds() / 60
-            if elapsed >= grace_minutes:
-                went_offline.append(host.name)
-                _grace_notified.add(host.id)
-
-    # Send batched notifications (one message per direction)
-    from notifications import notify
-    if went_offline:
-        names = ", ".join(went_offline)
-        title = f"Host offline: {went_offline[0]}" if len(went_offline) == 1 \
-            else f"{len(went_offline)} hosts went offline"
-        _asyncio.create_task(notify(title, names, "critical", link_path="/hosts?state=down"))
-    if came_online:
-        names = ", ".join(came_online)
-        title = f"Host back online: {came_online[0]}" if len(came_online) == 1 \
-            else f"{len(came_online)} hosts back online"
-        _asyncio.create_task(notify(title, names, "info", link_path="/hosts"))
+    # No offline / back-online notification from here: the correlation
+    # engine opens a host_down incident (services.correlation), for hosts
+    # behind a probe and agent hosts as well, and that incident notifies
+    # when it opens and when it resolves. The offline grace period
+    # (notify_grace_minutes) is applied there.
 
     logger.debug("Ping check done for %d hosts (concurrent)", len(active_hosts))
 
@@ -872,6 +818,14 @@ async def check_disk_space():
     await _disk_space_incident(used_pct, free_gb)
 
 
+async def _notify_disk(title: str, message: str, severity: str, incident_id: int) -> None:
+    try:
+        from notifications import notify
+        await notify(title, message, severity=severity, link_path=f"/incidents/{incident_id}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to send disk-space notification: %s", exc)
+
+
 @per_tenant_job
 async def _disk_space_incident(used_pct: float, free_gb: float) -> None:
     """Raise, update or resolve the disk-space incident (per tenant)."""
@@ -896,12 +850,17 @@ async def _disk_space_incident(used_pct: float, free_gb: float) -> None:
                     event_type="resolved",
                     summary=f"Disk usage back to {used_pct}% ({free_gb} GB free)",
                 ))
+                incident_id, incident_title = existing.id, existing.title
                 await db.commit()
                 logger.info("Disk space incident resolved: %.1f%% used", used_pct)
+                await _notify_disk(f"✅ Resolved: {incident_title}",
+                                   f"Disk usage back to {used_pct}% ({free_gb} GB free)",
+                                   "info", incident_id)
         return
 
     severity = "critical" if used_pct >= DISK_CRITICAL_PCT else "warning"
     title = f"Disk usage at {used_pct}% ({free_gb} GB free)"
+    opened_id: int | None = None
 
     async with AsyncSessionLocal() as db:
         # Dedup: only one open disk incident at a time
@@ -939,8 +898,16 @@ async def _disk_space_incident(used_pct: float, free_gb: float) -> None:
                 event_type="created",
                 summary=title,
             ))
+            opened_id = inc.id
 
         await db.commit()
+
+    if opened_id is not None:
+        # After the commit, so a notification never names an incident that
+        # was rolled back. The incident used to be raised without a word.
+        await _notify_disk(f"🔴 Incident: {title}",
+                           "The disk Nodeglow stores its data on is filling up.",
+                           severity, opened_id)
 
     logger.warning("Disk space %s: %.1f%% used (%.1f GB free)", severity, used_pct, free_gb)
 
@@ -1272,6 +1239,57 @@ async def run_alert_rules():
             logger.info("Alert rules: %d rule(s) triggered", triggered)
 
 
+# ── Heartbeat ────────────────────────────────────────────────────────────────
+
+# Wall-clock time of the scheduler's last sign of life (time.time()), read by
+# /readyz. None until the first tick.
+last_tick: float | None = None
+
+
+async def _postgres_answers() -> bool:
+    from sqlalchemy import text
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await _asyncio.wait_for(db.execute(text("SELECT 1")), timeout=5)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@instrument_job("heartbeat")
+@system_job("heartbeat to an external monitor (installation)")
+async def send_heartbeat():
+    """Tell somebody outside that this installation is alive.
+
+    Everything else Nodeglow knows about its own health it reports through
+    itself: an incident, a notification. A stopped scheduler or a database
+    that is gone silences those too. With ``NODEGLOW_HEARTBEAT_URL`` set
+    (a check URL of a dead-man service such as healthchecks.io) this job
+    requests it once a minute, and only while Postgres answers, so the
+    absence of the request is the alarm.
+    """
+    import os
+    import time
+
+    global last_tick
+    last_tick = time.time()
+
+    url = os.getenv("NODEGLOW_HEARTBEAT_URL", "").strip()
+    if not url:
+        return
+    if not await _postgres_answers():
+        logger.warning("Heartbeat withheld: Postgres does not answer")
+        return
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            (await client.get(url)).raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Heartbeat to the external monitor failed: %s", exc)
+
+
 @instrument_job("legacy_api_key_cleanup")
 @system_job("disable stale legacy API keys of every tenant")
 async def cleanup_legacy_api_keys():
@@ -1404,6 +1422,9 @@ async def start_scheduler():
                       next_run_time=datetime.now() + timedelta(seconds=60))
     scheduler.add_job(run_backup_compliance, "interval", hours=1,
                       id="backup_compliance", replace_existing=True)
+    scheduler.add_job(send_heartbeat, "interval", seconds=60,
+                      id="heartbeat", replace_existing=True,
+                      next_run_time=datetime.now() + timedelta(seconds=15))
     scheduler.add_job(cleanup_legacy_api_keys, "cron", hour=3, minute=30,
                       id="legacy_api_key_cleanup", replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)

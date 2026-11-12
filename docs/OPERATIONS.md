@@ -682,11 +682,41 @@ when Nodeglow stops working properly:
 
 - a data source that is in use stops receiving data
 - a scheduled job stops completing successfully
+- a probe goes quiet
+- a notification channel fails three deliveries in a row (each after its
+  retries): the incident names the channel and the error, and goes out on
+  every other channel
 
-Those appear in the incident list like any other alert. This exists because
-silent failure is the worst outcome for a monitoring product: the UI keeps
-rendering while nothing is collected. Check the incident list before assuming
-the platform is healthy.
+Each problem is its own incident. Those appear in the incident list like any
+other alert. This exists because silent failure is the worst outcome for a
+monitoring product: the UI keeps rendering while nothing is collected. Check
+the incident list before assuming the platform is healthy.
+
+### Who tells you when Nodeglow itself is down
+
+Nothing above helps when the scheduler has stopped, the database is gone or
+the host is off: the self-check runs inside the thing that failed. Set
+`NODEGLOW_HEARTBEAT_URL` in `.env` to a check URL of a dead-man service
+(healthchecks.io, an Uptime Kuma push monitor, another Nodeglow) and let that
+service alert you when the requests stop:
+
+```bash
+NODEGLOW_HEARTBEAT_URL=https://hc-ping.com/your-uuid
+```
+
+Nodeglow requests the URL once a minute, and only while Postgres answers.
+Give the service a grace time of five minutes or so; an update restarts the
+backend. `/readyz` reports `scheduler_last_tick_seconds_ago` for a quick
+look (`null` on an instance that is not the scheduler leader).
+
+### Host down, and when you hear about it
+
+A host that fails its checks opens a `host_down` incident, whether the core,
+a probe or an agent watches it. It opens after the offline grace period
+(Settings, Notifications; five minutes by default) and resolves when the host
+answers again; both notify. Hosts behind a parent that is down are listed in
+one `upstream_failure` incident, and three or more hosts down at once in one
+subnet in one `multi_host_down` incident, instead of one incident each.
 
 ### Health at a glance
 
@@ -1043,6 +1073,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `CORS_ORIGINS` | `nodeglow` | unset | Comma list of origins allowed to call the API cross-origin; not needed for the bundled UI |
 | `DEBUG` | `nodeglow` | unset | `1` serves the OpenAPI docs at `/api/docs` — never in production |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` | `nodeglow` | unset | OpenTelemetry tracing export (OTLP/HTTP) |
+| `NODEGLOW_HEARTBEAT_URL` | `nodeglow` | unset | Dead-man check URL, requested once a minute (passed through by the shipped compose files) |
 | `NODEGLOW_INTEGRATION_CONCURRENCY` | `nodeglow` | `8` | Integrations collected in parallel |
 | `NODEGLOW_INTEGRATION_TIMEOUT` | `nodeglow` | `60` | Seconds per integration collect |
 | `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |

@@ -456,3 +456,52 @@ async def test_incident_under_the_old_shared_key_is_replaced(db):
     )).scalars().all()
     assert sorted(i.status for i in incidents) == ["open", "resolved"]
     assert next(i for i in incidents if i.status == "open").host_ids_hash.startswith("sc:")
+
+
+async def test_a_channel_that_keeps_failing_is_a_self_check_problem(db):
+    """A revoked token must not silence every alert without anyone noticing."""
+    from models.notification import NotificationLog
+    from services.self_check import _notification_problems
+
+    for n in range(3):
+        db.add(NotificationLog(channel="telegram", title=f"t{n}", severity="critical",
+                               status="failed", error="401 Unauthorized"))
+    db.add(NotificationLog(channel="email", title="ok", severity="info", status="failed", error="x"))
+    db.add(NotificationLog(channel="email", title="ok", severity="info", status="sent"))
+    await db.commit()
+
+    problems = await _notification_problems(db)
+    assert [p.key for p in problems] == ["notify:telegram"]
+    assert "401 Unauthorized" in problems[0].summary
+
+    db.add(NotificationLog(channel="telegram", title="test", severity="info", status="sent"))
+    await db.commit()
+    assert await _notification_problems(db) == []
+
+
+async def test_heartbeat_is_withheld_while_postgres_is_down(monkeypatch):
+    """The missing request is the alarm: never ping while the database is gone."""
+    import scheduler
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url):
+            calls.append(url)
+            from types import SimpleNamespace
+            return SimpleNamespace(raise_for_status=lambda: None)
+
+    monkeypatch.setenv("NODEGLOW_HEARTBEAT_URL", "https://hc.example.com/ping/abc")
+    monkeypatch.setattr("httpx.AsyncClient", FakeClient)
+
+    monkeypatch.setattr(scheduler, "_postgres_answers", AsyncMock(return_value=False))
+    await scheduler.send_heartbeat()
+    assert calls == []
+    assert scheduler.last_tick is not None
+
+    monkeypatch.setattr(scheduler, "_postgres_answers", AsyncMock(return_value=True))
+    await scheduler.send_heartbeat()
+    assert calls == ["https://hc.example.com/ping/abc"]

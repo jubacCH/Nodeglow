@@ -52,6 +52,7 @@ JOBS = [
     "run_self_check_job",
     "refresh_disk_predictions",
     "run_clickhouse_tenant_rebuild",
+    "send_heartbeat",
 ]
 
 

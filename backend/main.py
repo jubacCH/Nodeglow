@@ -197,11 +197,18 @@ async def readyz():
     pg_ok = await _check_postgres()
     ch_ok = await _check_clickhouse()
     ok = pg_ok and ch_ok
+    # Informational, not part of the verdict: an instance that is not the
+    # scheduler leader (enterprise HA) is ready without ever ticking.
+    import time
+
+    import scheduler as _scheduler
+    tick = _scheduler.last_tick
     return JSONResponse(
         {
             "status": "ok" if ok else "error",
             "db": "connected" if pg_ok else "connection failed",
             "clickhouse": "connected" if ch_ok else "connection failed",
+            "scheduler_last_tick_seconds_ago": None if tick is None else round(time.time() - tick),
         },
         status_code=200 if ok else 503,
     )
