@@ -70,8 +70,12 @@ class Docker:
     """A fake docker/cosign CLI recording every call."""
 
     def __init__(self, target="1.1.0", cosign_rc=0, pull_digest_override=None,
-                 running_data="/opt/nodeglow/data", deploy_files=None, migrate_rc=0):
+                 running_data="/opt/nodeglow/data", deploy_files=None, migrate_rc=0,
+                 health=None):
         self.calls = []
+        # Health a container reports, by the version it was started at.
+        self.health = health or {}
+        self.running_version = "1.0.0"
         self.deploy_files = NEW_DEPLOY if deploy_files is None else deploy_files
         self.migrate_rc = migrate_rc
         self.target = target
@@ -87,6 +91,10 @@ class Docker:
 
     def __call__(self, argv, timeout=60, cwd=None):
         self.calls.append(argv)
+        if "compose" in argv and "up" in argv:
+            self.running_version = self._version_from(argv)
+        if argv[:3] == ["docker", "inspect", "--format"] and ".State.Health" in argv[3]:
+            return CmdResult(0, self.health.get(self.running_version, "healthy"), "")
         if "config" in argv and "json" in argv:
             return CmdResult(0, compose_config(self._version_from(argv)), "")
         if argv[:3] == ["docker", "inspect", "-f"] and argv[3] == "{{.State.Running}}":
@@ -476,3 +484,48 @@ def test_verified_digest_parsing():
         "docker-manifest-digest": DIGEST_B}}}])) == DIGEST_B
     assert iu._verified_digest("garbage " + DIGEST_F) == DIGEST_F
     assert iu._verified_digest("nothing") == ""
+
+
+# ── Health wait and rollback ─────────────────────────────────────────────────
+
+def test_a_release_that_does_not_come_up_is_rolled_back(tmp_path):
+    """"compose up" returning 0 is not a successful update.
+
+    A release that crashes on start used to leave the instance down with the
+    run marked done. Now the previous compose file, .env and version are put
+    back and the previous version is started again.
+    """
+    docker = Docker(health={"1.1.0": "unhealthy"})
+    ctx = make_ctx(tmp_path, docker, sleep=lambda seconds: None)
+    state = run_update(ctx, steps=steps())
+
+    assert state.status == "failed"
+    assert state.by_name("restart").status == "ok"
+    assert state.by_name("health").status == "failed"
+    assert state.by_name("handoff").status == "pending"
+    assert "Rolled back to 1.0.0, which is running again" in state.error
+    assert iu.read_env_value(os.path.join(ctx.repo_path, ".env"), "NODEGLOW_VERSION") == "1.0.0"
+    for rel, content in OLD_DEPLOY.items():
+        assert read(ctx.repo_path, rel) == content
+    ups = [c for c in docker.calls if "compose" in c and "up" in c]
+    assert "NODEGLOW_VERSION=1.1.0" in ups[0]
+    assert "NODEGLOW_VERSION=1.0.0" in ups[-1], "the previous version must be started explicitly"
+    assert docker.running_version == "1.0.0"
+
+
+def test_a_failed_rollback_says_the_instance_is_down(tmp_path):
+    docker = Docker(health={"1.1.0": "unhealthy", "1.0.0": "restarting"})
+    ctx = make_ctx(tmp_path, docker, sleep=lambda seconds: None)
+    state = run_update(ctx, steps=steps())
+
+    assert state.status == "failed"
+    assert "Rolling back to 1.0.0 failed as well" in state.error
+    assert "restore the pre-update database dump" in state.error
+
+
+def test_a_healthy_release_passes_the_health_step(tmp_path):
+    docker = Docker()
+    ctx = make_ctx(tmp_path, docker, sleep=lambda seconds: None)
+    state = run_update(ctx, steps=steps())
+    assert state.status == "done", state.error
+    assert "healthy" in state.by_name("health").detail

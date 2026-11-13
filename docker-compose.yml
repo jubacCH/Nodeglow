@@ -5,6 +5,14 @@
 # To install a published release instead (pulls signed images from GHCR, no
 # build, also air-gapped), use docker-compose.release.yml via scripts/install.sh
 # — see docs/INSTALL.md. Keep both files in step.
+# Container logs are rotated: without a limit the json-file driver grows
+# until the disk is full, and Postgres and ClickHouse stop with it.
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16-alpine
@@ -34,6 +42,7 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
@@ -54,6 +63,7 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
 
   nodeglow:
     build:
@@ -93,6 +103,9 @@ services:
       # Dead-man check: requested once a minute while the scheduler and
       # Postgres work (docs/OPERATIONS.md). Empty = off.
       NODEGLOW_HEARTBEAT_URL: ${NODEGLOW_HEARTBEAT_URL:-}
+      # First-run setup token (install.sh generates it). Empty: generated at
+      # start, written to the log and to /data/setup-token.
+      NODEGLOW_SETUP_TOKEN: ${NODEGLOW_SETUP_TOKEN:-}
       # The owner URL is used only when POSTGRES_APP_USER is set (or an
       # explicit DATABASE_OWNER_URL): an override that points DATABASE_URL at
       # another server keeps migrating that server (backend/config.py).
@@ -149,6 +162,7 @@ services:
     # mem_limit: 2g
     # cpus: 2.0
     restart: unless-stopped
+    logging: *default-logging
 
   updater:
     build: ./sidecar
@@ -184,6 +198,7 @@ services:
     expose:
       - "9100"
     restart: unless-stopped
+    logging: *default-logging
 
   frontend:
     build: ./frontend
@@ -200,6 +215,7 @@ services:
       - no-new-privileges:true
     # mem_limit: 512m
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   pgdata:

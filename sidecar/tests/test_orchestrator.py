@@ -655,3 +655,49 @@ def test_seconds_until_next_daily():
 
 def test_seconds_until_next_interval():
     assert seconds_until_next(("interval", 3600), datetime(2026, 1, 1)) == 3600
+
+
+# ── Health wait ──────────────────────────────────────────────────────────────
+
+def _health_ctx(tmp_path, statuses):
+    """A Ctx whose containers report the given statuses, one per look."""
+    looks = iter(statuses)
+    slept = []
+
+    def run_cmd(argv, timeout=60, cwd=None):
+        if "ps" in argv:
+            return CmdResult(0, "abc123\n", "")
+        if argv[:2] == ["docker", "inspect"]:
+            return CmdResult(0, next(looks, statuses[-1]), "")
+        if "logs" in argv:
+            return CmdResult(0, "Traceback: boom", "")
+        raise AssertionError(f"unexpected command: {argv}")
+
+    return make_ctx(tmp_path, run_cmd=run_cmd, sleep=slept.append), slept
+
+
+def test_wait_healthy_waits_for_a_starting_container(tmp_path):
+    from orchestrator import wait_healthy
+
+    ctx, slept = _health_ctx(tmp_path, ["starting", "starting", "healthy"])
+    assert "nodeglow healthy" in wait_healthy(ctx, services=["nodeglow"])
+    assert len(slept) == 2
+
+
+def test_running_without_a_healthcheck_has_to_hold(tmp_path):
+    """A crash loop says "running" between two crashes."""
+    from orchestrator import HEALTH_STABLE_POLLS, wait_healthy
+
+    ctx, slept = _health_ctx(tmp_path, ["running", "restarting", "running", "running", "running"])
+    wait_healthy(ctx, services=["frontend"])
+    assert len(slept) >= HEALTH_STABLE_POLLS
+
+
+def test_wait_healthy_gives_up_with_the_log_tail(tmp_path):
+    from orchestrator import wait_healthy
+
+    ctx, _slept = _health_ctx(tmp_path, ["unhealthy"])
+    with pytest.raises(StepError) as err:
+        wait_healthy(ctx, services=["nodeglow"], timeout=10)
+    assert "nodeglow is unhealthy" in str(err.value)
+    assert "Traceback: boom" in str(err.value)

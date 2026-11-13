@@ -89,10 +89,19 @@ async def test_setup_wizard_creates_the_operator_and_its_membership(auth_client)
     client, sf = auth_client
     async with sf() as s:
         await put_settings(s, setup_complete="false")
-    r = await client.post("/setup/complete", data={
-        "site_name": "ACME", "username": "root", "password": "Very-Str0ng-Passw0rd!",
-    })
-    assert r.status_code == 303, r.text
+    from services import setup_token
+
+    form = {"site_name": "ACME", "username": "root", "password": "Very-Str0ng-Passw0rd!"}
+    # Without the token, or with a wrong one, nothing is created: reaching
+    # the port first is not enough to become the operator.
+    for bad in ({}, {"setup_token": "guess"}):
+        r = await client.post("/setup/complete", data={**form, **bad})
+        assert r.status_code == 303 and "/setup?error=" in r.headers["location"], r.text
+    async with sf() as s:
+        assert (await s.execute(select(User).where(User.username == "root"))).scalar_one_or_none() is None
+
+    r = await client.post("/setup/complete", data={**form, "setup_token": setup_token.current()})
+    assert r.status_code == 303 and r.headers["location"] == "/", r.text
     async with sf() as s:
         user = (await s.execute(select(User).where(User.username == "root"))).scalar_one()
         assert user.is_operator is True and user.role == "admin"

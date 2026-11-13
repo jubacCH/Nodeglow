@@ -13,6 +13,14 @@
 # Every Nodeglow image is pinned to NODEGLOW_VERSION from .env. The updater
 # (image mode) changes that value when it installs a new release.
 
+# Container logs are rotated: without a limit the json-file driver grows
+# until the disk is full, and Postgres and ClickHouse stop with it.
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16-alpine
@@ -39,6 +47,7 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
@@ -58,6 +67,7 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
 
   nodeglow:
     # NODEGLOW_BACKEND_IMAGE picks the edition:
@@ -83,6 +93,9 @@ services:
       # Dead-man check: requested once a minute while the scheduler and
       # Postgres work (docs/OPERATIONS.md). Empty = off.
       NODEGLOW_HEARTBEAT_URL: ${NODEGLOW_HEARTBEAT_URL:-}
+      # First-run setup token (install.sh generates it). Empty: generated at
+      # start, written to the log and to /data/setup-token.
+      NODEGLOW_SETUP_TOKEN: ${NODEGLOW_SETUP_TOKEN:-}
       # The owner URL is used only when POSTGRES_APP_USER is set (or an
       # explicit DATABASE_OWNER_URL): an override that points DATABASE_URL at
       # another server keeps migrating that server (backend/config.py).
@@ -123,6 +136,7 @@ services:
     security_opt:
       - "no-new-privileges:${NODEGLOW_NO_NEW_PRIVILEGES:-false}"
     restart: unless-stopped
+    logging: *default-logging
 
   updater:
     image: ${NODEGLOW_REGISTRY:-ghcr.io/jubacch}/nodeglow-updater:${NODEGLOW_VERSION:?Set NODEGLOW_VERSION in .env (e.g. 1.0.0)}
@@ -156,6 +170,7 @@ services:
     expose:
       - "9100"
     restart: unless-stopped
+    logging: *default-logging
 
   frontend:
     image: ${NODEGLOW_REGISTRY:-ghcr.io/jubacch}/nodeglow-frontend:${NODEGLOW_VERSION:?Set NODEGLOW_VERSION in .env (e.g. 1.0.0)}
@@ -169,6 +184,7 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   pgdata:
