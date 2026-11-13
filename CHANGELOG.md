@@ -10,6 +10,15 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Backup integrations (Proxmox Backup Server, Veeam, Synology) take per-job
+  overrides of the "overdue" limit: one line per pattern, `weekly-* = 200`
+  or `archive-vm = off`. A malformed line is reported, never silently
+  ignored.
+- PagerDuty, the way back: `POST /api/v1/events/pagerduty` applies an
+  acknowledge or resolve done in PagerDuty to the Nodeglow incident.
+- An integration's settings are checked when they are saved: a malformed
+  Prometheus alert rule or backup override is refused with the line and the
+  reason, instead of surfacing at the first collection.
 - Thirteen integrations: Proxmox Backup Server, Veeam Backup & Replication,
   Synology Hyper Backup / Active Backup, Prometheus exporter scrape with
   alert rules, domain expiry (RDAP), Microsoft 365 / Entra ID, VMware
@@ -104,6 +113,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Resolving an incident by hand sends the resolve notification. Before, an
+  on-call channel kept its alert open after the incident was closed.
+- Prometheus: a rule whose label set has no series yet (an error counter
+  before the first error) no longer warns "matches no series"; only a
+  metric that is missing altogether does. Found against a live exporter.
+- Synology: a failed API call no longer puts the session id into the error
+  text and the log.
 - "Log volume anomaly" no longer flaps on hosts at their normal volume. The
   volume baseline and the template diversity shared one sample counter, so a
   host's first real hour was folded in at a fifth of its weight and its

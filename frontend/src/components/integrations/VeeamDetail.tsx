@@ -28,6 +28,8 @@ interface VeeamJob {
   next_run: string | null;
   repository_name: string;
   objects_count: number | null;
+  /** Matching overdue override of the instance: "off" or e.g. "200 h". */
+  stale_override?: string | null;
 }
 
 interface VeeamRepository {
@@ -60,6 +62,8 @@ interface VeeamData {
   repositories: VeeamRepository[] | null;
   sessions: VeeamSession[] | null;
   totals?: { jobs: number; jobs_failed: number; jobs_warning: number; jobs_disabled: number };
+  /** Malformed lines of the overdue overrides (they are ignored). */
+  override_errors?: string[];
 }
 
 const RESULT_LABEL: Record<string, string> = { success: 'Success', warning: 'Warning', failed: 'Failed', none: 'Never run' };
@@ -167,6 +171,10 @@ export function VeeamDetail({ data }: { data: VeeamData }) {
         </Card>
       )}
 
+      {data.override_errors && data.override_errors.length > 0 && (
+        <p className="wrap-break-word text-meta text-warning">Overdue overrides ignored: {data.override_errors.join('; ')}</p>
+      )}
+
       <TableCard title="Jobs" meta={`${jobs.length}`}>
         {jobs.length === 0 ? (
           <p className="px-4 pb-4 text-ui text-fg-3">No jobs reported.</p>
@@ -192,7 +200,14 @@ export function VeeamDetail({ data }: { data: VeeamData }) {
                   <Td muted className="whitespace-nowrap">{j.status || '—'}</Td>
                   <Td><ResultPill result={j.last_result} /></Td>
                   <Td muted className="whitespace-nowrap">{formatDate(j.last_run) ?? '—'}</Td>
-                  <Td numeric className="whitespace-nowrap">{ageText(j.last_run, collectedAt) ?? '—'}</Td>
+                  <Td numeric className="whitespace-nowrap">
+                    {ageText(j.last_run, collectedAt) ?? '—'}
+                    {j.stale_override && (
+                      <Badge className="ml-2">
+                        {j.stale_override === 'off' ? 'No limit' : `Limit ${j.stale_override}`}
+                      </Badge>
+                    )}
+                  </Td>
                   <Td muted className="whitespace-nowrap">{formatDate(j.next_run) ?? '—'}</Td>
                   <Td muted>{j.repository_name || '—'}</Td>
                 </Tr>

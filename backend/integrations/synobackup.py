@@ -14,6 +14,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
+from integrations import _backup_rules as backup_rules
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 from integrations.synology import SynologyAPI
 
@@ -394,6 +395,10 @@ class SynobackupIntegration(BaseIntegration):
         ConfigField(key="username", label="Username", placeholder="admin"),
         ConfigField(key="password", label="Password", field_type="password", encrypted=True),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox", required=False, default=True),
+        ConfigField(key="stale_overrides", label="Overdue limit per task (hours or off)",
+                    field_type="textarea", required=False,
+                    placeholder="Weekly *  = 200\nOffsite copy = off\n"
+                                "# Matched against the task name, case-insensitive. First match wins."),
     ]
 
     alert_thresholds = (
@@ -409,9 +414,20 @@ class SynobackupIntegration(BaseIntegration):
             verify_ssl=self.config.get("verify_ssl", True),
         )
 
+    def validate_config(self, config: dict) -> list[str]:
+        return backup_rules.parse_overrides((config or {}).get("stale_overrides"))[1]
+
+    def _overrides(self):
+        return backup_rules.parse_overrides(self.config.get("stale_overrides"))
+
     async def collect(self) -> CollectorResult:
         try:
             data = await self._api().fetch_all()
+            rules, errors = self._overrides()
+            data["override_errors"] = errors
+            for t in data.get("tasks") or []:
+                t["stale_override"] = backup_rules.override_label(
+                    rules, str(t.get("name") or t.get("id") or ""))
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc) or type(exc).__name__)
@@ -428,6 +444,9 @@ class SynobackupIntegration(BaseIntegration):
             return alerts
         collected = parse_iso(data.get("collected_at"))
         stale_h = self.threshold("task_stale_hours")
+        rules, errors = self._overrides()
+        if errors:
+            alerts.append(backup_rules.errors_alert(errors))
         for t in data.get("tasks") or []:
             if not isinstance(t, dict):
                 continue
@@ -444,11 +463,12 @@ class SynobackupIntegration(BaseIntegration):
                                     detail=f"{entity}: last run finished with errors", entity=entity))
             last = parse_iso(t.get("last_run"))
             running = str(t.get("state") or "") in ("backingup", "running")
-            if (stale_h > 0 and collected is not None and last is not None
+            limit = backup_rules.effective_limit(rules, stale_h, name)
+            if (limit > 0 and collected is not None and last is not None
                     and t.get("scheduled") is not False and not running):
                 age_h = (collected - last).total_seconds() / 3600
-                if age_h > stale_h:
+                if age_h > limit:
                     alerts.append(Alert(severity="warning", title="Backup task overdue",
-                                        detail=f"{entity}: last run {age_h:.0f} h ago (limit {stale_h:g} h)",
+                                        detail=f"{entity}: last run {age_h:.0f} h ago (limit {limit:g} h)",
                                         entity=entity))
         return alerts

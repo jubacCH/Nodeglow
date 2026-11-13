@@ -10,6 +10,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
+from integrations import _backup_rules as backup_rules
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 log = logging.getLogger(__name__)
@@ -298,6 +299,10 @@ class VeeamIntegration(BaseIntegration):
         ConfigField(key="api_version", label="API version", placeholder=DEFAULT_API_VERSION,
                     required=False, default=DEFAULT_API_VERSION),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox", required=False, default=True),
+        ConfigField(key="stale_overrides", label="Overdue limit per job (hours or off)",
+                    field_type="textarea", required=False,
+                    placeholder="Weekly *  = 200\nArchive copy = off\n"
+                                "# Matched against the job name, case-insensitive. First match wins."),
     ]
 
     alert_thresholds = (
@@ -316,9 +321,20 @@ class VeeamIntegration(BaseIntegration):
             verify_ssl=self.config.get("verify_ssl", True),
         )
 
+    def validate_config(self, config: dict) -> list[str]:
+        return backup_rules.parse_overrides((config or {}).get("stale_overrides"))[1]
+
+    def _overrides(self):
+        return backup_rules.parse_overrides(self.config.get("stale_overrides"))
+
     async def collect(self) -> CollectorResult:
         try:
             data = await self._api().fetch_all()
+            rules, errors = self._overrides()
+            data["override_errors"] = errors
+            for job in data.get("jobs") or []:
+                job["stale_override"] = backup_rules.override_label(
+                    rules, str(job.get("name") or job.get("id") or ""))
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc) or type(exc).__name__)
@@ -335,6 +351,9 @@ class VeeamIntegration(BaseIntegration):
             return alerts
         collected = parse_iso(data.get("collected_at"))
         stale_h = self.threshold("job_stale_hours")
+        rules, errors = self._overrides()
+        if errors:
+            alerts.append(backup_rules.errors_alert(errors))
 
         for job in data.get("jobs") or []:
             if not isinstance(job, dict) or job.get("status") == "disabled":
@@ -350,11 +369,12 @@ class VeeamIntegration(BaseIntegration):
                 alerts.append(Alert(severity="warning", title="Backup job finished with warnings",
                                     detail=f"{name}: last run finished with warnings", entity=name))
             last = parse_iso(job.get("last_run"))
-            if stale_h > 0 and collected is not None and last is not None and job.get("status") != "running":
+            limit = backup_rules.effective_limit(rules, stale_h, name)
+            if limit > 0 and collected is not None and last is not None and job.get("status") != "running":
                 age_h = (collected - last).total_seconds() / 3600
-                if age_h > stale_h:
+                if age_h > limit:
                     alerts.append(Alert(severity="warning", title="Backup job overdue",
-                                        detail=f"{name}: last run {age_h:.0f} h ago (limit {stale_h:g} h)",
+                                        detail=f"{name}: last run {age_h:.0f} h ago (limit {limit:g} h)",
                                         entity=name))
 
         warn, crit = self.threshold("repo_warn_pct"), self.threshold("repo_crit_pct")

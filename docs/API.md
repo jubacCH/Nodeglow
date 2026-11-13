@@ -184,6 +184,7 @@ Kuma, Prometheus Alertmanager. Needs a key with the `editor` role.
 |---|---|---|
 | POST | `/events` | One event or a list of up to 200 |
 | POST | `/events/alertmanager` | Alertmanager webhook receiver (payload version 4) |
+| POST | `/events/pagerduty` | PagerDuty webhook (v3): acknowledge and resolve from the pager |
 
 ```json
 { "source": "backup-script", "key": "nightly-db", "status": "firing",
@@ -229,6 +230,16 @@ receivers:
             type: Bearer
             credentials: ng_…   # API key with the editor role
 ```
+
+PagerDuty, the way back: create a **Generic Webhook (v3)** subscription on the
+service (events `incident.acknowledged` and `incident.resolved`) pointing at
+`/api/v1/events/pagerduty`, with a custom header `X-API-Key: ng_…` (editor
+role). An acknowledge or resolve in PagerDuty is then applied to the Nodeglow
+incident the alert belongs to; a resolve also notifies the other channels.
+Alerts of another Nodeglow installation paging into the same service are
+ignored (the alert key carries the installation's public URL). The endpoint
+answers `200` with `"action": "ignored"` for anything that does not concern
+one of its incidents.
 
 ### Agents
 
