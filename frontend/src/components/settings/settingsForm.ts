@@ -67,6 +67,17 @@ export interface SettingsData {
   ntfy_topic?: string;
   ntfy_has_token?: boolean;
   notify_ntfy_min_severity?: string;
+  // On-call channels (keys are write-only: flags only)
+  pagerduty_enabled?: string;
+  pagerduty_has_key?: boolean;
+  notify_pagerduty_min_severity?: string;
+  opsgenie_enabled?: string;
+  opsgenie_region?: string;
+  opsgenie_has_key?: boolean;
+  notify_opsgenie_min_severity?: string;
+  jsm_enabled?: string;
+  jsm_has_key?: boolean;
+  notify_jsm_min_severity?: string;
   // LDAP
   ldap_enabled: string;
   ldap_server: string;
@@ -217,6 +228,19 @@ export interface NotifForm {
   ntfyToken: string;
   ntfyTokenClear: boolean;
   ntfyMinSev: string;
+  pagerdutyEnabled: boolean;
+  pagerdutyKey: string;
+  pagerdutyKeyClear: boolean;
+  pagerdutyMinSev: string;
+  opsgenieEnabled: boolean;
+  opsgenieRegion: string;
+  opsgenieKey: string;
+  opsgenieKeyClear: boolean;
+  opsgenieMinSev: string;
+  jsmEnabled: boolean;
+  jsmKey: string;
+  jsmKeyClear: boolean;
+  jsmMinSev: string;
 }
 
 export function notifFromSettings(s: SettingsData): NotifForm {
@@ -256,6 +280,19 @@ export function notifFromSettings(s: SettingsData): NotifForm {
     ntfyToken: '',
     ntfyTokenClear: false,
     ntfyMinSev: s.notify_ntfy_min_severity || 'all',
+    pagerdutyEnabled: s.pagerduty_enabled === '1',
+    pagerdutyKey: '',
+    pagerdutyKeyClear: false,
+    pagerdutyMinSev: s.notify_pagerduty_min_severity || 'all',
+    opsgenieEnabled: s.opsgenie_enabled === '1',
+    opsgenieRegion: s.opsgenie_region || 'us',
+    opsgenieKey: '',
+    opsgenieKeyClear: false,
+    opsgenieMinSev: s.notify_opsgenie_min_severity || 'all',
+    jsmEnabled: s.jsm_enabled === '1',
+    jsmKey: '',
+    jsmKeyClear: false,
+    jsmMinSev: s.notify_jsm_min_severity || 'all',
   };
 }
 
@@ -298,6 +335,20 @@ export function buildNotificationParams(f: NotifForm): URLSearchParams {
   params.set('ntfy_token', f.ntfyTokenClear ? '' : f.ntfyToken);
   if (f.ntfyTokenClear) params.set('ntfy_token_clear', '1');
   params.set('notify_ntfy_min_severity', f.ntfyMinSev);
+  // On-call channels: blank key keeps the stored value.
+  params.set('pagerduty_enabled', f.pagerdutyEnabled ? '1' : '0');
+  params.set('pagerduty_routing_key', f.pagerdutyKeyClear ? '' : f.pagerdutyKey);
+  if (f.pagerdutyKeyClear) params.set('pagerduty_routing_key_clear', '1');
+  params.set('notify_pagerduty_min_severity', f.pagerdutyMinSev);
+  params.set('opsgenie_enabled', f.opsgenieEnabled ? '1' : '0');
+  params.set('opsgenie_region', f.opsgenieRegion);
+  params.set('opsgenie_api_key', f.opsgenieKeyClear ? '' : f.opsgenieKey);
+  if (f.opsgenieKeyClear) params.set('opsgenie_api_key_clear', '1');
+  params.set('notify_opsgenie_min_severity', f.opsgenieMinSev);
+  params.set('jsm_enabled', f.jsmEnabled ? '1' : '0');
+  params.set('jsm_api_key', f.jsmKeyClear ? '' : f.jsmKey);
+  if (f.jsmKeyClear) params.set('jsm_api_key_clear', '1');
+  params.set('notify_jsm_min_severity', f.jsmMinSev);
   return params;
 }
 

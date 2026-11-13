@@ -184,7 +184,7 @@ def test_integrations_import_without_the_backend():
     assert "Failed to load integration module" not in proc.stderr, proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     expected = sorted(p.stem for p in MODULES if not p.stem.startswith("_"))
-    assert len(out["registered"]) == len(expected) == 19, out
+    assert len(out["registered"]) == len(expected) == 32, out
     outside = [m for m in out["loaded"]
                if not (_stdlib(m) or m in PACK_THIRD_PARTY or m in ("integrations", "utils"))]
     # Packages httpx itself pulls in optionally are fine as long as they are

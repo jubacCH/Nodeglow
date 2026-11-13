@@ -85,9 +85,11 @@ def _hash_key_legacy(key: str) -> str:
 
 
 async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) -> ApiKey:
-    """Validate API key from the X-API-Key header, or fall back to session auth."""
+    """Validate API key from the X-API-Key header (or ``Authorization: Bearer
+    ng_…``), or fall back to session auth."""
     # Header only: query-string keys would leak via proxy/access logs + browser history.
-    key = request.headers.get("X-API-Key")
+    from utils.api_key_header import presented_api_key
+    key = presented_api_key(request.headers)
     if not key and request.query_params.get("api_key"):
         logger.warning(
             "Rejected API request with key in query-string from %s (path=%s). "

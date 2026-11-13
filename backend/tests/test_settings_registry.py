@@ -307,6 +307,10 @@ def test_migration_042_moved_exactly_the_tenant_keys():
     added_later = {
         "digest_last_sent",  # phase 5: new state, no rows before it existed
         "integration_alert_thresholds",  # 2026-10: new, no rows before it existed
+        # 2026-11: on-call channels, new, no rows before they existed
+        "pagerduty_enabled", "pagerduty_routing_key", "notify_pagerduty_min_severity",
+        "opsgenie_enabled", "opsgenie_region", "opsgenie_api_key", "notify_opsgenie_min_severity",
+        "jsm_enabled", "jsm_api_key", "notify_jsm_min_severity",
     }
     assert set(m.TENANT_KEYS) == reg.tenant_keys() - added_later
 

@@ -36,6 +36,7 @@ from routers import (
     bandwidth as bandwidth_router,
     backups as backups_router,
     maintenance as maintenance_router,
+    events as events_router,
 )
 
 
@@ -278,6 +279,8 @@ _NAV_KEYS = (
     "truenas", "synology", "firewall", "hass", "gitea", "phpipam",
     "speedtest", "ups", "redfish", "swisscom", "cloudflare", "npm",
     "technitium",
+    "pbs", "veeam", "synobackup", "prometheus", "domain", "m365", "vsphere",
+    "fortigate", "kubernetes", "netbox", "hetzner", "infomaniak", "exoscale",
 )
 
 
@@ -405,7 +408,8 @@ async def inject_globals(request: Request, call_next):
     # session cookie is never consulted for it (see below). That is what makes
     # skipping CSRF for it safe: a forged cross-site request riding on the
     # victim's cookie gains nothing when the cookie is ignored.
-    has_api_key = bool(request.headers.get("X-API-Key"))
+    from utils.api_key_header import presented_api_key
+    has_api_key = presented_api_key(request.headers) is not None
 
     # CSRF protection for state-changing methods. Skipped only for requests
     # authenticated by X-API-Key (header-only — query-string keys are rejected
@@ -593,6 +597,7 @@ app.include_router(snmp_router.router)
 app.include_router(ssl_monitor.router)
 app.include_router(update.router)
 app.include_router(api_v1.router)
+app.include_router(events_router.router)
 app.include_router(api_v2.router)
 app.include_router(rules_router.router)
 app.include_router(digest_router.router)
