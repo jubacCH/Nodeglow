@@ -1018,6 +1018,10 @@ else
 fi
 
 echo "  [4/5] Writing configuration..."
+# The file holds this agent's token: readable by root only. Created under a
+# tight umask so it is never world-readable, not even for a moment.
+OLD_UMASK=$(umask)
+umask 077
 cat > "$CONFIG_FILE" << CONF
 {{
   "server": "$SERVER",
@@ -1026,6 +1030,8 @@ cat > "$CONFIG_FILE" << CONF
   {update_trust}
 }}
 CONF
+umask "$OLD_UMASK"
+chmod 600 "$CONFIG_FILE"
 
 echo "  [5/5] Creating systemd service..."
 cat > /etc/systemd/system/${{SERVICE_NAME}}.service << UNIT
@@ -1171,6 +1177,9 @@ Write-Host "  [5/8] Writing configuration..."
   {update_trust}
 }}
 "@ | Set-Content -Path "$InstallDir\\config.json" -Encoding ASCII -Force
+# The file holds this agent's token: SYSTEM and Administrators only (by SID,
+# the group names are localised). Program Files lets every user read.
+& icacls "$InstallDir\\config.json" /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null
 
 Write-Host "  [6/8] Creating restart wrapper..."
 $WrapperContent = @"

@@ -55,6 +55,16 @@ async def lifespan(app: FastAPI):
     from models.base import engine as _engine
     from services.pg_rls import log_runtime_status
     await log_runtime_status(_engine)
+    # First run: say where the setup token is.
+    try:
+        from database import AsyncSessionLocal as _SetupSession, is_setup_complete as _setup_done
+        from services import setup_token as _setup_token
+        async with _SetupSession() as _db:
+            if not await _setup_done(_db):
+                _setup_token.announce()
+    except Exception:
+        import logging as _logging
+        _logging.getLogger("nodeglow.setup").exception("Setup token check failed")
     # AI became opt-in: installations that already had a Claude key keep AI on (once).
     try:
         from services.ai_config import migrate_ai_opt_in

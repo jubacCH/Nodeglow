@@ -26,6 +26,7 @@ export const STEP_LABELS: Record<string, string> = {
   build: 'Build images',
   migrate: 'Apply migrations',
   restart: 'Restart services',
+  health: 'Wait for the new version',
 };
 
 export function stepLabel(name: string): string {
@@ -43,7 +44,8 @@ export function isTerminal(state: UpdateRunState | null): boolean {
  * expected rather than an error worth showing.
  */
 export function isRestartGap(state: UpdateRunState | null, pollFailed: boolean): boolean {
-  return Boolean(pollFailed && state && state.step === 'restart');
+  // The backend is still coming up while the updater waits for it.
+  return Boolean(pollFailed && state && (state.step === 'restart' || state.step === 'health'));
 }
 
 function stepByName(state: UpdateRunState | null, name: string): UpdateStep | null {

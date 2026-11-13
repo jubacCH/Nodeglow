@@ -446,6 +446,8 @@ POSTGRES_APP_PASSWORD=$(random_hex 24)
 NODEGLOW_RLS=on
 UPDATE_SIDECAR_TOKEN=$(random_hex 32)
 SECRET_KEY=$(random_hex 32)
+# Asked for once by the setup wizard on the first visit; unused afterwards.
+NODEGLOW_SETUP_TOKEN=$(random_hex 12)
 
 # Updates: stable | prerelease. "off" disables release checks (air-gapped).
 NODEGLOW_UPDATE_CHANNEL=stable
@@ -533,8 +535,10 @@ EOF
     else
         cat <<EOF
   First login: the setup wizard opens on the first visit and creates the
-               admin account. Do this right away — until then anyone who can
-               reach port 8000 can claim the instance.
+               admin account. It asks for this setup token:
+
+                   $(sed -n 's/^NODEGLOW_SETUP_TOKEN=//p' "$INSTALL_DIR/.env" | head -n1)
+
 EOF
     fi
     cat <<EOF

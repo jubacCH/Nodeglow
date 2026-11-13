@@ -108,6 +108,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- Updates wait until the new version runs and reports healthy (new step
+  `health`). A release that does not come up is rolled back: the updater
+  restores the previous compose file and `.env` and starts the previous
+  version again. Before, `docker compose up` returning 0 counted as a
+  successful update, and a release that crashed on start left the instance
+  down. The database is not rolled back.
+- Container logs are rotated (`local` driver, 5 files of 50 MB per service).
+  They used to grow without limit.
 - `multi_host_down` is keyed by subnet and `upstream_failure` by the failed
   parent, no longer by the exact set of hosts: an outage that spreads stays
   one incident, with its host list and count kept current. Incidents open
@@ -251,6 +259,20 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   as "last seen" for addresses never seen.
 
 ### Security
+- The first-run setup asks for a setup token (`NODEGLOW_SETUP_TOKEN`, printed
+  by `install.sh`; otherwise generated, logged and stored in
+  `/data/setup-token`). Before, whoever reached the port first could create
+  the admin account. The setup page now also shows why a submission was
+  refused.
+- Address guard at check time. A host on a loopback, link-local or cloud
+  metadata address is not checked at all, whatever its check type, and HTTP
+  checks connect through the guarded transport. Hosts added by the subnet
+  scanner are validated like hosts added by hand. Before, a host could reach
+  the scheduler on a path that skipped validation (scanner import, bulk
+  edit), and an HTTP check with a keyword then read such an address.
+- The agent installers write `config.json`, which holds the agent's token,
+  readable by root only (Linux) and by SYSTEM and Administrators only
+  (Windows). It used to be world-readable.
 - CSV exports keep cells that start with `=`, `+`, `-` or `@` as text. A
   hostname or syslog message, which any device on the network can set, could
   otherwise run as a formula when the export is opened in a spreadsheet.
