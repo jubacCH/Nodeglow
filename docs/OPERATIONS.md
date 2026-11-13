@@ -605,6 +605,19 @@ RLS. The backend logs a warning saying so.
   role does not exist yet. Harmless — the next start creates the role and
   the grants.
 
+### The audit log is append-only
+
+With two database users the app role can add audit entries and read them,
+but not change or delete them (`UPDATE`, `DELETE` and `TRUNCATE` on
+`audit_logs` are revoked on every start). Rows are removed only over the
+owner connection: when a tenant is purged, and by a backup restore.
+
+This does not hold for an installation with a single database user (no
+`POSTGRES_APP_USER`): there the app is the table owner, and an owner cannot
+be bound by a grant. It is also not tamper-proof against somebody who has
+the owner's password, which is in the backend container's environment (see
+Limits above); for that, forward the audit log to a system the backend cannot write.
+
 ---
 
 ## Probe syslog relay

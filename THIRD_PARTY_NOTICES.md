@@ -87,12 +87,13 @@ Versions as resolved in `frontend/package-lock.json`.
 | isomorphic-dompurify | 4.5.0 | MIT |
 | lucide-react | 1.52.0 | ISC |
 | next | 15.5.29 | MIT |
+| qrcode-generator | 2.0.4 | MIT |
 | react | 19.3.0 | MIT |
 | react-dom | 19.3.0 | MIT |
 | tailwind-merge | 3.7.0 | MIT |
 | zustand | 5.0.15 | MIT |
 
-Across all non-dev packages in the lockfile: MIT 83, Apache-2.0 17,
+Across all non-dev packages in the lockfile: MIT 84, Apache-2.0 17,
 LGPL-3.0-or-later 10 and mixed Apache/LGPL 4 (all `sharp`/`libvips`
 platform binaries), ISC 4, OFL-1.1 3, BSD-3-Clause 3, 0BSD 3, MIT-0 2,
 BSD-2-Clause 2, and one each of CC-BY-4.0, MPL-2.0 OR Apache-2.0,

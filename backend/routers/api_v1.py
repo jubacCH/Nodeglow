@@ -261,6 +261,9 @@ async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
         role=role, note=note, hash_algo="hmac",
     )
     db.add(api_key)
+    await db.flush()
+    await log_action(db, request, "api_key.create", "api_key", api_key.id, name,
+                     {"role": role, "prefix": prefix})
     await db.commit()
     return {"id": api_key.id, "key": raw_key, "name": name, "role": role,
             "note": "Store this key securely — it cannot be retrieved again."}
@@ -278,10 +281,12 @@ async def list_api_keys(db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/keys/{key_id}", summary="Delete API key", dependencies=[Depends(require_access_admin)])
-async def delete_api_key(key_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_api_key(key_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     key = await db.get(ApiKey, key_id)
     if not key:
         raise HTTPException(404, "API key not found")
+    await log_action(db, request, "api_key.delete", "api_key", key.id, key.name,
+                     {"role": key.role, "prefix": key.prefix})
     await db.delete(key)
     await db.commit()
     return {"ok": True}

@@ -44,7 +44,7 @@ describe('navigation registry', () => {
 
   it('hides admin-only items for other roles', () => {
     const admin = visibleSections(false).find((s) => s.id === 'admin');
-    expect(admin?.items.map((i) => i.id)).toEqual(['credentials', 'system']);
+    expect(admin?.items.map((i) => i.id)).toEqual(['credentials', 'system', 'account']);
   });
 
   it('shows the Tenants page only to operators of an installation with multi-tenancy', () => {

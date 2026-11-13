@@ -10,6 +10,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Two-factor sign-in (TOTP). Every user can turn it on for their own account
+  under the new **Account** page (account menu): scan a QR code with an
+  authenticator app, confirm with a code, keep ten one-time recovery codes. Signing in then asks for
+  the code after the password; LDAP accounts included. A code works once.
+  Admins can turn it off for a user who lost their phone (Users page).
+  Routes under `/api/account/mfa`; database revision 051.
+- Account page: change your own password. Until now only admins could, on
+  the Users page.
 - Backup integrations (Proxmox Backup Server, Veeam, Synology) take per-job
   overrides of the "overdue" limit: one line per pattern, `weekly-* = 200`
   or `archive-vm = off`. A malformed line is reported, never silently
@@ -169,6 +177,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- A sign-in while the backend is down or restarting said "Invalid username
+  or password". It now says the server is not responding.
 - Resolving an incident by hand sends the resolve notification. Before, an
   on-call channel kept its alert open after the incident was closed.
 - Prometheus: a rule whose label set has no series yet (an error counter
@@ -293,6 +303,17 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   as "last seen" for addresses never seen.
 
 ### Security
+- The audit log is append-only for the application. On an installation with
+  its own app database user (`POSTGRES_APP_USER`, the default of
+  `install.sh`), the app role can add and read audit entries but no longer
+  change or delete them. The tenant purge removes a tenant's entries over
+  the owner connection. Installations with a single database user are
+  unchanged: there the app owns the table.
+- The audit log records what it left out: users created, deleted and
+  changed in role, passwords reset or changed, API keys and agent install
+  tokens created and revoked, credentials created, changed and deleted,
+  updates started, and failed sign-ins (with the name as typed, never the
+  password). None of these wrote an entry before.
 - The first-run setup asks for a setup token (`NODEGLOW_SETUP_TOKEN`, printed
   by `install.sh`; otherwise generated, logged and stored in
   `/data/setup-token`). Before, whoever reached the port first could create

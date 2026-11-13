@@ -22,6 +22,7 @@ from services.tenancy import (
     SUPPORT_IAM_REFUSED, request_is_admin, request_is_operator, request_via_support,
 )
 from utils.password import hash_password, validate_password, verify_password
+from services.audit import log_action
 
 router = APIRouter(prefix="/users")
 api_router = APIRouter()
@@ -143,6 +144,7 @@ def _user_json(u: User, role: str, *, full: bool = True) -> dict:
     if full:
         out["auth_source"] = getattr(u, "auth_source", "local") or "local"
         out["display_name"] = getattr(u, "display_name", None)
+        out["mfa_enabled"] = bool(getattr(u, "totp_enabled_at", None))
     out["created_at"] = iso(u.created_at)
     return out
 
@@ -181,6 +183,7 @@ async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.flush()
     await ms.grant(db, user, _tenant(request), role, created_by=getattr(current, "id", None))
+    await log_action(db, request, "user.create", "user", user.id, user.username, {"role": role})
     await db.commit()
     return JSONResponse({"ok": True, "id": user.id, "username": user.username, "role": role})
 
@@ -198,7 +201,30 @@ async def delete_user_api(user_id: int, request: Request, db: AsyncSession = Dep
         return JSONResponse({"error": "User not found"}, status_code=404)
     if await _is_last_admin(db, request, role):
         return JSONResponse({"error": "Cannot delete the last admin"}, status_code=400)
+    removed_id, removed_name = user.id, user.username
     await _remove_from_tenant(db, request, user)
+    await log_action(db, request, "user.delete", "user", removed_id, removed_name, {"role": role})
+    await db.commit()
+    return JSONResponse({"ok": True})
+
+
+@api_router.post("/api/users/{user_id}/mfa/reset")
+@rate_limit(max_requests=5, window_seconds=300)
+async def reset_user_mfa(user_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Turn a user's two-factor sign-in off (lost phone). Admin only, and
+    only for an account this admin may also set the password of."""
+    if err := _refuse_change(request):
+        return err
+    user, _role = await _member(db, request, user_id)
+    if not user:
+        return JSONResponse({"error": "User not found"}, status_code=404)
+    current = getattr(request.state, "current_user", None)
+    if user.id != getattr(current, "id", None) and not await _may_set_credentials(db, request, user):
+        return JSONResponse({"error": FOREIGN_IDENTITY, "code": "foreign_identity"}, status_code=403)
+    from routers import mfa
+    mfa.clear(user)
+    await db.execute(sa_delete(UserSession).where(UserSession.user_id == user.id))
+    await log_action(db, request, "user.mfa_reset", "user", user.id, user.username)
     await db.commit()
     return JSONResponse({"ok": True})
 
@@ -224,6 +250,8 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
         if new_role != "admin" and await _is_last_admin(db, request, role):
             return JSONResponse({"error": "Cannot demote the last admin"}, status_code=400)
         await ms.grant(db, user, _tenant(request), new_role)
+        await log_action(db, request, "user.role_change", "user", user.id, user.username,
+                         {"from": role, "to": new_role})
     if "password" in body and body["password"]:
         # An admin resetting SOMEONE ELSE needs no old password. Changing
         # one's own does: otherwise a hijacked session (or an unlocked
@@ -236,6 +264,9 @@ async def update_user_api(user_id: int, request: Request, db: AsyncSession = Dep
             return JSONResponse({"error": pw_error}, status_code=400)
         user.password_hash = hash_password(body["password"])
         await db.execute(sa_delete(UserSession).where(UserSession.user_id == user_id))
+        await log_action(db, request,
+                         "user.password_change" if user.id == current.id else "user.password_reset",
+                         "user", user.id, user.username)
     await db.commit()
     return JSONResponse({"ok": True})
 
@@ -276,6 +307,7 @@ async def change_own_password(
                     UserSession.token != current_legacy,
                 )
             )
+        await log_action(db, request, "user.password_change", "user", db_user.id, db_user.username)
         await db.commit()
     # Redirect back to referrer (validated) or dashboard
     ref = request.headers.get("referer", "/")
@@ -316,6 +348,7 @@ async def add_user(
     await db.flush()
     current = getattr(request.state, "current_user", None)
     await ms.grant(db, user, _tenant(request), role, created_by=getattr(current, "id", None))
+    await log_action(db, request, "user.create", "user", user.id, user.username, {"role": role})
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)
 
@@ -337,6 +370,8 @@ async def update_role(
     if role != "admin" and await _is_last_admin(db, request, current_role):
         return RedirectResponse(url="/users?error=last_admin", status_code=303)
     await ms.grant(db, user, _tenant(request), role)
+    await log_action(db, request, "user.role_change", "user", user.id, user.username,
+                     {"from": current_role, "to": role})
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)
 
@@ -362,6 +397,7 @@ async def reset_password(
         return JSONResponse({"error": FOREIGN_IDENTITY, "code": "foreign_identity"}, status_code=403)
     user.password_hash = hash_password(password)
     await db.execute(sa_delete(UserSession).where(UserSession.user_id == user_id))
+    await log_action(db, request, "user.password_reset", "user", user.id, user.username)
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)
 
@@ -382,6 +418,8 @@ async def delete_user(
         return JSONResponse({"error": "User not found"}, status_code=404)
     if await _is_last_admin(db, request, role):
         return RedirectResponse(url="/users?error=last_admin", status_code=303)
+    removed_id, removed_name = user.id, user.username
     await _remove_from_tenant(db, request, user)
+    await log_action(db, request, "user.delete", "user", removed_id, removed_name, {"role": role})
     await db.commit()
     return RedirectResponse(url="/users?saved=1", status_code=303)

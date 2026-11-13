@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.base import get_db
 from models.credential import Credential
 from services.snmp import decrypt_credential, encrypt_credential
+from services.audit import log_action
 
 router = APIRouter()
 
@@ -88,6 +89,9 @@ async def api_create_credential(request: Request, db: AsyncSession = Depends(get
         data_json=await encrypt_credential(db, data),
     )
     db.add(cred)
+    await db.flush()
+    await log_action(db, request, "credential.create", "credential", cred.id, cred.name,
+                     {"type": cred_type})
     await db.commit()
     await db.refresh(cred)
 
@@ -117,6 +121,8 @@ async def api_update_credential(cred_id: int, request: Request,
             existing_data[field["name"]] = new_val
 
     cred.data_json = await encrypt_credential(db, existing_data, tenant_id=cred.tenant_id)
+    await log_action(db, request, "credential.update", "credential", cred.id, cred.name,
+                     {"type": cred.type})
     await db.commit()
 
     return JSONResponse({"ok": True})
@@ -127,6 +133,11 @@ async def api_delete_credential(cred_id: int, request: Request,
                                 db: AsyncSession = Depends(get_db)):
     if _require_admin(request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
+    cred = await db.get(Credential, cred_id)
+    if cred is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    await log_action(db, request, "credential.delete", "credential", cred.id, cred.name,
+                     {"type": cred.type})
     result = await db.execute(delete(Credential).where(Credential.id == cred_id))
     await db.commit()
     if result.rowcount == 0:

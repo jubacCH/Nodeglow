@@ -3,7 +3,7 @@ import hashlib
 import hmac
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.base import Base, decrypt_value, encrypt_value
@@ -42,6 +42,12 @@ class User(Base):
     # Installation operator: manages providers and installation settings. No
     # implicit access to tenant data (that takes a membership).
     is_operator = Column(Boolean, nullable=False, default=False, server_default="false")
+    # Two-factor sign-in (services.totp): the secret encrypted with the
+    # installation key; active only once totp_enabled_at is set.
+    totp_secret = Column(Text, nullable=True)
+    totp_enabled_at = Column(DateTime, nullable=True)
+    totp_last_counter = Column(BigInteger, nullable=True)
+    totp_recovery = Column(Text, nullable=True)
 
 
 class Session(Base):

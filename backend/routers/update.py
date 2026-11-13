@@ -110,6 +110,15 @@ async def apply_update(request: Request):
         return JSONResponse({"error": "Admin access required"}, status_code=403)
 
     try:
+        from database import AsyncSessionLocal
+        from services.audit import log_action
+        async with AsyncSessionLocal() as db:
+            await log_action(db, request, "update.apply", "installation")
+            await db.commit()
+    except Exception:  # noqa: BLE001 - never block an update on its audit entry
+        log.warning("Could not record the update in the audit log", exc_info=True)
+
+    try:
         code, result = await _sidecar_post("/apply")
     except RuntimeError as e:
         log.error("Update sidecar misconfigured: %s", e)
