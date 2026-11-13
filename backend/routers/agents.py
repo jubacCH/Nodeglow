@@ -68,6 +68,8 @@ def _require_access_admin(request: Request):
     return None
 
 
+from services.audit import log_action
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -816,6 +818,9 @@ async def create_install_token(request: Request):
     )
     async with AsyncSessionLocal() as db:
         db.add(token_row)
+        await db.flush()
+        await log_action(db, request, "install_token.create", "install_token", token_row.id,
+                         token_row.prefix, {"ttl_hours": ttl_hours, "note": note or None})
         await db.commit()
         await db.refresh(token_row)
 
@@ -871,6 +876,7 @@ async def revoke_install_token(token_id: int, request: Request):
         if not row:
             return JSONResponse({"error": "Not found"}, status_code=404)
         row.revoked = True
+        await log_action(db, request, "install_token.revoke", "install_token", row.id, row.prefix)
         await db.commit()
     return {"ok": True}
 
@@ -1018,6 +1024,10 @@ else
 fi
 
 echo "  [4/5] Writing configuration..."
+# The file holds this agent's token: readable by root only. Created under a
+# tight umask so it is never world-readable, not even for a moment.
+OLD_UMASK=$(umask)
+umask 077
 cat > "$CONFIG_FILE" << CONF
 {{
   "server": "$SERVER",
@@ -1026,6 +1036,8 @@ cat > "$CONFIG_FILE" << CONF
   {update_trust}
 }}
 CONF
+umask "$OLD_UMASK"
+chmod 600 "$CONFIG_FILE"
 
 echo "  [5/5] Creating systemd service..."
 cat > /etc/systemd/system/${{SERVICE_NAME}}.service << UNIT
@@ -1171,6 +1183,9 @@ Write-Host "  [5/8] Writing configuration..."
   {update_trust}
 }}
 "@ | Set-Content -Path "$InstallDir\\config.json" -Encoding ASCII -Force
+# The file holds this agent's token: SYSTEM and Administrators only (by SID,
+# the group names are localised). Program Files lets every user read.
+& icacls "$InstallDir\\config.json" /inheritance:r /grant:r "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null
 
 Write-Host "  [6/8] Creating restart wrapper..."
 $WrapperContent = @"

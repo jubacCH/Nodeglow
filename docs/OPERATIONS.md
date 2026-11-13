@@ -136,12 +136,20 @@ The update runs as an observable sequence and the page shows each step live:
 | `build` | Builds the new images | Old containers keep serving |
 | `migrate` | Applies migrations using the *new* code, before it goes live | Old containers keep serving; the backup name is shown |
 | `restart` | Recreates the application containers | Shown as failed; the backup is available |
+| `health` | Waits up to five minutes until the new containers run and report healthy | Release installs: the previous version is started again (below). Git installs: shown as failed with the last log lines |
 
-**A failed step stops the chain.** Everything except a failure inside `restart`
-itself leaves the running installation serving as before.
+**A failed step stops the chain.** Everything up to `restart` leaves the
+running installation serving as before.
 
-There is no automatic rollback — the backup taken in step 2 is the recovery
-path, deliberately, so that a bad rollback cannot compound a bad update.
+**If the new version does not come up** (release installs): the updater puts
+the previous compose file and `.env` back and starts the previous version,
+whose images are still on the host. The run is shown as failed and says
+whether the previous version is running again. The database is not rolled
+back: the previous version runs against the migrated schema, which is why
+migrations only add in one release and remove in a later one. If the
+previous version does not come up either, the message says so, and the
+pre-update dump from the `backup` step is the recovery path
+([Restoring](#restoring)).
 
 ### Common preflight failures
 
@@ -597,6 +605,19 @@ RLS. The backend logs a warning saying so.
   role does not exist yet. Harmless — the next start creates the role and
   the grants.
 
+### The audit log is append-only
+
+With two database users the app role can add audit entries and read them,
+but not change or delete them (`UPDATE`, `DELETE` and `TRUNCATE` on
+`audit_logs` are revoked on every start). Rows are removed only over the
+owner connection: when a tenant is purged, and by a backup restore.
+
+This does not hold for an installation with a single database user (no
+`POSTGRES_APP_USER`): there the app is the table owner, and an owner cannot
+be bound by a grant. It is also not tamper-proof against somebody who has
+the owner's password, which is in the backend container's environment (see
+Limits above); for that, forward the audit log to a system the backend cannot write.
+
 ---
 
 ## Probe syslog relay
@@ -682,11 +703,41 @@ when Nodeglow stops working properly:
 
 - a data source that is in use stops receiving data
 - a scheduled job stops completing successfully
+- a probe goes quiet
+- a notification channel fails three deliveries in a row (each after its
+  retries): the incident names the channel and the error, and goes out on
+  every other channel
 
-Those appear in the incident list like any other alert. This exists because
-silent failure is the worst outcome for a monitoring product: the UI keeps
-rendering while nothing is collected. Check the incident list before assuming
-the platform is healthy.
+Each problem is its own incident. Those appear in the incident list like any
+other alert. This exists because silent failure is the worst outcome for a
+monitoring product: the UI keeps rendering while nothing is collected. Check
+the incident list before assuming the platform is healthy.
+
+### Who tells you when Nodeglow itself is down
+
+Nothing above helps when the scheduler has stopped, the database is gone or
+the host is off: the self-check runs inside the thing that failed. Set
+`NODEGLOW_HEARTBEAT_URL` in `.env` to a check URL of a dead-man service
+(healthchecks.io, an Uptime Kuma push monitor, another Nodeglow) and let that
+service alert you when the requests stop:
+
+```bash
+NODEGLOW_HEARTBEAT_URL=https://hc-ping.com/your-uuid
+```
+
+Nodeglow requests the URL once a minute, and only while Postgres answers.
+Give the service a grace time of five minutes or so; an update restarts the
+backend. `/readyz` reports `scheduler_last_tick_seconds_ago` for a quick
+look (`null` on an instance that is not the scheduler leader).
+
+### Host down, and when you hear about it
+
+A host that fails its checks opens a `host_down` incident, whether the core,
+a probe or an agent watches it. It opens after the offline grace period
+(Settings, Notifications; five minutes by default) and resolves when the host
+answers again; both notify. Hosts behind a parent that is down are listed in
+one `upstream_failure` incident, and three or more hosts down at once in one
+subnet in one `multi_host_down` incident, instead of one incident each.
 
 ### Health at a glance
 
@@ -1043,6 +1094,8 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `CORS_ORIGINS` | `nodeglow` | unset | Comma list of origins allowed to call the API cross-origin; not needed for the bundled UI |
 | `DEBUG` | `nodeglow` | unset | `1` serves the OpenAPI docs at `/api/docs` — never in production |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` | `nodeglow` | unset | OpenTelemetry tracing export (OTLP/HTTP) |
+| `NODEGLOW_SETUP_TOKEN` | `nodeglow` | generated | Token the first-run setup wizard asks for. `install.sh` writes it to `.env` and prints it; otherwise it is generated at start, logged, and stored in `/data/setup-token` until setup is done (passed through by the shipped compose files) |
+| `NODEGLOW_HEARTBEAT_URL` | `nodeglow` | unset | Dead-man check URL, requested once a minute (passed through by the shipped compose files) |
 | `NODEGLOW_INTEGRATION_CONCURRENCY` | `nodeglow` | `8` | Integrations collected in parallel |
 | `NODEGLOW_INTEGRATION_TIMEOUT` | `nodeglow` | `60` | Seconds per integration collect |
 | `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |

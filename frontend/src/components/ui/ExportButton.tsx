@@ -10,17 +10,25 @@ interface ExportButtonProps {
   columns?: { key: string; label: string }[];
 }
 
-function toCSV(data: Record<string, unknown>[], columns?: { key: string; label: string }[]): string {
+/**
+ * A cell starting with = + - @ (or a tab / carriage return) is run as a
+ * formula by Excel and LibreOffice. Hostnames and syslog messages come from
+ * the network, so such a cell gets a leading apostrophe and stays text.
+ * Plain numbers keep their sign.
+ */
+export function csvCell(val: unknown): string {
+  if (val === null || val === undefined) return '';
+  let str = String(val);
+  if (typeof val !== 'number' && /^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
+export function toCSV(data: Record<string, unknown>[], columns?: { key: string; label: string }[]): string {
   if (data.length === 0) return '';
   const cols = columns ?? Object.keys(data[0]).map((k) => ({ key: k, label: k }));
-  const header = cols.map((c) => `"${c.label}"`).join(',');
+  const header = cols.map((c) => csvCell(c.label)).join(',');
   const rows = data.map((row) =>
-    cols.map((c) => {
-      const val = row[c.key];
-      if (val === null || val === undefined) return '';
-      const str = String(val).replace(/"/g, '""');
-      return `"${str}"`;
-    }).join(',')
+    cols.map((c) => csvCell(row[c.key])).join(',')
   );
   return [header, ...rows].join('\n');
 }

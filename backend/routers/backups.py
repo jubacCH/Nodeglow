@@ -27,7 +27,8 @@ async def backup_summary(db: AsyncSession = Depends(get_db)):
 async def backup_compliance(db: AsyncSession = Depends(get_db)):
     """Check all backup jobs for compliance issues (overdue, failed, never-run)."""
     issues = await bk_svc.check_backup_compliance(db)
-    return JSONResponse({"issues": issues, "count": len(issues)})
+    groups = await bk_svc.get_compliance_groups(db)
+    return JSONResponse({"issues": issues, "count": len(issues), **groups})
 
 
 @router.get("/{job_id}")

@@ -12,8 +12,94 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.backup import BackupJob, BackupHistory
+from services.host_state import iso
 
 logger = logging.getLogger(__name__)
+
+
+# ── Job state ───────────────────────────────────────────────────────────────
+
+
+def overdue_after_hours(expected_frequency_hours: int | None) -> float:
+    """Hours without a backup after which a job counts as overdue.
+
+    The expected interval plus a quarter of it, at least two hours. A nightly
+    job never runs exactly 24 h after the last one: it starts a little later,
+    or takes longer. Judged against the bare interval every daily backup was
+    "overdue" for the hours before its next run.
+    """
+    expected = max(1, int(expected_frequency_hours or 24))
+    return expected + max(2.0, expected * 0.25)
+
+
+def _hours(hours: float) -> str:
+    if hours < 48:
+        return f"{round(hours)} h"
+    return f"{round(hours / 24)} days"
+
+
+def job_state(job: BackupJob, now: datetime) -> dict[str, Any]:
+    """Status of a backup job and the reason for it, in words.
+
+    ``effective_status`` is what the UI shows (ok, warning, failed, running,
+    unknown); ``status_reason`` says why, so a "Warning" is never just a
+    colour.
+    """
+    hours_since = None
+    is_overdue = False
+    if job.last_run_at:
+        hours_since = round((now - job.last_run_at).total_seconds() / 3600, 1)
+        is_overdue = hours_since > overdue_after_hours(job.expected_frequency_hours)
+
+    status = job.last_status or "unknown"
+    reason: str | None = None
+    if status == "failed":
+        reason = f"Last run failed: {job.last_error}" if job.last_error else "Last run failed"
+    elif status == "warning":
+        reason = "Last run finished with warnings"
+        if job.last_error:
+            reason += f": {job.last_error}"
+    elif status == "running":
+        reason = "A backup is running"
+    elif status == "unknown" or not job.last_run_at:
+        status = "unknown"
+        reason = "No backup has been recorded"
+
+    if is_overdue and status in ("ok", "warning"):
+        overdue = (f"Last backup {_hours(hours_since)} ago, "
+                   f"expected every {_hours(job.expected_frequency_hours or 24)}")
+        reason = overdue if status == "ok" else f"{reason}. {overdue}"
+        status = "warning"
+
+    return {
+        "effective_status": status,
+        "status_reason": reason,
+        "hours_since_last": hours_since,
+        "is_overdue": is_overdue,
+        # The name the frontend reads; is_overdue stays for API clients.
+        "overdue": is_overdue,
+    }
+
+
+def job_entry(job: BackupJob, now: datetime) -> dict[str, Any]:
+    """A backup job as the API returns it."""
+    return {
+        "id": job.id,
+        "name": job.name,
+        "source_type": job.source_type,
+        "source_config_id": job.source_config_id,
+        "target_name": job.target_name,
+        "target_vmid": job.target_vmid,
+        "storage_name": job.storage_name,
+        "last_run_at": iso(job.last_run_at),
+        "last_status": job.last_status,
+        "last_duration_sec": job.last_duration_sec,
+        "last_size_bytes": job.last_size_bytes,
+        "last_error": job.last_error,
+        "expected_frequency_hours": job.expected_frequency_hours,
+        "enabled": job.enabled,
+        **job_state(job, now),
+    }
 
 
 # ── Proxmox sync ────────────────────────────────────────────────────────────
@@ -333,12 +419,12 @@ async def check_backup_compliance(db: AsyncSession) -> list[dict]:
                 "issue": "failed",
                 "last_status": job.last_status,
                 "last_error": job.last_error,
-                "last_run_at": job.last_run_at.isoformat() if job.last_run_at else None,
+                "last_run_at": iso(job.last_run_at),
             })
 
         if job.last_run_at:
             hours_since = (now - job.last_run_at).total_seconds() / 3600
-            if hours_since > job.expected_frequency_hours:
+            if hours_since > overdue_after_hours(job.expected_frequency_hours):
                 issues.append({
                     "job_id": job.id,
                     "job_name": job.name,
@@ -347,7 +433,7 @@ async def check_backup_compliance(db: AsyncSession) -> list[dict]:
                     "issue": "overdue",
                     "hours_since": round(hours_since, 1),
                     "expected_hours": job.expected_frequency_hours,
-                    "last_run_at": job.last_run_at.isoformat(),
+                    "last_run_at": iso(job.last_run_at),
                 })
         elif job.last_status == "unknown":
             issues.append({
@@ -368,6 +454,10 @@ async def check_backup_compliance(db: AsyncSession) -> list[dict]:
 async def get_backup_summary(db: AsyncSession) -> dict:
     """
     Get a full summary of all backup jobs with their status.
+
+    The counts are returned under ``summary`` (what the UI reads) and, as
+    before, at the top level. Disabled jobs are listed but not counted: a job
+    somebody switched off is not a problem.
     """
     now = datetime.utcnow()
     result = await db.execute(
@@ -375,68 +465,40 @@ async def get_backup_summary(db: AsyncSession) -> dict:
     )
     jobs = result.scalars().all()
 
-    total = len(jobs)
-    healthy = 0
-    warning = 0
-    failed = 0
-    unknown = 0
-    overdue: list[dict] = []
-
+    counts = {"total": 0, "healthy": 0, "warning": 0, "failed": 0, "unknown": 0}
     job_list: list[dict] = []
     for job in jobs:
-        hours_since = None
-        is_overdue = False
-        if job.last_run_at:
-            hours_since = round((now - job.last_run_at).total_seconds() / 3600, 1)
-            if hours_since > job.expected_frequency_hours:
-                is_overdue = True
-
-        effective_status = job.last_status
-        if effective_status == "ok" and is_overdue:
-            effective_status = "warning"
-
-        if effective_status == "ok":
-            healthy += 1
-        elif effective_status in ("warning", "running"):
-            warning += 1
-        elif effective_status == "failed":
-            failed += 1
-        else:
-            unknown += 1
-
-        entry = {
-            "id": job.id,
-            "name": job.name,
-            "source_type": job.source_type,
-            "source_config_id": job.source_config_id,
-            "target_name": job.target_name,
-            "target_vmid": job.target_vmid,
-            "storage_name": job.storage_name,
-            "last_run_at": job.last_run_at.isoformat() if job.last_run_at else None,
-            "last_status": job.last_status,
-            "effective_status": effective_status,
-            "last_duration_sec": job.last_duration_sec,
-            "last_size_bytes": job.last_size_bytes,
-            "last_error": job.last_error,
-            "expected_frequency_hours": job.expected_frequency_hours,
-            "hours_since_last": hours_since,
-            "is_overdue": is_overdue,
-            "enabled": job.enabled,
-        }
+        entry = job_entry(job, now)
         job_list.append(entry)
-
-        if is_overdue:
-            overdue.append(entry)
+        if not job.enabled:
+            continue
+        counts["total"] += 1
+        status = entry["effective_status"]
+        if status == "ok":
+            counts["healthy"] += 1
+        elif status in ("warning", "running"):
+            counts["warning"] += 1
+        elif status == "failed":
+            counts["failed"] += 1
+        else:
+            counts["unknown"] += 1
 
     return {
-        "total": total,
-        "healthy": healthy,
-        "warning": warning,
-        "failed": failed,
-        "unknown": unknown,
-        "overdue": overdue,
+        **counts,
+        "summary": counts,
+        "overdue": [e for e in job_list if e["is_overdue"] and e["enabled"]],
         "jobs": job_list,
     }
+
+
+async def get_compliance_groups(db: AsyncSession) -> dict[str, list[dict]]:
+    """Enabled jobs that need attention, grouped the way the UI lists them."""
+    summary = await get_backup_summary(db)
+    jobs = [j for j in summary["jobs"] if j["enabled"]]
+    failed = [j for j in jobs if j["effective_status"] == "failed"]
+    never_run = [j for j in jobs if j["effective_status"] == "unknown"]
+    overdue = [j for j in jobs if j["is_overdue"] and j["effective_status"] != "failed"]
+    return {"failed": failed, "overdue": overdue, "never_run": never_run}
 
 
 # ── Job history ─────────────────────────────────────────────────────────────
@@ -448,33 +510,10 @@ async def get_job_detail(db: AsyncSession, job_id: int) -> dict | None:
     if not job:
         return None
 
-    now = datetime.utcnow()
-    hours_since = None
-    is_overdue = False
-    if job.last_run_at:
-        hours_since = round((now - job.last_run_at).total_seconds() / 3600, 1)
-        if hours_since > job.expected_frequency_hours:
-            is_overdue = True
-
     return {
-        "id": job.id,
-        "name": job.name,
-        "source_type": job.source_type,
-        "source_config_id": job.source_config_id,
-        "target_name": job.target_name,
-        "target_vmid": job.target_vmid,
-        "storage_name": job.storage_name,
-        "last_run_at": job.last_run_at.isoformat() if job.last_run_at else None,
-        "last_status": job.last_status,
-        "last_duration_sec": job.last_duration_sec,
-        "last_size_bytes": job.last_size_bytes,
-        "last_error": job.last_error,
-        "expected_frequency_hours": job.expected_frequency_hours,
-        "hours_since_last": hours_since,
-        "is_overdue": is_overdue,
-        "enabled": job.enabled,
-        "created_at": job.created_at.isoformat() if job.created_at else None,
-        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        **job_entry(job, datetime.utcnow()),
+        "created_at": iso(job.created_at),
+        "updated_at": iso(job.updated_at),
     }
 
 
@@ -495,7 +534,7 @@ async def get_job_history(
         {
             "id": e.id,
             "job_id": e.job_id,
-            "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+            "timestamp": iso(e.timestamp),
             "status": e.status,
             "duration_sec": e.duration_sec,
             "size_bytes": e.size_bytes,

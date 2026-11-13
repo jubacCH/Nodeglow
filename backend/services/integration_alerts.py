@@ -32,6 +32,7 @@ config was deleted or disabled, since no snapshot will ever resolve them.
 """
 from __future__ import annotations
 
+import re
 import hashlib
 import logging
 from dataclasses import dataclass
@@ -275,6 +276,46 @@ async def evaluate_alerts(db, cfg: IntegrationConfig, instance, data) -> None:
             await _resolve(db, incident, f"Resolved: {cfg.name} no longer reports this")
 
 
+_MDN_HINT = re.compile(r"\s*For more information check: \S+")
+_HTTP_STATUS = re.compile(r"(?:'|\bstatus(?: code)? |\bHTTP )(\d{3})\b")
+
+
+def explain_failure(error: str | None) -> str:
+    """A collection error as a sentence somebody can act on.
+
+    The raw text is an exception message: an httpx status line with a link
+    to a web reference, a socket error. It stays (it names the URL), without
+    the link, and gets one sentence saying what it usually means.
+    """
+    text = _MDN_HINT.sub("", (error or "").strip()).strip() or "unknown error"
+    low = text.lower()
+    match = _HTTP_STATUS.search(text)
+    status = int(match.group(1)) if match else None
+    if status in (400, 401, 403):
+        hint = ("The system rejected the login. Check the user name, password or token "
+                "in the integration's settings.")
+    elif status == 404:
+        hint = ("The address answers, but not with the expected API. Check the URL and "
+                "port in the integration's settings.")
+    elif status == 429:
+        hint = "The system is limiting requests. It should recover by itself."
+    elif status is not None and status >= 500:
+        hint = "The system itself reports an error. Check it directly."
+    elif "decryption failed" in low:
+        hint = "The stored credentials cannot be read. Enter them again in the integration's settings."
+    elif "certificate" in low:
+        hint = ("The TLS certificate is not trusted. Renew it, or turn certificate "
+                "verification off in the integration's settings.")
+    elif "timed out" in low or "timeout" in low:
+        hint = "No answer in time. Check that the system is running and reachable from Nodeglow."
+    elif any(word in low for word in ("connect", "refused", "unreachable", "name or service",
+                                      "getaddrinfo", "name resolution")):
+        hint = "No connection. Check the address and that the system is reachable from Nodeglow."
+    else:
+        hint = ""
+    return f"{text.rstrip('.')}. {hint}".strip() if hint else text
+
+
 async def record_failure(db, cfg: IntegrationConfig, error: str | None, config: dict | None = None) -> None:
     """Open (or extend) the failure incident once the integration has been
     failing long enough. Called after the failed snapshot was added to ``db``."""
@@ -301,7 +342,7 @@ async def record_failure(db, cfg: IntegrationConfig, error: str | None, config: 
     await _open_or_extend(
         db, rule=FAILED_RULE, title=f"{cfg.name}: integration cannot collect"[:256],
         severity="warning", event_type="integration_error",
-        summary=f"{cfg.type} integration '{cfg.name}' failed: {error or 'unknown error'}",
+        summary=f"{cfg.type} integration '{cfg.name}' failed: {explain_failure(error)}",
         key=key, host_ids=[host.id] if host is not None else [],
     )
 
@@ -323,6 +364,18 @@ def _belongs(cfg: IntegrationConfig, incident: Incident) -> bool:
     if incident.rule == FAILED_RULE:
         return key == failed_key(cfg)
     return incident.rule == ALERT_RULE and key.startswith(alert_prefix(cfg))
+
+
+async def integration_of(db, incident: Incident) -> dict | None:
+    """The integration an incident is about (id, type, name), so the UI can
+    link to it. None for incidents of other rules or of a deleted config."""
+    if incident.rule not in RULES:
+        return None
+    configs = (await db.execute(select(IntegrationConfig))).scalars().all()
+    for cfg in configs:
+        if _belongs(cfg, incident):
+            return {"id": cfg.id, "type": cfg.type, "name": cfg.name}
+    return None
 
 
 async def open_counts(db, configs) -> dict[int, int]:

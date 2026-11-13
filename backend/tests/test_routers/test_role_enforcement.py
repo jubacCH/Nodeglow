@@ -32,7 +32,12 @@ class EditorUser:
 
 # Mutations a read-only user may still make (own account only). Routes under
 # the middleware's auth-skip prefixes never see a session role at all.
-READONLY_ALLOWED = {("POST", "/users/me/password")}
+READONLY_ALLOWED = {
+    ("POST", "/users/me/password"),
+    # Two-factor sign-in of one's own account (routers.mfa).
+    ("POST", "/api/account/mfa/setup"), ("POST", "/api/account/mfa/enable"),
+    ("POST", "/api/account/mfa/disable"),
+}
 _SKIP_PREFIXES = ("/api/agent/", "/api/auth/", "/setup", "/install/", "/agents/download/", "/static")
 
 

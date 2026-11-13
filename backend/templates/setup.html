@@ -70,6 +70,18 @@
 
       <form method="post" action="/setup/complete" class="space-y-4">
         {{ csrf_input(request)|safe }}
+        {% if error %}
+        <p role="alert" class="text-sm" style="color:#F87171">{{ error }}</p>
+        {% endif %}
+        <div>
+          <label for="setup_token" class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Setup token</label>
+          <input type="text" id="setup_token" name="setup_token" required autocomplete="off" spellcheck="false"
+                 class="ng-input">
+          <p class="text-xs text-[--ng-text-muted] mt-1.5">
+            Printed by the installer (NODEGLOW_SETUP_TOKEN in .env). Without the installer:
+            in the server log, or in the file <code>setup-token</code> in the data directory.
+          </p>
+        </div>
         <div>
           <label class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Site name</label>
           <input type="text" name="site_name" value="NODEGLOW"

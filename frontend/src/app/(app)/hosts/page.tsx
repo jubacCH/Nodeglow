@@ -63,7 +63,8 @@ function HostsPageInner() {
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [report, setReport] = useState<BulkReport | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
+  // ?add=1 opens the dialog directly (the first-run welcome links here).
+  const [showAdd, setShowAdd] = useState(() => searchParams.get('add') === '1');
   const redirected = useRef(false);
 
   // All hosts (for the chip counts) and the server-filtered list.

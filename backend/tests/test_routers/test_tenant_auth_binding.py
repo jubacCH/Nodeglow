@@ -415,3 +415,52 @@ async def test_notification_history_is_per_tenant(env):
     assert CANARY not in (await client.get("/settings/notifications/history")).text
     r = await client.get("/settings/notifications/history", headers={"X-Nodeglow-Tenant": "2"})
     assert CANARY in r.text
+
+
+# ── audit trail of access changes ───────────────────────────────────────────
+
+async def test_access_changes_and_failed_sign_ins_are_audited(env):
+    """Who created, promoted or removed a user, and who minted an API key.
+
+    None of these wrote an audit entry: the log could say that somebody
+    changed a host's name, but not that somebody became admin.
+    """
+    from models.audit import AuditLog
+    from services.tenancy import system_scope
+
+    client, sf = env
+    await _user(sf, "admin1", {A: "admin"})
+
+    bad = await client.post("/api/auth/login", json={"username": "admin1", "password": "wrong-password"})
+    assert bad.status_code == 401
+    assert (await _login(client, "admin1")).status_code == 200
+
+    r = await client.post("/api/users", json={"username": "newbie", "password": "Sup3r-Secret-pw!",
+                                              "role": "readonly"})
+    new_id = r.json()["id"]
+    assert (await client.patch(f"/api/users/{new_id}", json={"role": "admin"})).status_code == 200
+    assert (await client.patch(f"/api/users/{new_id}",
+                               json={"password": "An0ther-Secret-pw!"})).status_code == 200
+    assert (await client.delete(f"/api/users/{new_id}")).status_code == 200
+
+    key = await client.post("/settings/api-keys/create", json={"name": "ci", "role": "editor"})
+    assert key.status_code == 200, key.text
+    assert (await client.delete(f"/settings/api-keys/{key.json()['id']}")).status_code == 200
+
+    async with sf() as s:
+        with system_scope("test: read the audit log", audit=False):
+            rows = (await s.execute(select(AuditLog).order_by(AuditLog.id))).scalars().all()
+    actions = [row.action for row in rows]
+    for expected in ("auth.login_failed", "user.create", "user.role_change", "user.password_reset",
+                     "user.delete", "api_key.create", "api_key.delete"):
+        assert expected in actions, (expected, actions)
+
+    by_action = {row.action: row for row in rows}
+    assert by_action["auth.login_failed"].target_name == "admin1"
+    assert by_action["auth.login_failed"].tenant_id is None
+    assert by_action["user.role_change"].username == "admin1"
+    assert '"to": "admin"' in by_action["user.role_change"].details
+    # No secret ever lands in the log.
+    for row in rows:
+        assert "Secret" not in (row.details or "") and "wrong-password" not in (row.details or "")
+        assert key.json()["key"] not in (row.details or "")

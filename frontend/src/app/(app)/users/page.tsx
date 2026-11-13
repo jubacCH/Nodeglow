@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { KeyRound, Plus, ShieldOff, Trash2, Users } from 'lucide-react';
+import { KeyRound, Plus, ShieldCheck, ShieldOff, Trash2, Users } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -19,6 +19,8 @@ import { useIsAdmin, useUser } from '@/stores/auth';
 import { useToastStore } from '@/stores/toast';
 
 interface UserInfo {
+  /** Two-factor sign-in is on for this account. */
+  mfa_enabled?: boolean;
   id: number;
   username: string;
   role: string;
@@ -99,6 +101,23 @@ export default function UsersPage() {
       toast('Role updated', 'success');
     } catch {
       toast('Failed to update role', 'error');
+    }
+  }
+
+  async function handleResetMfa(u: UserInfo) {
+    const ok = await confirm({
+      title: 'Turn off two-factor sign-in',
+      description: `Turn off two-factor sign-in for "${u.username}"? Use this when they lost their phone. They are signed out, sign in with their password alone, and can set it up again.`,
+      confirmLabel: 'Turn off',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await post(`/api/users/${u.id}/mfa/reset`);
+      refresh();
+      toast(`Two-factor sign-in is off for ${u.username}`, 'success');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not turn off two-factor sign-in'), 'error');
     }
   }
 
@@ -213,6 +232,7 @@ export default function UsersPage() {
                             <span className="font-medium">{u.display_name || u.username}</span>
                             {u.auth_source === 'ldap' && <Tag>LDAP</Tag>}
                             {self && <Tag>You</Tag>}
+                            {u.mfa_enabled && <Tag>Two-factor</Tag>}
                           </span>
                           {u.display_name && u.display_name !== u.username && (
                             <span className="block font-mono text-meta text-fg-3">{u.username}</span>
@@ -241,6 +261,16 @@ export default function UsersPage() {
                             >
                               <KeyRound size={14} aria-hidden="true" />
                             </IconButton>
+                            {u.mfa_enabled && !self && (
+                              <IconButton
+                                size="sm"
+                                onClick={() => handleResetMfa(u)}
+                                title="Turn off two-factor sign-in"
+                                aria-label={`Turn off two-factor sign-in for ${u.username}`}
+                              >
+                                <ShieldCheck size={14} aria-hidden="true" />
+                              </IconButton>
+                            )}
                             <IconButton
                               size="sm"
                               onClick={() => handleDelete(u)}

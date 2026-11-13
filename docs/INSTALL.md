@@ -108,6 +108,8 @@ What it does:
 visit and creates the admin account — do it right away, until then anyone who
 reaches port 8000 can claim the instance.
 
+The wizard asks for the **setup token**, so that only the person installing can create the admin account: `install.sh` prints it (it is `NODEGLOW_SETUP_TOKEN` in `.env`). Started without the installer, the backend logs it at start (`docker compose logs nodeglow | grep 'Setup token'`).
+
 Then:
 
 - **Back up `.env`** off the host. `SECRET_KEY` decrypts every stored

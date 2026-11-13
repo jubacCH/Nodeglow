@@ -141,10 +141,60 @@ async def test_webhook_send_revalidates_at_connect_time():
 
 async def test_webhook_send_blocks_unsafe_url_before_sending():
     with patch.object(net_safety, "safe_async_client") as client_factory:
-        await notifications._send_webhook("http://169.254.169.254/", "", "t", "m")
-        await notifications._send_discord("http://localhost/hook", "t", "m")
+        # Blocked is a failure the caller logs as such, never a silent "sent".
+        with pytest.raises(ValueError):
+            await notifications._send_webhook("http://169.254.169.254/", "", "t", "m")
+        with pytest.raises(ValueError):
+            await notifications._send_discord("http://localhost/hook", "t", "m")
     client_factory.assert_not_called()
 
 
 def test_webhook_client_does_not_follow_redirects():
     assert notifications._webhook_client().follow_redirects is False
+
+
+async def test_a_host_on_a_blocked_address_is_not_checked_at_all():
+    """Loopback and metadata addresses are refused when the check runs.
+
+    Saving a host validates it, but hosts also arrive from the scanner and
+    from bulk edits: such a host with an HTTP check and a keyword read the
+    cloud metadata endpoint byte by byte.
+    """
+    from types import SimpleNamespace
+
+    from utils import ping
+
+    for address in ("169.254.169.254", "127.0.0.1"):
+        host = SimpleNamespace(hostname=address, ip_address=None, check_type="http,tcp:22,icmp",
+                               port=None, http_options=None)
+        with patch.object(ping, "_check_single") as single:
+            result = await ping.check_host(host)
+        single.assert_not_called()
+        online, port_error, latency, detail = result
+        assert online is False and latency is None
+        assert "target not allowed" in result.errors["check"]
+
+    # The address on record counts too, not only the name.
+    host = SimpleNamespace(hostname="looks-fine.example.test", ip_address="169.254.169.254",
+                           check_type="http", port=None, http_options=None)
+    with patch.object(net_safety, "resolve_all", return_value=[]):
+        assert "metadata" in (await ping.target_block_reason(host)).lower()
+
+    lan = SimpleNamespace(hostname="10.10.30.52", ip_address="10.10.30.52")
+    assert await ping.target_block_reason(lan) is None
+
+
+def test_http_checks_use_the_guarded_transport():
+    """Connect-time check: covers a name that resolves somewhere else later."""
+    import asyncio
+
+    from utils import ping
+
+    async def build():
+        client = ping._http_client(True)
+        try:
+            return isinstance(client._transport, net_safety.GuardedAsyncTransport)
+        finally:
+            await ping.close_http_clients()
+
+    assert asyncio.run(build()) is True

@@ -14,6 +14,7 @@ from datetime import datetime
 
 from services import clickhouse_client as ch
 
+from services.host_state import iso
 logger = logging.getLogger(__name__)
 
 
@@ -287,6 +288,13 @@ async def extract_unifi_bandwidth(
 # ── Query helpers (read from ClickHouse) ─────────────────────────────────────
 
 
+def _ts(value):
+    """A sample's time as UTC with Z. ClickHouse hands back naive (or aware)
+    UTC datetimes; without the Z a browser reads them as local time, and every
+    interface looked an hour or two stale ("0 reporting")."""
+    return iso(value) if isinstance(value, datetime) else value
+
+
 async def get_bandwidth_history(
     source_type: str | None = None,
     source_id: str | None = None,
@@ -305,7 +313,7 @@ async def get_bandwidth_history(
     return [
         {
             "timestamp": (
-                r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"]
+                _ts(r["timestamp"])
             ),
             "source_type": r["source_type"],
             "source_id": r["source_id"],
@@ -315,6 +323,20 @@ async def get_bandwidth_history(
             "tx_bytes": int(r.get("tx_bytes") or 0),
             "rx_rate_bps": int(r.get("rx_rate_bps") or 0),
             "tx_rate_bps": int(r.get("tx_rate_bps") or 0),
+        }
+        for r in rows
+    ]
+
+
+async def get_bandwidth_total_history(hours: int = 24) -> list[dict]:
+    """Total download / upload over time, for the traffic chart."""
+    rows = await ch.get_bandwidth_total_history_ch(hours=hours)
+    return [
+        {
+            "timestamp": _ts(r["timestamp"]),
+            "rx_rate_bps": int(r.get("rx_rate_bps") or 0),
+            "tx_rate_bps": int(r.get("tx_rate_bps") or 0),
+            "interfaces": int(r.get("interfaces") or 0),
         }
         for r in rows
     ]
@@ -363,7 +385,7 @@ async def get_bandwidth_summary() -> dict:
                 "rx_rate_bps": int(r.get("rx_rate_bps") or 0),
                 "tx_rate_bps": int(r.get("tx_rate_bps") or 0),
                 "timestamp": (
-                    r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"]
+                    _ts(r["timestamp"])
                 ),
             }
             for r in sorted_samples[:20]
@@ -394,7 +416,7 @@ async def get_bandwidth_interfaces() -> list[dict]:
             "rx_bytes": int(r.get("rx_bytes") or 0),
             "tx_bytes": int(r.get("tx_bytes") or 0),
             "last_seen": (
-                r["timestamp"].isoformat() if isinstance(r["timestamp"], datetime) else r["timestamp"]
+                _ts(r["timestamp"])
             ),
         }
         for r in sorted(

@@ -384,3 +384,148 @@ async def test_job_that_only_ever_degrades_is_still_judged(db):
         )
 
     assert [p.key for p in problems] == ["job:ping_checks"]
+
+
+async def test_each_problem_gets_its_own_incident_even_after_an_acknowledge(db):
+    """An acknowledged self-check incident must not swallow the next problem.
+
+    All self-check problems used to share one dedup key (the hash of an empty
+    host list). With "syslog stale" open or acknowledged, "ping_checks stopped"
+    became a mere event on that incident: no incident of its own, no
+    notification.
+    """
+    from sqlalchemy import select
+
+    from models.incident import Incident
+    from services.self_check import SELF_CHECK_RULE, Problem, run_self_check
+
+    scheduler = FakeScheduler([])
+    syslog = Problem(key="syslog_messages", title="Syslog messages: stale",
+                     severity="warning", summary="nothing for 2 h")
+    ping = Problem(key="job:ping_checks", title="Scheduled job not completing: ping_checks",
+                   severity="critical", summary="no successful run")
+    notify = AsyncMock()
+
+    with patch("services.self_check.collect_problems", new=AsyncMock(return_value=[syslog])), \
+         patch("notifications.notify", new=notify):
+        await run_self_check(db, scheduler, NOW, NOW - 10_000)
+
+    first = (await db.execute(
+        select(Incident).where(Incident.rule == SELF_CHECK_RULE)
+    )).scalars().one()
+    first.status = "acknowledged"
+    await db.commit()
+
+    with patch("services.self_check.collect_problems",
+               new=AsyncMock(return_value=[syslog, ping])), \
+         patch("notifications.notify", new=notify):
+        await run_self_check(db, scheduler, NOW + 300, NOW - 10_000)
+
+    incidents = (await db.execute(
+        select(Incident).where(Incident.rule == SELF_CHECK_RULE)
+    )).scalars().all()
+    by_title = {i.title: i for i in incidents}
+    assert set(by_title) == {syslog.title, ping.title}
+    assert by_title[syslog.title].status == "acknowledged"
+    assert by_title[ping.title].status == "open"
+    assert by_title[syslog.title].host_ids_hash != by_title[ping.title].host_ids_hash
+
+
+async def test_incident_under_the_old_shared_key_is_replaced(db):
+    """An incident opened before the per-problem key closes; its successor opens."""
+    from sqlalchemy import select
+
+    from models.incident import Incident
+    from services.correlation import _find_or_create_incident
+    from services.self_check import SELF_CHECK_RULE, Problem, run_self_check
+
+    problem = Problem(key="ping_checks", title="Ping checks: no data recorded",
+                      severity="critical", summary="nothing arriving")
+    with patch("notifications.notify", new=AsyncMock()):
+        await _find_or_create_incident(
+            db, rule=SELF_CHECK_RULE, title=problem.title, severity="critical",
+            host_ids=[], event_type="self_check", summary="old",
+        )
+        await db.commit()
+        with patch("services.self_check.collect_problems",
+                   new=AsyncMock(return_value=[problem])):
+            await run_self_check(db, FakeScheduler([]), NOW, NOW - 10_000)
+
+    incidents = (await db.execute(
+        select(Incident).where(Incident.rule == SELF_CHECK_RULE)
+    )).scalars().all()
+    assert sorted(i.status for i in incidents) == ["open", "resolved"]
+    assert next(i for i in incidents if i.status == "open").host_ids_hash.startswith("sc:")
+
+
+async def test_a_channel_that_keeps_failing_is_a_self_check_problem(db):
+    """A revoked token must not silence every alert without anyone noticing."""
+    from models.notification import NotificationLog
+    from services.self_check import _notification_problems
+
+    for n in range(3):
+        db.add(NotificationLog(channel="telegram", title=f"t{n}", severity="critical",
+                               status="failed", error="401 Unauthorized"))
+    db.add(NotificationLog(channel="email", title="ok", severity="info", status="failed", error="x"))
+    db.add(NotificationLog(channel="email", title="ok", severity="info", status="sent"))
+    await db.commit()
+
+    problems = await _notification_problems(db)
+    assert [p.key for p in problems] == ["notify:telegram"]
+    assert "401 Unauthorized" in problems[0].summary
+
+    db.add(NotificationLog(channel="telegram", title="test", severity="info", status="sent"))
+    await db.commit()
+    assert await _notification_problems(db) == []
+
+
+async def test_heartbeat_is_withheld_while_postgres_is_down(monkeypatch):
+    """The missing request is the alarm: never ping while the database is gone."""
+    import scheduler
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url):
+            calls.append(url)
+            from types import SimpleNamespace
+            return SimpleNamespace(raise_for_status=lambda: None)
+
+    monkeypatch.setenv("NODEGLOW_HEARTBEAT_URL", "https://hc.example.com/ping/abc")
+    monkeypatch.setattr("httpx.AsyncClient", FakeClient)
+
+    monkeypatch.setattr(scheduler, "_postgres_answers", AsyncMock(return_value=False))
+    await scheduler.send_heartbeat()
+    assert calls == []
+    assert scheduler.last_tick is not None
+
+    monkeypatch.setattr(scheduler, "_postgres_answers", AsyncMock(return_value=True))
+    await scheduler.send_heartbeat()
+    assert calls == ["https://hc.example.com/ping/abc"]
+
+
+async def test_postgres_check_of_the_heartbeat_really_asks_the_database(db):
+    """The check itself, unpatched: the heartbeat test above replaces it, and
+    so missed that it raised a NameError and always answered "down"."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.exc import OperationalError
+
+    import scheduler
+
+    @asynccontextmanager
+    async def working():
+        yield db
+
+    @asynccontextmanager
+    async def broken():
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+        yield  # pragma: no cover
+
+    with patch.object(scheduler, "AsyncSessionLocal", working):
+        assert await scheduler._postgres_answers() is True
+    with patch.object(scheduler, "AsyncSessionLocal", broken):
+        assert await scheduler._postgres_answers() is False

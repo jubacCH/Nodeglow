@@ -1334,6 +1334,46 @@ async def get_bandwidth_history_ch(
     return await query(sql, params)
 
 
+def bandwidth_bucket_seconds(hours: int) -> int:
+    """Width of one point of the traffic chart for a time range."""
+    if hours <= 1:
+        return 60
+    if hours <= 6:
+        return 300
+    if hours <= 24:
+        return 900
+    return 3600
+
+
+async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
+    """Total throughput over time: one row per time bucket.
+
+    Each interface is averaged within the bucket first and the interfaces are
+    summed after: interfaces report at different moments, and adding up raw
+    samples would count an interface once per sample it happened to send.
+    """
+    params: dict = {"h": int(hours), "b": bandwidth_bucket_seconds(int(hours))}
+    where = " AND ".join(
+        [tenant_clause(params), "timestamp >= now() - toIntervalHour({h:UInt32})"])
+    sql = f"""
+        SELECT bucket AS timestamp,
+               toUInt64(sum(rx)) AS rx_rate_bps,
+               toUInt64(sum(tx)) AS tx_rate_bps,
+               count() AS interfaces
+        FROM (
+            SELECT toStartOfInterval(timestamp, toIntervalSecond({{b:UInt32}})) AS bucket,
+                   source_type, source_id, interface_name,
+                   avg(rx_rate_bps) AS rx, avg(tx_rate_bps) AS tx
+            FROM bandwidth_metrics
+            WHERE {where}
+            GROUP BY bucket, source_type, source_id, interface_name
+        )
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    """
+    return await query(sql, params)
+
+
 async def get_previous_bandwidth_sample(
     source_type: str,
     source_id: str,

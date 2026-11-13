@@ -25,12 +25,16 @@ Steps:
 ``migrate``    shared with git mode, run from the new backend image; on failure
                the files of ``install`` are restored
 ``restart``    shared with git mode
+``health``     wait until the new version runs and reports healthy; otherwise
+               the files of ``install`` are restored and the previous version
+               is started again
 ``handoff``    recreate the updater itself from a short-lived helper container
 
 Nothing is changed before ``backup``; the files the running stack is defined
-by change in ``install`` and are reverted if the migration fails. The database
-is never rolled back automatically — like the git mode, the pre-update dump is
-the recovery path.
+by change in ``install`` and are reverted if the migration fails or the new
+version does not come up. The database is never rolled back automatically:
+after a failed start the previous version runs against the migrated schema,
+and the pre-update dump is the recovery path if it cannot.
 
 Stdlib only, all I/O through :class:`orchestrator.Ctx` (plus an injectable
 ``fetch_json``), so the steps are unit-testable without Docker or network.
@@ -54,10 +58,11 @@ from orchestrator import (
     step_backup,
     step_migrate,
     step_restart,
+    wait_healthy,
 )
 
 IMAGE_STEP_NAMES = ["preflight", "resolve", "verify", "backup", "pull", "stage",
-                    "install", "migrate", "restart", "handoff"]
+                    "install", "migrate", "restart", "health", "handoff"]
 
 # Release-owned files of an installation directory. The release workflow bakes
 # them into the updater image at DEPLOY_DIR_IN_IMAGE (sidecar/Dockerfile).
@@ -482,6 +487,8 @@ def step_install(ctx: Ctx) -> str:
     (next step) puts them back automatically.
     """
     target = ctx.plan["target"]
+    # What to go back to if the new version does not come up (step_image_health).
+    ctx.plan["previous"] = current_version(ctx)
     replaced = ctx.plan["replaced"] = []
     suffix = f".bak-{ctx.run_id}"
     try:
@@ -513,6 +520,46 @@ def step_image_migrate(ctx: Ctx) -> str:
     except Exception:
         revert_install(ctx)
         raise
+
+
+def step_image_health(ctx: Ctx) -> str:
+    """Wait for the new version; if it does not come up, start the old one.
+
+    The previous images are still on the host and the previous compose file
+    and ``.env`` are kept by ``install``, so going back needs no download. The
+    database stays migrated: migrations are written so the previous release
+    runs against the new schema (additive first, removal a release later).
+    If even the previous version does not come up, the instance needs the
+    pre-update dump restored by hand, and the error says so.
+    """
+    try:
+        return wait_healthy(ctx)
+    except StepError as failure:
+        previous = ctx.plan.get("previous") or ""
+        target = ctx.plan.get("target") or "the new version"
+        if not previous or not ctx.plan.get("replaced"):
+            raise StepError(f"{target} did not come up: {failure}. Nothing to roll back to; "
+                            "restore the pre-update database dump (docs/OPERATIONS.md)") from failure
+        ctx.log(f"{target} did not come up ({failure}); rolling back to {previous}")
+        revert_install(ctx)
+        # The shell environment overrides .env in compose: without this the
+        # restored .env would still be started at the new version.
+        ctx.compose_env[VERSION_KEY] = previous
+        back = step_restart_previous(ctx)
+        raise StepError(f"{target} did not come up: {failure}. {back}") from failure
+
+
+def step_restart_previous(ctx: Ctx) -> str:
+    previous = ctx.plan.get("previous")
+    try:
+        step_restart(ctx)
+        wait_healthy(ctx)
+    except StepError as exc:
+        return (f"Rolling back to {previous} failed as well: {exc}. The instance is down: "
+                "restore the pre-update database dump and start the stack "
+                "(docs/OPERATIONS.md, Restoring)")
+    return (f"Rolled back to {previous}, which is running again. The database stays at the "
+            "new schema; the pre-update dump is kept in case the old version misbehaves")
 
 
 def step_handoff(ctx: Ctx) -> str:
@@ -557,5 +604,6 @@ def image_steps(fetch_json=http_get_json, cfg_fn=settings, which=shutil.which):
         ("install", step_install),
         ("migrate", step_image_migrate),
         ("restart", step_restart),
+        ("health", step_image_health),
         ("handoff", step_handoff),
     ]

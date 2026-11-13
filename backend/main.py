@@ -56,6 +56,16 @@ async def lifespan(app: FastAPI):
     from models.base import engine as _engine
     from services.pg_rls import log_runtime_status
     await log_runtime_status(_engine)
+    # First run: say where the setup token is.
+    try:
+        from database import AsyncSessionLocal as _SetupSession, is_setup_complete as _setup_done
+        from services import setup_token as _setup_token
+        async with _SetupSession() as _db:
+            if not await _setup_done(_db):
+                _setup_token.announce()
+    except Exception:
+        import logging as _logging
+        _logging.getLogger("nodeglow.setup").exception("Setup token check failed")
     # AI became opt-in: installations that already had a Claude key keep AI on (once).
     try:
         from services.ai_config import migrate_ai_opt_in
@@ -198,11 +208,18 @@ async def readyz():
     pg_ok = await _check_postgres()
     ch_ok = await _check_clickhouse()
     ok = pg_ok and ch_ok
+    # Informational, not part of the verdict: an instance that is not the
+    # scheduler leader (enterprise HA) is ready without ever ticking.
+    import time
+
+    import scheduler as _scheduler
+    tick = _scheduler.last_tick
     return JSONResponse(
         {
             "status": "ok" if ok else "error",
             "db": "connected" if pg_ok else "connection failed",
             "clickhouse": "connected" if ch_ok else "connection failed",
+            "scheduler_last_tick_seconds_ago": None if tick is None else round(time.time() - tick),
         },
         status_code=200 if ok else 503,
     )
@@ -377,7 +394,11 @@ _AUTH_SKIP_PREFIXES = (
 
 # Mutations a read-only user may still perform: only on their own account.
 # (Login/logout live under /api/auth/, which never reaches the role check.)
-_READONLY_MUTATION_ALLOWLIST = frozenset({"/users/me/password"})
+_READONLY_MUTATION_ALLOWLIST = frozenset({
+    "/users/me/password",
+    # Two-factor sign-in of one's own account.
+    "/api/account/mfa/setup", "/api/account/mfa/enable", "/api/account/mfa/disable",
+})
 
 
 @app.middleware("http")
@@ -574,6 +595,9 @@ async def ws_live(websocket: WebSocket):
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
+from routers import mfa as _mfa_router  # noqa: E402
+
+app.include_router(_mfa_router.router)
 app.include_router(dashboard.router)
 app.include_router(setup.router)
 app.include_router(ping.router)

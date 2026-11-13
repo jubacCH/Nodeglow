@@ -335,3 +335,34 @@ async def test_a_purge_survives_the_schedule_through_the_api(env):
     assert await _count_tenant_rows(sf, B) == {}
     r = await client.get("/api/tenants")
     assert [t["id"] for t in r.json()["tenants"]] == [A]
+
+
+async def test_audit_rows_are_purged_over_the_owner_connection(env, monkeypatch):
+    """With a separate app user the app role cannot delete audit entries
+    (they are append-only for it); the purge takes the owner connection for
+    that table and the ordinary one for everything else."""
+    from models import base as models_base
+    from models.audit import AuditLog
+    from nodeglow_ee.tenancy import purge
+
+    table = AuditLog.__table__
+    other = next(t for t in purge.purge_order() if t.name != "audit_logs")
+
+    # One database user: nothing special.
+    monkeypatch.setattr(models_base, "has_separate_owner", lambda: False)
+    assert purge._needs_owner(table) is False
+
+    monkeypatch.setattr(models_base, "has_separate_owner", lambda: True)
+    assert purge._needs_owner(table) is True
+    assert purge._needs_owner(other) is False
+
+    used = []
+
+    async def as_owner(tbl, tenant_id):
+        used.append((tbl.name, tenant_id))
+        return 3
+
+    monkeypatch.setattr(purge, "_delete_as_owner", as_owner)
+    assert await purge._delete_batched(table, B) == 3
+    assert used == [("audit_logs", B)]
+

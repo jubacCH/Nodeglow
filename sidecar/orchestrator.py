@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections import namedtuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -32,7 +33,7 @@ from typing import Callable
 CmdResult = namedtuple("CmdResult", "returncode stdout stderr")
 DumpResult = namedtuple("DumpResult", "returncode size stderr")
 
-STEP_NAMES = ["preflight", "backup", "pull", "build", "migrate", "restart"]
+STEP_NAMES = ["preflight", "backup", "pull", "build", "migrate", "restart", "health"]
 
 MAX_ERROR_CHARS = 500
 
@@ -50,6 +51,12 @@ BUILD_SERVICES = ["nodeglow", "frontend"]
 BUILD_TIMEOUT = 1800
 MIGRATE_TIMEOUT = 600
 RESTART_TIMEOUT = 900
+# How long the restarted services get to report healthy, and how often to look.
+HEALTH_TIMEOUT = 300
+HEALTH_POLL = 5
+# A container without a healthcheck only says "running", which a crash loop
+# says too between two crashes: it has to hold for this many looks in a row.
+HEALTH_STABLE_POLLS = 3
 
 
 class StepError(Exception):
@@ -136,6 +143,8 @@ class Ctx:
     # Scratch space shared between the steps of one run (image mode: target
     # version, image references, verified digests).
     plan: dict = field(default_factory=dict)
+    # Waiting between health polls; injected so tests do not sleep.
+    sleep: Callable[[float], None] = time.sleep
 
 
 def idle_state() -> dict:
@@ -596,6 +605,66 @@ def step_restart(ctx: Ctx) -> str:
     return f"{', '.join(BUILD_SERVICES)} restarted"
 
 
+def _service_health(ctx: Ctx, service: str) -> str:
+    """Health of a service's container: healthy, starting, unhealthy, or the
+    container state (running, restarting, exited) when it has no healthcheck.
+    ``missing`` when compose knows no container for it."""
+    ps = _compose(ctx, "ps", "-q", service, timeout=60)
+    container = (ps.stdout or "").strip().splitlines()
+    if ps.returncode != 0 or not container:
+        return "missing"
+    result = ctx.run_cmd(
+        ["docker", "inspect", "--format",
+         "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+         container[0]],
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return "missing"
+    return (result.stdout or "").strip() or "missing"
+
+
+def wait_healthy(ctx: Ctx, services=None, timeout: int = HEALTH_TIMEOUT) -> str:
+    """Wait until every service runs and reports healthy; StepError otherwise.
+
+    ``docker compose up -d`` returning 0 only means the containers were
+    created. A release that crashes on start, or never passes its healthcheck,
+    used to count as a successful update and left the instance down.
+    """
+    services = list(services or BUILD_SERVICES)
+    stable = {name: 0 for name in services}
+    status = {name: "missing" for name in services}
+    waited = 0
+    while True:
+        for name in services:
+            status[name] = _service_health(ctx, name)
+            if status[name] == "healthy":
+                stable[name] = HEALTH_STABLE_POLLS
+            elif status[name] == "running":
+                stable[name] += 1
+            else:
+                stable[name] = 0
+        if all(count >= HEALTH_STABLE_POLLS for count in stable.values()):
+            return ", ".join(f"{name} {status[name]}" for name in services)
+        if waited >= timeout:
+            break
+        ctx.sleep(HEALTH_POLL)
+        waited += HEALTH_POLL
+
+    bad = [name for name in services if stable[name] < HEALTH_STABLE_POLLS]
+    logs = _compose(ctx, "logs", "--no-color", "--tail", "15", bad[0], timeout=60)
+    tail = (logs.stdout or logs.stderr or "").strip()[-MAX_ERROR_CHARS:]
+    raise StepError(
+        f"{', '.join(f'{name} is {status[name]}' for name in bad)} after {waited}s"
+        + (f" — last log lines: {tail}" if tail else "")
+    )
+
+
+def step_health(ctx: Ctx) -> str:
+    """The update is done when the new version runs, not when it was started."""
+    return wait_healthy(ctx)
+
+
 DEFAULT_STEPS = [
     ("preflight", step_preflight),
     ("backup", step_backup),
@@ -603,4 +672,5 @@ DEFAULT_STEPS = [
     ("build", step_build),
     ("migrate", step_migrate),
     ("restart", step_restart),
+    ("health", step_health),
 ]

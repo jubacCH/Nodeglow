@@ -20,6 +20,16 @@ describe('topology model', () => {
     expect(nodeState(node(1, 'a', 'unknown'))).toBe('unknown');
   });
 
+  it('follows the unified state: degraded and warning are not ok', () => {
+    expect(nodeState({ ...node(1, 'a', 'up'), state: 'degraded' })).toBe('degraded');
+    expect(nodeState({ ...node(1, 'a', 'up'), state: 'warning' })).toBe('warning');
+    expect(nodeState({ ...node(1, 'a', 'up'), state: 'up' })).toBe('ok');
+    expect(nodeState({ ...node(1, 'a', 'up'), state: 'disabled' })).toBe('unknown');
+    const match = matcher('problems', '')!;
+    expect(match({ ...node(1, 'a', 'up'), state: 'warning' })).toBe(true);
+    expect(match({ ...node(1, 'a', 'up'), state: 'up' })).toBe(false);
+  });
+
   it('builds trees (biggest first) and orphans', () => {
     const { trees, orphans } = buildTrees(nodes, edges);
     expect(trees.map((t) => t.node.name)).toEqual(['fw', 'probe']);

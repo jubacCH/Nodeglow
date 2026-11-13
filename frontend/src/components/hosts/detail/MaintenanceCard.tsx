@@ -27,7 +27,9 @@ const DURATIONS = [
 export function MaintenanceCard({ host, className }: { host: HostDetailData; className?: string }) {
   const qc = useQueryClient();
   const toast = useToastStore((s) => s.show);
-  const [duration, setDuration] = useState('');
+  // Two hours by default: a window nobody remembers to end keeps the host
+  // silent for good, so the open-ended one has to be picked on purpose.
+  const [duration, setDuration] = useState('2h');
   const [until, setUntil] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);

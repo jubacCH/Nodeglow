@@ -22,7 +22,9 @@ so an interrupted purge resumes from the top on the next run
    (``Base.metadata.sorted_tables`` reversed; self references cleared
    first), in batches of :data:`BATCH` rows with a commit each, in
    ``system_scope`` (as ``nodeglow_app`` under RLS: ``nodeglow.system =
-   on``; plain ``DELETE``, no TRUNCATE, so no owner connection is needed);
+   on``; plain ``DELETE``, no TRUNCATE). The exception is the audit log:
+   the app role may not delete from it (``pg_rls.APPEND_ONLY_TABLES``), so
+   its rows go over the owner connection;
    then memberships, the sessions working in it, the users who belong to no
    other tenant (and are neither operators nor provider members), and the
    tenant row.
@@ -130,8 +132,39 @@ async def purge_clickhouse(tenant_id: int) -> dict[str, int]:
     return out
 
 
+def _needs_owner(table) -> bool:
+    """Append-only tables on an installation with a separate app user: there
+    the app role has no DELETE on them. With a single database user the app
+    is the owner and the ordinary path below works as before."""
+    from models import base as _base
+    from services.pg_rls import APPEND_ONLY_TABLES
+
+    return table.name in APPEND_ONLY_TABLES and _base.has_separate_owner()
+
+
+async def _delete_as_owner(table, tenant_id: int) -> int:
+    """Delete the tenant's rows of an append-only table over the owner
+    connection, in batches. That connection starts in the system scope
+    (``services.pg_rls.system_connect_args``), so row-level security lets
+    it see the rows of the tenant being purged."""
+    from models import base as _base
+
+    engine = _base.owner_engine()
+    total = 0
+    while True:
+        async with engine.begin() as conn:
+            ids = select(table.c.id).where(table.c.tenant_id == tenant_id).limit(BATCH)
+            result = await conn.execute(delete(table).where(table.c.id.in_(ids.scalar_subquery())))
+        n = result.rowcount or 0
+        total += n
+        if n < BATCH:
+            return total
+
+
 async def _delete_batched(table, tenant_id: int) -> int:
     """Delete the tenant's rows of one table in batches; commits each."""
+    if _needs_owner(table):
+        return await _delete_as_owner(table, tenant_id)
     total = 0
     pk = list(table.primary_key.columns)
     while True:

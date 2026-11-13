@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Cpu, Eye, EyeOff, Monitor, Plus, Radio, Terminal, Trash2 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Cpu, Plus, Radio, Terminal, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { StatusPill } from '@/components/ui/StatusPill';
@@ -11,9 +12,6 @@ import { Badge } from '@/components/ui/Badge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Switch } from '@/components/ui/Field';
-import { Modal } from '@/components/ui/Modal';
-import { SegmentedControl } from '@/components/ui/Tabs';
-import { CopyButton } from '@/components/ui/CopyButton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryState, formatAsOf } from '@/components/ui/QueryState';
 import { TableContainer, Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
@@ -25,114 +23,16 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { timeAgo } from '@/lib/utils';
 import type { Agent } from '@/types';
 import { UsageBar, agentState } from './_components/agentStatus';
-
-interface EnrollmentInfo {
-  enrollment_key: string;
-  server_url: string;
-  install_linux: string;
-  install_windows: string;
-}
-
-function mask(secret: string) {
-  if (secret.length <= 4) return '••••••••';
-  return `${'•'.repeat(Math.min(16, secret.length - 4))}${secret.slice(-4)}`;
-}
-
-function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [platform, setPlatform] = useState<'linux' | 'windows'>('linux');
-  const [showKey, setShowKey] = useState(false);
-  const query = useQuery({
-    queryKey: ['enrollment-info'],
-    queryFn: () => get<EnrollmentInfo>('/api/enrollment-info'),
-    enabled: open,
-    staleTime: 60_000,
-  });
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      size="lg"
-      title="Add agent"
-      description="Run one of these commands on the target machine. The agent installs itself and enrols against this server."
-      footer={<Button variant="secondary" onClick={onClose}>Done</Button>}
-    >
-      <QueryState
-        query={query}
-        errorTitle="Could not load the install command"
-        loading={
-          <div className="space-y-3" aria-busy="true" aria-label="Loading">
-            <Skeleton className="h-7 w-48" />
-            <Skeleton className="h-20 w-full" />
-          </div>
-        }
-      >
-        {(info) => {
-          const command = platform === 'linux' ? info.install_linux : info.install_windows;
-          return (
-            <div className="space-y-4">
-              <SegmentedControl
-                label="Target platform"
-                value={platform}
-                onChange={setPlatform}
-                options={[
-                  { value: 'linux', label: <><Terminal size={13} aria-hidden="true" /> Linux</> },
-                  { value: 'windows', label: <><Monitor size={13} aria-hidden="true" /> Windows</> },
-                ]}
-              />
-              <div className="relative">
-                <pre
-                  aria-label={`${platform === 'linux' ? 'Linux' : 'Windows'} install command`}
-                  className="overflow-x-auto whitespace-pre-wrap break-all rounded-ctl border border-border bg-surface-2 p-4 pr-10 font-mono text-meta text-fg"
-                >
-                  {command}
-                </pre>
-                <div className="absolute right-2 top-2">
-                  <CopyButton text={command} />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 gap-4 pt-1 sm:grid-cols-2">
-                <div className="min-w-0">
-                  <p className="ng-label">Server URL</p>
-                  <code className="block truncate rounded-chip bg-surface-2 px-2 py-1 font-mono text-meta text-fg">
-                    {info.server_url}
-                  </code>
-                </div>
-                <div className="min-w-0">
-                  <p className="ng-label">Enrollment key</p>
-                  <div className="flex items-center gap-1">
-                    <code
-                      className="block flex-1 truncate rounded-chip bg-surface-2 px-2 py-1 font-mono text-meta text-fg"
-                      aria-label={showKey ? 'Enrollment key' : 'Enrollment key (hidden)'}
-                    >
-                      {showKey ? info.enrollment_key : mask(info.enrollment_key)}
-                    </code>
-                    <IconButton
-                      size="sm"
-                      aria-label={showKey ? 'Hide enrollment key' : 'Show enrollment key'}
-                      aria-pressed={showKey}
-                      onClick={() => setShowKey((v) => !v)}
-                    >
-                      {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
-                    </IconButton>
-                    <CopyButton text={info.enrollment_key} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        }}
-      </QueryState>
-    </Modal>
-  );
-}
+import { AddAgentDialog } from './_components/AddAgentDialog';
 
 export default function AgentsPage() {
   useEffect(() => { document.title = 'Agents & probes | Nodeglow'; }, []);
   const agentsQuery = useAgents();
   const { data: agents } = agentsQuery;
   const { data: hosts } = useHostsV1();
-  const [showAdd, setShowAdd] = useState(false);
+  // ?add=1 opens the dialog directly (the first-run welcome links here).
+  const searchParams = useSearchParams();
+  const [showAdd, setShowAdd] = useState(() => searchParams.get('add') === '1');
   const toast = useToastStore((s) => s.show);
   const qc = useQueryClient();
   const { confirm, ConfirmDialogElement } = useConfirm();
@@ -206,7 +106,7 @@ export default function AgentsPage() {
         }
       />
 
-      <AddAgentDialog open={showAdd} onClose={() => setShowAdd(false)} />
+      <AddAgentDialog open={showAdd} onClose={() => setShowAdd(false)} agents={agents} />
 
       <Card padding="none">
         <QueryState

@@ -308,3 +308,20 @@ def test_endpoint_and_host_matching():
     assert idx.find("a") is None  # ambiguous short name
     assert idx.find("") is None
 
+
+
+def test_a_collection_error_reads_as_something_to_act_on():
+    """No web-reference link, and one sentence on what the error usually means."""
+    from services.integration_alerts import explain_failure
+
+    raw = ("Client error '400 Bad Request' for url 'http://10.10.70.10:81/api/tokens' "
+           "For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400")
+    text = explain_failure(raw)
+    assert "mozilla" not in text
+    assert "http://10.10.70.10:81/api/tokens" in text
+    assert text.endswith("Check the user name, password or token in the integration's settings.")
+
+    assert "reachable from Nodeglow" in explain_failure("collect timed out after 30s")
+    assert "No connection" in explain_failure("All connection attempts failed")
+    assert explain_failure(None) == "unknown error"
+    assert explain_failure("something odd") == "something odd"

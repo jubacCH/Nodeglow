@@ -2,6 +2,7 @@
 
 export interface BulkUpdates {
   maintenance?: boolean;
+  maintenance_hours?: number;
   enabled?: boolean;
   probe_id?: number | null;
   check_type?: string;
@@ -17,7 +18,8 @@ export interface BulkResponse {
 }
 
 export type BulkAction =
-  | { kind: 'maintenance'; on: boolean }
+  /** hours: how long it lasts; without it, until somebody ends it. */
+  | { kind: 'maintenance'; on: boolean; hours?: number }
   | { kind: 'enabled'; on: boolean }
   | { kind: 'probe'; probeId: number | null; probeName?: string }
   | { kind: 'edit'; updates: BulkUpdates }
@@ -25,7 +27,10 @@ export type BulkAction =
 
 export function bulkUpdatesFor(action: Exclude<BulkAction, { kind: 'delete' }>): BulkUpdates {
   switch (action.kind) {
-    case 'maintenance': return { maintenance: action.on };
+    case 'maintenance':
+      return action.on && action.hours
+        ? { maintenance: true, maintenance_hours: action.hours }
+        : { maintenance: action.on };
     case 'enabled': return { enabled: action.on };
     case 'probe': return { probe_id: action.probeId };
     case 'edit': return action.updates;

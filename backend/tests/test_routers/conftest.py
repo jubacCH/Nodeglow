@@ -88,9 +88,26 @@ async def _test_database():
     url = make_url(PG_APP_URL).set(drivername="postgresql+asyncpg", database=name)
     engine = create_async_engine(url, poolclass=NullPool)
     pg_rls.install_engine_hooks(engine)
+    # The split of a real installation: the app as nodeglow_app (above), and
+    # an owner connection on the same database for what the app role may not
+    # do (delete from the append-only audit log during a tenant purge,
+    # TRUNCATE on restore). Without it the code under test sees "one database
+    # user" and takes the path a restricted role cannot walk.
+    from models import base as models_base
+
+    owner_url = make_url(PG_ADMIN_URL).set(drivername="postgresql+asyncpg", database=name)
+    owner = create_async_engine(
+        owner_url, poolclass=NullPool,
+        connect_args=pg_rls.system_connect_args(owner_url.render_as_string(hide_password=False)),
+    )
+    saved = (models_base.owner_engine, models_base.has_separate_owner)
+    models_base.owner_engine = lambda: owner
+    models_base.has_separate_owner = lambda: True
     try:
         yield engine
     finally:
+        models_base.owner_engine, models_base.has_separate_owner = saved
+        await owner.dispose()
         await engine.dispose()
         admin = await asyncpg.connect(admin_dsn)
         try:

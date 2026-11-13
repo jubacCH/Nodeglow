@@ -10,6 +10,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Two-factor sign-in (TOTP). Every user can turn it on for their own account
+  under the new **Account** page (account menu): scan a QR code with an
+  authenticator app, confirm with a code, keep ten one-time recovery codes. Signing in then asks for
+  the code after the password; LDAP accounts included. A code works once.
+  Admins can turn it off for a user who lost their phone (Users page).
+  Routes under `/api/account/mfa`; database revision 051.
+- Account page: change your own password. Until now only admins could, on
+  the Users page.
 - Backup integrations (Proxmox Backup Server, Veeam, Synology) take per-job
   overrides of the "overdue" limit: one line per pattern, `weekly-* = 200`
   or `archive-vm = off`. A malformed line is reported, never silently
@@ -19,6 +27,33 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - An integration's settings are checked when they are saved: a malformed
   Prometheus alert rule or backup override is refused with the line and the
   reason, instead of surfacing at the first collection.
+- Certificate expiry incidents (`ssl_expiry`): a warning at 14 days left,
+  critical at 3 days and when expired, resolved once the certificate is valid
+  for longer again. Until now the days left were shown and never alerted on.
+- Backup incidents (`backup`): a failed or overdue backup job opens an
+  incident and resolves with the next successful run on schedule. The
+  compliance job used to write its findings to the log only.
+- Bulk "Maintenance for…" on the host list takes a duration
+  (`maintenance_hours` on `PATCH /api/v1/hosts/bulk`).
+- Host-down incidents. A host that fails its checks opens a `host_down`
+  incident, for hosts the core checks, hosts behind a probe and agent hosts
+  alike, after the offline grace period, and resolves when the host answers
+  again. Before, a single host going down was a notification without an
+  incident for core-checked hosts, and nothing at all for the others. The
+  incident replaces the "Host offline" / "Host back online" notifications of
+  the ping job and the rule `host_down_syslog` (syslog errors of the host are
+  named in the summary).
+- Heartbeat to an external monitor: with `NODEGLOW_HEARTBEAT_URL` set,
+  Nodeglow requests that URL once a minute while its scheduler runs and
+  Postgres answers. `/readyz` reports `scheduler_last_tick_seconds_ago`.
+- A failed notification is retried after 5, 30 and 120 seconds. A channel
+  that fails three deliveries in a row raises a self-check incident.
+- The disk-space incident notifies when it opens and when it resolves.
+- Incidents link to what they are about: "Open host" (one affected host) or
+  "Open integration" in the header, and a link on every affected host. The
+  incident API returns `integration` (id, type, name) for integration rules.
+- Backups: every job says why it has its status (`status_reason`: overdue by
+  how long, last run failed with which error, never ran).
 - Thirteen integrations: Proxmox Backup Server, Veeam Backup & Replication,
   Synology Hyper Backup / Active Backup, Prometheus exporter scrape with
   alert rules, domain expiry (RDAP), Microsoft 365 / Entra ID, VMware
@@ -108,6 +143,35 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- Updates wait until the new version runs and reports healthy (new step
+  `health`). A release that does not come up is rolled back: the updater
+  restores the previous compose file and `.env` and starts the previous
+  version again. Before, `docker compose up` returning 0 counted as a
+  successful update, and a release that crashed on start left the instance
+  down. The database is not rolled back.
+- Container logs are rotated (`local` driver, 5 files of 50 MB per service).
+  They used to grow without limit.
+- `multi_host_down` is keyed by subnet and `upstream_failure` by the failed
+  parent, no longer by the exact set of hosts: an outage that spreads stays
+  one incident, with its host list and count kept current. Incidents open
+  under the old keys resolve once and reopen under the new ones.
+- An incident's timeline gets an entry when something changed, not one per
+  cycle. A day-long outage used to collect over a thousand identical lines.
+- A backup job counts as overdue after its interval plus a quarter (at least
+  two hours), not at the bare interval.
+- The reason of an integration failure is cleaned of the web-reference link
+  and followed by what the error usually means (login rejected, not
+  reachable, certificate not trusted).
+- Unfiltered `/api/bandwidth/history` returns the total over all interfaces
+  per time bucket instead of the first 2000 raw samples.
+- Telegram, Discord, webhook and e-mail notifications now carry a link into
+  Nodeglow when the public URL is set (webhook payload field `url`). Before,
+  only Teams, Slack and ntfy did. Host offline and back-online notifications
+  link to the host list.
+- Manual maintenance on a host defaults to two hours. "Until I end it" has to
+  be chosen on purpose.
+- The first-run welcome no longer prints install commands. Its links open the
+  "Add host" and "Add agent" dialogs directly (`/hosts?add=1`, `/agents?add=1`).
 - An agent's own log entries are attributed to its own host by name, no
   longer by the address the request came from (behind NAT that was the
   customer's router).
@@ -123,6 +187,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   recognised, so every such line became a template of its own (the Nodeglow
   agent's log among them). Templates of coloured lines are learned afresh
   once.
+- A sign-in while the backend is down or restarting said "Invalid username
+  or password". It now says the server is not responding.
 - Resolving an incident by hand sends the resolve notification. Before, an
   on-call channel kept its alert open after the incident was closed.
 - Prometheus: a rule whose label set has no series yet (an error counter
@@ -130,6 +196,49 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   metric that is missing altogether does. Found against a live exporter.
 - Synology: a failed API call no longer puts the session id into the error
   text and the log.
+- The DNS job deleted manually added hosts whose address another host also
+  has, every 30 minutes and without a trace, and renamed hosts to their
+  reverse-DNS name even when the user had named them. It now merges only
+  what the scanner found, and keeps a given name.
+- Certificate expiry was only read for hosts whose sole check is HTTPS.
+- The heartbeat's database check raised a NameError and always answered
+  "down", so the heartbeat would never have been sent.
+- Incidents resolved as "back online" while the host was still down
+  (`host_down_syslog` looked for fresh syslog errors, which a dead host does
+  not send), and `upstream_failure` and `disk_space` were resolved a minute
+  after every time they were raised. Each rule now resolves on its own
+  condition, and a rule without one is left open.
+- Two open incidents for one key no longer make the rule fail on every cycle.
+- Backups page: the summary tiles showed dashes, "Needs attention" never
+  appeared and no job was marked overdue, because the page read fields the
+  API did not send. Every daily job showed "Warning" in the hours before its
+  next run.
+- Traffic page: the chart and the interface list stayed empty although data
+  existed (the page took the response envelope for the list), and "0
+  reporting" came from timestamps without a time zone.
+- "Add agent" crashed the Agents page: the dialog read an enrollment key the
+  server no longer sends. It now creates a per-install token (valid 24 hours,
+  7 or 30 days), shows the finished command once, and says when the new agent
+  has reported in. The install commands on the first-run welcome had no token
+  and were answered with 401.
+- Self-check incidents no longer swallow each other. Every self-check problem
+  shared one dedup key, so while one incident was open or acknowledged (say
+  "syslog stale"), a second problem ("ping_checks not completing") only became
+  an event on it: no incident, no notification. Each problem now has its own
+  incident; incidents under the old key are closed and reopened under the new.
+- One host whose check cannot run (a hostname that is not a valid name, a
+  malformed check type) no longer stops the ping cycle for every host of the
+  tenant. That host is recorded as failed with the reason; the rest are
+  checked and written as usual.
+- SMTP connections have a 15 second timeout. A mail server that accepted the
+  connection and then went silent held the notifying job indefinitely.
+- A webhook or Discord URL refused by the address guard is logged as a failed
+  notification, not as sent.
+- The Topology page showed degraded and warning hosts as OK, because it read
+  the old up/down status instead of the host state the rest of the app uses.
+  It now counts them under "Warning" and includes them in "Problems".
+- "Root cause" on the log patterns page always answered "Not found" (wrong
+  API path).
 - "Log volume anomaly" no longer flaps on hosts at their normal volume. The
   volume baseline and the template diversity shared one sample counter, so a
   host's first real hour was folded in at a fifth of its weight and its
@@ -204,6 +313,34 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   as "last seen" for addresses never seen.
 
 ### Security
+- The audit log is append-only for the application. On an installation with
+  its own app database user (`POSTGRES_APP_USER`, the default of
+  `install.sh`), the app role can add and read audit entries but no longer
+  change or delete them. The tenant purge removes a tenant's entries over
+  the owner connection. Installations with a single database user are
+  unchanged: there the app owns the table.
+- The audit log records what it left out: users created, deleted and
+  changed in role, passwords reset or changed, API keys and agent install
+  tokens created and revoked, credentials created, changed and deleted,
+  updates started, and failed sign-ins (with the name as typed, never the
+  password). None of these wrote an entry before.
+- The first-run setup asks for a setup token (`NODEGLOW_SETUP_TOKEN`, printed
+  by `install.sh`; otherwise generated, logged and stored in
+  `/data/setup-token`). Before, whoever reached the port first could create
+  the admin account. The setup page now also shows why a submission was
+  refused.
+- Address guard at check time. A host on a loopback, link-local or cloud
+  metadata address is not checked at all, whatever its check type, and HTTP
+  checks connect through the guarded transport. Hosts added by the subnet
+  scanner are validated like hosts added by hand. Before, a host could reach
+  the scheduler on a path that skipped validation (scanner import, bulk
+  edit), and an HTTP check with a keyword then read such an address.
+- The agent installers write `config.json`, which holds the agent's token,
+  readable by root only (Linux) and by SYSTEM and Administrators only
+  (Windows). It used to be world-readable.
+- CSV exports keep cells that start with `=`, `+`, `-` or `@` as text. A
+  hostname or syslog message, which any device on the network can set, could
+  otherwise run as a formula when the export is opened in a spreadsheet.
 - Dependency updates for new advisories. Frontend: Next.js 15.5.29
   (GHSA-2464-fhr4-w9xw, remote code execution in the Image Optimization API
   with SVG files; GHSA-p3m5-59mp-jv5r), DOMPurify 3.4.17 and undici 8.12.4.

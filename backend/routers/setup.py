@@ -20,7 +20,8 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 async def setup_page(request: Request, db: AsyncSession = Depends(get_db)):
     if await is_setup_complete(db):
         return RedirectResponse(url="/")
-    return templates.TemplateResponse(request, "setup.html")
+    return templates.TemplateResponse(
+        request, "setup.html", {"error": request.query_params.get("error", "")[:300]})
 
 
 @router.post("/complete")
@@ -28,8 +29,21 @@ async def complete_setup(
     site_name: str = Form("NODEGLOW"),
     username: str = Form("admin"),
     password: str = Form(...),
+    setup_token: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
+    from urllib.parse import quote
+
+    from services import setup_token as token_svc
+
+    if await is_setup_complete(db):
+        return RedirectResponse(url="/", status_code=303)
+    # Before anything else: without the token this request does nothing. The
+    # wizard is reachable without a login, and whoever got to it first used
+    # to become the installation's operator.
+    if not token_svc.matches(setup_token):
+        return RedirectResponse(
+            url="/setup?error=" + quote("The setup token is missing or wrong."), status_code=303)
     if not password.strip():
         return RedirectResponse(url="/setup?error=password_required", status_code=303)
     from utils.password import validate_password
@@ -67,5 +81,6 @@ async def complete_setup(
     # Set setup_complete last — only after user creation
     await set_setting(db, "setup_complete", "true")
     await db.commit()
+    token_svc.discard()
 
     return RedirectResponse(url="/", status_code=303)

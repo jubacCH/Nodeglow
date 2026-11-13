@@ -3,7 +3,8 @@ Correlation engine – runs periodically (60s) to detect and group related issue
 into Incidents. Supports deduplication and auto-resolve.
 
 Rules:
-1. host_down_syslog  – Host offline + syslog errors from same host (5min window)
+1. host_down         – A host is offline (every source: core, probe, agent)
+   upstream_failure  – Hosts offline behind a parent that is offline itself
 2. multi_host_down   – 3+ hosts offline simultaneously → network problem
 3. integration_host  – Integration unreachable + associated host offline
 4. syslog_spike      – Syslog error rate 5x above baseline
@@ -67,17 +68,27 @@ def _host_ids_hash(host_ids: list[int]) -> str:
     return hashlib.sha256(",".join(str(i) for i in sorted(host_ids)).encode()).hexdigest()[:16]
 
 
-def _track_rule_hit(db, rule: str, host_ids: list[int], min_cycles: int) -> bool:
+def _track_rule_hit(db, rule: str, host_ids: list[int], min_cycles: int,
+                    key: str | None = None) -> bool:
     """Track consecutive correlation cycles where a rule matches.
 
     Returns True if the rule has matched for >= min_cycles consecutive runs.
     Counters for combos not seen in a cycle are reset automatically via
     _prune_stale_hits() at end of each correlation run.
+
+    ``key`` replaces the host-id hash for rules whose host set changes while
+    the condition stays the same (an outage that grows), and must then be the
+    incident's ``key_hash`` too: auto-resolve looks the incident up by it.
     """
-    key = (_hit_tenant(db), rule, _host_ids_hash(host_ids))
+    key = (_hit_tenant(db), rule, key or _host_ids_hash(host_ids))
     _current_cycle_hits.add(key)
     _rule_hit_counts[key] = _rule_hit_counts.get(key, 0) + 1
     return _rule_hit_counts[key] >= min_cycles
+
+
+def _matched_this_cycle(db, rule: str, key_hash: str | None) -> bool:
+    """Did ``rule`` match for this dedup key in the cycle that is running?"""
+    return (_hit_tenant(db), rule, key_hash) in _current_cycle_hits
 
 
 def _prune_stale_hits():
@@ -167,8 +178,11 @@ async def _find_or_create_incident(
             Incident.rule == rule,
             Incident.host_ids_hash == h,
             Incident.status.in_(["open", "acknowledged"]),
-        )
-    )).scalar_one_or_none()
+        ).order_by(Incident.id)
+    # The oldest one, not scalar_one_or_none(): should two ever exist for one
+    # key (two instances racing), raising here would roll the whole rule back
+    # on every cycle from then on.
+    )).scalars().first()
 
     if existing:
         # Same dedup key, so normally the same hosts. Record them when the
@@ -176,14 +190,23 @@ async def _find_or_create_incident(
         # key_hash incident whose host mapping moved).
         if recorded is not None and existing.host_ids != recorded:
             existing.host_ids = recorded
-        # Append event to existing incident
+        # The incident is refreshed every cycle (inactivity resolves some
+        # rules), but the timeline only gets an entry when something changed:
+        # a day-long outage used to collect one identical line per minute.
         existing.updated_at = datetime.utcnow()
-        db.add(IncidentEvent(
-            incident_id=existing.id,
-            event_type=event_type,
-            summary=summary,
-            detail=detail,
-        ))
+        last_summary = (await db.execute(
+            select(IncidentEvent.summary)
+            .where(IncidentEvent.incident_id == existing.id,
+                   IncidentEvent.event_type.notin_(["acknowledged", "resolved"]))
+            .order_by(IncidentEvent.id.desc()).limit(1)
+        )).scalar()
+        if last_summary != summary:
+            db.add(IncidentEvent(
+                incident_id=existing.id,
+                event_type=event_type,
+                summary=summary,
+                detail=detail,
+            ))
         return existing
 
     # Create new incident
@@ -265,14 +288,65 @@ async def _get_topology(db) -> dict[int, int | None]:
     return hit[1] if hit else {}
 
 
-# ── Rule 1: Host Down + Syslog Errors ───────────────────────────────────────
+# ── Rule 1: Host Down ───────────────────────────────────────────────────────
 
-async def _rule_host_down_syslog(
+def _subnet_of(host) -> str | None:
+    """The /24 of a host's IPv4 address, None when it has none on record."""
+    for value in (getattr(host, "ip_address", None), getattr(host, "hostname", None)):
+        parts = (value or "").strip().split(".")
+        if len(parts) == 4 and all(part.isdigit() for part in parts):
+            return ".".join(parts[:3]) + ".0/24"
+    return None
+
+
+def _down_groups(primary_hosts: list[PingHost]) -> list[tuple[str, str | None, list[PingHost]]]:
+    """Offline hosts that count as one outage: ``(dedup key, subnet, hosts)``.
+
+    Three or more in one /24 are a group each. Whatever is left forms one
+    group "across subnets" if that is three or more as well. The key names the
+    subnet, not the hosts, so an outage that spreads stays one incident.
+    """
+    subnets: dict[str | None, list[PingHost]] = {}
+    for host in primary_hosts:
+        subnets.setdefault(_subnet_of(host), []).append(host)
+    groups = [(f"mhd:{subnet}", subnet, hosts) for subnet, hosts in subnets.items()
+              if subnet is not None and len(hosts) >= 3]
+    rest = [h for subnet, hosts in subnets.items()
+            if subnet is None or len(hosts) < 3 for h in hosts]
+    if len(rest) >= 3:
+        groups.append(("mhd:across", None, rest))
+    return groups
+
+
+def _down_reason(host) -> str:
+    """Why the host counts as down, from what its last check recorded."""
+    if getattr(host, "source", None) == "agent":
+        return "its agent has stopped reporting"
+    try:
+        errors = json.loads(getattr(host, "check_errors", None) or "{}")
+    except (TypeError, ValueError):
+        errors = {}
+    if isinstance(errors, dict) and errors:
+        return "; ".join(f"{label}: {reason}" for label, reason in sorted(errors.items()))[:300]
+    return "it does not answer its checks"
+
+
+async def _rule_host_down(
     db, min_failures: int = 3, min_cycles: int = 2,
     offline_hosts: list[PingHost] | None = None,
+    grace_cycles: int | None = None,
 ):
-    """Host offline AND syslog severity <= 3 from same host in 5min window.
-    Skips hosts whose upstream parent is also offline (topology cascading)."""
+    """One incident per host that is offline, whoever checks it.
+
+    Covers hosts the core checks, hosts behind a probe and agent-sourced
+    hosts alike: all of them write their results to ping_checks. A host down
+    on its own used to be an in-memory notification at best (core-checked
+    hosts only) and nothing at all behind a probe or for an agent.
+
+    Not raised for hosts whose parent is offline (``upstream_failure`` names
+    those) nor for hosts that are part of a multi-host outage this cycle
+    (``multi_host_down``). Syslog errors of the host go into the summary.
+    """
     if offline_hosts is None:
         offline_hosts = await _get_offline_hosts(db, min_failures)
     if not offline_hosts:
@@ -285,34 +359,51 @@ async def _rule_host_down_syslog(
 
     window = datetime.utcnow() - timedelta(minutes=5)
 
+    candidates = [h for h in offline_hosts if h.id not in cascaded_ids]
+    grouped_ids = {h.id for _key, _subnet, hosts in _down_groups(candidates) for h in hosts}
+    singles = [h for h in candidates if h.id not in grouped_ids]
+
     # Error-level syslog counts for every candidate in one grouped query
     # instead of one count() per offline host.
-    candidates = [h for h in offline_hosts if h.id not in cascaded_ids]
     error_counts = await _ch.count_syslog_by_host(
-        [h.id for h in candidates], window, max_severity=3,
-    ) if candidates else {}
+        [h.id for h in singles], window, max_severity=3,
+    ) if singles else {}
 
-    for host in candidates:
+    # Incidents of the rule this one replaced stay open until their host is
+    # back; a second incident for the same host would only be noise.
+    legacy_hashes = set((await db.execute(
+        select(Incident.host_ids_hash).where(
+            Incident.rule == "host_down_syslog",
+            Incident.status.in_(["open", "acknowledged"]),
+        )
+    )).scalars().all()) if singles else set()
+
+    cycles = max(min_cycles, grace_cycles or 0)
+    for host in singles:
+        if not _track_rule_hit(db, "host_down", [host.id], cycles):
+            continue
+        if _host_ids_hash([host.id]) in legacy_hashes:
+            continue
+        summary = f"{host.name} ({host.hostname}) is down: {_down_reason(host)}"
         syslog_count = error_counts.get(host.id, 0)
-
         if syslog_count > 0:
-            if not _track_rule_hit(db, "host_down_syslog", [host.id], min_cycles):
-                continue
-            await _find_or_create_incident(
-                db,
-                rule="host_down_syslog",
-                title=f"{host.name} offline with syslog errors",
-                severity="critical",
-                host_ids=[host.id],
-                event_type="host_down",
-                summary=f"{host.name} ({host.hostname}) is offline with {syslog_count} syslog errors in the last 5min",
-            )
+            summary += f". {syslog_count} syslog errors from it in the last 5 min"
+        await _find_or_create_incident(
+            db,
+            rule="host_down",
+            title=f"Host down: {host.name}",
+            severity="critical",
+            host_ids=[host.id],
+            event_type="host_down",
+            summary=summary,
+        )
 
     # Create a single upstream-failure incident if cascaded hosts exist
     if cascaded_ids:
         # Find the upstream root causes
         cascade_hosts = [h for h in offline_hosts if h.id in cascaded_ids]
         parent_names = set()
+        parent_ids: set[int] = set()
         for hid in cascaded_ids:
             from services.topology import get_ancestors
             ancestors = get_ancestors(topology, hid)
@@ -321,24 +412,32 @@ async def _rule_host_down_syslog(
                     ph = next((h for h in offline_hosts if h.id == a), None)
                     if ph:
                         parent_names.add(ph.name)
+                        parent_ids.add(ph.id)
                     break
 
         names = ", ".join(h.name for h in cascade_hosts[:5])
         if len(cascade_hosts) > 5:
             names += f" (+{len(cascade_hosts) - 5} more)"
-        upstream_label = ", ".join(parent_names) if parent_names else "upstream device"
+        upstream_label = ", ".join(sorted(parent_names)) if parent_names else "upstream device"
 
-        if not _track_rule_hit(db, "upstream_failure", list(cascaded_ids), min_cycles):
+        # Keyed by the failed parents, not by the hosts behind them: the set
+        # of affected hosts shifts while the outage is the same one.
+        key = f"uf:{_host_ids_hash(sorted(parent_ids) or sorted(cascaded_ids))}"
+        if not _track_rule_hit(db, "upstream_failure", list(cascaded_ids), min_cycles, key=key):
             return
-        await _find_or_create_incident(
+        title = f"Upstream failure: {len(cascaded_ids)} hosts affected"
+        incident = await _find_or_create_incident(
             db,
             rule="upstream_failure",
-            title=f"Upstream failure: {len(cascaded_ids)} hosts affected",
+            title=title,
             severity="warning",
             host_ids=list(cascaded_ids),
             event_type="host_down",
             summary=f"{len(cascaded_ids)} hosts offline due to upstream failure ({upstream_label}): {names}",
+            key_hash=key,
+            affected_host_ids=list(cascaded_ids),
         )
+        incident.title = title
 
 
 # ── Rule 2: Multi-Host Down ─────────────────────────────────────────────────
@@ -360,58 +459,34 @@ async def _rule_multi_host_down(
     primary_ids, _ = filter_upstream_failures(offline_ids, topology)
     primary_hosts = [h for h in offline_hosts if h.id in primary_ids]
 
-    if len(primary_hosts) < 3:
-        return
-
-    # Group by /24 subnet (simple heuristic)
-    subnets: dict[str, list[PingHost]] = {}
-    for host in primary_hosts:
-        hostname = host.hostname.strip()
-        parts = hostname.split(".")
-        if len(parts) == 4 and all(p.isdigit() for p in parts):
-            subnet = ".".join(parts[:3]) + ".0/24"
+    for key, subnet, hosts in _down_groups(primary_hosts):
+        host_ids = [h.id for h in hosts]
+        if not _track_rule_hit(db, "multi_host_down", host_ids, min_cycles, key=key):
+            continue
+        names = ", ".join(h.name for h in hosts[:5])
+        if len(hosts) > 5:
+            names += f" (+{len(hosts) - 5} more)"
+        if subnet:
+            title = f"Network issue: {len(hosts)} hosts down in {subnet}"
+            severity = "critical"
+            summary = f"{len(hosts)} hosts offline in {subnet}: {names}"
         else:
-            subnet = "unknown"
-        subnets.setdefault(subnet, []).append(host)
-
-    for subnet, hosts in subnets.items():
-        if len(hosts) >= 3:
-            host_ids = [h.id for h in hosts]
-            if not _track_rule_hit(db, "multi_host_down", host_ids, min_cycles):
-                continue
-            names = ", ".join(h.name for h in hosts[:5])
-            if len(hosts) > 5:
-                names += f" (+{len(hosts) - 5} more)"
-            await _find_or_create_incident(
-                db,
-                rule="multi_host_down",
-                title=f"Network issue: {len(hosts)} hosts down in {subnet}",
-                severity="critical",
-                host_ids=host_ids,
-                event_type="host_down",
-                summary=f"{len(hosts)} hosts offline in {subnet}: {names}",
-            )
-
-    # Also trigger if 3+ hosts down across all subnets (no single subnet has 3+)
-    already_covered = sum(len(h) for h in subnets.values() if len(h) >= 3)
-    remaining = len(primary_hosts) - already_covered
-    if remaining >= 3:
-        uncovered = [h for s, hosts in subnets.items() if len(hosts) < 3 for h in hosts]
-        host_ids = [h.id for h in uncovered]
-        if not _track_rule_hit(db, "multi_host_down", host_ids, min_cycles):
-            return
-        names = ", ".join(h.name for h in uncovered[:5])
-        if len(uncovered) > 5:
-            names += f" (+{len(uncovered) - 5} more)"
-        await _find_or_create_incident(
+            title = f"Multiple hosts down ({len(hosts)} across subnets)"
+            severity = "warning"
+            summary = f"{len(hosts)} hosts offline across multiple subnets: {names}"
+        incident = await _find_or_create_incident(
             db,
             rule="multi_host_down",
-            title=f"Multiple hosts down ({len(uncovered)} across subnets)",
-            severity="warning",
+            title=title,
+            severity=severity,
             host_ids=host_ids,
             event_type="host_down",
-            summary=f"{len(uncovered)} hosts offline across multiple subnets: {names}",
+            summary=summary,
+            key_hash=key,
+            affected_host_ids=host_ids,
         )
+        # The same outage with one host more or less: keep the count current.
+        incident.title = title
 
 
 # ── Rule 3: Integration + Host ──────────────────────────────────────────────
@@ -895,8 +970,35 @@ def _timeout_resolve_reason(rule: str) -> str | None:
     return None
 
 
-async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list[int]:
-    """Auto-resolve incidents where all affected hosts are back online.
+# What an auto-resolved incident says, per rule. Each rule that watches hosts
+# has its own test below; nothing resolves just because no branch claimed it.
+_HOST_RESOLVE_REASONS = {
+    "host_down": "Auto-resolved: the host is no longer down",
+    "host_down_syslog": "Auto-resolved: the host is no longer down",
+    "integration_host": "Auto-resolved: the host is no longer down",
+    "multi_host_down": "Auto-resolved: fewer than three of these hosts are still down",
+    "upstream_failure": "Auto-resolved: the upstream device is reachable again",
+    "port_error": "Auto-resolved: the service check passes again",
+}
+
+# Rules resolved by the code that raises them; auto-resolve leaves them alone.
+_SELF_RESOLVING_RULES = frozenset({
+    "self_check", "agent_service", "disk_space",
+    # services.condition_incidents: the job that raises them resolves them.
+    "ssl_expiry", "backup",
+})
+
+# Which correlation rule (as named in run_correlation) raises which incidents.
+_RAISED_BY = {"upstream_failure": "host_down"}
+
+
+async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None,
+                        failed_rules: frozenset[str] | set[str] = frozenset()) -> list[int]:
+    """Auto-resolve incidents whose condition no longer holds.
+
+    ``failed_rules``: correlation rules that did not complete this cycle.
+    Their incidents are left as they are: "the rule did not report it" then
+    means nothing.
 
     Returns the ids of incidents that were resolved and should get a
     post-mortem. The caller spawns the post-mortem tasks AFTER the surrounding
@@ -918,7 +1020,7 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
 
     # Looked up lazily, once per call, and only if an incident needs them —
     # these used to be one query per incident (and per offline host).
-    syslog_error_counts: dict[int, int] | None = None
+    offline_hashes: set[str] | None = None
     port_error_hashes: set[str] | None = None
 
     for incident in open_incidents:
@@ -952,14 +1054,13 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
         # run_self_check knows whether the condition still holds; it clears them
         # itself. Without this they were recreated every 5 minutes and resolved
         # 60 seconds later, flapping indefinitely.
-        if incident.rule == "self_check":
-            continue
-
         # Watched-service incidents are keyed by agent + service, not by ping
         # hosts, so the check below would resolve them on the next cycle while
         # the service is still down. The agent heartbeat resolves them itself
         # (services.agent_services) when the service reports running again.
-        if incident.rule == "agent_service":
+        # The disk-space job likewise opens and resolves its own incident; here
+        # it was resolved a minute after every time it was raised.
+        if incident.rule in _SELF_RESOLVING_RULES:
             continue
 
         # Integration incidents carry no hosts either; the ingest path resolves
@@ -977,38 +1078,31 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
         if not incident.host_ids_hash:
             continue
 
-        # Check if ALL hosts from the original hash are back online
-        # We find incidents by their hash, so we need to check current offline hosts
-        # against what created this incident. Since we can't reverse the hash,
-        # we check: if no offline hosts match this rule anymore, resolve it.
+        reason = _HOST_RESOLVE_REASONS.get(incident.rule)
+        if reason is None:
+            # Not a rule this function knows how to judge (a rule added
+            # without a resolve test, an extension's rule). Resolving it by
+            # default is how incidents came to flap every cycle.
+            continue
+        if _RAISED_BY.get(incident.rule, incident.rule) in failed_rules:
+            continue
+
         should_resolve = True
 
-        if incident.rule == "host_down_syslog":
-            # If any offline host still has syslog errors, keep open
-            if syslog_error_counts is None:
-                window = datetime.utcnow() - timedelta(minutes=5)
-                syslog_error_counts = await _ch.count_syslog_by_host(
-                    [h.id for h in offline_hosts], window, max_severity=3,
-                ) if offline_hosts else {}
-            for host in offline_hosts:
-                h = _host_ids_hash([host.id])
-                if h == incident.host_ids_hash:
-                    if syslog_error_counts.get(host.id, 0) > 0:
-                        should_resolve = False
-                        break
-
-        elif incident.rule == "multi_host_down":
-            # Can't easily reverse the hash, so check if enough hosts recovered
-            # Resolve if < 3 hosts offline now
-            if len(offline_hosts) >= 3:
+        if incident.rule in ("host_down", "host_down_syslog", "integration_host"):
+            # Open for as long as the host is offline. host_down_syslog used
+            # to look for fresh syslog errors instead, and a host that is
+            # down sends none: "back online" after five minutes of silence.
+            if offline_hashes is None:
+                offline_hashes = {_host_ids_hash([h.id]) for h in offline_hosts}
+            if incident.host_ids_hash in offline_hashes:
                 should_resolve = False
 
-        elif incident.rule == "integration_host":
-            # If the host is still offline, keep open
-            for host in offline_hosts:
-                if _host_ids_hash([host.id]) == incident.host_ids_hash:
-                    should_resolve = False
-                    break
+        elif incident.rule in ("multi_host_down", "upstream_failure"):
+            # Keyed by subnet / failed parent: open while the rule still
+            # reports that key in this cycle.
+            if _matched_this_cycle(db, incident.rule, incident.host_ids_hash):
+                should_resolve = False
 
         elif incident.rule == "port_error":
             # Check if the host still has port_error
@@ -1030,13 +1124,13 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
             db.add(IncidentEvent(
                 incident_id=incident.id,
                 event_type="resolved",
-                summary="Auto-resolved: affected hosts are back online",
+                summary=reason,
             ))
             try:
                 from notifications import notify
                 await notify(
                     f"✅ Resolved: {incident.title}",
-                    "Auto-resolved: affected hosts are back online",
+                    reason,
                     severity="info",
                     link_path=f"/incidents/{incident.id}",
                 )
@@ -1048,6 +1142,17 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None) -> list
 
 
 # ── Main entry point ────────────────────────────────────────────────────────
+
+async def _load_grace_cycles(db) -> int:
+    """Cycles a host must stay down before ``host_down`` opens: the offline
+    grace period in minutes (a cycle is a minute; being counted as offline
+    already took about one)."""
+    from models.settings import get_setting
+    try:
+        return max(0, int(await get_setting(db, "notify_grace_minutes", "5")) - 1)
+    except (ValueError, TypeError):
+        return 4
+
 
 async def _load_correlation_settings(db) -> tuple[int, int]:
     from models.settings import get_setting
@@ -1088,6 +1193,7 @@ async def run_correlation():
     try:
         async with AsyncSessionLocal() as db:
             min_failures, min_cycles = await _load_correlation_settings(db)
+            grace_cycles = await _load_grace_cycles(db)
     except Exception as e:
         log.error("Correlation engine error: %s", e, exc_info=True)
         _clear_cycle_hits(_hit_tenant())
@@ -1107,8 +1213,9 @@ async def run_correlation():
 
     rules = [
         # (name, callable, needs offline hosts)
-        ("host_down_syslog", lambda db: _rule_host_down_syslog(
-            db, min_failures, min_cycles, offline_hosts=offline_hosts), True),
+        ("host_down", lambda db: _rule_host_down(
+            db, min_failures, min_cycles, offline_hosts=offline_hosts,
+            grace_cycles=grace_cycles), True),
         ("multi_host_down", lambda db: _rule_multi_host_down(
             db, min_failures, min_cycles, offline_hosts=offline_hosts), True),
         ("integration_host", lambda db: _rule_integration_host(
@@ -1124,11 +1231,13 @@ async def run_correlation():
     ]
 
     all_ok = offline_hosts is not None
+    failed_rules: set[str] = set()
     for name, fn, needs_offline in rules:
         if needs_offline and offline_hosts is None:
             continue
         if not await _run_rule(name, fn):
             all_ok = False
+            failed_rules.add(name)
 
     # Auto-resolve with an unknown offline set would resolve every host-down
     # incident as "back online"; skip it rather than guess.
@@ -1145,7 +1254,8 @@ async def run_correlation():
     if offline_hosts is not None:
         async with AsyncSessionLocal() as db:
             try:
-                postmortem_ids = await _auto_resolve(db, offline_hosts=offline_hosts)
+                postmortem_ids = await _auto_resolve(
+                    db, offline_hosts=offline_hosts, failed_rules=failed_rules)
                 await db.commit()
             except Exception as e:
                 log.error("Correlation auto-resolve failed: %s", e, exc_info=True)

@@ -165,6 +165,10 @@ def _set_device_cookie(response, request: Request, username: str, nonce: str | N
 class LoginRequest(BaseModel):
     username: str
     password: str
+    # Code from the authenticator app (or a recovery code), when the account
+    # has two-factor sign-in on. Sent with a second request after the first
+    # one answered "mfa_required".
+    totp: str | None = None
 
 
 class LdapConfigError(Exception):
@@ -318,9 +322,31 @@ async def login(
     async def _fail(message: str = "Invalid username or password"):
         await _record_failed_attempt(db, body.username)
         await _record_device_failure(device_nonce)
+        # Installation-level entry: nobody is signed in to a tenant yet. Never
+        # the password, and the name as typed, cut to the column's width.
+        try:
+            from services.tenancy import system_scope
+            with system_scope("audit: failed sign-in", audit=False):
+                await log_action(db, request, "auth.login_failed", "user", None,
+                                 (body.username or "")[:256])
+                await db.commit()
+        except Exception:  # noqa: BLE001 - an audit failure must not change the answer
+            logger.warning("Could not record the failed sign-in", exc_info=True)
         return JSONResponse({"error": message}, status_code=401)
 
     async def _succeed(user, method: str):
+        # Second factor, after the password (or the directory) said yes and
+        # before anything is opened. A missing code is not a failed attempt:
+        # the client asks for it and sends the request again.
+        from routers import mfa
+        if mfa.is_enabled(user):
+            if not (body.totp or "").strip():
+                return JSONResponse(
+                    {"error": "Enter the code from your authenticator app.", "mfa_required": True},
+                    status_code=401)
+            if not mfa.check_code(user, body.totp):
+                failed = await _fail("That code is not valid.")
+                return failed
         # The session starts in the tenant the request names (header) or the
         # user's only membership. A valid password without any tenant access
         # opens nothing — no session.

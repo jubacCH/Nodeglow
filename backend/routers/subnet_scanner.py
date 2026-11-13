@@ -248,7 +248,10 @@ async def api_add_hosts(request: Request, db: AsyncSession = Depends(get_db)):
     q = await db.execute(select(PingHost))
     existing = {(h.hostname or "").strip() for h in q.scalars().all()}
 
+    from utils.net_safety import validate_host
+
     added = 0
+    rejected = 0
     for entry in hosts_to_add:
         ip = (entry.get("ip") or "").strip() if isinstance(entry, dict) else str(entry).strip()
         dns_name = (entry.get("dns_name") or "").strip() if isinstance(entry, dict) else ""
@@ -257,6 +260,11 @@ async def api_add_hosts(request: Request, db: AsyncSession = Depends(get_db)):
         try:
             ipaddress.ip_address(ip)
         except ValueError:
+            continue
+        # The same rule as for a host added by hand: no loopback, link-local
+        # or cloud metadata address becomes a monitored host.
+        if validate_host(ip, resolve=False):
+            rejected += 1
             continue
 
         display_name = dns_name.split(".")[0] if dns_name else ip
@@ -276,7 +284,7 @@ async def api_add_hosts(request: Request, db: AsyncSession = Depends(get_db)):
     if added:
         await db.commit()
 
-    return JSONResponse({"added": added})
+    return JSONResponse({"added": added, "rejected": rejected})
 
 
 # ── Routes – Scheduled Scans CRUD ────────────────────────────────────────────

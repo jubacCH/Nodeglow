@@ -125,7 +125,13 @@ def _http_client(verify_ssl: bool) -> httpx.AsyncClient:
     if client is None or client.is_closed:
         for stale in [k for k in _http_clients if k[0] != loop_id]:
             _http_clients.pop(stale, None)
-        client = httpx.AsyncClient(
+        # The guarded client checks the address at connect time, for the
+        # first request and for every redirect hop: a host saved under a name
+        # that later resolves to loopback or a metadata address, or one that
+        # was added on a path that skipped validation, cannot be fetched.
+        from utils.net_safety import safe_async_client
+
+        client = safe_async_client(
             verify=verify_ssl,
             follow_redirects=False,
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
@@ -407,6 +413,26 @@ async def _check_single(host: "PingHost", ct: str) -> tuple[bool, float | None]:
     return await ping_host(target)
 
 
+async def target_block_reason(host) -> str | None:
+    """Why a host must not be checked at all, or None.
+
+    The rules of ``utils.net_safety`` (private LAN ranges are fine; loopback,
+    link-local, cloud metadata and Nodeglow's own services are not), applied
+    when the check runs and not only when the host is saved: hosts also arrive
+    from the scanner, from bulk edits and from integrations, and a name can
+    point somewhere else tomorrow.
+    """
+    from utils.net_safety import validate_host
+
+    for value in (getattr(host, "hostname", None), getattr(host, "ip_address", None)):
+        if not value:
+            continue
+        reason = await asyncio.to_thread(validate_host, str(value))
+        if reason:
+            return reason
+    return None
+
+
 async def check_host(host: "PingHost") -> HostCheck:
     """Run all check types in parallel.
 
@@ -418,6 +444,13 @@ async def check_host(host: "PingHost") -> HostCheck:
     The returned tuple's ``errors`` attribute maps failed checks to a reason
     ({"https": "status 503"}); ICMP failures have none (the host is down).
     """
+    blocked = await target_block_reason(host)
+    if blocked:
+        # Not checked at all: the answer of a loopback or metadata address is
+        # none of a monitored host's business, whatever the check type.
+        reason = f"target not allowed: {blocked}"
+        return HostCheck(False, False, None, {"check": False}, {"check": reason})
+
     types = [t.strip() for t in (host.check_type or "icmp").split(",") if t.strip()]
     results: list[tuple[bool, float | None]] = await asyncio.gather(
         *[_check_single(host, ct) for ct in types]
