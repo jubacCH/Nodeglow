@@ -391,7 +391,11 @@ _AUTH_SKIP_PREFIXES = (
 
 # Mutations a read-only user may still perform: only on their own account.
 # (Login/logout live under /api/auth/, which never reaches the role check.)
-_READONLY_MUTATION_ALLOWLIST = frozenset({"/users/me/password"})
+_READONLY_MUTATION_ALLOWLIST = frozenset({
+    "/users/me/password",
+    # Two-factor sign-in of one's own account.
+    "/api/account/mfa/setup", "/api/account/mfa/enable", "/api/account/mfa/disable",
+})
 
 
 @app.middleware("http")
@@ -587,6 +591,9 @@ async def ws_live(websocket: WebSocket):
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
+from routers import mfa as _mfa_router  # noqa: E402
+
+app.include_router(_mfa_router.router)
 app.include_router(dashboard.router)
 app.include_router(setup.router)
 app.include_router(ping.router)

@@ -1,7 +1,8 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { Keyboard, LogOut, Moon, Search, Sparkles, Sun } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Keyboard, LogOut, Moon, Search, Sparkles, Sun, UserCog } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ColorMode } from '@/lib/theme';
 import { useResolvedTheme } from '@/lib/useResolvedTheme';
@@ -123,6 +124,7 @@ function UserMenu() {
   const colorMode = useThemeStore((s) => s.colorMode);
   const setColorMode = useThemeStore((s) => s.setColorMode);
   const setShortcutsOpen = useUiStore((s) => s.setShortcutsOpen);
+  const router = useRouter();
   if (!user) return null;
   const initials = user.username.slice(0, 2).toUpperCase();
   return (
@@ -162,6 +164,9 @@ function UserMenu() {
             />
           </div>
           <div className="border-t border-border pt-1">
+            <PopoverItem icon={<UserCog size={16} />} onClick={() => { close(); router.push('/account'); }}>
+              Password and two-factor sign-in
+            </PopoverItem>
             <PopoverItem icon={<Keyboard size={16} />} onClick={() => { close(); setShortcutsOpen(true); }}>
               Keyboard shortcuts
             </PopoverItem>

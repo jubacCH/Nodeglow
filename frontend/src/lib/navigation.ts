@@ -11,7 +11,7 @@
 import {
   Activity, ArrowUpDown, BarChart3, Bell, BookOpen, Bot, Building2, ClipboardList, FileText, History,
   KeyRound, LayoutDashboard, LayoutList, Network, Plug, Radio, Scan, ScrollText,
-  Server, Settings, Shield, ShieldCheck, TriangleAlert, Users, Wrench, Archive,
+  Server, Settings, Shield, ShieldCheck, TriangleAlert, UserCog, Users, Wrench, Archive,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -136,6 +136,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { id: 'credentials', label: 'Credentials', href: '/credentials', icon: KeyRound },
       { id: 'system', label: 'System status', href: '/system/status', icon: Activity, shortcut: 't', keywords: 'updates version' },
       { id: 'audit', label: 'Audit log', href: '/system/audit', icon: Shield, adminOnly: true },
+      { id: 'account', label: 'Account', href: '/account', icon: UserCog, keywords: 'password two-factor 2fa mfa security profile' },
       { id: 'tenants', label: 'Tenants', href: '/tenants', icon: Building2, operatorOnly: true, feature: 'multi_tenancy', keywords: 'customers msp multi-tenant plans' },
     ],
   },

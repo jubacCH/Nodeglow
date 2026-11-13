@@ -14,6 +14,7 @@ from models.api_key import ApiKey
 from ratelimit import rate_limit
 
 from ._helpers import require_access_admin
+from services.audit import log_action
 
 router = APIRouter()
 
@@ -56,6 +57,9 @@ async def create_api_key(request: Request, db: AsyncSession = Depends(get_db)):
         hash_algo="hmac",
     )
     db.add(api_key)
+    await db.flush()
+    await log_action(db, request, "api_key.create", "api_key", api_key.id, name,
+                     {"role": role, "prefix": prefix})
     await db.commit()
     return JSONResponse({"ok": True, "key": raw_key, "id": api_key.id, "prefix": prefix})
 
@@ -68,6 +72,8 @@ async def delete_api_key(key_id: int, request: Request, db: AsyncSession = Depen
     key = await db.get(ApiKey, key_id)
     if not key:
         return JSONResponse({"error": "Not found"}, status_code=404)
+    await log_action(db, request, "api_key.delete", "api_key", key.id, key.name,
+                     {"role": key.role, "prefix": key.prefix})
     await db.delete(key)
     await db.commit()
     return JSONResponse({"ok": True})

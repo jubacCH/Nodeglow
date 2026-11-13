@@ -68,6 +68,8 @@ def _require_access_admin(request: Request):
     return None
 
 
+from services.audit import log_action
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -816,6 +818,9 @@ async def create_install_token(request: Request):
     )
     async with AsyncSessionLocal() as db:
         db.add(token_row)
+        await db.flush()
+        await log_action(db, request, "install_token.create", "install_token", token_row.id,
+                         token_row.prefix, {"ttl_hours": ttl_hours, "note": note or None})
         await db.commit()
         await db.refresh(token_row)
 
@@ -871,6 +876,7 @@ async def revoke_install_token(token_id: int, request: Request):
         if not row:
             return JSONResponse({"error": "Not found"}, status_code=404)
         row.revoked = True
+        await log_action(db, request, "install_token.revoke", "install_token", row.id, row.prefix)
         await db.commit()
     return {"ok": True}
 

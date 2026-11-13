@@ -15,6 +15,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Second step: the account has two-factor sign-in, the server asked for a code.
+  const [needCode, setNeedCode] = useState(false);
+  const [code, setCode] = useState('');
 
   useEffect(() => {
     fetch('/setup/status')
@@ -34,7 +37,7 @@ export default function LoginPage() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(needCode ? { username, password, totp: code.trim() } : { username, password }),
         credentials: 'include',
       });
 
@@ -44,8 +47,16 @@ export default function LoginPage() {
         const next = safeNextPath(new URLSearchParams(window.location.search).get('next'));
         router.push(next ?? '/');
         router.refresh();
+      } else if (res.status >= 500) {
+        // Not a wrong password: the backend is down or restarting (an update).
+        setError('The server is not responding right now. Try again in a moment.');
       } else {
         const data = await res.json().catch(() => ({}));
+        if (data.mfa_required && !needCode) {
+          // Password accepted; ask for the code and send both again.
+          setNeedCode(true);
+          return;
+        }
         setError(data.error || 'Invalid username or password');
       }
     } catch {
@@ -71,31 +82,64 @@ export default function LoginPage() {
             </div>
           )}
 
-          <Field label="Username">
-            <Input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              // eslint-disable-next-line jsx-a11y/no-autofocus
-              autoFocus
-              required
-            />
-          </Field>
+          {needCode ? (
+            <>
+              <Field
+                label="Authentication code"
+                hint="The six-digit code from your authenticator app, or one of your recovery codes."
+              >
+                <Input
+                  type="text"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  autoComplete="one-time-code"
+                  inputMode="text"
+                  spellCheck={false}
+                  // eslint-disable-next-line jsx-a11y/no-autofocus
+                  autoFocus
+                  required
+                />
+              </Field>
+              <Button type="submit" className="w-full" loading={loading}>
+                {loading ? 'Signing in…' : 'Verify'}
+              </Button>
+              <button
+                type="button"
+                className="block w-full text-center text-meta text-fg-2 hover:text-fg"
+                onClick={() => { setNeedCode(false); setCode(''); setError(''); }}
+              >
+                Use a different account
+              </button>
+            </>
+          ) : (
+            <>
+              <Field label="Username">
+                <Input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  // eslint-disable-next-line jsx-a11y/no-autofocus
+                  autoFocus
+                  required
+                />
+              </Field>
 
-          <Field label="Password">
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </Field>
+              <Field label="Password">
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </Field>
 
-          <Button type="submit" className="w-full" loading={loading}>
-            {loading ? 'Signing in…' : 'Sign in'}
-          </Button>
+              <Button type="submit" className="w-full" loading={loading}>
+                {loading ? 'Signing in…' : 'Sign in'}
+              </Button>
+            </>
+          )}
         </form>
       </div>
     </main>

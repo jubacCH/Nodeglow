@@ -10,6 +10,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Two-factor sign-in (TOTP). Every user can turn it on for their own account
+  under the new **Account** page (account menu): an authenticator app, a
+  confirmation code, ten one-time recovery codes. Signing in then asks for
+  the code after the password; LDAP accounts included. A code works once.
+  Admins can turn it off for a user who lost their phone (Users page).
+  Routes under `/api/account/mfa`; database revision 051.
+- Account page: change your own password. Until now only admins could, on
+  the Users page.
 - Certificate expiry incidents (`ssl_expiry`): a warning at 14 days left,
   critical at 3 days and when expired, resolved once the certificate is valid
   for longer again. Until now the days left were shown and never alerted on.
@@ -142,6 +150,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- A sign-in while the backend is down or restarting said "Invalid username
+  or password". It now says the server is not responding.
 - The DNS job deleted manually added hosts whose address another host also
   has, every 30 minutes and without a trace, and renamed hosts to their
   reverse-DNS name even when the user had named them. It now merges only
@@ -259,6 +269,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   as "last seen" for addresses never seen.
 
 ### Security
+- The audit log records what it left out: users created, deleted and
+  changed in role, passwords reset or changed, API keys and agent install
+  tokens created and revoked, credentials created, changed and deleted,
+  updates started, and failed sign-ins (with the name as typed, never the
+  password). None of these wrote an entry before.
 - The first-run setup asks for a setup token (`NODEGLOW_SETUP_TOKEN`, printed
   by `install.sh`; otherwise generated, logged and stored in
   `/data/setup-token`). Before, whoever reached the port first could create
