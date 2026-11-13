@@ -982,3 +982,28 @@ def test_app_role_cannot_create_objects_in_public(pg_db):
         q_app(pg_db, "CREATE TABLE public.planted (x int)")
     # The owner still can (later migrations create tables).
     q(pg_db, "CREATE TABLE public.owner_made (x int)")
+
+
+def test_app_role_cannot_change_the_audit_log(pg_db):
+    """The app adds audit entries and reads them; it cannot rewrite history.
+
+    A compromised backend (or an admin with SQL through it) could otherwise
+    delete the trace of what it did. The owner still can: the tenant purge
+    and a backup restore go over the owner connection.
+    """
+    _run(["migrate.py"], pg_db, **_rls_env(pg_db))
+    q_app(pg_db, "INSERT INTO audit_logs (tenant_id, timestamp, action) VALUES (1, now(), 'test.entry')",
+          tenant=1)
+    assert q_app(pg_db, "SELECT count(*) FROM audit_logs WHERE action = 'test.entry'", tenant=1)[0][0] == 1
+    for statement in ("UPDATE audit_logs SET action = 'rewritten'",
+                      "DELETE FROM audit_logs",
+                      "TRUNCATE audit_logs"):
+        with pytest.raises(Exception, match="permission denied"):
+            q_app(pg_db, statement, system=True)
+    # A second start repeats the blanket grant and takes it back again.
+    _run(["migrate.py"], pg_db, **_rls_env(pg_db))
+    with pytest.raises(Exception, match="permission denied"):
+        q_app(pg_db, "DELETE FROM audit_logs", system=True)
+    q(pg_db, "DELETE FROM audit_logs WHERE action = 'test.entry'")
+    assert q(pg_db, "SELECT count(*) FROM audit_logs WHERE action = 'test.entry'")[0][0] == 0
+

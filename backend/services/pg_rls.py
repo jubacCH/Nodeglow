@@ -233,6 +233,13 @@ def ensure_app_role(conn, login: AppLogin | None, report: SetupReport) -> bool:
     return True
 
 
+# Tables the app may add to and read, never change: what happened stays as it
+# was written. Only the owner connection can remove rows (the tenant purge,
+# a backup restore). This holds where the app has its own database user;
+# with a single user the app is the owner and no grant can bind it.
+APPEND_ONLY_TABLES = ("audit_logs",)
+
+
 def grant_app_privileges(conn, report: SetupReport) -> None:
     """DML on every table and sequence of ``public`` for ``nodeglow_app``,
     now and for tables the owner creates later. Idempotent; ``migrate.py``
@@ -249,6 +256,12 @@ def grant_app_privileges(conn, report: SetupReport) -> None:
     ]
     for sql in statements:
         _try(conn, sql, report, f"cannot grant privileges to {APP_ROLE}")
+    # After the blanket grant above, which this function repeats on every
+    # start: take the changing privileges back where rows are a record.
+    for name in APPEND_ONLY_TABLES:
+        if _scalar(conn, "SELECT to_regclass(:name) IS NOT NULL", name=f"public.{name}"):
+            _try(conn, f"REVOKE UPDATE, DELETE, TRUNCATE ON public.{name} FROM {APP_ROLE}",
+                 report, f"cannot make {name} append-only for {APP_ROLE}")
     # CREATE on the schema would let the RLS-bound role plant tables or
     # functions that the owner later resolves (CVE-2018-1058 pattern). New
     # PostgreSQL 15+ databases do not grant it to PUBLIC; older or upgraded

@@ -269,6 +269,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   as "last seen" for addresses never seen.
 
 ### Security
+- The audit log is append-only for the application. On an installation with
+  its own app database user (`POSTGRES_APP_USER`, the default of
+  `install.sh`), the app role can add and read audit entries but no longer
+  change or delete them. The tenant purge removes a tenant's entries over
+  the owner connection. Installations with a single database user are
+  unchanged: there the app owns the table.
 - The audit log records what it left out: users created, deleted and
   changed in role, passwords reset or changed, API keys and agent install
   tokens created and revoked, credentials created, changed and deleted,
