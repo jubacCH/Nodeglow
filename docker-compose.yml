@@ -45,7 +45,11 @@ services:
     logging: *default-logging
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    # 26.8 LTS (24.8 is end of life). An existing installation on 24.8 must
+    # not jump here in one step: go through every LTS in between, one start
+    # each (25.3 -> 25.8 -> 26.3 -> 26.8), see CHANGELOG. The release compose
+    # file (docker-compose.release.yml) stays on 24.8 for now.
+    image: clickhouse/clickhouse-server:26.8-alpine
     container_name: nodeglow-ch
     volumes:
       - chdata:/var/lib/clickhouse
