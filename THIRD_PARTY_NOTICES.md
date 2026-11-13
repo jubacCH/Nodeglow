@@ -87,6 +87,7 @@ Versions as resolved in `frontend/package-lock.json`.
 | isomorphic-dompurify | 4.5.0 | MIT |
 | lucide-react | 1.52.0 | ISC |
 | next | 15.5.29 | MIT |
+| qrcode-generator | 2.0.4 | MIT |
 | react | 19.3.0 | MIT |
 | react-dom | 19.3.0 | MIT |
 | tailwind-merge | 3.7.0 | MIT |

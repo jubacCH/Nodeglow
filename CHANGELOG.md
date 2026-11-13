@@ -11,8 +11,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 
 ### Added
 - Two-factor sign-in (TOTP). Every user can turn it on for their own account
-  under the new **Account** page (account menu): an authenticator app, a
-  confirmation code, ten one-time recovery codes. Signing in then asks for
+  under the new **Account** page (account menu): scan a QR code with an
+  authenticator app, confirm with a code, keep ten one-time recovery codes. Signing in then asks for
   the code after the password; LDAP accounts included. A code works once.
   Admins can turn it off for a user who lost their phone (Users page).
   Routes under `/api/account/mfa`; database revision 051.

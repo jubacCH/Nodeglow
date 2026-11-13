@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Field, Input } from '@/components/ui/Field';
+import { QrCode } from '@/components/ui/QrCode';
 import { QueryState } from '@/components/ui/QueryState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { api, apiErrorMessage, get, post } from '@/lib/api';
@@ -169,8 +170,12 @@ function TwoFactorCard() {
               <form onSubmit={confirm} className="space-y-4">
                 <ol className="list-decimal space-y-3 pl-5 text-ui text-fg-2">
                   <li>
-                    Open an authenticator app (Google Authenticator, Microsoft Authenticator, Aegis, 1Password, …) and add an account with this setup key:
-                    <span className="mt-1.5 flex items-center gap-2">
+                    Open an authenticator app on your phone (Google Authenticator, Microsoft Authenticator, Aegis, 1Password, …) and scan this code:
+                    <span className="mt-2 block">
+                      <QrCode value={setup.otpauth_uri} label="QR code for the authenticator app" />
+                    </span>
+                    <span className="mt-2 block text-meta text-fg-3">Cannot scan? Enter this setup key in the app instead:</span>
+                    <span className="mt-1 flex items-center gap-2">
                       <code className="rounded-chip bg-surface-2 px-2 py-1 font-mono text-ui text-fg">{formatSecret(setup.secret)}</code>
                       <CopyButton text={setup.secret} />
                     </span>
