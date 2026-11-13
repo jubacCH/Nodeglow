@@ -598,6 +598,13 @@ RLS. The backend logs a warning saying so.
 - RLS is defence in depth against a *forgotten tenant predicate*, not against
   SQL injection: cross-tenant work (token lookups, installation jobs) sets a
   system bypass (`nodeglow.system`) that the app role can set itself.
+- The owner's password is in the backend container's environment, because
+  the container runs the migrations before the app starts.
+- A dump restored into a **new** PostgreSQL cluster references `nodeglow_app`
+  in its grants; `pg_restore` reports those statements as errors when the
+  role does not exist yet. Harmless — the next start creates the role and
+  the grants.
+
 ### The audit log is append-only
 
 With two database users the app role can add audit entries and read them,
@@ -609,16 +616,7 @@ This does not hold for an installation with a single database user (no
 `POSTGRES_APP_USER`): there the app is the table owner, and an owner cannot
 be bound by a grant. It is also not tamper-proof against somebody who has
 the owner's password, which is in the backend container's environment (see
-below); for that, forward the audit log to a system the backend cannot write.
-
-### Limits (continued)
-
-- The owner's password is in the backend container's environment, because
-  the container runs the migrations before the app starts.
-- A dump restored into a **new** PostgreSQL cluster references `nodeglow_app`
-  in its grants; `pg_restore` reports those statements as errors when the
-  role does not exist yet. Harmless — the next start creates the role and
-  the grants.
+Limits above); for that, forward the audit log to a system the backend cannot write.
 
 ---
 
