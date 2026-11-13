@@ -22,6 +22,8 @@ interface PromRule {
   expr: string;
   title: string;
   matched: number;
+  /** Series of the rule's metric regardless of labels (absent in older snapshots). */
+  name_seen?: number;
   nan: number;
   firing: number;
   firing_series: SeriesRow[];
@@ -64,14 +66,21 @@ function labelText(labels: Record<string, string> | undefined): string {
   return entries.length === 0 ? '' : entries.map(([k, v]) => `${k}="${v}"`).join(', ');
 }
 
+/** The metric exists, but no series carries the rule's labels (yet): the rule is fine, it just has nothing to fire on. */
+function idle(rule: PromRule): boolean {
+  return rule.matched === 0 && isNum(rule.name_seen) && rule.name_seen > 0;
+}
+
 function ruleState(rule: PromRule): HealthState {
+  if (idle(rule)) return 'ok';
   if (!isNum(rule.matched) || rule.matched === 0) return 'unknown';
   if (rule.firing > 0) return rule.severity === 'info' ? 'warning' : rule.severity === 'critical' ? 'down' : 'warning';
   return 'ok';
 }
 
 function ruleLabel(rule: PromRule): string {
-  if (!isNum(rule.matched) || rule.matched === 0) return 'Matches no series';
+  if (idle(rule)) return 'OK · no series with these labels';
+  if (!isNum(rule.matched) || rule.matched === 0) return 'Metric not found';
   if (rule.firing > 0) return `${formatCount(rule.firing)} firing`;
   return 'OK';
 }

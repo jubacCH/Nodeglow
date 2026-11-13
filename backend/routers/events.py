@@ -2,6 +2,7 @@
 
 ``POST /api/v1/events``               one event or a list (generic format)
 ``POST /api/v1/events/alertmanager``  Prometheus Alertmanager webhook
+``POST /api/v1/events/pagerduty``     PagerDuty webhook (v3): acknowledge / resolve
 
 Both need an API key with the editor role, sent as ``X-API-Key`` or as
 ``Authorization: Bearer <key>`` (Alertmanager's ``http_config`` can only set
@@ -91,3 +92,39 @@ async def post_alertmanager(
     except ext.EventError as exc:
         raise HTTPException(400, str(exc)) from None
     return await _ingest(db, events)
+
+
+@router.post("/pagerduty", summary="PagerDuty webhook (v3): acknowledge and resolve from the pager")
+@rate_limit(max_requests=240, window_seconds=60)
+async def post_pagerduty(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_editor),
+):
+    """An acknowledge or resolve done in PagerDuty is applied to the Nodeglow
+    incident the alert belongs to. The subscription authenticates with an API
+    key in a custom header (``X-API-Key``). Always answers 200 for a body it
+    could read: PagerDuty retries anything else."""
+    from database import get_setting
+    from services import oncall_feedback
+
+    body = await _json_body(request)
+    public_url = (await get_setting(db, "public_url", "")) or ""
+    result, resolved = await oncall_feedback.apply_pagerduty_event(db, body, public_url)
+    if result["action"] in ("acknowledged", "resolved"):
+        from services.audit import log_action
+        action = {"acknowledged": "incident.acknowledge", "resolved": "incident.resolve"}[result["action"]]
+        await log_action(db, request, action, "incident", result["incident_id"], "via PagerDuty")
+    await db.commit()
+    if resolved is not None:
+        from extensions import fire_incident_resolved
+        fire_incident_resolved([resolved.id])
+        # The other channels learn about it too; for PagerDuty itself the
+        # resolve is a no-op on an already resolved alert.
+        try:
+            from notifications import notify
+            await notify(f"✅ Resolved: {resolved.title}", "Resolved in PagerDuty",
+                         severity="info", link_path=f"/incidents/{resolved.id}")
+        except Exception as exc:
+            logger.warning("Failed to send resolve notification: %s", exc)
+    return {"ok": True, **result}

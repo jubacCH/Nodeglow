@@ -498,6 +498,11 @@ class _RuleState:
     def __init__(self, rule: Rule):
         self.rule = rule
         self.matched = 0
+        # Series of the rule's metric, whatever their labels. Tells a rule
+        # whose metric is missing (a typo: it can never fire) from one whose
+        # label set simply has no series yet (`errors_total{status="error"}`
+        # before the first error: normal).
+        self.name_seen = 0
         self.nan = 0
         self.firing = 0
         self.firing_rows: list[dict] = []
@@ -521,7 +526,8 @@ class _RuleState:
         r = self.rule
         return {
             "line": r.line, "severity": r.severity, "expr": r.expr, "title": r.title,
-            "matched": self.matched, "nan": self.nan, "firing": self.firing,
+            "matched": self.matched, "name_seen": self.name_seen,
+            "nan": self.nan, "firing": self.firing,
             "firing_series": firing, "sample_series": self.sample_rows,
         }
 
@@ -542,6 +548,7 @@ def evaluate_scrape(text: str, rules: list[Rule]) -> dict:
         if len(preview) < PREVIEW_SERIES:
             preview.append(_row(s))
         for st in by_name.get(s.name, ()):
+            st.name_seen += 1
             if st.rule.matches(s):
                 st.feed(s)
 
@@ -740,6 +747,10 @@ class PrometheusIntegration(BaseIntegration):
     color = "orange"
     description = "Scrape any Prometheus or OpenMetrics /metrics endpoint and alert on rules you define."
 
+    def validate_config(self, config: dict) -> list[str]:
+        # The module-level function: connection settings and rule lines.
+        return validate_config(config)
+
     config_fields = [
         ConfigField(key="url", label="Metrics URL", field_type="url",
                     placeholder="http://exporter.local:9100/metrics"),
@@ -805,10 +816,16 @@ class PrometheusIntegration(BaseIntegration):
             if not isinstance(matched, int):
                 continue  # no evaluation result: unknown, not an alert
             if matched == 0:
+                name_seen = rule.get("name_seen")
+                if isinstance(name_seen, int) and name_seen > 0:
+                    # The metric is there, only no series carries these
+                    # labels right now. Counters with an error label have
+                    # no such series until the first error.
+                    continue
                 alerts.append(Alert(
                     severity="warning", title="Rule matches no series",
-                    detail=f"'{expr}' matched no series in the scrape; the rule cannot fire. "
-                           "Check the metric name and label values.",
+                    detail=f"'{expr}': the scrape has no metric of that name; the rule cannot "
+                           "fire. Check the metric name.",
                     entity=_bounded_entity(f"{expr} :: no series"),
                 ))
                 continue

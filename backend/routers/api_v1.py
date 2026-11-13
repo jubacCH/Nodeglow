@@ -1846,7 +1846,11 @@ async def resolve_incident(
     incident = await db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(404, "Incident not found")
+    if incident.status == "resolved":
+        # Idempotent: nothing to change, nobody to tell a second time.
+        return {"ok": True, "status": "resolved"}
 
+    title = incident.title
     incident.status = "resolved"
     incident.resolved_at = datetime.utcnow()
     incident.updated_at = datetime.utcnow()
@@ -1860,6 +1864,16 @@ async def resolve_incident(
     await db.commit()
     from extensions import fire_incident_resolved
     fire_incident_resolved([incident.id])
+    # Tell the channels, like an automatic resolve does. Without this an
+    # on-call service (PagerDuty, Opsgenie, …) keeps its alert open after
+    # the incident was closed by hand. After the commit, and never a
+    # reason to fail the request.
+    try:
+        from notifications import notify
+        await notify(f"✅ Resolved: {title}", f"Resolved by {_key.name}",
+                     severity="info", link_path=f"/incidents/{incident_id}")
+    except Exception as exc:
+        logger.warning("Failed to send resolve notification: %s", exc)
     return {"ok": True, "status": "resolved"}
 
 
