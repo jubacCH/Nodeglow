@@ -120,7 +120,7 @@ interface SystemStatus {
       msg_per_min?: number;
     };
     ssl_expiring: Array<{ name: string; hostname: string; days: number }>;
-    notification_channels: { telegram?: boolean; discord?: boolean; email?: boolean; teams?: boolean; slack?: boolean; ntfy?: boolean };
+    notification_channels: { telegram?: boolean; discord?: boolean; email?: boolean; teams?: boolean; slack?: boolean; ntfy?: boolean; pagerduty?: boolean; opsgenie?: boolean; jsm?: boolean };
     incidents: { open?: number; acknowledged?: number; resolved?: number; total?: number };
     alert_rules: { total?: number; enabled?: number; syslog_rules?: number; last_triggered?: string };
     maintenance: { active?: number; timed?: number; indefinite?: number };

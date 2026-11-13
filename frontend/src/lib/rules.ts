@@ -16,7 +16,7 @@ export const OPERATORS = [
 ] as const;
 
 export const SEVERITIES = ['critical', 'warning', 'info'] as const;
-export const NOTIFY_CHANNELS = ['telegram', 'discord', 'webhook', 'email', 'teams', 'slack', 'ntfy'] as const;
+export const NOTIFY_CHANNELS = ['telegram', 'discord', 'webhook', 'email', 'teams', 'slack', 'ntfy', 'pagerduty', 'opsgenie', 'jsm'] as const;
 
 const NUMERIC_OPS = new Set(['gt', 'lt', 'gte', 'lte']);
 const NO_THRESHOLD_OPS = new Set(['is_true', 'is_false']);

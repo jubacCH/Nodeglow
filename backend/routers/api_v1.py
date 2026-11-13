@@ -85,9 +85,11 @@ def _hash_key_legacy(key: str) -> str:
 
 
 async def require_api_key(request: Request, db: AsyncSession = Depends(get_db)) -> ApiKey:
-    """Validate API key from the X-API-Key header, or fall back to session auth."""
+    """Validate API key from the X-API-Key header (or ``Authorization: Bearer
+    ng_…``), or fall back to session auth."""
     # Header only: query-string keys would leak via proxy/access logs + browser history.
-    key = request.headers.get("X-API-Key")
+    from utils.api_key_header import presented_api_key
+    key = presented_api_key(request.headers)
     if not key and request.query_params.get("api_key"):
         logger.warning(
             "Rejected API request with key in query-string from %s (path=%s). "
@@ -1862,7 +1864,11 @@ async def resolve_incident(
     incident = await db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(404, "Incident not found")
+    if incident.status == "resolved":
+        # Idempotent: nothing to change, nobody to tell a second time.
+        return {"ok": True, "status": "resolved"}
 
+    title = incident.title
     incident.status = "resolved"
     incident.resolved_at = datetime.utcnow()
     incident.updated_at = datetime.utcnow()
@@ -1876,6 +1882,16 @@ async def resolve_incident(
     await db.commit()
     from extensions import fire_incident_resolved
     fire_incident_resolved([incident.id])
+    # Tell the channels, like an automatic resolve does. Without this an
+    # on-call service (PagerDuty, Opsgenie, …) keeps its alert open after
+    # the incident was closed by hand. After the commit, and never a
+    # reason to fail the request.
+    try:
+        from notifications import notify
+        await notify(f"✅ Resolved: {title}", f"Resolved by {_key.name}",
+                     severity="info", link_path=f"/incidents/{incident_id}")
+    except Exception as exc:
+        logger.warning("Failed to send resolve notification: %s", exc)
     return {"ok": True, "status": "resolved"}
 
 

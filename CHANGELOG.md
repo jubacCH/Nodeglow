@@ -10,6 +10,15 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Backup integrations (Proxmox Backup Server, Veeam, Synology) take per-job
+  overrides of the "overdue" limit: one line per pattern, `weekly-* = 200`
+  or `archive-vm = off`. A malformed line is reported, never silently
+  ignored.
+- PagerDuty, the way back: `POST /api/v1/events/pagerduty` applies an
+  acknowledge or resolve done in PagerDuty to the Nodeglow incident.
+- An integration's settings are checked when they are saved: a malformed
+  Prometheus alert rule or backup override is refused with the line and the
+  reason, instead of surfacing at the first collection.
 - Certificate expiry incidents (`ssl_expiry`): a warning at 14 days left,
   critical at 3 days and when expired, resolved once the certificate is valid
   for longer again. Until now the days left were shown and never alerted on.
@@ -37,6 +46,24 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   incident API returns `integration` (id, type, name) for integration rules.
 - Backups: every job says why it has its status (`status_reason`: overdue by
   how long, last run failed with which error, never ran).
+- Thirteen integrations: Proxmox Backup Server, Veeam Backup & Replication,
+  Synology Hyper Backup / Active Backup, Prometheus exporter scrape with
+  alert rules, domain expiry (RDAP), Microsoft 365 / Entra ID, VMware
+  vSphere, FortiGate, Kubernetes, NetBox (with optional host import),
+  Hetzner Cloud, Infomaniak and Exoscale. They were built from the
+  vendors' API documentation and tested against recorded-shape responses,
+  not yet against live systems.
+- On-call channels: PagerDuty (Events API v2), Opsgenie and Jira Service
+  Management. One alert per incident (stable deduplication key), resolved
+  when the incident resolves. A resolve reaches these channels regardless of
+  the channel's minimum severity, so an alert is never left open there.
+- Inbound events: `POST /api/v1/events` and an Alertmanager webhook receiver
+  at `/api/v1/events/alertmanager` let other systems open, update and resolve
+  incidents (rule `external_event`). See docs/API.md.
+- API keys are also accepted as `Authorization: Bearer ng_…`, for senders
+  that cannot set a custom header.
+- Integration settings can have multi-line fields (alert rules, domain
+  lists).
 - Integration incidents. What an integration reports as a problem (a failed
   disk, a degraded RAID or pool, an expiring certificate, a UPS on battery, an
   unreachable DNS cluster node, ...) now opens an incident after two
@@ -142,6 +169,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Resolving an incident by hand sends the resolve notification. Before, an
+  on-call channel kept its alert open after the incident was closed.
+- Prometheus: a rule whose label set has no series yet (an error counter
+  before the first error) no longer warns "matches no series"; only a
+  metric that is missing altogether does. Found against a live exporter.
+- Synology: a failed API call no longer puts the session id into the error
+  text and the log.
 - The DNS job deleted manually added hosts whose address another host also
   has, every 30 minutes and without a trace, and renamed hosts to their
   reverse-DNS name even when the user had named them. It now merges only

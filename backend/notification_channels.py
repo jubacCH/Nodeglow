@@ -1,4 +1,5 @@
-"""Additional notification channels: Microsoft Teams, Slack, ntfy.
+"""Additional notification channels: Microsoft Teams, Slack, ntfy, and the
+on-call services PagerDuty, Opsgenie and Jira Service Management.
 
 Kept apart from ``notifications.py`` so the dispatcher there only has to ask
 this module for its configuration and its send coroutines. Each channel has:
@@ -8,6 +9,12 @@ this module for its configuration and its send coroutines. Each channel has:
     Error text never contains the target URL: webhook URLs for Teams and
     Slack are bearer credentials and the error ends up in notification_logs.
 
+The on-call channels are stateful: an alert stays open on their side until
+it is resolved. They get a stable deduplication key per incident, a resolve
+event when Nodeglow resolves the incident, and resolves bypass the channel's
+minimum severity (a resolve is sent as "info" and would otherwise never
+arrive, leaving the page open for good).
+
 URL safety reuses ``notifications._is_safe_url`` (looked up at call time, so
 hardening there applies here too).
 """
@@ -15,11 +22,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -27,7 +36,9 @@ import notifications as _notifications
 
 logger = logging.getLogger(__name__)
 
-CHANNELS: tuple[str, ...] = ("teams", "slack", "ntfy")
+CHANNELS: tuple[str, ...] = ("teams", "slack", "ntfy", "pagerduty", "opsgenie", "jsm")
+# Channels that keep an alert open until it is resolved (see module docstring).
+STATEFUL_CHANNELS: frozenset[str] = frozenset({"pagerduty", "opsgenie", "jsm"})
 # Every channel the daily AI summary can go to; also its default selection.
 DAILY_SUMMARY_DEFAULT_CHANNELS = "telegram,discord,webhook,email,teams,slack,ntfy"
 
@@ -39,6 +50,15 @@ DEFAULT_NTFY_SERVER = "https://ntfy.sh"
 # ntfy's own topic rule: 1-64 chars of letters, digits, '-' and '_'.
 NTFY_TOPIC_RE = re.compile(r"^[-_A-Za-z0-9]{1,64}$")
 
+PAGERDUTY_EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
+OPSGENIE_BASES: dict[str, str] = {
+    "us": "https://api.opsgenie.com",
+    "eu": "https://api.eu.opsgenie.com",
+}
+# Jira Service Management's alert API speaks the Opsgenie protocol under
+# another base URL (same GenieKey auth, same paths).
+JSM_BASE = "https://api.atlassian.com/jsm/ops/integration"
+
 
 class ChannelError(Exception):
     """A channel delivery failed. The message is safe to store and show."""
@@ -49,13 +69,17 @@ class ChannelError(Exception):
 _SEVERITY_STYLE: dict[str, dict[str, Any]] = {
     # container style / text colour are Adaptive Card enum values
     "critical": {"emoji": "\U0001F534", "label": "CRITICAL", "container": "attention",
-                 "color": "Attention", "ntfy_priority": 5, "ntfy_tag": "rotating_light"},
+                 "color": "Attention", "ntfy_priority": 5, "ntfy_tag": "rotating_light",
+                 "pagerduty": "critical", "ops_priority": "P1"},
     "error":    {"emoji": "\U0001F7E0", "label": "ERROR", "container": "attention",
-                 "color": "Attention", "ntfy_priority": 4, "ntfy_tag": "x"},
+                 "color": "Attention", "ntfy_priority": 4, "ntfy_tag": "x",
+                 "pagerduty": "error", "ops_priority": "P2"},
     "warning":  {"emoji": "\U0001F7E1", "label": "WARNING", "container": "warning",
-                 "color": "Warning", "ntfy_priority": 4, "ntfy_tag": "warning"},
+                 "color": "Warning", "ntfy_priority": 4, "ntfy_tag": "warning",
+                 "pagerduty": "warning", "ops_priority": "P3"},
     "info":     {"emoji": "\U0001F535", "label": "INFO", "container": "accent",
-                 "color": "Accent", "ntfy_priority": 3, "ntfy_tag": "information_source"},
+                 "color": "Accent", "ntfy_priority": 3, "ntfy_tag": "information_source",
+                 "pagerduty": "info", "ops_priority": "P5"},
 }
 
 
@@ -76,6 +100,39 @@ def build_link(public_url: str, link_path: str | None) -> str | None:
     if not link_path:
         return base
     return f"{base}/{link_path.lstrip('/')}"
+
+
+# ── Incident identity (stateful channels) ────────────────────────────────────
+
+_INCIDENT_PATH_RE = re.compile(r"^/?incidents/(\d+)/?$")
+# Title prefixes the incident engine puts in front of the incident title.
+_TITLE_PREFIX_RE = re.compile(r"^\W*(?:resolved|incident)\s*:\s*", re.IGNORECASE)
+_RESOLVED_RE = re.compile(r"^\W*resolved\s*:", re.IGNORECASE)
+
+
+def is_resolve(title: str) -> bool:
+    """True for the notification the incident engine sends on resolution
+    ("✅ Resolved: <incident title>")."""
+    return bool(_RESOLVED_RE.match(title or ""))
+
+
+def dedup_key(public_url: str, link_path: str | None, title: str) -> str:
+    """Stable key under which a stateful channel files an alert, so the
+    resolve finds the alert its trigger opened and a re-notification does not
+    open a second one.
+
+    Incidents are keyed by id (their link path), anything else by its title
+    without the "Incident:" / "Resolved:" prefix. The key is scoped by the
+    installation's public URL: two Nodeglow installations reporting into the
+    same on-call service both have an incident 42.
+    """
+    scope = hashlib.sha256((public_url or "").strip().lower().encode()).hexdigest()[:8]
+    match = _INCIDENT_PATH_RE.match((link_path or "").strip())
+    if match:
+        return f"nodeglow-{scope}-incident-{match.group(1)}"
+    subject = _TITLE_PREFIX_RE.sub("", (title or "").strip()).strip().lower()
+    digest = hashlib.sha256(subject.encode()).hexdigest()[:24]
+    return f"nodeglow-{scope}-{digest}"
 
 
 # ── Payload builders ─────────────────────────────────────────────────────────
@@ -186,6 +243,48 @@ def build_ntfy_payload(topic: str, title: str, message: str, severity: str,
     return payload
 
 
+def build_pagerduty_payload(routing_key: str, title: str, message: str, severity: str,
+                            link: str | None = None, *, key: str, resolve: bool = False) -> dict:
+    """Events API v2 event: a trigger, or the resolve of an earlier trigger."""
+    if resolve:
+        return {"routing_key": routing_key, "event_action": "resolve", "dedup_key": key}
+    payload: dict[str, Any] = {
+        "routing_key": routing_key,
+        "event_action": "trigger",
+        "dedup_key": key,
+        "client": "Nodeglow",
+        "payload": {
+            "summary": _truncate(title, 1024) or "Nodeglow alert",
+            "source": "Nodeglow",
+            "severity": severity_style(severity)["pagerduty"],
+            "custom_details": {"message": _truncate(message, 4000)},
+        },
+    }
+    if link:
+        payload["client_url"] = link
+        payload["links"] = [{"href": link, "text": "Open in Nodeglow"}]
+    return payload
+
+
+def build_ops_alert_payload(title: str, message: str, severity: str,
+                            link: str | None = None, *, key: str) -> dict:
+    """Create-alert body of the Opsgenie alert API (also Jira Service Management)."""
+    details = {"severity": (severity or "info").lower()}
+    description = _truncate(message, 14000)
+    if link:
+        details["link"] = link
+        description = f"{description}\n\n{link}".strip()
+    return {
+        "message": _truncate(title, 130) or "Nodeglow alert",
+        "alias": key,
+        "description": description,
+        "priority": severity_style(severity)["ops_priority"],
+        "source": "Nodeglow",
+        "tags": ["nodeglow"],
+        "details": details,
+    }
+
+
 def ntfy_auth_header(token: str) -> dict[str, str]:
     """Access token -> Bearer; ``user:password`` -> Basic."""
     token = (token or "").strip()
@@ -207,7 +306,8 @@ def _redact(text: str, *secrets: str) -> str:
 
 async def _post_json(url: str, payload: dict, *, headers: dict | None = None,
                      transport: httpx.AsyncBaseTransport | None = None,
-                     label: str) -> None:
+                     label: str, accept: tuple[int, ...] = ()) -> None:
+    """POST ``payload``; a status >= 400 that is not in ``accept`` raises."""
     if not _notifications._is_safe_url(url):
         raise ChannelError(f"{label}: URL rejected by safety check")
     try:
@@ -222,7 +322,7 @@ async def _post_json(url: str, payload: dict, *, headers: dict | None = None,
                     logger.warning("%s 429 - retrying in %.1fs", label, wait)
                     await asyncio.sleep(min(max(wait, 0.0), _MAX_RETRY_WAIT))
                     continue
-                if resp.status_code >= 400:
+                if resp.status_code >= 400 and resp.status_code not in accept:
                     body = _redact(resp.text[:200].strip(), url)
                     raise ChannelError(f"{label}: HTTP {resp.status_code}" + (f" {body}" if body else ""))
                 return
@@ -262,6 +362,40 @@ async def send_ntfy(server_url: str, topic: str, token: str, title: str, message
         raise ChannelError(_redact(str(exc), (token or "").strip())) from exc
 
 
+async def send_pagerduty(routing_key: str, title: str, message: str, severity: str,
+                         link: str | None = None, *, key: str,
+                         transport: httpx.AsyncBaseTransport | None = None) -> None:
+    payload = build_pagerduty_payload(routing_key, title, message, severity, link,
+                                      key=key, resolve=is_resolve(title))
+    try:
+        await _post_json(PAGERDUTY_EVENTS_URL, payload, transport=transport, label="PagerDuty")
+    except ChannelError as exc:
+        raise ChannelError(_redact(str(exc), routing_key)) from exc
+
+
+async def send_ops_alert(base_url: str, api_key: str, title: str, message: str, severity: str,
+                         link: str | None = None, *, key: str, label: str,
+                         transport: httpx.AsyncBaseTransport | None = None) -> None:
+    """Create an alert through the Opsgenie alert API, or close the one a
+    previous call created under the same alias."""
+    headers = {"Authorization": f"GenieKey {api_key}"}
+    base = base_url.rstrip("/")
+    try:
+        if is_resolve(title):
+            # 404: no open alert under this alias (never triggered because of
+            # the severity filter, or closed by hand) — nothing left to do.
+            await _post_json(
+                f"{base}/v2/alerts/{quote(key, safe='')}/close?identifierType=alias",
+                {"source": "Nodeglow", "note": _truncate(message, 2000)},
+                headers=headers, transport=transport, label=label, accept=(404,))
+        else:
+            await _post_json(f"{base}/v2/alerts",
+                             build_ops_alert_payload(title, message, severity, link, key=key),
+                             headers=headers, transport=transport, label=label)
+    except ChannelError as exc:
+        raise ChannelError(_redact(str(exc), api_key)) from exc
+
+
 # ── Configuration + dispatch ─────────────────────────────────────────────────
 
 @dataclass
@@ -278,6 +412,16 @@ class ExtraChannelConfig:
     ntfy_topic: str = ""
     ntfy_token: str = ""
     ntfy_min_severity: str = "all"
+    pagerduty_enabled: bool = False
+    pagerduty_routing_key: str = ""
+    pagerduty_min_severity: str = "all"
+    opsgenie_enabled: bool = False
+    opsgenie_api_key: str = ""
+    opsgenie_region: str = "us"
+    opsgenie_min_severity: str = "all"
+    jsm_enabled: bool = False
+    jsm_api_key: str = ""
+    jsm_min_severity: str = "all"
 
     def configured(self, channel: str) -> bool:
         if channel == "teams":
@@ -286,6 +430,12 @@ class ExtraChannelConfig:
             return bool(self.slack_webhook_url)
         if channel == "ntfy":
             return bool(self.ntfy_topic)
+        if channel == "pagerduty":
+            return bool(self.pagerduty_routing_key)
+        if channel == "opsgenie":
+            return bool(self.opsgenie_api_key)
+        if channel == "jsm":
+            return bool(self.jsm_api_key)
         return False
 
 
@@ -356,12 +506,24 @@ async def load_config(db, get_setting: Callable[..., Awaitable[Any]],
         ntfy_topic=(await g("ntfy_topic")).strip(),
         ntfy_token=secret("ntfy", await g("ntfy_token")),
         ntfy_min_severity=await g("notify_ntfy_min_severity", "all"),
+        pagerduty_enabled=await g("pagerduty_enabled", "0") == "1",
+        pagerduty_routing_key=secret("pagerduty", await g("pagerduty_routing_key")),
+        pagerduty_min_severity=await g("notify_pagerduty_min_severity", "all"),
+        opsgenie_enabled=await g("opsgenie_enabled", "0") == "1",
+        opsgenie_api_key=secret("opsgenie", await g("opsgenie_api_key")),
+        opsgenie_region=(await g("opsgenie_region", "us")).strip().lower() or "us",
+        opsgenie_min_severity=await g("notify_opsgenie_min_severity", "all"),
+        jsm_enabled=await g("jsm_enabled", "0") == "1",
+        jsm_api_key=secret("jsm", await g("jsm_api_key")),
+        jsm_min_severity=await g("notify_jsm_min_severity", "all"),
     )
 
 
 def make_send(cfg: ExtraChannelConfig, channel: str, title: str, message: str,
-              severity: str, link: str | None) -> Coroutine[Any, Any, None]:
-    """Coroutine delivering to one channel, regardless of enabled/severity."""
+              severity: str, link: str | None, *,
+              link_path: str | None = None) -> Coroutine[Any, Any, None]:
+    """Coroutine delivering to one channel, regardless of enabled/severity.
+    ``link_path`` identifies the incident for the stateful channels."""
     if not cfg.configured(channel):
         raise ChannelError(f"{channel}: not configured")
     if channel == "teams":
@@ -371,6 +533,18 @@ def make_send(cfg: ExtraChannelConfig, channel: str, title: str, message: str,
     if channel == "ntfy":
         return send_ntfy(cfg.ntfy_server_url, cfg.ntfy_topic, cfg.ntfy_token,
                          title, message, severity, link)
+    if channel in STATEFUL_CHANNELS:
+        key = dedup_key(cfg.public_url, link_path, title)
+        if channel == "pagerduty":
+            return send_pagerduty(cfg.pagerduty_routing_key, title, message, severity, link, key=key)
+        if channel == "opsgenie":
+            base = OPSGENIE_BASES.get(cfg.opsgenie_region)
+            if base is None:
+                raise ChannelError(f"opsgenie: unknown region {cfg.opsgenie_region!r}")
+            return send_ops_alert(base, cfg.opsgenie_api_key, title, message, severity, link,
+                                  key=key, label="Opsgenie")
+        return send_ops_alert(JSM_BASE, cfg.jsm_api_key, title, message, severity, link,
+                              key=key, label="Jira Service Management")
     raise ChannelError(f"unknown channel {channel!r}")
 
 
@@ -386,6 +560,8 @@ async def send_to_selected(cfg: ExtraChannelConfig, selected: set[str] | list[st
     link = build_link(cfg.public_url, link_path)
     results: list[tuple[str, Exception | None]] = []
     for name in CHANNELS:
+        if name in STATEFUL_CHANNELS:   # a summary is nothing to page for
+            continue
         if name not in selected or not getattr(cfg, f"{name}_enabled"):
             continue
         if failed and name in failed:
@@ -413,7 +589,12 @@ def build_sends(cfg: ExtraChannelConfig, title: str, message: str, severity: str
             continue
         if not getattr(cfg, f"{name}_enabled") or not cfg.configured(name):
             continue
-        if not _notifications._severity_passes(severity, getattr(cfg, f"{name}_min_severity")):
+        # A resolve always reaches a stateful channel: it is sent as "info"
+        # and a severity filter would leave the alert open there for good.
+        resolving = name in STATEFUL_CHANNELS and is_resolve(title)
+        if not resolving and not _notifications._severity_passes(
+                severity, getattr(cfg, f"{name}_min_severity")):
             continue
-        sends.append((name, make_send(cfg, name, title, message, severity, link)))
+        sends.append((name, make_send(cfg, name, title, message, severity, link,
+                                      link_path=link_path)))
     return sends

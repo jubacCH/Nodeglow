@@ -420,7 +420,9 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             k: await get_setting(db, k, "")
             for k in ("telegram_bot_token", "telegram_chat_id", "discord_webhook_url",
                       "smtp_host", "smtp_to", "teams_enabled", "teams_webhook_url",
-                      "slack_enabled", "slack_webhook_url", "ntfy_enabled", "ntfy_topic")
+                      "slack_enabled", "slack_webhook_url", "ntfy_enabled", "ntfy_topic",
+                      "pagerduty_enabled", "pagerduty_routing_key", "opsgenie_enabled",
+                      "opsgenie_api_key", "jsm_enabled", "jsm_api_key")
         }
 
         notification_info = {
@@ -430,6 +432,9 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "teams": settings.get("teams_enabled") == "1" and bool(settings.get("teams_webhook_url")),
             "slack": settings.get("slack_enabled") == "1" and bool(settings.get("slack_webhook_url")),
             "ntfy": settings.get("ntfy_enabled") == "1" and bool(settings.get("ntfy_topic")),
+            "pagerduty": settings.get("pagerduty_enabled") == "1" and bool(settings.get("pagerduty_routing_key")),
+            "opsgenie": settings.get("opsgenie_enabled") == "1" and bool(settings.get("opsgenie_api_key")),
+            "jsm": settings.get("jsm_enabled") == "1" and bool(settings.get("jsm_api_key")),
         }
     except Exception:
         pass

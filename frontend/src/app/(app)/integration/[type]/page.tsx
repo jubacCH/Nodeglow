@@ -14,7 +14,7 @@ import { Tag } from '@/components/ui/Tag';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SidePanel } from '@/components/ui/SidePanel';
-import { Checkbox, Field, Input, Select } from '@/components/ui/Field';
+import { Checkbox, Field, Input, Select, Textarea } from '@/components/ui/Field';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryState, formatAsOf } from '@/components/ui/QueryState';
 import { TableContainer, Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
@@ -410,6 +410,28 @@ export default function IntegrationListPage() {
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </Select>
+                </Field>
+              );
+            }
+            if (field.field_type === 'textarea') {
+              // Multi-line values (one rule or domain per line): a single-line
+              // input would drop the line breaks.
+              return (
+                <Field
+                  key={field.key}
+                  label={field.label}
+                  required={field.required}
+                  error={missingFields.includes(field.key) ? 'Required.' : undefined}
+                  className="sm:col-span-2"
+                >
+                  <Textarea
+                    rows={6}
+                    className="font-mono"
+                    spellCheck={false}
+                    placeholder={field.placeholder}
+                    value={(formData[field.key] as string) ?? ''}
+                    onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                  />
                 </Field>
               );
             }

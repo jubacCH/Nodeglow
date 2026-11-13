@@ -88,6 +88,26 @@ async def _validate_config_hosts_async(config_dict: dict, fields) -> str | None:
     return await asyncio.to_thread(_validate_config_hosts, config_dict, fields)
 
 
+def _config_problems(integration_cls: type[BaseIntegration], config_dict: dict) -> list[str]:
+    """What the integration itself finds wrong with a configuration
+    (BaseIntegration.validate_config). A validator that fails does not block
+    the save: the collector reports the same problems at its first run."""
+    try:
+        problems = integration_cls(config=config_dict).validate_config(config_dict)
+    except Exception:
+        log.exception("validate_config of %s failed", integration_cls.name)
+        return []
+    return [str(p) for p in problems or [] if p]
+
+
+def _problems_response(problems: list[str]) -> JSONResponse:
+    shown = problems[:5]
+    more = len(problems) - len(shown)
+    text = "; ".join(shown) + (f" (and {more} more)" if more > 0 else "")
+    return JSONResponse({"error": text, "code": "invalid_config", "problems": problems},
+                        status_code=400)
+
+
 def _is_secret_field(field) -> bool:
     return field.field_type == "password" or bool(getattr(field, "encrypted", False))
 
@@ -259,6 +279,8 @@ async def api_create_instance(
     host_err = await _validate_config_hosts_async(config_dict, integration_cls.config_fields)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
+    if problems := _config_problems(integration_cls, config_dict):
+        return _problems_response(problems)
     cfg = await int_svc.create_config(
         db, integration_type, name, config_dict, cluster_group=cluster_group,
     )
@@ -349,6 +371,8 @@ async def api_edit_instance(
     host_err = await _validate_config_hosts_async(config_dict, fields)
     if host_err:
         return JSONResponse({"error": host_err}, status_code=400)
+    if problems := _config_problems(integration_cls, config_dict):
+        return _problems_response(problems)
 
     # Tri-state: only thread cluster_group when the body explicitly contains
     # the key. Empty string or null clear it; missing key leaves it untouched.

@@ -1068,6 +1068,13 @@ async def _auto_resolve(db, offline_hosts: list[PingHost] | None = None,
         if incident.rule in integration_alerts.RULES:
             continue
 
+        # Incidents another system reported (services.external_events) are
+        # resolved by that system only: nothing here can check the
+        # condition, and the host logic below would close them a minute
+        # after they were opened.
+        if incident.rule == "external_event":
+            continue
+
         if not incident.host_ids_hash:
             continue
 

@@ -60,6 +60,8 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "public_url", "teams_enabled", "slack_enabled", "ntfy_enabled",
         "ntfy_server_url", "ntfy_topic",
         "notify_teams_min_severity", "notify_slack_min_severity", "notify_ntfy_min_severity",
+        "pagerduty_enabled", "opsgenie_enabled", "opsgenie_region", "jsm_enabled",
+        "notify_pagerduty_min_severity", "notify_opsgenie_min_severity", "notify_jsm_min_severity",
         "ping_retention_days", "proxmox_retention_days", "integration_retention_days",
         "incident_event_retention_days",
         "anomaly_threshold", "proxmox_cpu_threshold", "proxmox_ram_threshold",
@@ -91,6 +93,8 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
         "daily_ai_summary_channels": DAILY_SUMMARY_DEFAULT_CHANNELS,
         "ntfy_server_url": "https://ntfy.sh",
         "teams_enabled": "0", "slack_enabled": "0", "ntfy_enabled": "0",
+        "pagerduty_enabled": "0", "opsgenie_enabled": "0", "jsm_enabled": "0",
+        "opsgenie_region": "us",
     }
     for key, default in defaults.items():
         if not result.get(key):
@@ -106,6 +110,10 @@ async def settings_json(request: Request, db: AsyncSession = Depends(get_db)):
     result["teams_has_url"] = bool(await get_setting(db, "teams_webhook_url", ""))
     result["slack_has_url"] = bool(await get_setting(db, "slack_webhook_url", ""))
     result["ntfy_has_token"] = bool(await get_setting(db, "ntfy_token", ""))
+    # On-call channel keys: flags only as well.
+    result["pagerduty_has_key"] = bool(await get_setting(db, "pagerduty_routing_key", ""))
+    result["opsgenie_has_key"] = bool(await get_setting(db, "opsgenie_api_key", ""))
+    result["jsm_has_key"] = bool(await get_setting(db, "jsm_api_key", ""))
     result["claude_has_key"] = bool(await get_setting(db, "claude_api_key", ""))
     result["geoip_has_key"] = bool(await get_setting(db, "geoip_license_key", ""))
     ldap_keys = [
