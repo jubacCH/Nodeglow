@@ -89,6 +89,14 @@ _VARIABLE_PATTERNS = [
 ]
 
 
+# Terminal colour codes, raw or as rsyslog escapes the ESC byte ("#033").
+# A program that colours its output without checking for a terminal (the
+# Nodeglow agent's own log among them) glues them onto the neighbouring
+# token: "\x1b[2m2026-11-12T20:59:44Z" has no word boundary before the
+# timestamp, so it was never masked and every line became its own template.
+_ANSI_ESCAPE = re.compile(r'(?:\x1b|#033)\[[0-9;?]*[A-Za-z]')
+
+
 def extract_template(message: str) -> tuple[str, str]:
     """
     Extract a template from a log message using Drain-lite algorithm.
@@ -97,7 +105,7 @@ def extract_template(message: str) -> tuple[str, str]:
     if not message:
         return ("", hashlib.md5(b"").hexdigest()[:16])
 
-    tpl = message
+    tpl = _ANSI_ESCAPE.sub(' ', message)
     for pattern, replacement in _VARIABLE_PATTERNS:
         tpl = pattern.sub(replacement, tpl)
 
@@ -1676,12 +1684,23 @@ SEVERITY_UPGRADE_MIN_COUNT = 3
 
 DIVERSITY_NOVELTY_DAYS = 7
 
+# The agent's own log and the lines systemd writes about its unit. An agent
+# self-update happens less often than the novelty window is long, so its
+# dozen lines (update found, verified, applied, unit stopped and started)
+# were new every time: each release raised a spike on every agent host with
+# a quiet template mix. An agent that stops reporting has its own alert.
+OWN_AGENT_SQL = (
+    "(app_name = 'nodeglow-agent'"
+    " OR positionCaseInsensitive(message, 'nodeglow-agent.service') > 0)"
+)
+
 
 async def _count_novel_templates(host_keys: list[str]) -> dict[str, int]:
     """{host_key: templates seen in the last hour but not in the week before}.
 
     Scans a week of syslog, so it runs only for hosts whose distinct count
-    already crossed the threshold.
+    already crossed the threshold. Leaves out what Nodeglow's own agent logs
+    (OWN_AGENT_SQL).
     """
     from services import clickhouse_client as ch
 
@@ -1696,6 +1715,7 @@ async def _count_novel_templates(host_keys: list[str]) -> dict[str, int]:
                  AND timestamp >= now() - INTERVAL {{days:UInt32}} DAY
                  AND template_hash != ''
                  AND {DIVERSITY_KEY_SQL} IN {{keys:Array(String)}}
+                 AND NOT {OWN_AGENT_SQL}
                GROUP BY host_key, template_hash
            )
            GROUP BY host_key""",

@@ -177,6 +177,16 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- "Template diversity spike" no longer fires on every agent host after a
+  release. An agent that updates itself logs a dozen lines it has not sent
+  in the past week (update found, verified, applied, unit stopped and
+  started); the agent's own log and the systemd lines about its unit no
+  longer count as new templates.
+- Log lines with terminal colour codes are grouped into templates like any
+  other. The codes sat directly in front of the timestamp, which was then not
+  recognised, so every such line became a template of its own (the Nodeglow
+  agent's log among them). Templates of coloured lines are learned afresh
+  once.
 - A sign-in while the backend is down or restarting said "Invalid username
   or password". It now says the server is not responding.
 - Resolving an incident by hand sends the resolve notification. Before, an
