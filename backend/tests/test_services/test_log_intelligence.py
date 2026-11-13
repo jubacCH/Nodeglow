@@ -103,6 +103,22 @@ def test_extract_template_masks_docker_veth_names():
     assert "veth116i0" in tpl
 
 
+def test_extract_template_ignores_terminal_colour_codes():
+    # The agent's own log as rsyslog forwards it: ESC escaped to "#033".
+    a = ("#033[2m2026-11-12T20:59:44.139095Z#033[0m #033[33m WARN#033[0m "
+         "#033[2mnodeglow_agent#033[0m#033[2m:#033[0m Report failed")
+    b = ("#033[2m2026-11-12T20:59:48.429368Z#033[0m #033[33m WARN#033[0m "
+         "#033[2mnodeglow_agent#033[0m#033[2m:#033[0m Report failed")
+    tpl, h1 = extract_template(a)
+    _, h2 = extract_template(b)
+    assert h1 == h2
+    assert "#033" not in tpl and "<TS>" in tpl
+    # The raw ESC byte, and the same line without colours, land on one template.
+    raw = "\x1b[2m2026-11-12T21:02:47.588343Z\x1b[0m \x1b[32m INFO\x1b[0m started"
+    plain = "2026-11-12T21:02:47.588343Z INFO started"
+    assert extract_template(raw)[1] == extract_template(plain)[1]
+
+
 def test_extract_template_port_and_pid_keep_their_labels():
     tpl, _ = extract_template("sshd pid=42 listening on port 22")
     assert "pid=<PID>" in tpl

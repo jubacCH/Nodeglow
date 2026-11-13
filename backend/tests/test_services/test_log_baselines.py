@@ -428,6 +428,24 @@ async def test_busy_hour_of_known_templates_is_not_a_diversity_spike(db):
     assert not [a for a in anomalies if a["type"] == "template_diversity_spike"]
 
 
+async def test_novelty_scan_leaves_out_the_agents_own_log():
+    """paperless and n8n, 2026-11-12: the agent updated itself after a deploy
+    and its dozen update and unit-restart lines counted as a spike."""
+    seen = {}
+
+    async def fake_query(sql, params=None):
+        seen["sql"] = sql
+        return [{"host_key": "host:182", "novel": 2}]
+
+    with patch("services.clickhouse_client.query", new=fake_query):
+        novel = await li._count_novel_templates(["host:182"])
+
+    assert novel == {"host:182": 2}
+    assert f"AND NOT {li.OWN_AGENT_SQL}" in seen["sql"]
+    assert "app_name = 'nodeglow-agent'" in li.OWN_AGENT_SQL
+    assert "nodeglow-agent.service" in li.OWN_AGENT_SQL
+
+
 async def test_novelty_scan_skipped_when_no_host_crosses_threshold(db):
     now = datetime.utcnow()
     db.add(HostBaseline(
