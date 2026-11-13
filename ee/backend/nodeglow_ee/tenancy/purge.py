@@ -139,7 +139,7 @@ def _needs_owner(table) -> bool:
     from models import base as _base
     from services.pg_rls import APPEND_ONLY_TABLES
 
-    return table.name in APPEND_ONLY_TABLES and _base.DATABASE_OWNER_URL != _base.DATABASE_URL
+    return table.name in APPEND_ONLY_TABLES and _base.has_separate_owner()
 
 
 async def _delete_as_owner(table, tenant_id: int) -> int:

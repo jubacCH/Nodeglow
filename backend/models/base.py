@@ -40,6 +40,13 @@ def create_owner_engine():
     )
 
 
+def has_separate_owner() -> bool:
+    """Whether the schema owner is a different database user than the app.
+    Only then can a privilege be withheld from the app (the append-only
+    audit log): a single user is the owner, and grants do not bind owners."""
+    return DATABASE_OWNER_URL != DATABASE_URL
+
+
 _owner_engine = None
 
 

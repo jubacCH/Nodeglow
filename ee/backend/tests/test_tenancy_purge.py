@@ -348,11 +348,11 @@ async def test_audit_rows_are_purged_over_the_owner_connection(env, monkeypatch)
     table = AuditLog.__table__
     other = next(t for t in purge.purge_order() if t.name != "audit_logs")
 
-    # One database user (this test database): nothing special.
+    # One database user: nothing special.
+    monkeypatch.setattr(models_base, "has_separate_owner", lambda: False)
     assert purge._needs_owner(table) is False
 
-    monkeypatch.setattr(models_base, "DATABASE_OWNER_URL", "postgresql+asyncpg://owner@db/nodeglow")
-    monkeypatch.setattr(models_base, "DATABASE_URL", "postgresql+asyncpg://nodeglow_app@db/nodeglow")
+    monkeypatch.setattr(models_base, "has_separate_owner", lambda: True)
     assert purge._needs_owner(table) is True
     assert purge._needs_owner(other) is False
 

@@ -496,21 +496,17 @@ async def test_host_timeline_falls_back_to_created_at(client):
     the change source would be empty for all of them.
     """
     from database import AsyncSessionLocal
-    from models.audit import AuditLog
-    from sqlalchemy import delete
+    from models.ping import PingHost
 
-    create = await client.post("/api/v1/hosts", json={
-        "name": "legacy-host",
-        "hostname": "10.0.0.52",
-        "check_type": "icmp",
-    })
-    host_id = create.json()["id"]
-
-    # Drop the audit trail to mimic a host created before logging existed.
+    # Written straight to the table, as a host from before audit logging: no
+    # "host.create" entry exists for it. (It used to be created through the
+    # API and its audit rows deleted; the app role can no longer delete them.)
     async with AsyncSessionLocal() as s:
         bind_session(s, 1)  # seed/assert as tenant 1
-        await s.execute(delete(AuditLog).where(AuditLog.target_id == host_id))
+        host = PingHost(name="legacy-host", hostname="10.0.0.52", check_type="icmp", enabled=True)
+        s.add(host)
         await s.commit()
+        host_id = host.id
 
     resp = await client.get(f"/api/v1/hosts/{host_id}/timeline?hours=24&sources=change")
     assert resp.status_code == 200
