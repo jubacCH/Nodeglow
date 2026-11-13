@@ -21,6 +21,8 @@ interface SynobackupTask {
   next_run: string | null;
   scheduled: boolean | null;
   counts: { success_count?: number; warning_count?: number; error_count?: number } | null;
+  /** Matching overdue override of the instance: "off" or e.g. "200 h". */
+  stale_override?: string | null;
 }
 
 interface SynobackupData {
@@ -28,6 +30,8 @@ interface SynobackupData {
   sources?: { hyper_backup: boolean; active_backup: boolean };
   tasks: SynobackupTask[];
   totals?: { tasks: number; failed: number; partial: number };
+  /** Malformed lines of the overdue overrides (they are ignored). */
+  override_errors?: string[];
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -101,7 +105,14 @@ function TaskTable({ title, tasks, collectedAt }: { title: string; tasks: Synoba
                   )}
                 </Td>
                 <Td muted className="whitespace-nowrap">{formatDate(t.last_run) ?? '—'}</Td>
-                <Td numeric className="whitespace-nowrap">{ageText(t.last_run, collectedAt) ?? '—'}</Td>
+                <Td numeric className="whitespace-nowrap">
+                  {ageText(t.last_run, collectedAt) ?? '—'}
+                  {t.stale_override && (
+                      <Badge className="ml-2">
+                        {t.stale_override === 'off' ? 'No limit' : `Limit ${t.stale_override}`}
+                      </Badge>
+                    )}
+                </Td>
                 <Td muted className="whitespace-nowrap">{formatDate(t.next_run) ?? '—'}</Td>
                 <Td numeric className="whitespace-nowrap">
                   {t.counts
@@ -133,6 +144,10 @@ export function SynobackupDetail({ data }: { data: SynobackupData }) {
         <StatTile label="Last run failed" value={nFailed} state={isNum(nFailed) && nFailed > 0 ? 'down' : undefined} />
         <StatTile label="Last run partial" value={nPartial} state={isNum(nPartial) && nPartial > 0 ? 'warning' : undefined} />
       </StatGrid>
+
+      {data.override_errors && data.override_errors.length > 0 && (
+        <p className="wrap-break-word text-meta text-warning">Overdue overrides ignored: {data.override_errors.join('; ')}</p>
+      )}
 
       {/* A source that could not be asked is not shown as an empty table: the page header lists it as unavailable. */}
       {(['hyper_backup', 'active_backup'] as const).map((src) =>

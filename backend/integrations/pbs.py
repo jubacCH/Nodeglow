@@ -10,6 +10,7 @@ import httpx
 
 from utils.net_safety import safe_async_client
 
+from integrations import _backup_rules as backup_rules
 from integrations._base import Alert, BaseIntegration, CollectorResult, ConfigField, Threshold
 
 log = logging.getLogger(__name__)
@@ -404,6 +405,11 @@ class PbsIntegration(BaseIntegration):
         ConfigField(key="token_id", label="API token ID", placeholder="monitor@pbs!nodeglow"),
         ConfigField(key="token_secret", label="API token secret", field_type="password", encrypted=True),
         ConfigField(key="verify_ssl", label="Verify SSL", field_type="checkbox", required=False, default=True),
+        ConfigField(key="stale_overrides", label="Overdue limit per backup group (hours or off)",
+                    field_type="textarea", required=False,
+                    placeholder="weekly/* = 200\nvm/105 = off\nmain/archive/* = off\n"
+                                "# Matched against the group as shown (ns/type/id, root groups: type/id)\n"
+                                "# or store/group to target one datastore. First match wins."),
     ]
 
     alert_thresholds = (
@@ -420,9 +426,21 @@ class PbsIntegration(BaseIntegration):
             verify_ssl=self.config.get("verify_ssl", True),
         )
 
+    def validate_config(self, config: dict) -> list[str]:
+        return backup_rules.parse_overrides((config or {}).get("stale_overrides"))[1]
+
+    def _overrides(self):
+        return backup_rules.parse_overrides(self.config.get("stale_overrides"))
+
     async def collect(self) -> CollectorResult:
         try:
             data = await self._api().fetch_all()
+            rules, errors = self._overrides()
+            data["override_errors"] = errors
+            for ds in data.get("datastores") or []:
+                for g in ds.get("groups") or []:
+                    g["stale_override"] = backup_rules.override_label(
+                        rules, f"{ds['name']}/{g['name']}", g["name"])
             return CollectorResult(success=True, data=data)
         except Exception as exc:
             return CollectorResult(success=False, error=str(exc) or type(exc).__name__)
@@ -440,6 +458,9 @@ class PbsIntegration(BaseIntegration):
         collected = parse_iso(data.get("collected_at"))
         warn, crit = self.threshold("ds_warn_pct"), self.threshold("ds_crit_pct")
         stale_h = self.threshold("stale_hours")
+        rules, errors = self._overrides()
+        if errors:
+            alerts.append(backup_rules.errors_alert(errors))
 
         for ds in data.get("datastores") or []:
             if not isinstance(ds, dict):
@@ -467,12 +488,14 @@ class PbsIntegration(BaseIntegration):
                         detail=f"{gname}: {g['verify_failed_count']} snapshot(s) failed verification",
                         entity=gname))
                 last = parse_iso(g.get("last_backup"))
-                if stale_h > 0 and collected is not None and last is not None:
+                limit = backup_rules.effective_limit(
+                    rules, stale_h, f"{name}/{g.get('name') or ''}", str(g.get("name") or ""))
+                if limit > 0 and collected is not None and last is not None:
                     age_h = (collected - last).total_seconds() / 3600
-                    if age_h > stale_h:
+                    if age_h > limit:
                         alerts.append(Alert(
                             severity="warning", title="Backup group overdue",
-                            detail=f"{gname}: newest snapshot is {age_h:.0f} h old (limit {stale_h:g} h)",
+                            detail=f"{gname}: newest snapshot is {age_h:.0f} h old (limit {limit:g} h)",
                             entity=gname))
 
         tasks = data.get("tasks")

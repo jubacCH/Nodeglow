@@ -628,3 +628,22 @@ async def test_health_check_uses_status_without_reading_the_body(monkeypatch, st
 
     _patch_client(monkeypatch, lambda request: httpx.Response(status, stream=Endless()))
     assert await PrometheusIntegration(CFG).health_check() is expected
+
+
+def test_a_label_set_without_series_is_not_a_broken_rule():
+    """Found against a live exporter: `jobs_total{status="error"} > 0` has no
+    series until the first error. The metric exists, so the rule is fine and
+    must not warn; only a metric that is missing altogether (a typo) does."""
+    out = alerts_for('warning node_filesystem_avail_bytes{mountpoint="/does/not/exist"} < 1')
+    assert out == []
+    rule = snapshot('warning node_filesystem_avail_bytes{mountpoint="/does/not/exist"} < 1', SCRAPE)["rules"][0]
+    assert rule["matched"] == 0 and rule["name_seen"] > 0
+
+    typo = alerts_for("warning node_filesystem_avail_bytez < 1")
+    assert [(a.severity, a.title) for a in typo] == [("warning", "Rule matches no series")]
+
+
+def test_snapshots_from_before_name_seen_still_warn():
+    out = PrometheusIntegration({}).parse_alerts(
+        {"rules": [{"expr": "up == 0", "severity": "critical", "matched": 0, "nan": 0, "firing": 0}]})
+    assert [a.title for a in out] == ["Rule matches no series"]

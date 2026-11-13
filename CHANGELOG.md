@@ -10,6 +10,15 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Backup integrations (Proxmox Backup Server, Veeam, Synology) take per-job
+  overrides of the "overdue" limit: one line per pattern, `weekly-* = 200`
+  or `archive-vm = off`. A malformed line is reported, never silently
+  ignored.
+- PagerDuty, the way back: `POST /api/v1/events/pagerduty` applies an
+  acknowledge or resolve done in PagerDuty to the Nodeglow incident.
+- An integration's settings are checked when they are saved: a malformed
+  Prometheus alert rule or backup override is refused with the line and the
+  reason, instead of surfacing at the first collection.
 - Certificate expiry incidents (`ssl_expiry`): a warning at 14 days left,
   critical at 3 days and when expired, resolved once the certificate is valid
   for longer again. Until now the days left were shown and never alerted on.
@@ -152,6 +161,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Resolving an incident by hand sends the resolve notification. Before, an
+  on-call channel kept its alert open after the incident was closed.
+- Prometheus: a rule whose label set has no series yet (an error counter
+  before the first error) no longer warns "matches no series"; only a
+  metric that is missing altogether does. Found against a live exporter.
+- Synology: a failed API call no longer puts the session id into the error
+  text and the log.
 - The DNS job deleted manually added hosts whose address another host also
   has, every 30 minutes and without a trace, and renamed hosts to their
   reverse-DNS name even when the user had named them. It now merges only

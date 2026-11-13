@@ -161,6 +161,14 @@ class BaseIntegration(ABC):
         except Exception:
             return False
 
+    def validate_config(self, config: dict) -> list[str]:
+        """Problems of a configuration that can be seen without contacting
+        the target (a malformed rule line, two auth methods at once), as
+        messages for the person saving it. Called before an instance is
+        created or changed; a non-empty list refuses the save. Must not open
+        connections and must not raise."""
+        return []
+
     def parse_alerts(self, data: dict) -> list[Alert]:
         """Extract alerts from snapshot data. Override per integration."""
         return []

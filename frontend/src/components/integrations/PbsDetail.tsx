@@ -36,6 +36,8 @@ interface PbsGroup {
   comment: string;
   verification: 'ok' | 'failed' | 'unverified' | null;
   verify_failed_count: number | null;
+  /** Matching overdue override of the instance: "off" or e.g. "200 h". */
+  stale_override?: string | null;
 }
 
 interface PbsDatastore {
@@ -78,6 +80,8 @@ interface PbsData {
   } | null;
   /** groups / verify_failed_groups are null when a datastore's groups or snapshots could not be read. */
   totals?: { datastores: number; groups: number | null; verify_failed_groups: number | null };
+  /** Malformed lines of the overdue overrides (they are ignored). */
+  override_errors?: string[];
 }
 
 /** Age of a timestamp relative to the collection time ("5 h", "2.3 d"), or null. */
@@ -185,6 +189,10 @@ export function PbsDetail({ data }: { data: PbsData }) {
         </section>
       )}
 
+      {data.override_errors && data.override_errors.length > 0 && (
+        <p className="wrap-break-word text-meta text-warning">Overdue overrides ignored: {data.override_errors.join('; ')}</p>
+      )}
+
       {datastores.map((ds) =>
         ds.groups && ds.groups.length > 0 ? (
           <TableCard key={`g-${ds.name}`} title={`Backup groups: ${ds.name}`} meta={`${ds.groups.length}`}>
@@ -205,7 +213,14 @@ export function PbsDetail({ data }: { data: PbsData }) {
                     <Td className="font-mono">{g.name}</Td>
                     <Td numeric>{isNum(g.backup_count) ? g.backup_count : '—'}</Td>
                     <Td muted className="whitespace-nowrap">{formatDate(g.last_backup) ?? '—'}</Td>
-                    <Td numeric className="whitespace-nowrap">{ageText(g.last_backup, collectedAt) ?? '—'}</Td>
+                    <Td numeric className="whitespace-nowrap">
+                      {ageText(g.last_backup, collectedAt) ?? '—'}
+                      {g.stale_override && (
+                      <Badge className="ml-2">
+                        {g.stale_override === 'off' ? 'No limit' : `Limit ${g.stale_override}`}
+                      </Badge>
+                    )}
+                    </Td>
                     <Td>
                       {g.verification ? (
                         <StatusPill status={verifyState(g.verification)} size="sm">
