@@ -16,6 +16,8 @@ import {
 import { CHECK_TYPES } from './hostForm';
 import { probeOptionLabel, type ProbeAgent } from './probes';
 
+const MAINTENANCE_HOURS = [1, 2, 4, 8, 24] as const;
+
 interface BulkActionsBarProps {
   ids: number[];
   /** id → name, to name skipped hosts in the report. */
@@ -97,9 +99,27 @@ export function BulkActionsBar({ ids, names, onClear, onReport }: BulkActionsBar
       className="mb-3 flex flex-wrap items-center gap-2 rounded-card border border-accent/40 bg-accent-soft px-3 py-2"
     >
       <span className="num mr-1 text-ui font-medium text-fg" aria-live="polite">{n} selected</span>
-      <Button size="sm" variant="secondary" disabled={busy} onClick={() => run({ kind: 'maintenance', on: true })}>
-        <Wrench size={13} aria-hidden="true" /> Maintenance on
-      </Button>
+      {/* A duration is chosen with the action: maintenance without an end
+          keeps the hosts silent until somebody remembers to end it. */}
+      <label className="inline-flex items-center gap-1.5 text-meta text-fg-2">
+        <Wrench size={13} aria-hidden="true" />
+        <span className="sr-only">Start maintenance for</span>
+        <Select
+          aria-label="Start maintenance for"
+          className="h-8 w-auto py-0 text-ui"
+          disabled={busy}
+          value=""
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!v) return;
+            void run(v === 'open' ? { kind: 'maintenance', on: true } : { kind: 'maintenance', on: true, hours: Number(v) });
+          }}
+        >
+          <option value="">Maintenance for…</option>
+          {MAINTENANCE_HOURS.map((h) => <option key={h} value={h}>{h} hour{h === 1 ? '' : 's'}</option>)}
+          <option value="open">Until I end it</option>
+        </Select>
+      </label>
       <Button size="sm" variant="secondary" disabled={busy} onClick={() => run({ kind: 'maintenance', on: false })}>
         Maintenance off
       </Button>

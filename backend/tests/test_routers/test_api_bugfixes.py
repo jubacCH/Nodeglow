@@ -159,3 +159,44 @@ async def test_probe_interval_validation():
                                    json={"is_probe": "yes"})).status_code == 400
         resp = await client.patch(f"/api/v1/agents/{agent_id}", json={"probe_interval_seconds": 30})
         assert resp.json()["probe_interval_seconds"] == 30
+
+
+async def test_bulk_maintenance_can_carry_a_duration():
+    """Maintenance started for many hosts ends by itself when asked to.
+
+    The bulk action had no duration at all: the hosts stayed silent until
+    somebody remembered to end it.
+    """
+    from datetime import datetime, timedelta
+
+    async with make_client() as (client, sf):
+        ids = []
+        for i in range(2):
+            resp = await client.post("/api/v1/hosts", json={
+                "name": f"mw-{i}", "hostname": f"10.0.8.{i + 1}", "check_type": "icmp",
+            })
+            ids.append(resp.json()["id"])
+
+        resp = await client.patch("/api/v1/hosts/bulk", json={
+            "ids": ids, "updates": {"maintenance": True, "maintenance_hours": 2},
+        })
+        assert resp.status_code == 200, resp.text
+
+        from models.ping import PingHost
+        async with sf() as db:
+            rows = (await db.execute(select(PingHost).where(PingHost.id.in_(ids)))).scalars().all()
+        for row in rows:
+            assert row.maintenance is True
+            assert timedelta(minutes=110) < row.maintenance_until - datetime.utcnow() < timedelta(minutes=121)
+
+        for bad in ({"maintenance": True, "maintenance_hours": 0},
+                    {"maintenance": True, "maintenance_hours": "2"},
+                    {"maintenance_hours": 2}):
+            resp = await client.patch("/api/v1/hosts/bulk", json={"ids": ids, "updates": bad})
+            assert resp.status_code == 400, bad
+
+        # Without hours: open-ended, as chosen. Ending it clears the end time.
+        await client.patch("/api/v1/hosts/bulk", json={"ids": ids, "updates": {"maintenance": True}})
+        async with sf() as db:
+            rows = (await db.execute(select(PingHost).where(PingHost.id.in_(ids)))).scalars().all()
+        assert all(r.maintenance and r.maintenance_until is None for r in rows)

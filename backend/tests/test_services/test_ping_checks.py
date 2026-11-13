@@ -259,3 +259,33 @@ async def test_port_error_clears_when_service_check_is_removed():
     finally:
         scheduler._port_fail_streak.pop(host.id, None)
         scheduler._port_pass_streak.pop(host.id, None)
+
+
+async def test_one_host_whose_check_raises_does_not_stop_the_cycle(icmp_only_hosts):
+    """A check that cannot even run fails its own host, not every host.
+
+    One hostname that is not a valid name (``a..b`` raises UnicodeError in the
+    TCP check) used to take the whole ``gather`` down: nothing was written for
+    any host of the tenant, and the monitoring stood still until the
+    self-check noticed three cycles later.
+    """
+    import scheduler
+
+    insert_mock = AsyncMock()
+
+    async def fake_check_host(host):
+        if host.id == 2:
+            raise UnicodeError("label empty or too long")
+        return True, False, 5.0, {"icmp": True}
+
+    with patch.object(scheduler, "AsyncSessionLocal", _session_factory(icmp_only_hosts)), \
+         patch("utils.ping.check_host", new=fake_check_host), \
+         patch("services.clickhouse_client.insert_ping_checks", new=insert_mock), \
+         patch("services.clickhouse_client.get_latest_ping_per_host",
+               new=AsyncMock(return_value={})):
+        await scheduler.run_ping_checks()
+
+    assert insert_mock.await_count == 1, "the healthy host was never recorded"
+    rows = {r["host_id"]: r for r in insert_mock.await_args.args[0]}
+    assert rows[1]["success"] is True
+    assert rows[2]["success"] is False

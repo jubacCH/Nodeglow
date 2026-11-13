@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import delete, select
 
 import config
@@ -361,10 +362,6 @@ async def run_integration_checks():
 # Concurrent ping checks (all tenants together).
 PING_CONCURRENCY = 50
 
-# Grace period tracker: host_id -> first_seen_offline timestamp
-_offline_since: dict[int, datetime] = {}
-_grace_notified: set[int] = set()  # host_ids already notified after grace
-
 # Hysteresis for the host.port_error flag. The raw single-cycle result from
 # check_host() flaps for borderline hosts (e.g. external HTTPS endpoints with
 # transient TLS / rate-limit issues), which causes the correlation engine to
@@ -410,7 +407,7 @@ async def run_ping_checks():
     # this, and a conditional import would leave the name unbound on any fleet
     # without agent-sourced hosts.
     from services.clickhouse_client import insert_ping_checks
-    from utils.ping import check_host
+    from utils.ping import HostCheck, check_host
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(PingHost).where(PingHost.enabled == True))
@@ -490,24 +487,23 @@ async def run_ping_checks():
 
     active_hosts = ping_hosts
 
-    # Load previous success state per host from ClickHouse (for state-change detection)
-    from services.clickhouse_client import get_latest_ping_per_host
-    try:
-        latest_map = await get_latest_ping_per_host([h.id for h in active_hosts])
-        prev_success: dict[int, bool] = {
-            hid: bool(rec.get("success")) for hid, rec in latest_map.items()
-        }
-    except Exception as ch_exc:
-        logger.warning("ClickHouse previous-state lookup failed: %s", ch_exc)
-        prev_success = {}
-
     # Run all checks concurrently, at most PING_CONCURRENCY at once across
     # every tenant's pass, the free slots shared round-robin between tenants.
     sem = tenant_jobs.limiter("ping_checks", PING_CONCURRENCY)
 
     async def _check_one(host):
         async with sem.slot():
-            res = await check_host(host)
+            try:
+                res = await check_host(host)
+            except Exception as exc:  # noqa: BLE001
+                # One host whose check cannot even run (a hostname that is
+                # not a valid name, a malformed check type) must not take the
+                # whole cycle with it: every other host would go unchecked.
+                # It counts as failed, with the reason on the host.
+                logger.warning("Check for host %s (id=%s) could not run: %s",
+                               host.name, host.id, exc)
+                reason = f"check could not run: {type(exc).__name__}: {exc}"[:200]
+                res = HostCheck(False, False, None, {"check": False}, errors={"check": reason})
             online, port_error, latency, detail = res
             errors_by_host[host.id] = getattr(res, "errors", None) or {}
             return host, online, port_error, latency, detail
@@ -521,8 +517,6 @@ async def run_ping_checks():
     import json as _json
     from services.metrics import PING_CHECKS_TOTAL
     now = datetime.utcnow()
-    went_offline: list[str] = []
-    came_online: list[str] = []
     icmp_rows: list[dict] = []
     ws_updates: list[tuple] = []
     async with AsyncSessionLocal() as db:
@@ -585,20 +579,6 @@ async def run_ping_checks():
 
             ws_updates.append((host.id, host.name, online, latency))
 
-            # Track state changes for grace-period notification
-            if not online:
-                if host.id not in _offline_since:
-                    _offline_since[host.id] = now
-            else:
-                # Host is back online — clear grace tracking
-                was_tracked = host.id in _offline_since
-                was_notified = host.id in _grace_notified
-                _offline_since.pop(host.id, None)
-                _grace_notified.discard(host.id)
-                prev = prev_success.get(host.id)
-                if prev is False and online and was_notified:
-                    came_online.append(host.name)
-
         await db.commit()
 
     # Broadcast live updates via WebSocket — one task for the whole cycle
@@ -613,34 +593,11 @@ async def run_ping_checks():
         except Exception as ch_exc:
             logger.error("ClickHouse insert (ping_checks) failed: %s", ch_exc)
 
-    # Grace period: only notify after host has been offline for N minutes
-    from models.settings import get_setting
-    async with AsyncSessionLocal() as db:
-        grace_str = await get_setting(db, "notify_grace_minutes", "5")
-    try:
-        grace_minutes = max(0, int(grace_str))
-    except (ValueError, TypeError):
-        grace_minutes = 5
-
-    for host, online, port_error, latency, detail in results:
-        if not online and host.id in _offline_since and host.id not in _grace_notified:
-            elapsed = (now - _offline_since[host.id]).total_seconds() / 60
-            if elapsed >= grace_minutes:
-                went_offline.append(host.name)
-                _grace_notified.add(host.id)
-
-    # Send batched notifications (one message per direction)
-    from notifications import notify
-    if went_offline:
-        names = ", ".join(went_offline)
-        title = f"Host offline: {went_offline[0]}" if len(went_offline) == 1 \
-            else f"{len(went_offline)} hosts went offline"
-        _asyncio.create_task(notify(title, names, "critical"))
-    if came_online:
-        names = ", ".join(came_online)
-        title = f"Host back online: {came_online[0]}" if len(came_online) == 1 \
-            else f"{len(came_online)} hosts back online"
-        _asyncio.create_task(notify(title, names, "info"))
+    # No offline / back-online notification from here: the correlation
+    # engine opens a host_down incident (services.correlation), for hosts
+    # behind a probe and agent hosts as well, and that incident notifies
+    # when it opens and when it resolves. The offline grace period
+    # (notify_grace_minutes) is applied there.
 
     logger.debug("Ping check done for %d hosts (concurrent)", len(active_hosts))
 
@@ -656,14 +613,20 @@ async def update_ssl_expiry():
     from sqlalchemy import update as sa_update
 
     async with AsyncSessionLocal() as db:
+        # check_type is a comma list ("https,icmp"); matching the bare
+        # value skipped every host that has more than the one check.
         result = await db.execute(
-            select(PingHost).where(PingHost.enabled == True, PingHost.check_type == "https")
+            select(PingHost).where(PingHost.enabled == True, PingHost.check_type.like("%https%"))
         )
-        hosts = result.scalars().all()
+        hosts = [h for h in result.scalars().all()
+                 if "https" in [t.strip() for t in (h.check_type or "").split(",")]]
 
     if not hosts:
         return
 
+    from services import condition_incidents as cond
+
+    expiring: dict[str, cond.Condition] = {}
     async with AsyncSessionLocal() as db:
         for host in hosts:
             hostname = host.hostname
@@ -677,7 +640,43 @@ async def update_ssl_expiry():
                 await db.execute(
                     sa_update(PingHost).where(PingHost.id == host.id).values(ssl_expiry_days=days)
                 )
+            else:
+                # Unreadable this time: judge by the last known value rather
+                # than drop an incident that is already open.
+                days = host.ssl_expiry_days
+            condition = certificate_condition(host.name, hostname, days)
+            if condition is not None:
+                condition.host_ids = [host.id]
+                expiring[f"ssl:{host.id}"] = condition
+        notes = await cond.sync_rule(
+            db, "ssl_expiry", expiring, event_type="certificate_expiring",
+            resolved_summary="Auto-resolved: the certificate is valid for longer again",
+        )
         await db.commit()
+    await cond.send(notes)
+
+
+# A certificate with this many days left opens a warning; this many, a
+# critical incident. Fourteen days is two renewal attempts of an ACME client.
+CERT_WARNING_DAYS = 14
+CERT_CRITICAL_DAYS = 3
+
+
+def certificate_condition(name: str, hostname: str, days: int | None):
+    """The incident a certificate with ``days`` left calls for, or None."""
+    from services.condition_incidents import Condition
+
+    if days is None or days > CERT_WARNING_DAYS:
+        return None
+    if days < 0:
+        return Condition(f"Certificate expired: {name}", "critical",
+                         f"The TLS certificate of {name} ({hostname}) expired {-days} day(s) ago. "
+                         f"Browsers and clients refuse the connection.")
+    left = "today" if days == 0 else f"in {days} day(s)"
+    severity = "critical" if days <= CERT_CRITICAL_DAYS else "warning"
+    return Condition(f"Certificate expires {left}: {name}", severity,
+                     f"The TLS certificate of {name} ({hostname}) expires {left}. "
+                     f"Renew it, or check why the automatic renewal did not run.")
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
@@ -862,6 +861,14 @@ async def check_disk_space():
     await _disk_space_incident(used_pct, free_gb)
 
 
+async def _notify_disk(title: str, message: str, severity: str, incident_id: int) -> None:
+    try:
+        from notifications import notify
+        await notify(title, message, severity=severity, link_path=f"/incidents/{incident_id}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to send disk-space notification: %s", exc)
+
+
 @per_tenant_job
 async def _disk_space_incident(used_pct: float, free_gb: float) -> None:
     """Raise, update or resolve the disk-space incident (per tenant)."""
@@ -886,12 +893,17 @@ async def _disk_space_incident(used_pct: float, free_gb: float) -> None:
                     event_type="resolved",
                     summary=f"Disk usage back to {used_pct}% ({free_gb} GB free)",
                 ))
+                incident_id, incident_title = existing.id, existing.title
                 await db.commit()
                 logger.info("Disk space incident resolved: %.1f%% used", used_pct)
+                await _notify_disk(f"✅ Resolved: {incident_title}",
+                                   f"Disk usage back to {used_pct}% ({free_gb} GB free)",
+                                   "info", incident_id)
         return
 
     severity = "critical" if used_pct >= DISK_CRITICAL_PCT else "warning"
     title = f"Disk usage at {used_pct}% ({free_gb} GB free)"
+    opened_id: int | None = None
 
     async with AsyncSessionLocal() as db:
         # Dedup: only one open disk incident at a time
@@ -929,8 +941,16 @@ async def _disk_space_incident(used_pct: float, free_gb: float) -> None:
                 event_type="created",
                 summary=title,
             ))
+            opened_id = inc.id
 
         await db.commit()
+
+    if opened_id is not None:
+        # After the commit, so a notification never names an incident that
+        # was rolled back. The incident used to be raised without a word.
+        await _notify_disk(f"🔴 Incident: {title}",
+                           "The disk Nodeglow stores its data on is filling up.",
+                           severity, opened_id)
 
     logger.warning("Disk space %s: %.1f%% used (%.1f GB free)", severity, used_pct, free_gb)
 
@@ -1186,8 +1206,14 @@ async def resolve_host_dns():
                 # Scanner/manual hosts with IP as hostname: try rDNS
                 if h.source in ("scanner", "manual"):
                     # Check if this IP already belongs to a non-scanner host → merge
+                    # Only what the scanner found by itself is a duplicate to
+                    # clean up. A host somebody added by hand on an address
+                    # another host has (a second check on the same machine, a
+                    # VM an integration also lists) is deliberate: deleting it
+                    # here took its checks, and the monitoring, with it.
                     check_ip = h.ip_address or hostname
-                    if check_ip in ip_to_host and ip_to_host[check_ip].id != h.id:
+                    if (h.source == "scanner" and check_ip in ip_to_host
+                            and ip_to_host[check_ip].id != h.id):
                         logger.info("DNS merge: removing duplicate scanner host %s (covered by %s)",
                                     h.name, ip_to_host[check_ip].name)
                         to_delete.append(h.id)
@@ -1202,7 +1228,8 @@ async def resolve_host_dns():
                         )
                         fqdn = rdns_result[0]
                         short = fqdn.split(".")[0] if "." in fqdn else fqdn
-                        if short and short != hostname:
+                        # A name the user gave is never overwritten.
+                        if short and short != hostname and (h.name or "").strip() in ("", hostname):
                             h.name = short
                             changed = True
                             logger.info("DNS resolve: %s → %s", hostname, short)
@@ -1262,6 +1289,60 @@ async def run_alert_rules():
             logger.info("Alert rules: %d rule(s) triggered", triggered)
 
 
+# ── Heartbeat ────────────────────────────────────────────────────────────────
+
+# Wall-clock time of the scheduler's last sign of life (time.time()), read by
+# /readyz. None until the first tick.
+last_tick: float | None = None
+
+
+async def _postgres_answers() -> bool:
+    from sqlalchemy import text
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await asyncio.wait_for(db.execute(text("SELECT 1")), timeout=5)
+        return True
+    except (asyncio.TimeoutError, OSError, SQLAlchemyError) as exc:
+        # Only what "the database does not answer" looks like. A blanket
+        # except hid a NameError in here, and the heartbeat was never sent.
+        logger.warning("Heartbeat: Postgres check failed: %s", exc)
+        return False
+
+
+@instrument_job("heartbeat")
+@system_job("heartbeat to an external monitor (installation)")
+async def send_heartbeat():
+    """Tell somebody outside that this installation is alive.
+
+    Everything else Nodeglow knows about its own health it reports through
+    itself: an incident, a notification. A stopped scheduler or a database
+    that is gone silences those too. With ``NODEGLOW_HEARTBEAT_URL`` set
+    (a check URL of a dead-man service such as healthchecks.io) this job
+    requests it once a minute, and only while Postgres answers, so the
+    absence of the request is the alarm.
+    """
+    import os
+    import time
+
+    global last_tick
+    last_tick = time.time()
+
+    url = os.getenv("NODEGLOW_HEARTBEAT_URL", "").strip()
+    if not url:
+        return
+    if not await _postgres_answers():
+        logger.warning("Heartbeat withheld: Postgres does not answer")
+        return
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            (await client.get(url)).raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Heartbeat to the external monitor failed: %s", exc)
+
+
 @instrument_job("legacy_api_key_cleanup")
 @system_job("disable stale legacy API keys of every tenant")
 async def cleanup_legacy_api_keys():
@@ -1315,8 +1396,29 @@ async def cleanup_legacy_api_keys():
 @instrument_job("backup_compliance")
 @per_tenant_job
 async def run_backup_compliance():
-    """Check all backup jobs for compliance (overdue/failed) and log issues."""
-    from services.backup_monitor import check_backup_compliance
+    """Check all backup jobs for compliance (overdue/failed) and raise
+    incidents. This job used to write its findings to the log and nowhere
+    else: a backup that stopped running was never an alert."""
+    from services import condition_incidents as cond
+    from services.backup_monitor import check_backup_compliance, get_compliance_groups
+    async with AsyncSessionLocal() as db:
+        groups = await get_compliance_groups(db)
+        wanted: dict[str, cond.Condition] = {}
+        for job in groups["failed"]:
+            wanted[f"bk:{job['id']}"] = cond.Condition(
+                f"Backup failed: {job['target_name']}", "critical",
+                f"Backup {job['name']} of {job['target_name']}: {job['status_reason']}")
+        for job in groups["overdue"]:
+            wanted.setdefault(f"bk:{job['id']}", cond.Condition(
+                f"Backup overdue: {job['target_name']}", "warning",
+                f"Backup {job['name']} of {job['target_name']}: {job['status_reason']}"))
+        notes = await cond.sync_rule(
+            db, "backup", wanted, event_type="backup_issue",
+            resolved_summary="Auto-resolved: a backup ran successfully and on schedule",
+        )
+        await db.commit()
+    await cond.send(notes)
+
     async with AsyncSessionLocal() as db:
         issues = await check_backup_compliance(db)
         if issues:
@@ -1394,6 +1496,9 @@ async def start_scheduler():
                       next_run_time=datetime.now() + timedelta(seconds=60))
     scheduler.add_job(run_backup_compliance, "interval", hours=1,
                       id="backup_compliance", replace_existing=True)
+    scheduler.add_job(send_heartbeat, "interval", seconds=60,
+                      id="heartbeat", replace_existing=True,
+                      next_run_time=datetime.now() + timedelta(seconds=15))
     scheduler.add_job(cleanup_legacy_api_keys, "cron", hour=3, minute=30,
                       id="legacy_api_key_cleanup", replace_existing=True,
                       misfire_grace_time=CRON_MISFIRE_GRACE_SECONDS)

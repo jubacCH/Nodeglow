@@ -90,6 +90,15 @@ def _reset_tenant_job_state():
 
 
 @pytest.fixture(autouse=True)
+def _no_background_notification_retries(monkeypatch):
+    """A failed delivery is retried by a background task minutes later. Tests
+    end before that; the ones about retrying set their own delays."""
+    import notifications
+
+    monkeypatch.setattr(notifications, "RETRY_DELAYS", ())
+
+
+@pytest.fixture(autouse=True)
 def _reset_syslog_host_cache():
     """The syslog host cache (hosts per tenant and site, allowlists, the
     tenant count the direct listener's "auto" mode reads) is process-global."""

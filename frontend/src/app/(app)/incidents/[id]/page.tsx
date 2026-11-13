@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, ChevronDown, ChevronRight, Eye, RefreshCw, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, ChevronDown, ChevronRight, Eye, RefreshCw, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { AffectedHostsCard } from '@/components/incidents/AffectedHostsCard';
@@ -169,6 +169,15 @@ export default function IncidentDetailPage() {
   const pending = action.isPending;
   const title = data?.title ?? `Incident #${incidentId}`;
   const durationMs = data ? incidentDurationMs(data) : null;
+  // Where "the device" of this incident is: the integration for integration
+  // rules, the host when it is about exactly one. Several hosts are listed
+  // in the card on the right, each with its own link.
+  const liveHosts = (data?.hosts ?? []).filter((h) => h.name !== null || h.hostname !== null);
+  const jumpTarget = data?.integration
+    ? { href: `/integration/${data.integration.type}/${data.integration.id}`, label: 'Open integration' }
+    : liveHosts.length === 1
+      ? { href: `/hosts/${liveHosts[0].id}`, label: 'Open host' }
+      : null;
 
   return (
     <div>
@@ -190,16 +199,23 @@ export default function IncidentDetailPage() {
             {' · '}{data.status === 'resolved' ? 'lasted' : 'open for'} {durationMs === null ? '—' : formatDuration(durationMs)}
           </>
         ) : undefined}
-        actions={data && canEdit && data.status !== 'resolved' ? (
+        actions={data ? (
           <>
-            {data.status === 'open' && (
+            {jumpTarget && (
+              <Link href={jumpTarget.href} prefetch={false} className={buttonClasses({ variant: 'secondary' })}>
+                <ArrowUpRight size={15} aria-hidden="true" /> {jumpTarget.label}
+              </Link>
+            )}
+            {canEdit && data.status === 'open' && (
               <Button variant="secondary" disabled={pending} onClick={() => action.mutate({ id: incidentId, action: 'acknowledge' })}>
                 <Eye size={15} aria-hidden="true" /> Acknowledge
               </Button>
             )}
-            <Button disabled={pending} onClick={() => action.mutate({ id: incidentId, action: 'resolve' })}>
-              <CheckCircle2 size={15} aria-hidden="true" /> Resolve
-            </Button>
+            {canEdit && data.status !== 'resolved' && (
+              <Button disabled={pending} onClick={() => action.mutate({ id: incidentId, action: 'resolve' })}>
+                <CheckCircle2 size={15} aria-hidden="true" /> Resolve
+              </Button>
+            )}
           </>
         ) : undefined}
       />
@@ -226,7 +242,7 @@ export default function IncidentDetailPage() {
                 {inc.summary && <p className="mb-4 text-ui text-fg-2">{inc.summary}</p>}
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-3 min-[760px]:grid-cols-4">
                   <Fact label="Severity"><SeverityIndicator severity={inc.severity} status={inc.status} glow={false} /></Fact>
-                  <Fact label="Rule"><span className="font-mono text-meta" title={inc.rule}>{inc.rule}</span></Fact>
+                  <Fact label="Rule"><span title={inc.rule}>{ruleLabel(inc.rule)}</span></Fact>
                   <Fact label="Opened"><span title={inc.created_at}>{formatDateTime(inc.created_at)}</span></Fact>
                   <Fact label={inc.status === 'resolved' ? 'Duration' : 'Open for'}>
                     <span className="num">{durationMs === null ? '—' : formatDuration(durationMs)}</span>

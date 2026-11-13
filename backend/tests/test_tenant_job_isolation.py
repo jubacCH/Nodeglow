@@ -54,6 +54,7 @@ JOBS = [
 ]
 # Installation jobs: no tenant data (system scope by design).
 INSTALLATION_JOBS = {"cleanup_clickhouse_logs", "cleanup_legacy_api_keys", "update_geoip",
+                     "send_heartbeat",
                      "run_clickhouse_tenant_rebuild"}
 
 # Jobs that must reach ClickHouse in this scenario (a check that finds no
@@ -249,8 +250,6 @@ def boundaries(sf):
         notifications._recent.clear()
     import scheduler
 
-    scheduler._offline_since.clear()
-    scheduler._grace_notified.clear()
     scheduler._inflight_cfgs.clear()
 
 
@@ -380,7 +379,13 @@ async def test_alert_rules_fire_in_both_tenants_to_their_own_channel(sf, boundar
 
 
 async def test_hosts_down_in_both_tenants_notify_both(sf, boundaries):
-    await _run("run_ping_checks")
+    """The host_down incident of each tenant notifies that tenant's channel."""
+    async def all_offline(host_ids, min_failures, **_kw):
+        return list(host_ids)
+
+    with patch("services.clickhouse_client.get_offline_hosts_since", all_offline):
+        for _ in range(6):  # past the offline grace period (one cycle a minute)
+            await _run("run_correlation")
     chats = {addr for addr, _ in boundaries.sent}
     assert {"chat-1", "chat-2"} <= chats, boundaries.sent
 

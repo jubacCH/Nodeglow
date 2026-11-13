@@ -2,7 +2,7 @@
  * Topology data model: `parent_id` edges from /api/v1/topology turned into
  * trees, per-node health and filtering. Shared by the tree view and the map.
  */
-import type { HealthState } from '@/lib/status';
+import { toHealthState, type HealthState } from '@/lib/status';
 
 export interface TopoNode {
   id: number;
@@ -11,6 +11,9 @@ export interface TopoNode {
   // 'unknown' covers a host nobody is currently observing (e.g. its probe
   // went silent) — it must render distinctly, never as 'up' or 'down'.
   status: 'up' | 'down' | 'unknown';
+  /** The unified host state the rest of the app shows (up, degraded,
+   *  warning, down, unknown, maintenance, disabled). */
+  state?: string | null;
   check_type: string;
   source: string;
   maintenance: boolean;
@@ -26,9 +29,14 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-/** Maintenance wins over the last result; unknown is never "ok". */
+/**
+ * Maintenance wins over the last result; unknown is never "ok". The unified
+ * `state` decides when the API sends it: a host that is degraded or warning
+ * on the overview must not turn green here. `status` only knows up and down.
+ */
 export function nodeState(n: TopoNode): HealthState {
   if (n.maintenance) return 'maint';
+  if (n.state) return toHealthState(n.state);
   if (n.status === 'down') return 'down';
   if (n.status === 'up') return 'ok';
   return 'unknown';
@@ -98,7 +106,7 @@ export function matcher(filter: TopoFilter, search: string): ((n: TopoNode) => b
   return (n) => {
     if (filter === 'problems') {
       const s = nodeState(n);
-      if (s !== 'down' && s !== 'unknown') return false;
+      if (s === 'ok' || s === 'maint') return false;
     }
     return !q || n.name.toLowerCase().includes(q) || n.hostname.toLowerCase().includes(q);
   };

@@ -44,6 +44,8 @@ interface BackupJob {
   expected_frequency_hours: number;
   enabled: boolean;
   effective_status: string;
+  /** Why the job has this status, in words (null when it is simply OK). */
+  status_reason: string | null;
   hours_since_last: number | null;
   overdue: boolean;
 }
@@ -113,6 +115,7 @@ function jobState(status: string, enabled = true): { status: HealthState | 'disa
   switch (status) {
     case 'ok': return { status: 'ok', label: 'OK' };
     case 'warning': return { status: 'warning', label: 'Warning' };
+    case 'running': return { status: 'ok', label: 'Running' };
     case 'failed': return { status: 'down', label: 'Failed' };
     default: return { status: 'unknown', label: 'No data' };
   }
@@ -232,9 +235,7 @@ export default function BackupsPage() {
                   <p className="text-ui font-medium text-fg">{job.name} <span className="font-normal text-warning">overdue</span></p>
                   <p className="mt-0.5 text-meta text-fg-2">
                     Target: {job.target_name}
-                    {job.hours_since_last != null && (
-                      <> — {job.hours_since_last}h since last run (expected every {job.expected_frequency_hours}h)</>
-                    )}
+                    {job.status_reason && <> — {job.status_reason}</>}
                   </p>
                 </div>
               </li>
@@ -290,7 +291,13 @@ export default function BackupsPage() {
                     const st = jobState(job.effective_status, job.enabled);
                     return (
                       <Tr key={job.id} selected={selected?.id === job.id}>
-                        <Td><StatusPill status={st.status}>{st.label}</StatusPill></Td>
+                        <Td className="max-w-[320px] py-1.5">
+                          <StatusPill status={st.status}>{job.overdue && st.status === 'warning' ? 'Overdue' : st.label}</StatusPill>
+                          {/* A status without its reason is only a colour. */}
+                          {job.enabled && job.status_reason && (
+                            <span className="mt-1 block whitespace-normal text-meta text-fg-2">{job.status_reason}</span>
+                          )}
+                        </Td>
                         <Td className="max-w-[280px] py-1.5">
                           <button
                             type="button"
@@ -313,7 +320,6 @@ export default function BackupsPage() {
                           ) : (
                             <span className="text-fg-3">Never</span>
                           )}
-                          {job.overdue && <StatusPill status="warning" size="sm" className="ml-1.5">Overdue</StatusPill>}
                         </Td>
                         <Td numeric muted>{formatDuration(job.last_duration_sec)}</Td>
                         <Td numeric muted>{formatBytes(job.last_size_bytes)}</Td>
@@ -337,6 +343,11 @@ export default function BackupsPage() {
       >
         {selected && (
           <>
+            {selected.status_reason && !selected.last_error && (
+              <p className="mb-4 wrap-break-word rounded-ctl border border-border bg-surface-2 px-3 py-2 text-meta text-fg-2">
+                {selected.status_reason}
+              </p>
+            )}
             {selected.last_error && (
               <p role="alert" className="mb-4 wrap-break-word rounded-ctl border border-down/30 bg-down-soft px-3 py-2 text-meta text-down">
                 Last error: {selected.last_error}

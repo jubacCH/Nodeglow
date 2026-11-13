@@ -942,7 +942,9 @@ def _audit_value(value):
 # Declared BEFORE /hosts/{host_id}: Starlette matches routes in order and
 # "{host_id}" matches the literal "bulk", so declared after it this route was
 # unreachable — every bulk edit answered 422 from the single-host route.
-_BULK_FIELDS = {"check_type", "enabled", "latency_threshold_ms", "maintenance", "probe_id"}
+_BULK_FIELDS = {"check_type", "enabled", "latency_threshold_ms", "maintenance",
+                "maintenance_hours", "probe_id"}
+_BULK_MAINTENANCE_MAX_HOURS = 24 * 30
 _BULK_MAX_IDS = 5000
 
 
@@ -972,6 +974,19 @@ async def bulk_update_hosts(
         for flag in ("enabled", "maintenance"):
             if flag in values and not isinstance(values[flag], bool):
                 raise HTTPException(400, f"{flag} must be true or false")
+    # maintenance_hours: how long the maintenance lasts. Without it the hosts
+    # stay in maintenance, and silent, until somebody ends it.
+    hours = values.pop("maintenance_hours", None)
+    if hours is not None:
+        if isinstance(hours, bool) or not isinstance(hours, int) \
+                or not 1 <= hours <= _BULK_MAINTENANCE_MAX_HOURS:
+            raise HTTPException(
+                400, f"maintenance_hours must be a whole number from 1 to {_BULK_MAINTENANCE_MAX_HOURS}")
+        if values.get("maintenance") is not True:
+            raise HTTPException(400, "maintenance_hours needs maintenance: true")
+        values["maintenance_until"] = datetime.utcnow() + timedelta(hours=hours)
+    elif values.get("maintenance") is True:
+        values["maintenance_until"] = None
     if "maintenance" in values and values["maintenance"] is False:
         values["maintenance_until"] = None
     if "probe_id" in values and values["probe_id"] is not None:
@@ -1776,8 +1791,11 @@ async def get_incident(
     from services import incident_view as iv
     host_summary = await iv.host_summaries(db, [incident], limit_per_item=None)
 
+    from services import integration_alerts
+
     return {
         **iv.host_fields(incident, host_summary),
+        "integration": await integration_alerts.integration_of(db, incident),
         "acknowledged": incident.status == "acknowledged",
         "id": incident.id,
         "rule": incident.rule,

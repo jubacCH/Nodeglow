@@ -52,6 +52,7 @@ JOBS = [
     "run_self_check_job",
     "refresh_disk_predictions",
     "run_clickhouse_tenant_rebuild",
+    "send_heartbeat",
 ]
 
 
@@ -221,3 +222,40 @@ async def test_every_scheduled_job_declares_its_tenancy():
             fn = getattr(fn, "__wrapped__", None)
         assert scopes & {"per_tenant", "system"} or name == "check_disk_space", name
     assert scheduler._disk_space_incident.__tenancy__ == "per_tenant"
+
+
+async def test_dns_job_never_deletes_or_renames_a_host_somebody_added(
+    db, session_factory, isolated_boundaries
+):
+    """Only the scanner's own finds are merged away.
+
+    A manually added host on an address another host has (a second check on
+    the same machine, a VM an integration also lists) was deleted every 30
+    minutes, and its monitoring with it. A host named by the user was renamed
+    to whatever reverse DNS said.
+    """
+    import socket
+
+    from models.ping import PingHost
+    from sqlalchemy import select
+
+    import scheduler
+
+    db.add_all([
+        PingHost(name="pve-vm", hostname="vm.example.test", ip_address="10.9.9.9",
+                 source="proxmox", enabled=True, check_type="icmp"),
+        PingHost(name="My second check", hostname="10.9.9.9", ip_address="10.9.9.9",
+                 source="manual", enabled=True, check_type="tcp:443"),
+        PingHost(name="10.9.9.9", hostname="10.9.9.9", ip_address="10.9.9.9",
+                 source="scanner", enabled=True, check_type="icmp"),
+    ])
+    await db.commit()
+
+    with patch.object(scheduler, "AsyncSessionLocal", session_factory), \
+         patch.object(socket, "gethostbyaddr", return_value=("renamed.example.test", [], [])):
+        await scheduler.resolve_host_dns()
+
+    db.expire_all()
+    names = sorted((await db.execute(
+        select(PingHost.name).where(PingHost.ip_address == "10.9.9.9"))).scalars().all())
+    assert names == ["My second check", "pve-vm"]

@@ -39,9 +39,9 @@ export const TIME_RANGES: { value: TimeRange; label: string; hours: number | nul
 /** Correlation rules the backend opens incidents for (services/*). Alert
  *  rules appear as `alert_rule_<id>`; anything seen in the data is added. */
 export const KNOWN_RULES = [
-  'agent_service', 'content_anomaly', 'disk_space', 'external_event', 'fleet_wide_issue', 'host_down_syslog',
+  'agent_service', 'backup', 'content_anomaly', 'disk_space', 'external_event', 'fleet_wide_issue', 'host_down',
   'integration_alert', 'integration_failed', 'integration_host', 'log_anomaly', 'multi_host_down',
-  'port_error', 'self_check',
+  'port_error', 'self_check', 'ssl_expiry',
   'severity_trend', 'syslog_spike', 'upstream_failure',
 ];
 
@@ -62,6 +62,8 @@ export interface IncidentItem extends Incident {
   host_ids?: number[] | null;
   host_count?: number | null;
   hosts?: IncidentHost[] | null;
+  /** The integration the incident is about (integration rules only). */
+  integration?: { id: number; type: string; name: string } | null;
 }
 
 export interface IncidentPage {
