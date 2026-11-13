@@ -23,7 +23,7 @@ The source of truth is the code: `backend/routers/api_v1.py`,
 
 | Caller | How | Notes |
 |---|---|---|
-| Scripts, integrations | `X-API-Key: ng_…` header | Keys are created by an admin (Settings → API, or `POST /api/v1/keys`) with role `readonly`, `editor` or `admin`. The key is shown once. Keys in the query string are rejected with `400`. |
+| Scripts, integrations | `X-API-Key: ng_…` header, or `Authorization: Bearer ng_…` | Keys are created by an admin (Settings → API, or `POST /api/v1/keys`) with role `readonly`, `editor` or `admin`. The key is shown once. Keys in the query string are rejected with `400`. |
 | The UI (browser) | Session cookie | Mutating requests (`POST`, `PUT`, `PATCH`, `DELETE`) must also send the CSRF token: the value of the `ng_csrf` cookie in an `X-CSRF-Token` header (double-submit). This applies to `/api/v1` too whenever a session cookie is present. |
 
 A request with `X-API-Key` is authenticated by the key only; the session
@@ -174,6 +174,72 @@ Each item: `id`, `rule`, `title`, `severity`, `status`, `acknowledged`,
 `resolved_at`, `acknowledged_by`, and the affected hosts — `host_ids`,
 `host_count`, `hosts` (`null` for incidents created before hosts were
 recorded).
+
+### Inbound events
+
+Other systems open and resolve Nodeglow incidents — a backup script, Uptime
+Kuma, Prometheus Alertmanager. Needs a key with the `editor` role.
+
+| Method | Path | |
+|---|---|---|
+| POST | `/events` | One event or a list of up to 200 |
+| POST | `/events/alertmanager` | Alertmanager webhook receiver (payload version 4) |
+| POST | `/events/pagerduty` | PagerDuty webhook (v3): acknowledge and resolve from the pager |
+
+```json
+{ "source": "backup-script", "key": "nightly-db", "status": "firing",
+  "severity": "critical", "title": "Nightly DB backup failed",
+  "summary": "pg_dump exited with 1" }
+```
+
+| Field | |
+|---|---|
+| `source` | Who reports: letters, digits, `.`, `_`, `-` (max 64) |
+| `key` | Stable id of the thing the event is about (max 256). `source` + `key` identify the incident |
+| `status` | `firing` (default) or `resolved` |
+| `severity` | `critical`, `warning` (default) or `info` |
+| `title` | Incident title; required for `firing` |
+| `summary` | Optional detail, shown in the timeline and the notification |
+
+A `firing` event opens an incident (rule `external_event`) and notifies. A
+repeated `firing` for the same `source` + `key` updates that incident: no new
+notification, a timeline entry only when the summary changed, and the
+severity can rise but never drops. `resolved` closes the incident and
+notifies; without an open incident it is ignored. A request is all-or-nothing:
+one invalid event rejects it with `400`.
+
+Response: `{ "ok": true, "results": [ { "key": "…", "action": "created" |
+"updated" | "resolved" | "ignored", "incident_id": 42 } ] }`.
+
+These incidents are resolved only by their sender or by hand. Nodeglow
+cannot check the condition itself, so a sender that stops without sending
+`resolved` leaves its incident open.
+
+Alertmanager: each alert becomes one event, keyed by its `fingerprint`. The
+`severity` label maps to the incident severity (`critical`, `page`, `error` →
+critical; `info`, `none` → info; anything else → warning).
+
+```yaml
+receivers:
+  - name: nodeglow
+    webhook_configs:
+      - url: https://nodeglow.example.com/api/v1/events/alertmanager
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: ng_…   # API key with the editor role
+```
+
+PagerDuty, the way back: create a **Generic Webhook (v3)** subscription on the
+service (events `incident.acknowledged` and `incident.resolved`) pointing at
+`/api/v1/events/pagerduty`, with a custom header `X-API-Key: ng_…` (editor
+role). An acknowledge or resolve in PagerDuty is then applied to the Nodeglow
+incident the alert belongs to; a resolve also notifies the other channels.
+Alerts of another Nodeglow installation paging into the same service are
+ignored (the alert key carries the installation's public URL). The endpoint
+answers `200` with `"action": "ignored"` for anything that does not concern
+one of its incidents.
 
 ### Agents
 

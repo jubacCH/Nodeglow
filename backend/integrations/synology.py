@@ -47,8 +47,9 @@ class SynologyAPI:
                 "api": "SYNO.API.Auth", "version": "1", "method": "logout",
                 "session": "Nodeglow", "_sid": sid,
             })
-        except Exception:
-            logger.debug("Synology logout failed", exc_info=True)
+        except Exception as exc:
+            # Type only: the exception text can carry the URL with the _sid.
+            logger.debug("Synology logout failed: %s", type(exc).__name__)
 
     async def _api(self, client: httpx.AsyncClient, api: str, method: str,
                    version: int, sid: str, extra_params: dict | None = None) -> dict:
@@ -56,8 +57,15 @@ class SynologyAPI:
         if extra_params:
             params.update(extra_params)
         resp = await client.get(f"{self.base}/webapi/entry.cgi", params=params)
-        resp.raise_for_status()
-        return resp.json()
+        # Not raise_for_status(): its message carries the request URL, and
+        # the URL carries the session id (_sid). The text ends up in the
+        # snapshot's error and in the log.
+        if resp.status_code >= 400:
+            raise ValueError(f"Synology {api} {method} failed: HTTP {resp.status_code}")
+        try:
+            return resp.json()
+        except ValueError:
+            raise ValueError(f"Synology {api} {method} returned no JSON") from None
 
     async def fetch_all(self) -> dict:
         async with safe_async_client(verify=self.verify_ssl, timeout=20) as client:

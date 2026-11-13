@@ -2,7 +2,7 @@
 
 Self-hosted infrastructure monitoring with **log intelligence** and
 **incident correlation**: host checks, remote probes, a Rust agent, syslog,
-SNMP and 19 integrations in one place, with one consistent answer to "what is
+SNMP and 32 integrations in one place, with one consistent answer to "what is
 broken right now, and what changed since I last looked".
 
 Nodeglow runs as a small Docker Compose stack (PostgreSQL, ClickHouse, a
@@ -41,7 +41,7 @@ source-available under a commercial license (see [Editions](#editions)).
 - **Agent** — Rust agent for Linux and Windows: CPU, memory, disks, network,
   processes, Docker, temperatures, journal / Windows Event Log, watched
   services (a stopped service raises an incident), signed auto-update.
-- **Integrations** — 19 built-in collectors (table below), one Python file
+- **Integrations** — 32 built-in collectors (table below), one Python file
   each.
 - **SNMP** — MIB upload, OID browser, polling with thresholds.
 - **Certificates** — TLS expiry tracking, discovered by the network scanner.
@@ -68,7 +68,10 @@ source-available under a commercial license (see [Editions](#editions)).
 - **Alert rules** — custom conditions (contains, regex, numeric operators) on
   any field.
 - **Notifications** — Telegram, Discord, e-mail, webhook, Microsoft Teams,
-  Slack and ntfy. Channel secrets are encrypted and write-only.
+  Slack, ntfy, PagerDuty, Opsgenie and Jira Service Management. Channel
+  secrets are encrypted and write-only.
+- **Inbound events** — other systems (Alertmanager, scripts) open and
+  resolve incidents through the API.
 - **Maintenance windows** — one-off and recurring; hosts in a window are
   shown as `maintenance` and do not alert.
 
@@ -117,6 +120,19 @@ source-available under a commercial license (see [Editions](#editions)).
 | **Swisscom Internet-Box** | WAN status, connected devices, device info |
 | **Cloudflare** | Zones, DNS records, analytics, security events |
 | **Nginx Proxy Manager** | Proxy hosts, certificates and their expiry, redirections, streams |
+| **Proxmox Backup Server** | Datastore usage, backup age per group (all namespaces), verification, failed tasks |
+| **Veeam Backup & Replication** | Job results and age, repository capacity, sessions |
+| **Synology Backup** | Hyper Backup and Active Backup for Business task results |
+| **Prometheus exporter** | Any `/metrics` endpoint, with your own alert rules per series |
+| **Domain expiry** | Registration expiry and hold status via RDAP (registries without expiry data, such as .ch, are shown as not readable) |
+| **Microsoft 365 / Entra ID** | Service health, licence usage, expiring app secrets and certificates |
+| **VMware vSphere** | Hosts, VMs, datastores, vCenter appliance health |
+| **FortiGate** | CPU, memory, interfaces, IPsec tunnels, HA, FortiGuard licences |
+| **Kubernetes** | Nodes, failing pods, stalled workloads, pending volume claims |
+| **NetBox** | Sites, devices, VMs, prefixes, optional import into Hosts |
+| **Hetzner Cloud** | Servers, volumes, load balancers, traffic quota |
+| **Infomaniak** | Products, expiry, locked or in maintenance |
+| **Exoscale** | Instances, SKS clusters, DBaaS, load balancers |
 
 ---
 
