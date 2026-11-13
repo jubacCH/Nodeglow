@@ -175,6 +175,16 @@ _DEFS: tuple[SettingDef, ...] = (
     _t("ntfy_server_url", default="https://ntfy.sh"),
     _t("ntfy_topic"),
     _t("ntfy_token", secret=True),
+    _t("notify_pagerduty_min_severity", default="all"),
+    _t("notify_opsgenie_min_severity", default="all"),
+    _t("notify_jsm_min_severity", default="all"),
+    _t("pagerduty_enabled", "bool", "0"),
+    _t("pagerduty_routing_key", secret=True),
+    _t("opsgenie_enabled", "bool", "0"),
+    _t("opsgenie_region", default="us"),
+    _t("opsgenie_api_key", secret=True),
+    _t("jsm_enabled", "bool", "0"),
+    _t("jsm_api_key", secret=True),
     # SMTP: the tenant's own relay; falls back to an installation relay (SaaS)
     # when the tenant has none. Revision 042 moved existing values to tenant 1.
     _t("smtp_host", fallback=True),

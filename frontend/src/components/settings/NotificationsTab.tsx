@@ -96,7 +96,7 @@ function ChannelCard({
 }: {
   id: string;
   title: string;
-  /** Only channels with their own on/off flag (Teams, Slack, ntfy). */
+  /** Only channels with their own on/off flag (Teams, Slack, ntfy, on-call). */
   enabled?: boolean;
   onToggle?: (v: boolean) => void;
   configured: boolean;
@@ -349,10 +349,98 @@ export function NotificationsTab({
           </div>
         </ChannelCard>
 
+        <ChannelCard
+          id="pagerduty"
+          title="PagerDuty"
+          enabled={form.pagerdutyEnabled}
+          onToggle={(v) => set('pagerdutyEnabled', v)}
+          configured={!!settings.pagerduty_has_key}
+          {...testProps('pagerduty')}
+          guide={[
+            <>In PagerDuty open the service that should be paged, then <strong>Integrations</strong> &gt; <strong>Add an integration</strong></>,
+            <>Choose <strong>Events API v2</strong> and copy the <strong>Integration Key</strong></>,
+            <>Paste it below. Nodeglow opens one PagerDuty incident per incident and resolves it when the incident resolves.</>,
+            <><strong>Send test</strong> triggers a real page — resolve it in PagerDuty afterwards</>,
+          ]}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SecretField
+              label="Integration key"
+              stored={!!settings.pagerduty_has_key}
+              cleared={form.pagerdutyKeyClear}
+              onClear={(v) => set('pagerdutyKeyClear', v)}
+              value={form.pagerdutyKey}
+              onChange={(v) => set('pagerdutyKey', v)}
+              placeholder="32-character routing key"
+            />
+            <SeverityField value={form.pagerdutyMinSev} onChange={(v) => set('pagerdutyMinSev', v)} />
+          </div>
+        </ChannelCard>
+
+        <ChannelCard
+          id="jsm"
+          title="Jira Service Management"
+          enabled={form.jsmEnabled}
+          onToggle={(v) => set('jsmEnabled', v)}
+          configured={!!settings.jsm_has_key}
+          {...testProps('jsm')}
+          guide={[
+            <>In Jira Service Management open your team&apos;s <strong>Operations</strong> &gt; <strong>Integrations</strong> and add an <strong>API</strong> integration</>,
+            <>Copy its <strong>API key</strong> and paste it below</>,
+            <>Alerts are created with an alias per incident and closed when the incident resolves</>,
+          ]}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SecretField
+              label="Integration API key"
+              stored={!!settings.jsm_has_key}
+              cleared={form.jsmKeyClear}
+              onClear={(v) => set('jsmKeyClear', v)}
+              value={form.jsmKey}
+              onChange={(v) => set('jsmKey', v)}
+              placeholder="API key of the integration"
+            />
+            <SeverityField value={form.jsmMinSev} onChange={(v) => set('jsmMinSev', v)} />
+          </div>
+        </ChannelCard>
+
+        <ChannelCard
+          id="opsgenie"
+          title="Opsgenie"
+          enabled={form.opsgenieEnabled}
+          onToggle={(v) => set('opsgenieEnabled', v)}
+          configured={!!settings.opsgenie_has_key}
+          {...testProps('opsgenie')}
+          guide={[
+            <>In Opsgenie open <strong>Teams</strong> &gt; your team &gt; <strong>Integrations</strong> and add an <strong>API</strong> integration</>,
+            <>Copy its <strong>API key</strong>, paste it below and pick the region of your account</>,
+            <>Atlassian is retiring Opsgenie: accounts that moved to Jira Service Management use that channel instead</>,
+          ]}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SecretField
+              label="Integration API key"
+              stored={!!settings.opsgenie_has_key}
+              cleared={form.opsgenieKeyClear}
+              onClear={(v) => set('opsgenieKeyClear', v)}
+              value={form.opsgenieKey}
+              onChange={(v) => set('opsgenieKey', v)}
+              placeholder="API key of the integration"
+            />
+            <Field label="Region">
+              <Select className="max-w-[200px]" value={form.opsgenieRegion} onChange={(e) => set('opsgenieRegion', e.target.value)}>
+                <option value="us">US (api.opsgenie.com)</option>
+                <option value="eu">EU (api.eu.opsgenie.com)</option>
+              </Select>
+            </Field>
+            <SeverityField value={form.opsgenieMinSev} onChange={(v) => set('opsgenieMinSev', v)} />
+          </div>
+        </ChannelCard>
+
         <SettingsSection
           id="public-url"
           title="Public URL"
-          description="Address of this Nodeglow as users open it. Teams, Slack and ntfy alerts link to the incident when set."
+          description="Address of this Nodeglow as users open it. Teams, Slack, ntfy and on-call alerts link to the incident when set."
         >
           <Field label="Public URL" className="max-w-xl">
             <Input inputMode="url" value={form.publicUrl} onChange={(e) => set('publicUrl', e.target.value)} placeholder="https://nodeglow.example.com" />

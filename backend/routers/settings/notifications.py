@@ -14,18 +14,29 @@ from ._helpers import log, require_admin
 
 router = APIRouter()
 
-EXTRA_CHANNELS = ("teams", "slack", "ntfy")
-# Secrets of the Teams/Slack/ntfy channels, stored under the tenant's data
+EXTRA_CHANNELS = ("teams", "slack", "ntfy", "pagerduty", "opsgenie", "jsm")
+# Secrets of the Teams/Slack/ntfy and on-call channels, stored under the tenant's data
 # key (services.tenant_keys) like
 # smtp_password. Teams Workflows and Slack webhook URLs carry their own
 # credential, so they count as secrets and are never sent back to the UI.
-EXTRA_SECRET_KEYS = ("teams_webhook_url", "slack_webhook_url", "ntfy_token")
+EXTRA_SECRET_KEYS = ("teams_webhook_url", "slack_webhook_url", "ntfy_token",
+                     "pagerduty_routing_key", "opsgenie_api_key", "jsm_api_key")
+# Form fields of the on-call channels (PagerDuty, Opsgenie, Jira Service
+# Management). Read from the form by name: a field that was not sent keeps
+# its stored value, like the Teams/Slack/ntfy fields.
+ONCALL_FORM_KEYS = (
+    "pagerduty_enabled", "pagerduty_routing_key", "pagerduty_routing_key_clear",
+    "notify_pagerduty_min_severity",
+    "opsgenie_enabled", "opsgenie_region", "opsgenie_api_key", "opsgenie_api_key_clear",
+    "notify_opsgenie_min_severity",
+    "jsm_enabled", "jsm_api_key", "jsm_api_key_clear", "notify_jsm_min_severity",
+)
 
 
 def _validate_extra_channels(*, public_url, teams_webhook_url, slack_webhook_url,
-                             ntfy_server_url, ntfy_topic) -> str | None:
+                             ntfy_server_url, ntfy_topic, opsgenie_region=None) -> str | None:
     """Return an error message for an unusable value, else None."""
-    from notification_channels import NTFY_TOPIC_RE
+    from notification_channels import NTFY_TOPIC_RE, OPSGENIE_BASES
     from notifications import _is_safe_url
 
     if public_url and public_url.strip():
@@ -38,6 +49,8 @@ def _validate_extra_channels(*, public_url, teams_webhook_url, slack_webhook_url
             return f"{label} is not allowed"
     if ntfy_topic and ntfy_topic.strip() and not NTFY_TOPIC_RE.match(ntfy_topic.strip()):
         return "ntfy topic may only contain letters, digits, '-' and '_' (max 64)"
+    if opsgenie_region and opsgenie_region.strip().lower() not in OPSGENIE_BASES:
+        return "Opsgenie region must be one of: " + ", ".join(sorted(OPSGENIE_BASES))
     return None
 
 
@@ -63,6 +76,8 @@ async def _save_extra_channels(db: AsyncSession, valid_severities: set[str],
                           values["ntfy_server_url"].strip().rstrip("/") or DEFAULT_NTFY_SERVER)
     if given("ntfy_topic"):
         await set_setting(db, "ntfy_topic", values["ntfy_topic"].strip())
+    if given("opsgenie_region") and values["opsgenie_region"].strip():
+        await set_setting(db, "opsgenie_region", values["opsgenie_region"].strip().lower())
     for key in EXTRA_SECRET_KEYS:
         if values.get(f"{key}_clear") == "1":
             await set_setting(db, key, "")
@@ -116,10 +131,12 @@ async def save_notifications(
 ):
     if err := require_admin(request):
         return err
+    form = await request.form()
+    oncall = {k: (str(form[k]) if k in form else None) for k in ONCALL_FORM_KEYS}
     extra_error = _validate_extra_channels(
         public_url=public_url, teams_webhook_url=teams_webhook_url,
         slack_webhook_url=slack_webhook_url, ntfy_server_url=ntfy_server_url,
-        ntfy_topic=ntfy_topic,
+        ntfy_topic=ntfy_topic, opsgenie_region=oncall["opsgenie_region"],
     )
     if extra_error:
         return JSONResponse({"ok": False, "message": extra_error}, status_code=400)
@@ -143,7 +160,6 @@ async def save_notifications(
 
     await set_setting(db, "telegram_chat_id", telegram_chat_id.strip())
     # Legacy channel secrets: encrypted at rest, blank keeps, <key>_clear removes.
-    form = await request.form()
     for key, val in (
         ("telegram_bot_token", telegram_bot_token),
         ("discord_webhook_url", discord_webhook_url),
@@ -187,6 +203,7 @@ async def save_notifications(
         "ntfy_token": ntfy_token,
         "ntfy_token_clear": ntfy_token_clear,
         "notify_ntfy_min_severity": notify_ntfy_min_severity,
+        **oncall,
     })
 
     await db.commit()
@@ -277,7 +294,7 @@ async def test_notification(request: Request, db: AsyncSession = Depends(get_db)
             if channel in secrets.errors:   # only the tested channel's own secret counts
                 raise ChannelError(secrets.errors[channel])
             await make_send(cfg, channel, "Nodeglow Test", "Notifications are working ✓",
-                            "info", build_link(cfg.public_url, None))
+                            "info", build_link(cfg.public_url, None), link_path="/test")
         else:
             return JSONResponse({"ok": False, "message": "Unknown channel"}, status_code=400)
         await _log_notification(channel, "Test Notification", "Manual test", "info", "sent")
