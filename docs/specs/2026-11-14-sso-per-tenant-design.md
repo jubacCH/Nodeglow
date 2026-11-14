@@ -1,6 +1,6 @@
 # Single sign-on per tenant (OIDC)
 
-Status: design · 2026-11-14 · owner decisions taken 2026-11-14 (see "Owner decisions") · nothing implemented. Phase 13 of
+Status: design · 2026-11-14 · owner decisions taken 2026-11-14 (see "Owner decisions") · PR 1 of the plan (data model and administration) in review; no sign-in yet. Phase 13 of
 [2026-10-10-multi-tenancy-design.md](2026-10-10-multi-tenancy-design.md)
 ("Identity, LDAP, SSO"), narrowed to OIDC.
 
@@ -172,6 +172,15 @@ Decisions:
    new local usernames ending in `#<digits>`. The column grows to 255 because a
    mail address does not fit in 64.
 
+   Two cases the sign-in pull request must handle (found in the review of
+   PR 1): a mail address may be up to 320 characters (`user_identities.email`
+   keeps it whole), so when `<mail>#<id>` does not fit in 255 the username
+   falls back to `sso-<first 16 hex digits of SHA-256 of sub>#<id>`; and local
+   users created before revision 052 may already end in `#<digits>` (052 logs
+   them), so just-in-time creation checks that the name is free and takes the
+   same fallback when it is not. A name is never reused by attaching an
+   existing user.
+
 ### Revision, row-level security
 
 - **Revision 052** (`052_identity_providers.py`, down-revision 051; the number
@@ -287,9 +296,13 @@ browser                     nodeglow (ee)                         provider
   unknown `kid` triggers one refetch, at most once a minute per provider (key
   rotation without waiting an hour, and no fetch storm from forged tokens).
 - All outbound requests (discovery, JWKS, token, userinfo) go through
-  `utils.net_safety.safe_async_client`: address checked at connect time, no
-  redirects followed, five second timeout, one megabyte response cap, TLS
-  verification always on. A private CA is pasted into the provider form
+  `utils.net_safety.safe_async_client`: address checked at connect time
+  (including the IPv4 address inside NAT64, IPv4-compatible, IPv4-translated,
+  6to4 and Teredo addresses), no redirects followed, five seconds per network
+  operation and one overall deadline per check or sign-in step (a server that
+  sends a byte every few seconds must not keep a request alive), one megabyte
+  response cap, TLS verification always on. No database transaction is held
+  while waiting on the provider. A private CA is pasted into the provider form
   (`ca_pem`), not dropped into the container.
 
 ### Id token checks (all mandatory)
@@ -346,8 +359,11 @@ backend: a tenant could make the installation fetch
   addresses" (Settings, operator only);
 - error messages to the tenant admin are categories ("cannot connect", "TLS
   certificate not trusted", "not an OIDC discovery document", "issuer does not
-  match"), never response bodies, so the test cannot be used to read internal
-  services.
+  match"), never response bodies, field values or HTTP status codes, so the
+  test cannot be used to read internal services. The categories themselves
+  still tell whether something answers at an address the tenant may check;
+  that is inherent to a connection test and limited by the address rules
+  above.
 
 ## Finding the provider on the sign-in page
 
@@ -685,7 +701,7 @@ PR), against the threat table. Sign-in stays unreleased until it is done.
 |---|---|---|
 | **1. Data model and administration** | Core: models, revision 052, global-unique columns, `_secret_rows`, `EXPORT_TABLES`, feature flag, username rule. `ee`: `nodeglow_ee.sso` with provider CRUD, validation, discovery/JWKS client with outbound rules, "check connection", licence gate, purge addition. Frontend: the settings section without test and enable. | Yes. Providers can be drafted; no flow route exists, nothing anonymous is reachable. |
 | **2. The flow** | `sso_flows` handling, `/start` and `/callback`, id token validation, the fake issuer and the token and flow tests, the **test sign-in** end to end with its result page. Only purpose `test` is accepted, and only from a signed-in admin. | Yes. The callback can end in a result page for an admin, never in a session. This is the state to try against authentik and Infomaniak. |
-| **3. Sign-in** | Core: `open_session`, sign-in policy hook, `request.state` field, password login refusing `oidc`. `ee`: purpose `login` and `link`, identity resolution, JIT, restrictions, invitations, session confinement, session lifetime, "SSO required" with break-glass, enable/disable. Frontend: sign-in address page, hint cookie, done page, account and users pages. Released behind `SIGN_IN_RELEASED = False` in `nodeglow_ee.sso`: with it off, purpose `login` and `link` are refused and "enable" is hidden. | Yes, inert: the constant keeps sign-in off whatever the licence says (a `*` licence would otherwise switch it on). |
+| **3. Sign-in** | Core: `open_session`, sign-in policy hook, `request.state` field, password login refusing `oidc`. `ee`: purpose `login` and `link`, identity resolution, JIT, restrictions, invitations, session confinement, session lifetime, "SSO required" with break-glass, enable/disable. Frontend: sign-in address page, hint cookie, done page, account and users pages. Released behind `SIGN_IN_RELEASED = False` in `nodeglow_ee.sso`: with it off, purpose `login` and `link` are refused and "enable" is hidden. The constant is checked **at sign-in** (start and callback), not only when a provider is saved: a restored or hand-edited row can carry `enabled = true` (PR 1 switches such rows off after a restore). | Yes, inert: the constant keeps sign-in off whatever the licence says (a `*` licence would otherwise switch it on). |
 | **4. Roles from groups** | `role_rules`, `required_groups` evaluation at every sign-in, last-admin guard, the "last sign-in errors" list, audit entries for role changes. | Yes, still inert. |
 | **Release** (small) | Fixes from the security review, `SIGN_IN_RELEASED = True`, user documentation, the ee README row. | This is the deployment that turns sign-in on. |
 

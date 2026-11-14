@@ -16,6 +16,10 @@ enterprise package reads and writes it, and nothing signs anybody in yet.
   ``revoked_by_name``, ``incidents.acknowledged_by`` / ``feedback_by``.
   Widening a varchar is a catalogue change in PostgreSQL, no table rewrite.
 
+Local usernames that already end in "#<digits>" (the shape reserved for
+single sign-on users from now on) are logged, so an admin can rename them
+before a sign-in could want the same name.
+
 Downgrade: drops the three tables and the session column; shrinks the
 columns back, cutting stored names to the old width. It refuses while a
 username longer than 64 characters exists, because cutting those could make
@@ -26,8 +30,13 @@ Revises: 051
 """
 from __future__ import annotations
 
+import logging
+import re
+
 import sqlalchemy as sa
 from alembic import op
+
+log = logging.getLogger("alembic.runtime.migration")
 
 revision = "052"
 down_revision = "051"
@@ -186,7 +195,17 @@ def _apply_rls() -> None:
     pg_rls.apply(bind, TABLES, enabled=config.RLS_ENABLED, login=pg_rls.app_login())
 
 
+def _report_reserved_usernames() -> list[str]:
+    names = [n for n in op.get_bind().execute(sa.text("SELECT username FROM users")).scalars()
+             if n and re.search(r"#\d+$", n.strip())]
+    if names:
+        log.warning("052: %d local username(s) end in '#<digits>', the shape now reserved for "
+                    "single sign-on users; rename them: %s", len(names), ", ".join(sorted(names)))
+    return names
+
+
 def upgrade() -> None:
+    _report_reserved_usernames()
     _create_tables()
     _add_session_column()
     _resize(lambda _old: NEW_WIDTH)

@@ -1036,8 +1036,12 @@ def test_052_identity_providers_up_and_down(pg_db):
     q(pg_db, "INSERT INTO tenants (id, provider_id, name, slug, status, created_at) "
              "VALUES (2, 1, 'B', 'b', 'active', now())")
     q(pg_db, "INSERT INTO users (id, username, password_hash, role, auth_source, created_at, "
-             "is_operator) VALUES (1, 'admin', 'x', 'admin', 'local', now(), false)")
-    _alembic(pg_db, "upgrade", "052", **env)
+             "is_operator) VALUES (1, 'admin', 'x', 'admin', 'local', now(), false), "
+             "(3, 'legacy#3', 'x', 'readonly', 'local', now(), false)")
+    proc = _alembic(pg_db, "upgrade", "052", **env)
+    # A local name of the shape now reserved for single sign-on is reported.
+    assert "legacy#3" in proc.stdout + proc.stderr
+    q(pg_db, "DELETE FROM users WHERE id = 3")
 
     tables = ("identity_providers", "user_identities", "sso_flows")
     assert set(tables) <= _policies(pg_db)

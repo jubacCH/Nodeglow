@@ -252,6 +252,15 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
     if moved_secrets:
         await db.commit()
 
+    # Plugins bring restored rows in line with what this version allows
+    # (ee: identity providers stay off while sign-in is not released).
+    import extensions
+
+    if extensions.registry.restore_hooks:
+        for hook in extensions.registry.restore_hooks:
+            await hook(db)
+        await db.commit()
+
     warnings = [key_warning] if key_warning else []
     if missing:
         missing_warning = (

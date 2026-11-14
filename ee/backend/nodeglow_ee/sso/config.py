@@ -343,7 +343,9 @@ def _iso(dt: datetime | None) -> str | None:
 
 
 def state_of(idp: IdentityProvider) -> str:
-    if idp.enabled:
+    # A stored "enabled" counts only once sign-in is released (a restore or a
+    # hand-edited row cannot make a provider look live before that).
+    if idp.enabled and sso.SIGN_IN_RELEASED:
         return "enabled"
     if idp.tested_hash and idp.tested_hash == idp.config_hash:
         return "tested"
@@ -396,7 +398,7 @@ def public(idp: IdentityProvider, *, public_url: str) -> dict:
         "type": idp.type,
         "name": idp.name,
         "state": state_of(idp),
-        "enabled": bool(idp.enabled),
+        "enabled": bool(idp.enabled) and sso.SIGN_IN_RELEASED,
         "login_key": idp.login_key,
         "sign_in_url": sign_in_url(public_url, idp.login_key),
         "issuer": idp.issuer,

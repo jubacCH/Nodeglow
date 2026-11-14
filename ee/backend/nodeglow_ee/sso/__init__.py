@@ -34,4 +34,35 @@ def register(registry: Registry) -> None:
     from nodeglow_ee.sso import api
 
     registry.add_router(api.router)
+    registry.after_restore(after_restore)
     registry.enable_feature(FEATURE)
+
+
+async def after_restore(db) -> int:
+    """A restored backup (from a later version, or edited) may carry enabled
+    providers; while sign-in is not released they are switched off again.
+    Returns the number of providers changed. The sign-in itself must check
+    :data:`SIGN_IN_RELEASED` too, not only the settings."""
+    if SIGN_IN_RELEASED:
+        return 0
+    import logging
+
+    from sqlalchemy import or_, update
+
+    from models.identity import IdentityProvider
+    from services.tenancy import system_scope
+
+    with system_scope("sso: restored providers stay off while sign-in is not released"):
+        result = await db.execute(
+            update(IdentityProvider)
+            .where(or_(IdentityProvider.enabled.is_(True), IdentityProvider.sso_required.is_(True)))
+            .values(enabled=False, sso_required=False)
+            .execution_options(synchronize_session=False)
+        )
+        await db.flush()
+    changed = result.rowcount or 0
+    if changed:
+        logging.getLogger("nodeglow.ee.sso").warning(
+            "restore: %d identity provider(s) came back enabled or required; switched off, "
+            "sign-in through single sign-on is not released in this version", changed)
+    return changed

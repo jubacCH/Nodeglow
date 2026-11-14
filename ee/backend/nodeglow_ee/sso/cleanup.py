@@ -41,13 +41,60 @@ async def affected_users(db, idp: IdentityProvider) -> int:
     )).scalar() or 0
 
 
-async def delete_provider(db, idp: IdentityProvider) -> Removed:
-    """Delete ``idp`` and what hangs on it (request's tenant scope). Not committed."""
+class DeleteRefused(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+LAST_ADMIN = ("Deleting this provider would leave the tenant without an admin: every admin "
+              "signs in through it. Make a local account an admin first.")
+OWN_ACCESS = ("You sign in through this provider only. Deleting it would remove your own "
+              "access; ask another admin, or sign in with a local account.")
+
+
+async def _losing_membership(db, idp: IdentityProvider, user_ids: list[int]) -> list[User]:
+    """The single sign-on users that exist in this tenant only through
+    ``idp``: deleting it takes their membership away."""
+    out: list[User] = []
+    for uid in user_ids:
+        user = await db.get(User, uid)
+        if user is None or (user.auth_source or "local") != AUTH_SOURCE_OIDC:
+            continue
+        # Identities of other tenants are not visible in this tenant's scope.
+        with system_scope("sso: does a single sign-on user have other identities"):
+            others = (await db.execute(
+                select(func.count()).select_from(UserIdentity)
+                .where(UserIdentity.user_id == uid, UserIdentity.identity_provider_id != idp.id)
+            )).scalar() or 0
+        if not others:
+            out.append(user)
+    return out
+
+
+async def delete_provider(db, idp: IdentityProvider, *, acting_user_id: int | None) -> Removed:
+    """Delete ``idp`` and what hangs on it (request's tenant scope). Not committed.
+
+    Refused (:class:`DeleteRefused`, nothing changed) when it would take away
+    the acting user's own membership, or leave the tenant without an admin —
+    the same rules ``routers.users`` applies to removing a user."""
     removed = Removed()
     tenant_id = idp.tenant_id
     user_ids = sorted(set((await db.execute(
         select(UserIdentity.user_id).where(UserIdentity.identity_provider_id == idp.id)
     )).scalars().all()))
+    losing = await _losing_membership(db, idp, user_ids)
+    losing_ids = {u.id for u in losing}
+    if acting_user_id is not None and acting_user_id in losing_ids:
+        raise DeleteRefused(OWN_ACCESS)
+    if losing_ids:
+        admins = set((await db.execute(
+            select(TenantMembership.user_id).where(TenantMembership.tenant_id == tenant_id,
+                                                   TenantMembership.role == "admin")
+        )).scalars().all())
+        if admins and admins <= losing_ids:
+            raise DeleteRefused(LAST_ADMIN)
+
     removed.identities = len(user_ids)
     removed.sessions = (await db.execute(
         delete(Session).where(Session.identity_provider_id == idp.id)
@@ -57,17 +104,8 @@ async def delete_provider(db, idp: IdentityProvider) -> Removed:
     await db.delete(idp)
     await db.flush()
 
-    for uid in user_ids:
-        user = await db.get(User, uid)
-        if user is None or (user.auth_source or "local") != AUTH_SOURCE_OIDC:
-            continue
-        # Identities of other tenants are not visible in this tenant's scope.
-        with system_scope("sso: does a single sign-on user have other identities"):
-            others = (await db.execute(
-                select(func.count()).select_from(UserIdentity).where(UserIdentity.user_id == uid)
-            )).scalar() or 0
-        if others:
-            continue
+    for user in losing:
+        uid = user.id
         if await ms.revoke(db, uid, tenant_id):
             removed.memberships_revoked += 1
         remaining = (await db.execute(

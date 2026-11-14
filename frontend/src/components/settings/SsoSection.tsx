@@ -265,7 +265,7 @@ function ProviderEditor({ provider, state, onDone }: { provider?: Provider; stat
   const errorFor = (name: string) => (field === name ? error : undefined);
 
   async function save() {
-    const { body, error: formError } = buildBody(f, creating);
+    const { body, error: formError } = buildBody(f);
     if (formError) {
       setError(formError);
       setField('role_rules');

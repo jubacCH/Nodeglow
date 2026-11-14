@@ -282,11 +282,25 @@ async def delete_provider(provider_id: int, request: Request, db: AsyncSession =
         if refused := await license_runtime.blocked(sso.FEATURE):
             return refused
     name, issuer, pid = idp.name, idp.issuer, idp.id
-    removed = await cleanup.delete_provider(db, idp)
+    user = getattr(request.state, "current_user", None)
+    try:
+        removed = await cleanup.delete_provider(db, idp, acting_user_id=getattr(user, "id", None))
+    except cleanup.DeleteRefused as exc:
+        await db.rollback()
+        return _error(exc.message, 409)
     await log_action(db, request, "idp.delete", "identity_provider", pid, name[:256],
                      details={"issuer": issuer, **removed.__dict__})
     await db.commit()
     return {"ok": True, **removed.__dict__}
+
+
+def _check_inputs(idp: IdentityProvider) -> tuple:
+    """What a check depends on; compared again before its result is stored."""
+    return (idp.issuer, idp.ca_pem, idp.scopes, idp.groups_claim)
+
+
+CHANGED_MEANWHILE = ("The provider was changed while the check ran, so its result was not "
+                     "stored. Check again.")
 
 
 @router.post("/api/identity-providers/{provider_id}/check",
@@ -301,15 +315,30 @@ async def check_provider(provider_id: int, request: Request, db: AsyncSession = 
     if refused := await license_runtime.blocked(sso.FEATURE):
         return refused
     public_only = not await private_issuers_allowed(db, idp.tenant_id)
+    inputs = _check_inputs(idp)
+    issuer, ca_pem, scopes, groups_claim = inputs
+    # No transaction (and so no pooled connection) is held while the check
+    # waits on a server the tenant admin chose: a slow one must not tie up
+    # the installation's database pool.
+    await db.commit()
     try:
-        result = await discovery.check(idp.issuer, scopes=idp.scopes,
-                                       groups_claim=idp.groups_claim, ca_pem=idp.ca_pem,
-                                       public_only=public_only)
+        result = await discovery.check(issuer, scopes=scopes, groups_claim=groups_claim,
+                                       ca_pem=ca_pem, public_only=public_only)
+        failure = None
     except discovery.CheckFailed as exc:
+        result, failure = None, exc
+
+    idp = await db.get(IdentityProvider, provider_id, populate_existing=True)
+    if idp is None:
+        return _error("Not found", 404)
+    if _check_inputs(idp) != inputs:
+        await db.rollback()
+        return {"ok": False, "code": "changed", "message": CHANGED_MEANWHILE}
+    if failure is not None:
         await log_action(db, request, "idp.check", "identity_provider", idp.id, idp.name[:256],
-                         details={"ok": False, "code": exc.code})
+                         details={"ok": False, "code": failure.code})
         await db.commit()
-        return {"ok": False, "code": exc.code, "message": exc.message}
+        return {"ok": False, "code": failure.code, "message": failure.message}
     idp.discovery_json = json.dumps(result.discovery, sort_keys=True)
     idp.discovery_at = datetime.utcnow()
     await log_action(db, request, "idp.check", "identity_provider", idp.id, idp.name[:256],

@@ -244,3 +244,51 @@ async def test_public_only_client_blocks_a_name_rebound_to_a_private_address():
         backend = _GuardedBackend(_RecordingBackend())
         with pytest.raises(httpcore.ConnectError, match="recorded"):
             await backend.connect_tcp("idp.example", 443)
+
+
+# ── IPv6 addresses that carry an IPv4 address ───────────────────────────────
+
+
+@pytest.mark.parametrize("value,inner", [
+    ("64:ff9b::a00:1", "10.0.0.1"),            # NAT64 well-known prefix
+    ("64:ff9b::a9fe:a9fe", "169.254.169.254"),  # ... the metadata service
+    ("::a00:1", "10.0.0.1"),                   # IPv4-compatible
+    ("::ffff:0:a00:1", "10.0.0.1"),            # IPv4-translated (SIIT)
+    ("64:ff9b:1::a00:1", "10.0.0.1"),          # NAT64 local-use, /96 layout
+    ("2002:a00:1::1", "10.0.0.1"),             # 6to4
+])
+def test_embedded_ipv4_is_found(value, inner):
+    import ipaddress
+
+    assert ipaddress.ip_address(inner) in net_safety.embedded_ipv4(ipaddress.ip_address(value))
+
+
+@pytest.mark.parametrize("value", ["64:ff9b::a9fe:a9fe", "::ffff:0:a9fe:a9fe", "::7f00:1",
+                                   "64:ff9b::7f00:1", "2002:a9fe:a9fe::1"])
+def test_embedded_blocked_addresses_are_blocked_for_every_caller(value):
+    assert validate_host(value, resolve=False) is not None
+
+
+@pytest.mark.parametrize("value", ["64:ff9b::a00:1", "::a00:1", "::ffff:0:a00:1",
+                                   "64:ff9b:1::a00:1", "2002:c0a8:101::1"])
+def test_embedded_private_addresses_are_not_public(value):
+    assert validate_host(value, resolve=False, public_only=True) is not None
+
+
+def test_nat64_of_a_public_address_stays_allowed():
+    assert validate_host("64:ff9b::101:101", resolve=False, public_only=True) is None  # 1.1.1.1
+
+
+async def test_connect_time_guard_judges_the_embedded_address():
+    inner = _RecordingBackend()
+    backend = _GuardedBackend(inner)
+
+    def fake(host, port, *a, **kw):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("64:ff9b::a9fe:a9fe", port, 0, 0))]
+
+    with patch("socket.getaddrinfo", side_effect=fake):
+        with pytest.raises(httpcore.ConnectError, match="Blocked outbound connection"):
+            await backend.connect_tcp("dns64.example", 80)
+    assert inner.hosts == []
+    with pytest.raises(httpcore.ConnectError, match="public addresses"):
+        await _GuardedBackend(_RecordingBackend(), public_only=True).connect_tcp("64:ff9b::a00:1", 443)

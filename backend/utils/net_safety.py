@@ -54,6 +54,42 @@ INTERNAL_HOSTS = frozenset({
 })
 _ZERO_NET = ipaddress.ip_network("0.0.0.0/8")  # "this host" on Linux
 
+# IPv6 ranges that carry an IPv4 address in their last 32 bits. Python calls
+# several of them global, but behind DNS64/NAT64 (or a translator) a
+# connection to them reaches the embedded IPv4 host: 64:ff9b::a9fe:a9fe is
+# the metadata service. Such an address is judged by its IPv4 address too.
+_EMBEDS_IPV4_LAST32 = (
+    ipaddress.ip_network("64:ff9b::/96"),     # NAT64 well-known prefix (RFC 6052)
+    ipaddress.ip_network("64:ff9b:1::/48"),   # NAT64 local-use prefix (RFC 8215)
+    ipaddress.ip_network("::/96"),            # IPv4-compatible (deprecated)
+    ipaddress.ip_network("::ffff:0:0:0/96"),  # IPv4-translated (SIIT, RFC 2765)
+)
+_NAT64_LOCAL = _EMBEDS_IPV4_LAST32[1]
+
+
+def embedded_ipv4(addr) -> list:
+    """IPv4 addresses an IPv6 address carries (NAT64, IPv4-compatible,
+    IPv4-translated, 6to4, Teredo), else ``[]``. Mapped addresses
+    (``::ffff:a.b.c.d``) are unwrapped by :func:`blocked_ip_reason` itself."""
+    if addr.version != 6:
+        return []
+    out = []
+    packed = int(addr)
+    if any(addr in net for net in _EMBEDS_IPV4_LAST32):
+        out.append(ipaddress.IPv4Address(packed & 0xFFFFFFFF))
+    if addr in _NAT64_LOCAL:
+        # A /48 NAT64 prefix places the IPv4 address in bits 48-63 and 72-87
+        # (RFC 6052, section 2.2); which prefix length an operator uses inside
+        # 64:ff9b:1::/48 is unknown, so both layouts are judged.
+        high = (packed >> 64) & 0xFFFF
+        low = (packed >> 40) & 0xFFFF
+        out.append(ipaddress.IPv4Address((high << 16) | low))
+    if addr.sixtofour is not None:
+        out.append(addr.sixtofour)
+    if addr.teredo is not None:
+        out.append(addr.teredo[1])
+    return out
+
 
 class UnsafeTargetError(httpx.ConnectError):
     """Raised by the guarded transport when a connection target is blocked.
@@ -100,6 +136,9 @@ def blocked_ip_reason(addr, *, public_only: bool = False) -> str | None:
         return "Multicast addresses are not allowed"
     if public_only and not addr.is_global:
         return "Only public addresses are allowed for this target"
+    for inner in embedded_ipv4(addr):
+        if reason := blocked_ip_reason(inner, public_only=public_only):
+            return f"{reason} ({inner} is embedded in {addr})"
     return None
 
 

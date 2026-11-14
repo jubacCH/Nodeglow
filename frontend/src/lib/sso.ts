@@ -168,10 +168,10 @@ export function formFromProvider(p: Provider): ProviderForm {
 
 /**
  * The JSON body for POST (create) or PATCH (edit). The secret is sent only
- * when typed (blank keeps the stored one); an empty sign-in key on create
- * lets the server pick one.
+ * when typed (blank keeps the stored one); a blank sign-in key is not sent
+ * (create: the server picks one; edit: the stored one stays).
  */
-export function buildBody(f: ProviderForm, creating: boolean): { body: Record<string, unknown>; error: string | null } {
+export function buildBody(f: ProviderForm): { body: Record<string, unknown>; error: string | null } {
   const { rules, error } = parseRules(f.roleRules);
   if (error) return { body: {}, error };
   const hours = Number(f.sessionHours);
@@ -191,7 +191,8 @@ export function buildBody(f: ProviderForm, creating: boolean): { body: Record<st
     issuer_is_own_organisation: f.ownOrganisation,
     session_hours: hours,
   };
-  if (f.loginKey.trim() || !creating) body.login_key = f.loginKey.trim();
+  // Blank: on create the server picks one, on edit the stored one stays.
+  if (f.loginKey.trim()) body.login_key = f.loginKey.trim();
   if (f.clearSecret) body.clear_client_secret = true;
   else if (f.clientSecret.trim()) body.client_secret = f.clientSecret;
   return { body, error: null };

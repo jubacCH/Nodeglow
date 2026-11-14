@@ -530,3 +530,160 @@ async def test_a_licence_without_sso_does_not_unlock_it(env, ee_license):
     env.login_as(env.b_session)
     r = await _create(env)
     assert r.status_code == 402 and r.json()["code"] == "feature_not_licensed"
+
+
+# ── Fixes after the review of PR 56 ──────────────────────────────────────────
+
+async def test_a_slow_drip_answer_is_cut_off_at_the_overall_deadline(env, issuer, monkeypatch):
+    """Five seconds per read do not bound a server that sends a byte every
+    few seconds; the overall deadline does."""
+    import asyncio
+    import time
+
+    from nodeglow_ee.sso import discovery
+
+    monkeypatch.setattr(discovery, "DEADLINE", 0.6)
+
+    async def drip():
+        yield b"{"
+        for _ in range(100):
+            await asyncio.sleep(0.1)
+            yield b" "
+
+    issuer.routes[f"{ISSUER}/.well-known/openid-configuration"] = httpx.Response(200, content=drip())
+    env.login_as(env.b_session)
+    pid = (await _create(env)).json()["id"]
+    started = time.monotonic()
+    body = (await env.client.post(f"/api/identity-providers/{pid}/check")).json()
+    assert body["code"] == "timeout" and time.monotonic() - started < 3
+
+
+async def test_no_database_transaction_is_held_while_the_check_waits(env, issuer, monkeypatch):
+    import gc
+
+    from sqlalchemy.orm import Session as OrmSession
+
+    from nodeglow_ee.sso import discovery
+
+    seen: list[int] = []
+    real = discovery.check
+
+    async def watching(*args, **kwargs):
+        seen.append(sum(1 for o in gc.get_objects()
+                        if isinstance(o, OrmSession) and o.in_transaction()))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(discovery, "check", watching)
+    env.login_as(env.b_session)
+    pid = (await _create(env)).json()["id"]
+    body = (await env.client.post(f"/api/identity-providers/{pid}/check")).json()
+    assert body["ok"] is True and seen == [0]
+
+
+async def test_a_check_result_is_not_stored_when_the_provider_changed_meanwhile(env, issuer, monkeypatch):
+    from nodeglow_ee.sso import discovery
+
+    real = discovery.check
+    env.login_as(env.b_session)
+    pid = (await _create(env)).json()["id"]
+
+    async def racing(*args, **kwargs):
+        result = await real(*args, **kwargs)
+        async with env.sf() as s:
+            with tenant_scope(2):
+                row = await s.get(IdentityProvider, pid)
+                row.issuer = "https://new-issuer.example.test"
+                await s.commit()
+        return result
+
+    monkeypatch.setattr(discovery, "check", racing)
+    body = (await env.client.post(f"/api/identity-providers/{pid}/check")).json()
+    assert body == {"ok": False, "code": "changed", "message": body["message"]}
+    row = await _row(env, pid)
+    assert row.discovery_json is None and row.issuer == "https://new-issuer.example.test"
+
+
+async def test_check_failures_carry_no_content_of_the_target(env, issuer):
+    issuer.serve(ISSUER, doc=discovery_doc("https://CANARY-target.example.test"))
+    env.login_as(env.b_session)
+    pid = (await _create(env)).json()["id"]
+    r = await env.client.post(f"/api/identity-providers/{pid}/check")
+    assert r.json()["code"] == "issuer_mismatch" and "CANARY" not in r.text
+    issuer.routes[f"{ISSUER}/.well-known/openid-configuration"] = httpx.Response(418, text="x")
+    r = await env.client.post(f"/api/identity-providers/{pid}/check")
+    assert r.json()["code"] == "http_status" and "418" not in r.text
+
+
+async def _link_oidc_admin(env, pid: int, *, admin_of: int = 2) -> int:
+    async with env.sf() as s:
+        user = User(username=f"boss@beta.ch#{pid}", password_hash="x", role="admin", auth_source="oidc")
+        s.add(user)
+        await s.flush()
+        s.add(TenantMembership(user_id=user.id, tenant_id=admin_of, role="admin"))
+        with tenant_scope(2):
+            s.add(UserIdentity(tenant_id=2, identity_provider_id=pid, user_id=user.id,
+                               external_subject=f"boss-{pid}", created_via="jit"))
+            await s.commit()
+        return user.id
+
+
+async def test_deleting_the_provider_you_sign_in_through_is_refused(env):
+    env.login_as(env.b_session)
+    pid = (await _create(env)).json()["id"]
+    boss = await _link_oidc_admin(env, pid)
+    env.login_as(await env.session(boss, 2))
+    r = await env.client.delete(f"/api/identity-providers/{pid}")
+    assert r.status_code == 409 and "your own access" in r.json()["error"]
+    assert await _row(env, pid) is not None
+    async with env.sf() as s:
+        assert await s.get(User, boss) is not None
+
+
+async def test_a_delete_that_would_leave_the_tenant_without_an_admin_is_refused(env):
+    from nodeglow_ee.sso import cleanup
+
+    env.login_as(env.b_session)
+    pid = (await _create(env)).json()["id"]
+    await _link_oidc_admin(env, pid)
+    async with env.sf() as s:
+        await s.execute(TenantMembership.__table__.update()
+                        .where(TenantMembership.user_id == env.b_admin).values(role="editor"))
+        await s.commit()
+    async with env.sf() as s:
+        with tenant_scope(2):
+            idp = await s.get(IdentityProvider, pid)
+            with pytest.raises(cleanup.DeleteRefused, match="without an admin"):
+                await cleanup.delete_provider(s, idp, acting_user_id=None)
+            await s.rollback()
+    assert await _row(env, pid) is not None
+
+
+async def test_a_restore_cannot_bring_back_an_enabled_provider(env):
+    """A backup of a later version (or an edited one) carries enabled = true;
+    while sign-in is not released it is switched off, and never reported as
+    enabled meanwhile."""
+    from unittest.mock import AsyncMock, patch
+
+    from services import backup
+
+    env.login_as(env.b_session)
+    pid = (await _create(env)).json()["id"]
+    async with env.sf() as s:
+        with system_scope("test: as a restore would leave it", audit=False):
+            await s.execute(IdentityProvider.__table__.update().values(enabled=True, sso_required=True))
+            await s.commit()
+    data = (await env.client.get(f"/api/identity-providers/{pid}")).json()
+    assert data["state"] == "draft" and data["enabled"] is False
+
+    async with env.sf() as s:
+        with tenant_scope(1), patch.object(backup, "_restore_tables", new=AsyncMock(return_value={})):
+            await backup.import_backup(s, {"_meta": {"format": "nodeglow-backup"}, "tables": {}})
+    row = await _row(env, pid)
+    assert (row.enabled, row.sso_required) == (False, False)
+
+
+def test_sso_registers_its_restore_hook():
+    import extensions
+    from nodeglow_ee import sso
+
+    assert sso.after_restore in extensions.registry.restore_hooks

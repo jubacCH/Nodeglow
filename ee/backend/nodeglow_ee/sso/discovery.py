@@ -2,18 +2,24 @@
 
 Everything goes through ``utils.net_safety``: the address is checked before
 the request and again at connect time, redirects are not followed, TLS is
-always verified (against a private CA if the provider has one), a response
-is read up to :data:`MAX_BYTES` and the whole check is bounded by
-:data:`TIMEOUT` per request. With ``public_only`` (a provider of any other
+always verified (against a private CA if the provider has one) and a
+response is read up to :data:`MAX_BYTES`. :data:`TIMEOUT` bounds each
+network operation (connect, each read); :data:`DEADLINE` bounds the whole
+check, both requests included, so a server that sends a byte every few
+seconds cannot keep it alive. With ``public_only`` (a provider of any other
 tenant than the default one, unless the operator allows private addresses)
 every address that is not globally routable is refused as well.
 
-Failures are reported as a category with a fixed message. Response bodies
-of the target are never shown or logged: the check must not become a way to
-read internal services.
+Failures are reported as a category with a fixed message. Nothing of the
+target's answer is shown or logged, neither bodies nor field values nor the
+HTTP status: the check must not become a way to read internal services.
+What remains is inherent to any connection test: the category itself
+(cannot connect, timeout, TLS, an error answer) tells whether something
+listens at an address the tenant may check.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import ssl
@@ -30,7 +36,8 @@ DISCOVERY_PATH = "/.well-known/openid-configuration"
 # Signature algorithms nodeglow accepts for id tokens (spec "Id token checks").
 ACCEPTED_ALGORITHMS = ("RS256", "PS256", "ES256")
 MAX_BYTES = 1_000_000
-TIMEOUT = 5.0
+TIMEOUT = 5.0     # per network operation
+DEADLINE = 15.0   # the whole check
 
 # Kept from the discovery document; everything else is dropped.
 KEPT_FIELDS = (
@@ -48,12 +55,13 @@ MESSAGES = {
     "cannot_connect": "Cannot connect to the provider.",
     "timeout": "The provider did not answer in time.",
     "tls": "The provider's TLS certificate is not trusted.",
-    "http_status": "The provider answered with an error.",
+    "http_status": "The provider answered with an error instead of the document.",
     "redirect": "The provider answered with a redirect; enter the issuer exactly as the provider states it.",
     "too_large": "The provider's answer is too large.",
     "not_json": "The provider's answer is not JSON.",
     "not_discovery": "This is not an OpenID Connect discovery document.",
-    "issuer_mismatch": "The discovery document states a different issuer.",
+    "issuer_mismatch": ("The discovery document states a different issuer. Enter the issuer "
+                        "exactly as the provider documents it (a trailing slash counts)."),
     "insecure_endpoint": "An endpoint of the provider is not an https:// address.",
     "no_code_flow": "The provider does not offer the authorization code flow.",
     "no_pkce": "The provider does not support PKCE with S256.",
@@ -129,7 +137,7 @@ async def _get_json(client: httpx.AsyncClient, url: str, public_only: bool) -> A
             if 300 <= response.status_code < 400:
                 raise CheckFailed("redirect")
             if response.status_code != 200:
-                raise CheckFailed("http_status", f"(HTTP {response.status_code})")
+                raise CheckFailed("http_status")
             body = bytearray()
             async for chunk in response.aiter_bytes():
                 body.extend(chunk)
@@ -164,8 +172,8 @@ def check_document(doc: Any, issuer: str) -> tuple[dict, list[str], list[str]]:
     if not isinstance(stated, str):
         raise CheckFailed("not_discovery")
     if stated != issuer:
-        shown = stated if len(stated) <= 512 and stated.isprintable() else "(not shown)"
-        raise CheckFailed("issuer_mismatch", f"It says {shown}.")
+        # Not echoed: whatever the target put there is not for the caller.
+        raise CheckFailed("issuer_mismatch")
     for key in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
         if key not in doc:
             raise CheckFailed("not_discovery")
@@ -229,16 +237,21 @@ def claim_notes(doc: dict, *, scopes: str, groups_claim: str) -> list[str]:
 
 async def check(issuer: str, *, scopes: str, groups_claim: str, ca_pem: str | None,
                 public_only: bool) -> CheckResult:
-    """Fetch and check the discovery document and the signing keys."""
+    """Fetch and check the discovery document and the signing keys, within
+    :data:`DEADLINE` for everything."""
     url = issuer.rstrip("/") + DISCOVERY_PATH
     try:
         client = client_factory(public_only=public_only, ca_pem=ca_pem)
     except ssl.SSLError:
         raise CheckFailed("tls", "(the CA certificate cannot be used)") from None
-    async with client:
-        doc = await _get_json(client, url, public_only)
-        kept, algorithms, notes = check_document(doc, issuer)
-        jwks = await _get_json(client, kept["jwks_uri"], public_only)
-        keys = usable_keys(jwks)
+    try:
+        async with asyncio.timeout(DEADLINE):
+            async with client:
+                doc = await _get_json(client, url, public_only)
+                kept, algorithms, notes = check_document(doc, issuer)
+                jwks = await _get_json(client, kept["jwks_uri"], public_only)
+                keys = usable_keys(jwks)
+    except TimeoutError:
+        raise CheckFailed("timeout") from None
     notes += claim_notes(kept, scopes=scopes, groups_claim=groups_claim)
     return CheckResult(discovery=kept, algorithms=algorithms, signing_keys=keys, notes=notes)

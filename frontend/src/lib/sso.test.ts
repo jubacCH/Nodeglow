@@ -38,29 +38,31 @@ describe('parseRules', () => {
 describe('buildBody', () => {
   it('leaves the secret alone unless typed or cleared', () => {
     const f = formFromProvider(provider);
-    expect(buildBody(f, false).body).not.toHaveProperty('client_secret');
-    expect(buildBody({ ...f, clientSecret: 'new' }, false).body.client_secret).toBe('new');
-    const cleared = buildBody({ ...f, clientSecret: 'ignored', clearSecret: true }, false).body;
+    expect(buildBody(f).body).not.toHaveProperty('client_secret');
+    expect(buildBody({ ...f, clientSecret: 'new' }).body.client_secret).toBe('new');
+    const cleared = buildBody({ ...f, clientSecret: 'ignored', clearSecret: true }).body;
     expect(cleared.clear_client_secret).toBe(true);
     expect(cleared).not.toHaveProperty('client_secret');
   });
 
-  it('lets the server pick a sign-in key on create only', () => {
-    expect(buildBody({ ...EMPTY_FORM, name: 'n' }, true).body).not.toHaveProperty('login_key');
-    expect(buildBody(formFromProvider(provider), false).body.login_key).toBe('xdigits-k3v9qa');
+  it('sends the sign-in key only when one is typed', () => {
+    expect(buildBody({ ...EMPTY_FORM, name: 'n' }).body).not.toHaveProperty('login_key');
+    expect(buildBody(formFromProvider(provider)).body.login_key).toBe('xdigits-k3v9qa');
+    // Cleared while editing: the stored key stays (the server refused "" before).
+    expect(buildBody({ ...formFromProvider(provider), loginKey: '  ' }).body).not.toHaveProperty('login_key');
   });
 
   it('sends lists, rules and numbers in the API shape', () => {
     const { body, error } = buildBody({
       ...formFromProvider(provider), allowedDomains: 'a.ch, b.ch', requiredGroups: 'CN=Ops,OU=Groups\nstaff',
-    }, false);
+    });
     expect(error).toBeNull();
     expect(body).toMatchObject({
       allowed_domains: ['a.ch', 'b.ch'], required_groups: ['CN=Ops,OU=Groups', 'staff'],
       role_rules: [{ group: 'admins', role: 'admin' }], default_role: 'none', session_hours: 8,
     });
-    expect(buildBody({ ...EMPTY_FORM, sessionHours: '1.5' }, true).error).not.toBeNull();
-    expect(buildBody({ ...EMPTY_FORM, roleRules: 'x = boss' }, true).error).not.toBeNull();
+    expect(buildBody({ ...EMPTY_FORM, sessionHours: '1.5' }).error).not.toBeNull();
+    expect(buildBody({ ...EMPTY_FORM, roleRules: 'x = boss' }).error).not.toBeNull();
   });
 });
 
