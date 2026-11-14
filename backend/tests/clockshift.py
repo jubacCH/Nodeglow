@@ -66,6 +66,34 @@ class ShiftedDate(real_date, metaclass=_DateMeta):
         return (real_datetime.now() + OFFSET).date()
 
 
+def _warm_cryptography() -> None:
+    """Let cryptography look up the datetime class while it is the real one.
+
+    Its compiled code checks the validity dates of a certificate against
+    ``datetime.datetime``, fetched once on first use and kept. Fetched after
+    the swap it is the shifted class, and that check, unlike ``isinstance``
+    in Python, refuses every real datetime. Signing one certificate here
+    makes the first use happen now.
+    """
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "clockshift")])
+        now = real_datetime(2026, 1, 1, tzinfo=_dt.timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                .public_key(key.public_key()).serial_number(1)
+                .not_valid_before(now).not_valid_after(now + _dt.timedelta(days=1))
+                .sign(key, hashes.SHA256()))
+        # Reading dates back goes through the same cached class.
+        _ = cert.not_valid_after_utc
+    except Exception:  # noqa: BLE001 - not installed, or an API this does not know
+        pass
+
+
 def _install() -> None:
     # These derive classes of their own from date/datetime, or register
     # adapters for the exact type: they have to see the real ones first.
@@ -76,6 +104,7 @@ def _install() -> None:
             pass
     import sqlite3
 
+    _warm_cryptography()
     _dt.datetime = ShiftedDatetime
     _dt.date = ShiftedDate
     _time.time = lambda: real_time() + OFFSET.total_seconds()

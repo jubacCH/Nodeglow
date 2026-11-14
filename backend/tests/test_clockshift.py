@@ -48,3 +48,31 @@ def test_real_datetimes_still_count_as_datetimes():
     assert isinstance(clockshift.real_datetime(2026, 1, 1), datetime)
     assert isinstance(clockshift.real_date(2026, 1, 1), date)
     assert isinstance(datetime.utcnow() - datetime(2026, 1, 1), timedelta)
+
+
+def _self_signed(not_before, not_after):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "clockshift")])
+    return (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+            .public_key(key.public_key()).serial_number(1)
+            .not_valid_before(not_before).not_valid_after(not_after)
+            .sign(key, hashes.SHA256()))
+
+
+def test_a_certificate_can_be_built_with_the_shifted_clock():
+    """cryptography checks the type of the validity dates in compiled code,
+    where the plugin's ``isinstance`` hook does not reach. It looks the
+    datetime class up on first use: after the swap that was the shifted one,
+    and every real datetime was refused ("'datetime' object is not an
+    instance of 'ShiftedDatetime'")."""
+    now = datetime.now(timezone.utc)
+    cert = _self_signed(now - timedelta(days=1), now + timedelta(days=30))
+    assert cert.not_valid_after_utc > cert.not_valid_before_utc
+    # Dates built by the code under test with the shifted class work as well.
+    cert = _self_signed(datetime(2026, 1, 1), datetime(2027, 1, 1))
+    assert cert.not_valid_after_utc.year == 2027
