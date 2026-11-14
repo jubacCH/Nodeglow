@@ -12,13 +12,15 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { apiErrorBody, apiErrorMessage, del, get, patch, post, put } from '@/lib/api';
 import {
   buildBody, EMPTY_FORM, formFromProvider, isOpenToEveryone, STATE_LABEL,
-  type CheckResult, type Provider, type ProviderForm, type ProvidersState, type TestStart,
+  type CheckResult, type Provider, type ProviderForm, type ProvidersState, type SaveResult, type TestStart,
 } from '@/lib/sso';
 import type { HealthState } from '@/lib/status';
 import { useToastStore } from '@/stores/toast';
 import { Notice, SettingsSection } from './formKit';
 
 export const SSO_KEY = ['identity-providers'] as const;
+
+const SECRET_CLEARED = 'Saved. The stored client secret was removed because the issuer, client ID or CA certificate changed: enter it again.';
 
 const STATE_TONE: Record<Provider['state'], HealthState> = {
   draft: 'unknown',
@@ -299,9 +301,14 @@ function ProviderEditor({ provider, state, onDone }: { provider?: Provider; stat
     setError(null);
     setField(null);
     try {
-      if (creating) await post('/api/identity-providers', body);
-      else await patch(`/api/identity-providers/${provider.id}`, body);
-      toast.show(creating ? 'Identity provider added' : 'Identity provider saved', 'success');
+      if (creating) {
+        await post('/api/identity-providers', body);
+        toast.show('Identity provider added', 'success');
+      } else {
+        const saved = await patch<SaveResult>(`/api/identity-providers/${provider.id}`, body);
+        toast.show(saved?.client_secret_cleared ? SECRET_CLEARED : 'Identity provider saved',
+                   saved?.client_secret_cleared ? 'warning' : 'success');
+      }
       onDone();
     } catch (e) {
       const b = apiErrorBody(e);
@@ -333,7 +340,9 @@ function ProviderEditor({ provider, state, onDone }: { provider?: Provider; stat
         </Field>
         <Field
           label={<>Client secret{provider?.client_secret_set && <span className="ml-1.5 font-normal text-ok">· stored</span>}</>}
-          hint={provider?.client_secret_set ? 'Leave blank to keep the stored secret. It is never shown again.' : 'Stored encrypted with this tenant’s key.'}
+          hint={provider?.client_secret_set
+            ? 'Leave blank to keep the stored secret. It is never shown again. Changing the issuer, client ID or CA certificate removes it.'
+            : 'Stored encrypted with this tenant’s key.'}
           error={errorFor('client_secret')}
         >
           <Input type="password" autoComplete="new-password" value={f.clientSecret} disabled={f.clearSecret}

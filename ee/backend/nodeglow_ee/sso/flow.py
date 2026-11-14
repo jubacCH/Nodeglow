@@ -115,6 +115,11 @@ async def start_test(provider_id: int, request: Request, db: AsyncSession = Depe
     if not redirect_uri:
         return {"ok": False, "code": "no_public_url",
                 "message": "Set the public URL of this installation first."}
+    if not redirect_uri.startswith("https://"):
+        # The provider would send the authorization code to this address in
+        # the clear; most providers refuse such a redirect URI anyway.
+        return {"ok": False, "code": "no_https_public_url",
+                "message": "The public URL of this installation must be an https:// address."}
     if not idp.client_secret:
         return {"ok": False, "code": "no_client_secret", "message": "Store the client secret first."}
     public_only = not await private_issuers_allowed(db, idp.tenant_id)
@@ -156,6 +161,9 @@ async def start_test(provider_id: int, request: Request, db: AsyncSession = Depe
 
 CHANGED = ("The provider was changed while its discovery document was fetched. "
            "Start the test again.")
+UNEXPECTED = "The provider's answer could not be processed."
+CHANGED_SINCE_START = ("The provider's settings changed after this test started; nothing was "
+                       "sent to the provider. Start the test again.")
 
 
 # ── Callback (anonymous) ─────────────────────────────────────────────────────
@@ -269,6 +277,12 @@ async def _run_test(db, request: Request, flow: SsoFlow, params) -> dict:
     if not code or len(code) > 4096:
         await db.rollback()
         return {"ok": False, "code": "no_code", "message": "The provider sent no authorization code."}
+    # Before anything leaves the house: the provider must still be what the
+    # flow started with. Otherwise code, verifier and secret would go to the
+    # token endpoint of whatever issuer it was changed to meanwhile.
+    if not flow.config_hash or flow.config_hash != idp.config_hash:
+        await db.rollback()
+        return {"ok": False, "code": "changed", "message": CHANGED_SINCE_START}
     try:
         doc = json.loads(idp.discovery_json or "null")
     except ValueError:
@@ -294,6 +308,12 @@ async def _run_test(db, request: Request, flow: SsoFlow, params) -> dict:
         result = await oidc.exchange(**inputs)
     except oidc.FlowFailed as exc:
         return {"ok": False, "code": exc.code, "message": exc.message}
+    except Exception as exc:  # noqa: BLE001 - a result, never a raw 500 with the flow used up
+        # Only the type: the text of an exception from token handling may
+        # carry parts of the answer.
+        log.warning("sso test sign-in: unexpected %s while processing the provider's answer",
+                    type(exc).__name__)
+        return {"ok": False, "code": "unexpected_answer", "message": UNEXPECTED}
     finally:
         inputs.clear()   # the secret and the code go out of scope here
     fresh = await db.get(IdentityProvider, flow.identity_provider_id, populate_existing=True)
@@ -339,14 +359,23 @@ CLEANUP_JOB_ID = "ee_sso_flow_cleanup"
 
 @instrument_job(CLEANUP_JOB_ID)
 async def delete_old_flows(now: datetime | None = None) -> int:
-    """Delete flows (and the test results in them) older than an hour."""
-    from sqlalchemy import delete
+    """Delete flows (and the test results in them) older than an hour.
+
+    A write in system scope leaves one installation-level audit entry; the
+    delete runs only when there is something to delete, so an idle
+    installation's audit log does not get an entry every ten minutes."""
+    from sqlalchemy import delete, func
 
     from models.base import AsyncSessionLocal
 
     cutoff = (now or datetime.utcnow()) - RESULT_LIFETIME
     async with AsyncSessionLocal() as db:
         with system_scope("sso: delete sign-in flows older than an hour"):
+            due = (await db.execute(
+                select(func.count()).select_from(SsoFlow).where(SsoFlow.created_at < cutoff)
+            )).scalar() or 0
+            if not due:
+                return 0
             result = await db.execute(delete(SsoFlow).where(SsoFlow.created_at < cutoff))
             await db.commit()
     return result.rowcount or 0

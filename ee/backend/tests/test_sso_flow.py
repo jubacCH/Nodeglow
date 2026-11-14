@@ -566,14 +566,17 @@ async def test_the_preview_follows_the_settings(env, idp_server):
     assert any("not marked as verified" in r for r in preview["reasons"])
 
 
-async def test_a_test_counts_only_for_the_settings_it_ran_with(env, idp_server):
+async def test_a_flow_of_changed_settings_sends_nothing(env, idp_server):
+    """Settings changed after the start: the callback refuses before any
+    request, so nothing reaches the token endpoint of the old or new issuer."""
     url, _s, flow_id = await _start(env)
     code, params = idp_server.authorize(url)
     r = await env.client.patch(f"/api/identity-providers/{env.pid}", json={"scopes": "openid email"})
     assert r.status_code == 200
     await _callback(env, code=code, state=params["state"])
     result = (await _result(env, flow_id))["result"]
-    assert result["ok"] is True and result["counted"] is False
+    assert result["ok"] is False and result["code"] == "changed"
+    assert not [q for q in idp_server.requests if str(q.url).endswith("/token")]
     assert (await env.client.get(f"/api/identity-providers/{env.pid}")).json()["state"] == "draft"
 
 
@@ -605,3 +608,122 @@ async def test_old_flows_and_their_results_are_deleted(env, idp_server):
     async with env.sf() as s:
         with system_scope("test", audit=False):
             assert await s.get(SsoFlow, flow_id) is None
+
+
+# ── Fixes after the security review of PR 57 ─────────────────────────────────
+
+async def _secret_set(env) -> bool:
+    return (await env.client.get(f"/api/identity-providers/{env.pid}")).json()["client_secret_set"]
+
+
+@pytest.mark.parametrize("change", [
+    {"issuer": "https://attacker.example.test"},
+    {"client_id": "another-client"},
+])
+async def test_changing_where_the_secret_goes_clears_it(env, idp_server, change):
+    r = await env.client.patch(f"/api/identity-providers/{env.pid}", json=change)
+    assert r.status_code == 200 and r.json()["client_secret_cleared"] is True
+    assert r.json()["client_secret_set"] is False
+    [audit] = [a for a in await env.audit("idp.update")]
+    assert json.loads(audit.details)["client_secret_cleared"] is True
+    # Nothing to send any more: the test cannot start, no request goes out.
+    started = (await env.client.post(f"/api/identity-providers/{env.pid}/test")).json()
+    assert started["code"] == "no_client_secret"
+    assert not [q for q in idp_server.requests if str(q.url).endswith("/token")]
+
+
+async def test_a_new_ca_certificate_clears_the_secret_too(env, idp_server):
+    from datetime import timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(1).not_valid_before(now).not_valid_after(now + timedelta(days=1))
+            .sign(key, hashes.SHA256()))
+    pem = cert.public_bytes(serialization.Encoding.PEM).decode()
+    r = await env.client.patch(f"/api/identity-providers/{env.pid}", json={"ca_pem": pem})
+    assert r.json()["client_secret_cleared"] is True and not await _secret_set(env)
+
+
+async def test_a_new_secret_with_the_change_and_other_edits_keep_it(env, idp_server):
+    r = await env.client.patch(f"/api/identity-providers/{env.pid}",
+                               json={"issuer": "https://new.example.test", "client_secret": "fresh"})
+    assert r.json()["client_secret_cleared"] is False and await _secret_set(env)
+    r = await env.client.patch(f"/api/identity-providers/{env.pid}",
+                               json={"name": "Renamed", "scopes": "openid email", "session_hours": 4})
+    assert r.json()["client_secret_cleared"] is False and await _secret_set(env)
+
+
+async def test_the_issuer_switch_attack_gets_no_secret(env, idp_server):
+    """The scenario from the review: point the issuer at your own server,
+    run a test, point it back. The stored secret is gone with the first
+    step, and a flow started before the switch sends nothing afterwards."""
+    url, _s, flow_id = await _start(env)
+    code, params = idp_server.authorize(url)
+    await env.client.patch(f"/api/identity-providers/{env.pid}",
+                           json={"issuer": "https://attacker.example.test"})
+    await _callback(env, code=code, state=params["state"])
+    assert (await _result(env, flow_id))["result"]["code"] == "changed"
+    assert [q for q in idp_server.requests if str(q.url).endswith("/token")] == []
+    assert not await _secret_set(env)
+
+
+async def test_a_malformed_key_under_the_tokens_kid_is_a_result_not_a_500(env, idp_server):
+    from nodeglow_ee.sso import oidc
+
+    idp_server.jwks = {"keys": [{"kty": "RSA", "kid": "k1", "use": "sig", "n": "%%%", "e": "AQAB"}]}
+    oidc.reset_jwks_cache()
+    r, flow_id, _p = await _run(env, idp_server)
+    assert r.status_code == 303
+    assert (await _result(env, flow_id))["result"]["code"] == "key_mismatch"
+
+
+async def test_a_non_ascii_nonce_is_a_nonce_mismatch(env, idp_server):
+    idp_server.token_override = lambda p: idp_server.id_token(p, nonce="nönce-✓")
+    r, flow_id, _p = await _run(env, idp_server)
+    assert r.status_code == 303
+    assert (await _result(env, flow_id))["result"]["code"] == "nonce"
+
+
+async def test_an_unexpected_error_still_records_a_result(env, idp_server, monkeypatch, caplog):
+    from nodeglow_ee.sso import oidc
+
+    async def boom(*a, **kw):
+        raise RuntimeError("detail that may carry token parts eyJ-SECRET")
+
+    monkeypatch.setattr(oidc, "verify_id_token", boom)
+    r, flow_id, _p = await _run(env, idp_server)
+    assert r.status_code == 303
+    assert (await _result(env, flow_id))["result"]["code"] == "unexpected_answer"
+    assert "eyJ-SECRET" not in caplog.text
+
+
+async def test_a_test_needs_an_https_public_url(env, idp_server):
+    async with env.sf() as s:
+        await set_setting(s, "public_url", "http://nodeglow.example.ch")
+    r = (await env.client.post(f"/api/identity-providers/{env.pid}/test")).json()
+    assert r["code"] == "no_https_public_url"
+    listed = (await env.client.get(f"/api/identity-providers/{env.pid}")).json()
+    assert any("not an https" in b for b in listed["blockers"])
+
+
+async def test_cached_keys_are_dropped_when_the_provider_changes(env, idp_server):
+    from nodeglow_ee.sso import oidc
+
+    await _run(env, idp_server)
+    assert env.pid in oidc._jwks_cache
+    await env.client.patch(f"/api/identity-providers/{env.pid}", json={"name": "Renamed"})
+    assert env.pid not in oidc._jwks_cache
+
+
+async def test_an_idle_cleanup_writes_no_audit_entry(env, idp_server):
+    from nodeglow_ee.sso import flow as flow_mod
+
+    before = len(await env.audit("system_scope.write"))
+    assert await flow_mod.delete_old_flows() == 0
+    assert len(await env.audit("system_scope.write")) == before

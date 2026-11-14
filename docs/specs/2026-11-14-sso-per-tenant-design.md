@@ -581,6 +581,7 @@ given tenant, audit `auth.login`, set the cookie.
 | Malicious or compromised issuer: key substitution | The issuer is fixed by the tenant admin, the discovery document must state the same issuer, keys come only from that document's `jwks_uri` over verified TLS, algorithm allow-list with key-type match, no `none`, no `HS*` (no confusion of the client secret or a public key with an HMAC key). What remains is inherent: whoever controls the issuer controls who signs in to *that* tenant. |
 | Replay of a callback | Flow consumed atomically and once; ten-minute lifetime; nonce checked; codes are single-use at the provider. |
 | A tenant admin points the provider at an issuer they control | Inside their own tenant: accepted. They are admin there already and gain nothing. Anywhere else: not possible. Session confinement, no operator rights from a non-default tenant's provider, no linking to existing accounts by an admin, disjoint usernames, default role never admin. |
+| A tenant admin (or a taken-over admin account) points the provider at an issuer they control so that the stored client secret is posted to their token endpoint | Changing the issuer, the client ID or the CA certificate without entering a new secret clears the stored secret (found in the security review of PR 2). The callback refuses before any outbound request when the provider's settings changed since the flow started, so a flow begun under issuer A never sends code, verifier or secret to the token endpoint of issuer B. |
 | Open redirect after sign-in | `next` validated as a relative path at the start, stored server-side, never taken from the callback. Error redirects go to fixed paths with a code, not a message. |
 | Log lines and error messages leak tokens or secrets | Codes, tokens, the verifier and the client secret are never logged; outbound errors are logged as category plus host. The provider's `error_description` is cut to 200 printable characters before it is stored. The API never returns the client secret. The test page shows claims, not the raw token. |
 | Enumeration of tenants | No listing endpoint; uniform answers for unknown keys; rate limits; default keys carry a random part. |
@@ -741,6 +742,13 @@ IPv4-translated, 6to4 and Teredo addresses.
   installers' query string).
 - Purposes other than `test` are refused at the callback while
   `SIGN_IN_RELEASED` is False.
+- After the security review of PR 2: changing issuer, client ID or CA
+  certificate clears the stored client secret; the callback refuses before
+  any outbound request when the provider changed since the start; the
+  signing-key cache is keyed by the keys' address, the trusted CA and the
+  address rules and dropped on every change; a test sign-in needs an https
+  public URL; the log filter covers exception texts, stacks, `extra=` fields
+  and `code_verifier`, and redacts `code` and `state` only on the SSO paths.
 
 ## Owner decisions
 

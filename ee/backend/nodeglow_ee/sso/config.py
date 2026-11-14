@@ -57,6 +57,12 @@ REQUIRED_ON_CREATE = ("name", "issuer", "client_id")
 # What a test sign-in depends on; changing any of it makes a tested
 # provider untested again (config_hash).
 TESTED_FIELDS = ("issuer", "client_id", "scopes", "groups_claim", "ca_pem")
+# What decides where the client secret goes (the issuer names the token
+# endpoint, the CA decides whom TLS trusts) and whose secret it is (the
+# client): changing any of them without a new secret clears the stored one.
+SECRET_BOUND_FIELDS = ("issuer", "client_id", "ca_pem")
+SECRET_CLEARED = ("The stored client secret was removed because the issuer, client ID or CA "
+                  "certificate changed. Enter it again.")
 
 NOT_RELEASED = ("Sign-in through single sign-on is not available in this version yet. "
                 "Providers can be prepared and checked; they cannot be enabled.")
@@ -366,6 +372,9 @@ def blockers(idp: IdentityProvider, *, public_url: str) -> list[str]:
     if not public_url:
         out.append("The installation's public address is not set (Settings → Notifications, "
                    "'Public URL'); the redirect address is built from it.")
+    elif not public_url.startswith("https://"):
+        out.append("The installation's public address is not an https:// address; the "
+                   "provider would send sign-in codes to it in the clear.")
     if not idp.client_secret:
         out.append("No client secret is stored.")
     if not idp.discovery_at:

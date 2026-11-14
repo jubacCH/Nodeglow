@@ -13,6 +13,10 @@ export interface RoleRule {
   role: RuleRole;
 }
 
+export interface SaveResult {
+  client_secret_cleared?: boolean;
+}
+
 export interface Provider {
   id: number;
   type: 'oidc';
@@ -133,7 +137,8 @@ export const CALLBACK_ERRORS: Record<string, string> = {
 };
 
 export function callbackErrorText(code: string | null): string {
-  return (code && CALLBACK_ERRORS[code]) || CALLBACK_ERRORS.invalid_request;
+  // Own keys only: the code comes from the address bar ("__proto__" too).
+  return code && Object.hasOwn(CALLBACK_ERRORS, code) ? CALLBACK_ERRORS[code] : CALLBACK_ERRORS.invalid_request;
 }
 
 /** One line on what the test decided, for the result page. */

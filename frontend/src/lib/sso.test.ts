@@ -96,6 +96,9 @@ describe('test sign-in results', () => {
       expect(callbackErrorText(code)).toBe(CALLBACK_ERRORS[code]);
     }
     expect(callbackErrorText('<script>')).toBe(CALLBACK_ERRORS.invalid_request);
+    for (const inherited of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+      expect(callbackErrorText(inherited)).toBe(CALLBACK_ERRORS.invalid_request);
+    }
     expect(callbackErrorText(null)).toBe(CALLBACK_ERRORS.invalid_request);
   });
 });

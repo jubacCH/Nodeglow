@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import jwt
-from jwt.exceptions import InvalidTokenError, PyJWKError
+from jwt.exceptions import PyJWTError
 
 from nodeglow_ee.sso import discovery
 from nodeglow_ee.sso.discovery import ACCEPTED_ALGORITHMS, CheckFailed
@@ -164,19 +164,28 @@ def _client_auth(doc: dict, client_id: str, client_secret: str) -> tuple[dict, d
     raise FlowFailed("unsupported_client_auth")
 
 
-# Signing keys per provider: (jwks_uri, keys, fetched at, last forced refresh).
-_jwks_cache: dict[int, tuple[str, list, float, float]] = {}
+# Signing keys per provider: (what the keys were fetched under, keys,
+# fetched at, last forced refresh). "What they were fetched under" is the
+# keys' address, the CA trusted for it and the address rules: keys fetched
+# under another trust anchor are never reused.
+_jwks_cache: dict[int, tuple[tuple, list, float, float]] = {}
 
 
 def reset_jwks_cache() -> None:
     _jwks_cache.clear()
 
 
+def forget_keys(provider_id: int) -> None:
+    """Drop a provider's cached keys (its settings changed)."""
+    _jwks_cache.pop(provider_id, None)
+
+
 async def _keys(client, provider_id: int, jwks_uri: str, public_only: bool, *,
-                force: bool = False) -> list:
+                force: bool = False, ca_pem: str | None = None) -> list:
     now = time.monotonic()
+    fetched_under = (jwks_uri, hashlib.sha256((ca_pem or "").encode()).hexdigest(), public_only)
     cached = _jwks_cache.get(provider_id)
-    if cached and cached[0] == jwks_uri:
+    if cached and cached[0] == fetched_under:
         _uri, keys, fetched, forced = cached
         fresh = now - fetched < JWKS_TTL
         if fresh and not force:
@@ -190,7 +199,8 @@ async def _keys(client, provider_id: int, jwks_uri: str, public_only: bool, *,
     keys = body.get("keys") if isinstance(body, dict) else None
     if not isinstance(keys, list):
         raise FlowFailed("jwks_invalid")
-    _jwks_cache[provider_id] = (jwks_uri, keys, now, now if force else (cached[3] if cached else 0.0))
+    previous_forced = cached[3] if cached and cached[0] == fetched_under else 0.0
+    _jwks_cache[provider_id] = (fetched_under, keys, now, now if force else previous_forced)
     return keys
 
 
@@ -207,12 +217,12 @@ def _pick_key(keys: list, kid: str | None, alg: str) -> dict | None:
 
 
 async def verify_id_token(client, token: str, *, provider_id: int, issuer: str, client_id: str,
-                          nonce: str, jwks_uri: str, public_only: bool,
+                          nonce: str, jwks_uri: str, public_only: bool, ca_pem: str | None = None,
                           now: float | None = None) -> dict:
     """The id token's claims after every mandatory check, or :class:`FlowFailed`."""
     try:
         header = jwt.get_unverified_header(token)
-    except InvalidTokenError:
+    except PyJWTError:
         raise FlowFailed("malformed_token") from None
     alg = header.get("alg")
     # Before any key is looked at: "none" and every HMAC algorithm are out,
@@ -220,10 +230,10 @@ async def verify_id_token(client, token: str, *, provider_id: int, issuer: str, 
     if alg not in ACCEPTED_ALGORITHMS:
         raise FlowFailed("algorithm")
     kid = header.get("kid") if isinstance(header.get("kid"), str) else None
-    keys = await _keys(client, provider_id, jwks_uri, public_only)
+    keys = await _keys(client, provider_id, jwks_uri, public_only, ca_pem=ca_pem)
     jwk = _pick_key(keys, kid, alg)
     if jwk is None and kid is not None:
-        keys = await _keys(client, provider_id, jwks_uri, public_only, force=True)
+        keys = await _keys(client, provider_id, jwks_uri, public_only, force=True, ca_pem=ca_pem)
         jwk = _pick_key(keys, kid, alg)
     if jwk is None:
         raise FlowFailed("unknown_key")
@@ -232,7 +242,9 @@ async def verify_id_token(client, token: str, *, provider_id: int, issuer: str, 
         raise FlowFailed("key_mismatch")
     try:
         key = jwt.PyJWK(jwk, algorithm=alg).key
-    except (PyJWKError, ValueError, TypeError):
+    except (PyJWTError, ValueError, TypeError, KeyError):
+        # A malformed key (bad numbers, missing members) raises
+        # InvalidKeyError, which is a PyJWTError rather than a PyJWKError.
         raise FlowFailed("key_mismatch") from None
     try:
         claims = jwt.decode(
@@ -251,7 +263,7 @@ async def verify_id_token(client, token: str, *, provider_id: int, issuer: str, 
         raise FlowFailed("issued_at") from None
     except jwt.MissingRequiredClaimError as exc:
         raise FlowFailed("subject" if exc.claim == "sub" else "malformed_token") from None
-    except InvalidTokenError:
+    except PyJWTError:
         raise FlowFailed("malformed_token") from None
     # Belt and braces on top of the library: exact issuer, audience, azp.
     if claims.get("iss") != issuer:
@@ -269,7 +281,9 @@ async def verify_id_token(client, token: str, *, provider_id: int, issuer: str, 
     if not isinstance(iat, (int, float)) or iat > current + LEEWAY or iat < current - MAX_TOKEN_AGE - LEEWAY:
         raise FlowFailed("issued_at")
     token_nonce = claims.get("nonce")
-    if not isinstance(token_nonce, str) or not hmac.compare_digest(token_nonce, nonce):
+    # As bytes: compare_digest refuses str with non-ASCII characters.
+    if not isinstance(token_nonce, str) or not hmac.compare_digest(
+            token_nonce.encode("utf-8"), nonce.encode("utf-8")):
         raise FlowFailed("nonce")
     sub = claims.get("sub")
     if not isinstance(sub, str) or not sub or len(sub) > 255:
@@ -307,7 +321,7 @@ async def exchange(*, provider_id: int, doc: dict, issuer: str, client_id: str,
                     raise FlowFailed("no_id_token")
                 claims = await verify_id_token(
                     client, token, provider_id=provider_id, issuer=issuer, client_id=client_id,
-                    nonce=nonce, jwks_uri=doc["jwks_uri"], public_only=public_only)
+                    nonce=nonce, jwks_uri=doc["jwks_uri"], public_only=public_only, ca_pem=ca_pem)
                 result = Exchange(claims=claims)
                 access = body.get("access_token")
                 missing = [c for c in ("email", groups_claim) if c not in claims]

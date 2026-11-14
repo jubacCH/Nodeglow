@@ -11,10 +11,11 @@ request). Uvicorn's own loggers (``uvicorn``, ``uvicorn.error``,
 ``uvicorn.access``) are routed through the same handler, so the access log has
 the same shape and the same request ID as the application log.
 
-Query values that are credentials (``code``, ``state``, ``token`` and the
-OAuth token names) are replaced by ``[redacted]`` in every record, the access
-log included: the single sign-on callback carries an authorization code and
-state in its query string, the installers an install token.
+Credential values are replaced by ``[redacted]`` in every record, the access
+log included (:class:`RedactSecretsFilter`): ``token``, the OAuth token names,
+``client_secret`` and ``code_verifier`` wherever they appear as
+``name=value``; ``code`` and ``state`` on the single sign-on paths, whose
+callback carries them in its query string.
 
 Call :func:`configure_logging` once, as early as possible in main.py: uvicorn
 installs its own config before it imports the app, and this replaces it.
@@ -48,43 +49,89 @@ _RESERVED = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
 }
 
 
-_SECRET_QUERY = re.compile(
-    r"([?&](?:code|state|token|id_token|access_token|refresh_token|session_state|client_secret)=)"
-    r"[^&\s\"']*",
+# Values that are credentials wherever they appear as ``name=value`` (a query
+# string, a form body, an exception text): the installers' install token, the
+# OAuth token names, the PKCE verifier, the client secret.
+_ALWAYS_SECRET = re.compile(
+    r"(?<![\w-])((?:token|id_token|access_token|refresh_token|client_secret|code_verifier)=)"
+    r"[^&\s\"',;]*",
     re.IGNORECASE,
 )
+# Values that are credentials only on the single sign-on paths: ``code`` and
+# ``state`` are ordinary words elsewhere (``?state=open&code=500``).
+_SSO_PATH = "/api/auth/sso"
+_SSO_SECRET = re.compile(
+    r"(?<![\w-])((?:code|state|session_state)=)[^&\s\"',;]*",
+    re.IGNORECASE,
+)
+# Argument types that are formatted to look for secrets: URLs (httpx logs
+# ``httpx.URL`` objects). Anything else is left alone, so no object's
+# ``__str__`` runs twice or runs where logging would not have run it.
+_URL_TYPE_NAMES = frozenset({"URL"})
 
 
 def redact_query(text: str) -> str:
-    return _SECRET_QUERY.sub(lambda m: m.group(1) + "[redacted]", text) if "=" in text else text
+    """``text`` with credential values replaced by ``[redacted]``."""
+    if "=" not in text:
+        return text
+    text = _ALWAYS_SECRET.sub(lambda m: m.group(1) + "[redacted]", text)
+    if _SSO_PATH in text:
+        text = _SSO_SECRET.sub(lambda m: m.group(1) + "[redacted]", text)
+    return text
+
+
+def _redact_arg(value):
+    if isinstance(value, str):
+        return redact_query(value)
+    if type(value).__name__ in _URL_TYPE_NAMES:
+        try:
+            text = str(value)
+        except Exception:  # noqa: BLE001 - logging must not break the caller
+            return value
+        redacted = redact_query(text)
+        return redacted if redacted != text else value
+    return value
 
 
 class RedactSecretsFilter(logging.Filter):
-    """Replace credential values in query strings by ``[redacted]`` — in the
-    message and in its arguments (uvicorn's access log passes the path as an
-    argument)."""
+    """Replace credential values by ``[redacted]`` before a record is
+    written: in the message, its arguments (uvicorn's access log passes the
+    path as one), the exception text and stack, and ``extra=`` fields.
+
+    Not covered: the text of an argument object other than a URL (it is not
+    formatted here) — a secret inside such an object's ``str()`` would be
+    written as it is. Never raises: on any problem the record goes out as it
+    came in."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            self._redact(record)
+        except Exception:  # noqa: BLE001 - logging must not break the caller
+            pass
+        return True
+
+    @staticmethod
+    def _redact(record: logging.LogRecord) -> None:
         if isinstance(record.msg, str):
             record.msg = redact_query(record.msg)
         if isinstance(record.args, tuple):
             record.args = tuple(_redact_arg(a) for a in record.args)
         elif isinstance(record.args, dict):
             record.args = {k: _redact_arg(v) for k, v in record.args.items()}
-        return True
-
-
-def _redact_arg(value):
-    """A log argument with credential query values removed. Strings, and
-    objects that print as a URL (httpx passes ``httpx.URL``), are checked;
-    numbers and the like stay as they are, so ``%d`` keeps working."""
-    if isinstance(value, str):
-        return redact_query(value)
-    if value is None or isinstance(value, (bool, int, float, bytes)):
-        return value
-    text = str(value)
-    redacted = redact_query(text)
-    return redacted if redacted != text else value
+        if record.exc_info and not record.exc_text:
+            # Formatter.format() uses exc_text when it is set; so does
+            # JsonFormatter below.
+            try:
+                record.exc_text = logging.Formatter().formatException(record.exc_info)
+            except Exception:  # noqa: BLE001
+                record.exc_text = None
+        if isinstance(record.exc_text, str):
+            record.exc_text = redact_query(record.exc_text)
+        if isinstance(record.stack_info, str):
+            record.stack_info = redact_query(record.stack_info)
+        for key, value in list(vars(record).items()):
+            if key not in _RESERVED and not key.startswith("_") and isinstance(value, str):
+                setattr(record, key, redact_query(value))
 
 
 class RequestIdFilter(logging.Filter):
@@ -112,7 +159,9 @@ class JsonFormatter(logging.Formatter):
         for key, value in vars(record).items():
             if key not in _RESERVED and not key.startswith("_"):
                 payload[key] = value
-        if record.exc_info:
+        if record.exc_text:
+            payload["exc"] = record.exc_text
+        elif record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
         if record.stack_info:
             payload["stack"] = self.formatStack(record.stack_info)

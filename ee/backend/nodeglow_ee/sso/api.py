@@ -253,9 +253,18 @@ async def update_provider(provider_id: int, request: Request, db: AsyncSession =
     changed = sorted(k for k, v in values.items() if getattr(idp, k) != v)
     for key in changed:
         setattr(idp, key, values[key])
+    secret_cleared = False
     if changes.client_secret is not None:
         changed.append("client_secret")
         await _store_secret(db, idp, changes.client_secret)
+    elif idp.client_secret and set(changed) & set(config.SECRET_BOUND_FIELDS):
+        # The stored secret was given for another issuer, client or trust
+        # anchor. Kept, it would be sent to wherever the new issuer's
+        # discovery document points — a server the person editing may run.
+        # It has to be entered again for the new settings.
+        await _store_secret(db, idp, "")
+        changed.append("client_secret")
+        secret_cleared = True
     if "issuer" in changed or "ca_pem" in changed:
         # The stored document belongs to the old issuer.
         idp.discovery_json = None
@@ -264,9 +273,14 @@ async def update_provider(provider_id: int, request: Request, db: AsyncSession =
         idp.updated_at = datetime.utcnow()
         await _refresh_hash(db, idp)
         await log_action(db, request, "idp.update", "identity_provider", idp.id, idp.name[:256],
-                         details={"changed": changed})
+                         details={"changed": changed, "client_secret_cleared": secret_cleared})
         await db.commit()
-    return config.public(idp, public_url=await _public_url(db))
+        from nodeglow_ee.sso import oidc
+
+        oidc.forget_keys(idp.id)
+    data = config.public(idp, public_url=await _public_url(db))
+    data["client_secret_cleared"] = secret_cleared
+    return data
 
 
 @router.delete("/api/identity-providers/{provider_id}", summary="Delete an identity provider (admin)")
