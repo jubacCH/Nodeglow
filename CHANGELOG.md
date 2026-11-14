@@ -198,6 +198,17 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Traffic: the total no longer adds up every interface. A download passes
+  the gateway, several switch ports and the host, and the page showed the
+  sum of all of them (5 Gbit/s for a 2 Gbit/s backup). The total is now the
+  Internet link of a UniFi gateway, or else the combined traffic of virtual
+  machines and containers, or else of hosts with an agent, and the page
+  says which. `/api/bandwidth` carries `total_basis`,
+  `/api/bandwidth/history` `basis`.
+- Traffic: agents and Proxmox guests are recorded again. The agent's
+  interface list was read in the format of its Python predecessor, and
+  Proxmox guests under keys the snapshot never had; neither ever reached
+  the traffic data.
 - Agent: `quinn-udp` 0.5.14 -> 0.5.16 (RUSTSEC-2026-0538, a receive loop
   that can spin after a truncated datagram). Lock file only.
 - Proxmox backups: a cluster watched by two integrations (one collecting,

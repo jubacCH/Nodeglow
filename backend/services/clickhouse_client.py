@@ -1345,8 +1345,26 @@ def bandwidth_bucket_seconds(hours: int) -> int:
     return 3600
 
 
+# What may be added up into "total traffic", in order of preference. Rates
+# of different interfaces are not additive in general: a download passes the
+# gateway, three switch ports and the host's own interface, and summing them
+# shows five times the traffic. Each basis counts every byte once:
+#   wan     the gateway's Internet link (services.bandwidth writes it)
+#   guests  virtual machines and containers, as the hypervisor counts them
+#   agents  each agent's own total over its interfaces
+# They are never mixed either: a container with an agent is in two of them.
+# Keep in step with services.bandwidth.total_basis_of.
+BANDWIDTH_TOTAL_BASES = {
+    "wan": "interface_name = 'wan'",
+    "guests": "source_type = 'proxmox' AND "
+              "(startsWith(interface_name, 'qemu/') OR startsWith(interface_name, 'lxc/'))",
+    "agents": "source_type = 'agent' AND interface_name = 'total'",
+}
+
+
 async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
-    """Total throughput over time: one row per time bucket.
+    """Throughput over time per total basis: one row per time bucket, with
+    ``<basis>_rx``, ``<basis>_tx`` (bit/s) and ``<basis>_n`` (interfaces).
 
     Each interface is averaged within the bucket first and the interfaces are
     summed after: interfaces report at different moments, and adding up raw
@@ -1355,11 +1373,13 @@ async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
     params: dict = {"h": int(hours), "b": bandwidth_bucket_seconds(int(hours))}
     where = " AND ".join(
         [tenant_clause(params), "timestamp >= now() - toIntervalHour({h:UInt32})"])
+    sums = ",\n               ".join(
+        f"toUInt64(sumIf(rx, {pred})) AS {name}_rx, toUInt64(sumIf(tx, {pred})) AS {name}_tx, "
+        f"countIf({pred}) AS {name}_n"
+        for name, pred in BANDWIDTH_TOTAL_BASES.items())
     sql = f"""
         SELECT bucket AS timestamp,
-               toUInt64(sum(rx)) AS rx_rate_bps,
-               toUInt64(sum(tx)) AS tx_rate_bps,
-               count() AS interfaces
+               {sums}
         FROM (
             SELECT toStartOfInterval(timestamp, toIntervalSecond({{b:UInt32}})) AS bucket,
                    source_type, source_id, interface_name,
