@@ -143,6 +143,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- `docker-compose.yml` (installations run from a checkout) uses ClickHouse
+  26.8 LTS; 24.8 is end of life. **An installation that still runs 24.8
+  must not jump in one step**: set the image to 25.3, start, then 25.8,
+  26.3 and 26.8, one start each, and only then pull this change. Each step
+  takes a few seconds; syslog messages arriving during a restart are lost.
+  `docker-compose.release.yml` and the CI stay on 24.8 for now.
 - Updates wait until the new version runs and reports healthy (new step
   `health`). A release that does not come up is rolled back: the updater
   restores the previous compose file and `.env` and starts the previous
