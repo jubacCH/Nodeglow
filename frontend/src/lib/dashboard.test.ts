@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   availabilityScale, changeHref, changeTiles, describeLatency, describeStates, formatDuration,
   glyphFor, groupFreshness, healthSegments, hostState, incidentDayBars, incidentHostsLabel,
-  isEmptyInstall, isStale, reachabilityFlipped, sectionError, speedBars, stateSegments,
-  syslogLevel, topologyColumns, upcomingView, wanState,
+  isEmptyInstall, isStale, reachabilityFlipped, sectionError, speedBars, speedLimitHint, speedSourceLabel,
+  stateSegments, syslogLevel, topologyColumns, upcomingView, wanState,
 } from './dashboard';
 import type {
   ChangeItem, DashboardV2, HostGroup, LatencySection, TopoParent, TopologySection, UpcomingItem,
@@ -290,5 +290,34 @@ describe('isEmptyInstall', () => {
     expect(isEmptyInstall(d(totals))).toBe(true);
     expect(isEmptyInstall(d({ ...totals, integrations: 1 }))).toBe(false);
     expect(isEmptyInstall({ health: null } as unknown as DashboardV2)).toBe(false);
+  });
+});
+
+describe('where a speed was measured', () => {
+  it('names the measuring point', () => {
+    expect(speedSourceLabel({ source: 'unifi', measured_at: 'gateway' })).toBe('Measured at the gateway');
+    expect(speedSourceLabel({ source: 'speedtest', measured_at: 'host' })).toBe('Measured from the Nodeglow host');
+    // A backend that does not send the field yet: derived from the source.
+    expect(speedSourceLabel({ source: 'speedtest' })).toBe('Measured from the Nodeglow host');
+    expect(speedSourceLabel({ source: 'unifi' })).toBe('Measured at the gateway');
+  });
+
+  it('explains a host result that the gateway contradicts', () => {
+    const hint = speedLimitHint({ measured_at: 'host', limit: { kind: 'below_gateway', gateway_mbps: 8152 } });
+    expect(hint).toContain('The gateway measures 8152 Mbit/s');
+    expect(hint).toContain('Nodeglow host');
+  });
+
+  it('suspects the link of the host when both directions end just under it', () => {
+    expect(speedLimitHint({ measured_at: 'host', limit: { kind: 'link_speed', link_mbps: 1000 } }))
+      .toContain('just under 1 Gbit/s');
+    expect(speedLimitHint({ measured_at: 'host', limit: { kind: 'link_speed', link_mbps: 100 } }))
+      .toContain('just under 100 Mbit/s');
+  });
+
+  it('says nothing while the gateway result is on show, or nothing is limited', () => {
+    expect(speedLimitHint({ measured_at: 'gateway', limit: { kind: 'below_gateway', gateway_mbps: 8152 } })).toBeNull();
+    expect(speedLimitHint({ measured_at: 'host', limit: null })).toBeNull();
+    expect(speedLimitHint({ measured_at: 'host' })).toBeNull();
   });
 });

@@ -9,7 +9,7 @@
 import type { HealthSegment, HealthState } from './status';
 import type {
   AvailabilitySection, ChangeItem, LatencySection, ChangeType, DashboardIncident, DashboardV2, HealthSection,
-  HostGroup, HostStateName, IncidentDay, SectionError, SpeedPoint, StateCounts, SyslogSection,
+  HostGroup, HostStateName, IncidentDay, InternetSection, SectionError, SpeedPoint, StateCounts, SyslogSection,
   TopoParent, TopologySection, UpcomingItem,
 } from '@/types/dashboard';
 
@@ -244,6 +244,31 @@ export function describeSpeedHistory(history: SpeedPoint[]): string {
   if (!values.length) return 'No speed test results';
   const latest = values[values.length - 1];
   return `Download speed of the last ${values.length} tests, between ${Math.round(Math.min(...values))} and ${Math.round(Math.max(...values))} Mbit/s, latest ${Math.round(latest)}`;
+}
+
+/** Where a speed was measured, for the card's "Source" line. */
+export function speedSourceLabel(internet: Pick<InternetSection, 'source' | 'measured_at'>): string {
+  const at = internet.measured_at ?? (internet.source === 'unifi' ? 'gateway' : internet.source === 'speedtest' ? 'host' : null);
+  if (at === 'gateway') return 'Measured at the gateway';
+  if (at === 'host') return 'Measured from the Nodeglow host';
+  return 'UniFi';
+}
+
+function fmtLink(mbps: number): string {
+  return mbps >= 1000 ? `${mbps / 1000} Gbit/s` : `${mbps} Mbit/s`;
+}
+
+/**
+ * The sentence shown when the host's own test cannot stand for the line.
+ * Only while that test is the one on show: a gateway result needs no caveat.
+ */
+export function speedLimitHint(internet: Pick<InternetSection, 'measured_at' | 'limit'>): string | null {
+  const limit = internet.limit;
+  if (!limit || internet.measured_at !== 'host') return null;
+  if (limit.kind === 'below_gateway') {
+    return `The gateway measures ${limit.gateway_mbps} Mbit/s. This test runs on the Nodeglow host and is limited by the network between it and the gateway.`;
+  }
+  return `Download and upload both end just under ${fmtLink(limit.link_mbps)}: this is probably the network link of the Nodeglow host, not the line.`;
 }
 
 /** WAN pill state. Only UniFi knows the WAN; without it there is no pill. */
