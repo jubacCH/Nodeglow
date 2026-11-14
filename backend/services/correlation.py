@@ -985,7 +985,7 @@ _HOST_RESOLVE_REASONS = {
 _SELF_RESOLVING_RULES = frozenset({
     "self_check", "agent_service", "disk_space",
     # services.condition_incidents: the job that raises them resolves them.
-    "ssl_expiry", "backup",
+    "ssl_expiry", "backup", "agent_silent",
 })
 
 # Which correlation rule (as named in run_correlation) raises which incidents.

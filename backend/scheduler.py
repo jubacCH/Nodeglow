@@ -1024,6 +1024,31 @@ async def run_log_analytics():
     await run_analytics()
 
 
+@instrument_job("agent_silence")
+@per_tenant_job
+async def check_agent_silence():
+    """Raise an incident for every agent that stopped reporting, and resolve
+    it when the agent is back. Nothing else notices a silent agent: its host
+    still answers a ping."""
+    import os
+    import time as _time
+
+    from services import agent_silence
+    from services import condition_incidents as cond
+
+    process_start = float(os.environ.get("NODEGLOW_START_TIME", _time.time()))
+    if agent_silence.started_recently(_time.time(), process_start):
+        return
+    async with AsyncSessionLocal() as db:
+        wanted = await agent_silence.silent_conditions(db, datetime.utcnow())
+        notes = await cond.sync_rule(
+            db, agent_silence.RULE, wanted, event_type="agent_silent",
+            resolved_summary="Auto-resolved: the agent reports again, or was disabled or removed",
+        )
+        await db.commit()
+    await cond.send(agent_silence.bundle(notes))
+
+
 @instrument_job("self_check")
 @per_tenant_job
 async def run_self_check_job():
@@ -1489,6 +1514,9 @@ async def start_scheduler():
                       next_run_time=datetime.now() + timedelta(seconds=60))
     scheduler.add_job(run_backup_compliance, "interval", hours=1,
                       id="backup_compliance", replace_existing=True)
+    scheduler.add_job(check_agent_silence, "interval", minutes=2,
+                      id="agent_silence", replace_existing=True,
+                      max_instances=1, coalesce=True)
     scheduler.add_job(send_heartbeat, "interval", seconds=60,
                       id="heartbeat", replace_existing=True,
                       next_run_time=datetime.now() + timedelta(seconds=15))

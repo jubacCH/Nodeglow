@@ -45,6 +45,8 @@ class Note:
     summary: str
     severity: str
     incident_id: int
+    # Where the notification links to; the incident itself unless given.
+    link_path: str | None = None
 
 
 async def sync_rule(db, rule: str, wanted: dict[str, Condition], *,
@@ -105,6 +107,6 @@ async def send(notes: list[Note]) -> None:
         try:
             from notifications import notify
             await notify(note.title, note.summary, severity=note.severity,
-                         link_path=f"/incidents/{note.incident_id}")
+                         link_path=note.link_path or f"/incidents/{note.incident_id}")
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to send incident notification: %s", exc)

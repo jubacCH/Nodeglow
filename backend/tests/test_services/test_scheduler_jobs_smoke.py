@@ -43,6 +43,7 @@ JOBS = [
     "run_snmp_polls",
     "run_port_discovery",
     "run_backup_compliance",
+    "check_agent_silence",
     "check_disk_space",
     "resolve_host_dns",
     "cleanup_old_results",
