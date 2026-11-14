@@ -38,18 +38,35 @@ def _hours(hours: float) -> str:
     return f"{round(hours / 24)} days"
 
 
-def job_state(job: BackupJob, now: datetime) -> dict[str, Any]:
+# A backup source counts as unread when its integration delivered no data for
+# this long. Integrations are collected every few minutes.
+SOURCE_UNREAD_AFTER = timedelta(hours=1)
+
+
+def job_state(job: BackupJob, now: datetime, source_read_at: datetime | None = None) -> dict[str, Any]:
     """Status of a backup job and the reason for it, in words.
 
     ``effective_status`` is what the UI shows (ok, warning, failed, running,
     unknown); ``status_reason`` says why, so a "Warning" is never just a
     colour.
+
+    ``source_read_at`` is when the job's source last delivered data. A job
+    that was on schedule then and would be overdue by now is not overdue: a
+    newer run would not be known. It is "unknown", with that reason. A job
+    that was overdue already at the last reading stays overdue.
     """
     hours_since = None
     is_overdue = False
+    unread_hours = None
     if job.last_run_at:
         hours_since = round((now - job.last_run_at).total_seconds() / 3600, 1)
-        is_overdue = hours_since > overdue_after_hours(job.expected_frequency_hours)
+        limit = overdue_after_hours(job.expected_frequency_hours)
+        is_overdue = hours_since > limit
+        if (is_overdue and source_read_at is not None
+                and now - source_read_at > SOURCE_UNREAD_AFTER
+                and (source_read_at - job.last_run_at).total_seconds() / 3600 <= limit):
+            is_overdue = False
+            unread_hours = round((now - source_read_at).total_seconds() / 3600, 1)
 
     status = job.last_status or "unknown"
     reason: str | None = None
@@ -71,17 +88,71 @@ def job_state(job: BackupJob, now: datetime) -> dict[str, Any]:
         reason = overdue if status == "ok" else f"{reason}. {overdue}"
         status = "warning"
 
+    if unread_hours is not None and status in ("ok", "warning"):
+        unread = (f"Not checked for {_hours(unread_hours)}: the backup source cannot be read. "
+                  f"The last backup known is {_hours(hours_since)} old")
+        reason = unread if status == "ok" else f"{reason}. {unread}"
+        if status == "ok":
+            status = "unknown"
+
     return {
         "effective_status": status,
         "status_reason": reason,
         "hours_since_last": hours_since,
+        # Set while the job cannot be judged because its source is not read.
+        "source_unread": unread_hours is not None,
+        "source_unread_hours": unread_hours,
         "is_overdue": is_overdue,
         # The name the frontend reads; is_overdue stays for API clients.
         "overdue": is_overdue,
     }
 
 
-def job_entry(job: BackupJob, now: datetime) -> dict[str, Any]:
+async def source_read_times(db: AsyncSession, jobs: list[BackupJob]) -> dict[tuple, datetime]:
+    """When each backup source last delivered data: (type, config id) -> time.
+
+    Integrations watching one cluster stand in for each other, so the newest
+    reading of the cluster group counts. A source without an integration, or
+    one that never delivered anything, is not in the result.
+    """
+    from models.integration import IntegrationConfig, Snapshot
+
+    wanted = {(j.source_type, j.source_config_id) for j in jobs if j.source_config_id}
+    if not wanted:
+        return {}
+    configs = (await db.execute(
+        select(IntegrationConfig).where(IntegrationConfig.type.in_({t for t, _ in wanted}))
+    )).scalars().all()
+    by_key = {(c.type, c.id): c for c in configs}
+    newest: dict[int, datetime | None] = {}
+
+    async def read_at(config_id: int) -> datetime | None:
+        if config_id not in newest:
+            cfg_type = next(c.type for c in configs if c.id == config_id)
+            # Newest first and one row: the index answers this without
+            # touching the snapshot data.
+            newest[config_id] = (await db.execute(
+                select(Snapshot.timestamp)
+                .where(Snapshot.entity_type == cfg_type, Snapshot.entity_id == config_id,
+                       Snapshot.ok == True, Snapshot.data_json.is_not(None))  # noqa: E712
+                .order_by(Snapshot.timestamp.desc()).limit(1)
+            )).scalar_one_or_none()
+        return newest[config_id]
+
+    times: dict[tuple, datetime] = {}
+    for key in wanted:
+        cfg = by_key.get(key)
+        if cfg is None:
+            continue
+        members = [c.id for c in configs
+                   if c.type == cfg.type and cfg.cluster_group and c.cluster_group == cfg.cluster_group]
+        read = [t for t in [await read_at(i) for i in (members or [cfg.id])] if t is not None]
+        if read:
+            times[key] = max(read)
+    return times
+
+
+def job_entry(job: BackupJob, now: datetime, source_read_at: datetime | None = None) -> dict[str, Any]:
     """A backup job as the API returns it."""
     return {
         "id": job.id,
@@ -98,7 +169,7 @@ def job_entry(job: BackupJob, now: datetime) -> dict[str, Any]:
         "last_error": job.last_error,
         "expected_frequency_hours": job.expected_frequency_hours,
         "enabled": job.enabled,
-        **job_state(job, now),
+        **job_state(job, now, source_read_at),
     }
 
 
@@ -518,6 +589,7 @@ async def check_backup_compliance(db: AsyncSession) -> list[dict]:
         select(BackupJob).where(BackupJob.enabled == True)
     )
     jobs = result.scalars().all()
+    read = await source_read_times(db, list(jobs))
 
     issues: list[dict] = []
     for job in jobs:
@@ -535,7 +607,18 @@ async def check_backup_compliance(db: AsyncSession) -> list[dict]:
 
         if job.last_run_at:
             hours_since = (now - job.last_run_at).total_seconds() / 3600
-            if hours_since > overdue_after_hours(job.expected_frequency_hours):
+            state = job_state(job, now, read.get((job.source_type, job.source_config_id)))
+            if state["source_unread"]:
+                issues.append({
+                    "job_id": job.id,
+                    "job_name": job.name,
+                    "target_name": job.target_name,
+                    "source_type": job.source_type,
+                    "issue": "source_unread",
+                    "hours_since": round(hours_since, 1),
+                    "last_run_at": iso(job.last_run_at),
+                })
+            elif state["is_overdue"]:
                 issues.append({
                     "job_id": job.id,
                     "job_name": job.name,
@@ -575,11 +658,12 @@ async def get_backup_summary(db: AsyncSession) -> dict:
         select(BackupJob).order_by(BackupJob.source_type, BackupJob.target_name)
     )
     jobs = result.scalars().all()
+    read = await source_read_times(db, list(jobs))
 
     counts = {"total": 0, "healthy": 0, "warning": 0, "failed": 0, "unknown": 0}
     job_list: list[dict] = []
     for job in jobs:
-        entry = job_entry(job, now)
+        entry = job_entry(job, now, read.get((job.source_type, job.source_config_id)))
         job_list.append(entry)
         if not job.enabled:
             continue
@@ -607,9 +691,10 @@ async def get_compliance_groups(db: AsyncSession) -> dict[str, list[dict]]:
     summary = await get_backup_summary(db)
     jobs = [j for j in summary["jobs"] if j["enabled"]]
     failed = [j for j in jobs if j["effective_status"] == "failed"]
-    never_run = [j for j in jobs if j["effective_status"] == "unknown"]
+    unverified = [j for j in jobs if j["source_unread"] and j["effective_status"] != "failed"]
+    never_run = [j for j in jobs if j["effective_status"] == "unknown" and not j["source_unread"]]
     overdue = [j for j in jobs if j["is_overdue"] and j["effective_status"] != "failed"]
-    return {"failed": failed, "overdue": overdue, "never_run": never_run}
+    return {"failed": failed, "overdue": overdue, "never_run": never_run, "unverified": unverified}
 
 
 # From this many jobs of one source with the same problem on, they are one
@@ -658,7 +743,35 @@ def backup_conditions(groups: dict[str, list[dict]]) -> dict:
             wanted[f"bk-{kind}:{source}:{source_id}"[:64]] = Condition(
                 f"{len(jobs)} backups {word} ({source})", severity, summary,
                 absorbs=frozenset(f"bk:{j['id']}" for j in jobs))
+
+    # Jobs that cannot be judged because their source is not read: one
+    # incident per source, whatever their number. It stands for the "overdue"
+    # incidents these jobs had or would have got.
+    unread: dict[tuple, list[dict]] = {}
+    for job in groups.get("unverified", []):
+        unread.setdefault((job.get("source_type"), job.get("source_config_id")), []).append(job)
+    for (source_type, source_id), jobs in unread.items():
+        source = str(source_type or "backup source")
+        names = sorted(str(j["target_name"]) for j in jobs)
+        shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+        since = max(j["source_unread_hours"] for j in jobs)
+        wanted[f"{UNREAD_KEY}{source}:{source_id}"[:64]] = Condition(
+            f"Backups of {source} cannot be checked", "warning",
+            f"The backup source has not been read for {_hours(since)}. {len(jobs)} "
+            f"backup{'s are' if len(jobs) != 1 else ' is'} past the expected interval since then, "
+            f"and a newer run would not be known: {shown}. Check the integration.",
+            absorbs=frozenset({f"bk:{j['id']}" for j in jobs} | {f"bk-overdue:{source}:{source_id}"[:64]}))
     return wanted
+
+
+UNREAD_KEY = "bk-unread:"
+RESOLVED = "Auto-resolved: a backup ran successfully and on schedule"
+RESOLVED_UNREAD = "Auto-resolved: the backup source is read again"
+
+
+def resolved_summary(key: str) -> str:
+    """What to say when the incident under ``key`` is over."""
+    return RESOLVED_UNREAD if key.startswith(UNREAD_KEY) else RESOLVED
 
 
 # ── Job history ─────────────────────────────────────────────────────────────
@@ -670,8 +783,9 @@ async def get_job_detail(db: AsyncSession, job_id: int) -> dict | None:
     if not job:
         return None
 
+    read = await source_read_times(db, [job])
     return {
-        **job_entry(job, datetime.utcnow()),
+        **job_entry(job, datetime.utcnow(), read.get((job.source_type, job.source_config_id))),
         "created_at": iso(job.created_at),
         "updated_at": iso(job.updated_at),
     }

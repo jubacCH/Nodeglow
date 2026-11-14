@@ -247,3 +247,107 @@ async def test_an_older_file_does_not_hide_a_newer_run(db):
     (job,) = await _jobs(db)
     assert job.last_run_at == newer
 
+
+
+# ── A source that is not read ───────────────────────────────────────────────
+
+
+def test_a_job_is_not_overdue_while_its_source_is_not_read():
+    """The integration stopped delivering data 40 hours ago. The job ran two
+    hours before that. By the clock it is 42 hours old and "overdue", but the
+    backup may have run twice since: nobody looked."""
+    job = _job(last_run_at=NOW - timedelta(hours=42))
+    state = bk.job_state(job, NOW, NOW - timedelta(hours=40))
+    assert state["is_overdue"] is False and state["source_unread"] is True
+    assert state["effective_status"] == "unknown"
+    assert state["status_reason"] == ("Not checked for 40 h: the backup source cannot be read. "
+                                      "The last backup known is 42 h old")
+
+
+def test_a_job_overdue_at_the_last_reading_stays_overdue():
+    job = _job(last_run_at=NOW - timedelta(hours=90))
+    state = bk.job_state(job, NOW, NOW - timedelta(hours=40))
+    assert state["is_overdue"] is True and state["source_unread"] is False
+    assert state["effective_status"] == "warning"
+
+
+def test_a_source_read_recently_changes_nothing():
+    overdue = _job(last_run_at=NOW - timedelta(hours=50))
+    for read_at in (NOW - timedelta(minutes=5), NOW - timedelta(minutes=59), None):
+        assert bk.job_state(overdue, NOW, read_at)["is_overdue"] is True
+    on_time = _job(last_run_at=NOW - timedelta(hours=5))
+    state = bk.job_state(on_time, NOW, NOW - timedelta(hours=3))
+    assert state["effective_status"] == "ok" and state["source_unread"] is False
+
+
+def test_a_failed_job_stays_failed_while_its_source_is_not_read():
+    job = _job(last_status="failed", last_error="exit code 255", last_run_at=NOW - timedelta(hours=42))
+    state = bk.job_state(job, NOW, NOW - timedelta(hours=40))
+    assert state["effective_status"] == "failed"
+    assert state["status_reason"] == "Last run failed: exit code 255"
+
+
+async def _snapshot(db, config_id, age, *, ok=True, data="{}"):
+    from models.integration import Snapshot
+
+    db.add(Snapshot(entity_type="proxmox", entity_id=config_id, ok=ok, data_json=data,
+                    timestamp=datetime.utcnow() - age))
+    await db.flush()
+
+
+async def test_an_unread_source_is_one_incident_and_no_overdue_jobs(db):
+    """Three daily jobs, the integration unreadable for two days. Before:
+    "3 backups overdue". Now: one incident saying they cannot be checked."""
+    from models.integration import IntegrationConfig
+
+    cfg = IntegrationConfig(type="proxmox", name="pve", config_json="{}")
+    db.add(cfg)
+    await db.flush()
+    now = datetime.utcnow()
+    db.add_all([_job(name=f"vzdump-{i}", target_name=f"vm-{i}", source_config_id=cfg.id,
+                     last_run_at=now - timedelta(hours=50)) for i in range(3)])
+    await _snapshot(db, cfg.id, timedelta(hours=48))
+    # Failed readings and standby markers since then are not a reading.
+    await _snapshot(db, cfg.id, timedelta(minutes=3), ok=False, data=None)
+    await _snapshot(db, cfg.id, timedelta(minutes=1), ok=True, data=None)
+    await db.commit()
+
+    groups = await bk.get_compliance_groups(db)
+    assert groups["overdue"] == [] and groups["never_run"] == []
+    assert len(groups["unverified"]) == 3
+    wanted = bk.backup_conditions(groups)
+    key = f"bk-unread:proxmox:{cfg.id}"
+    assert list(wanted) == [key]
+    cond = wanted[key]
+    assert cond.title == "Backups of proxmox cannot be checked" and cond.severity == "warning"
+    assert "not been read for 2 days" in cond.summary and "vm-0, vm-1, vm-2" in cond.summary
+    # The overdue incidents these jobs had are continued here, without a "resolved".
+    assert f"bk-overdue:proxmox:{cfg.id}" in cond.absorbs
+    assert {f"bk:{j['id']}" for j in groups["unverified"]} <= cond.absorbs
+    assert bk.resolved_summary(key) == "Auto-resolved: the backup source is read again"
+    assert bk.resolved_summary("bk:7") == bk.RESOLVED
+
+    issues = await bk.check_backup_compliance(db)
+    assert {i["issue"] for i in issues} == {"source_unread"}
+
+
+async def test_the_other_member_of_a_cluster_counts_as_a_reading(db):
+    """Two integrations watch one cluster. The one the jobs belong to is
+    down, the other one reads the cluster: the jobs are judged as usual."""
+    a, b = await _two_integrations(db)
+    now = datetime.utcnow()
+    db.add(_job(source_config_id=a, last_run_at=now - timedelta(hours=50)))
+    await _snapshot(db, a, timedelta(hours=48))
+    await _snapshot(db, b, timedelta(minutes=2))
+    await db.commit()
+
+    groups = await bk.get_compliance_groups(db)
+    assert len(groups["overdue"]) == 1 and groups["unverified"] == []
+
+
+async def test_a_job_without_an_integration_is_judged_by_the_clock(db):
+    db.add(_job(source_config_id=None, last_run_at=datetime.utcnow() - timedelta(hours=50)))
+    db.add(_job(name="gone", source_config_id=999, last_run_at=datetime.utcnow() - timedelta(hours=50)))
+    await db.commit()
+    groups = await bk.get_compliance_groups(db)
+    assert len(groups["overdue"]) == 2 and groups["unverified"] == []

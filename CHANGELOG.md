@@ -209,6 +209,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   interface list was read in the format of its Python predecessor, and
   Proxmox guests under keys the snapshot never had; neither ever reached
   the traffic data.
+- Backups: a job is no longer "overdue" because its source cannot be read.
+  With the integration down nobody knows whether a backup ran; jobs that
+  were on schedule at the last reading now say "not checked" with the
+  reason, and one incident per source says so ("Backups of ... cannot be
+  checked") instead of one "overdue" per job. Jobs already overdue at the
+  last reading stay overdue. `/api/backups/compliance` lists them under
+  `unverified`.
 - Traffic: an agent's `total` counts the host's own network cards only.
   The agent adds up every interface but loopback; on a Docker host that is
   the card, the bridge and each container's end of it, and the total was a
