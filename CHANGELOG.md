@@ -209,6 +209,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   interface list was read in the format of its Python predecessor, and
   Proxmox guests under keys the snapshot never had; neither ever reached
   the traffic data.
+- Heartbeat: the external monitor is set up under Settings, System
+  ("External monitor"): the check URL, or running without one, and a test
+  request. Stored encrypted, never shown again; it wins over
+  `NODEGLOW_HEARTBEAT_URL`, which keeps working. The warning incident now
+  points there instead of at a file on the server.
 - Heartbeat: an installation without an external monitor says so. With
   `NODEGLOW_HEARTBEAT_URL` unset there is a warning incident and a line
   "External monitor" on the System status page; `off` accepts it. Five

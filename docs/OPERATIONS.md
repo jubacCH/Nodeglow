@@ -716,18 +716,23 @@ the incident list before assuming the platform is healthy.
 ### Who tells you when Nodeglow itself is down
 
 Nothing above helps when the scheduler has stopped, the database is gone or
-the host is off: the self-check runs inside the thing that failed. Set
-`NODEGLOW_HEARTBEAT_URL` in `.env` to a check URL of a dead-man service
-(healthchecks.io, an Uptime Kuma push monitor, another Nodeglow) and let that
-service alert you when the requests stop:
+the host is off: the self-check runs inside the thing that failed. Under
+**Settings, System, External monitor** enter the check URL of a dead-man
+service (healthchecks.io, an Uptime Kuma push monitor, another Nodeglow) and
+let that service alert you when the requests stop. "Send a test request"
+tries it at once. The URL is stored encrypted and not shown again.
+
+The same can be set in `.env`, for an installation that is provisioned
+without the UI. A value saved in the UI wins:
 
 ```bash
 NODEGLOW_HEARTBEAT_URL=https://hc-ping.com/your-uuid
 ```
 
-Without the setting Nodeglow says so: a warning incident ("Nobody is told
+Without a monitor Nodeglow says so: a warning incident ("Nobody is told
 when Nodeglow itself stops") and the line "External monitor" on the System
-status page. Set the variable to `off` to accept running without one. When
+status page. Choose "run without a monitor" in the settings (or set the
+variable to `off`) to accept that. When
 five requests in a row fail, that is a critical incident; the error is shown
 without the URL, which is the credential of the monitor.
 

@@ -8,13 +8,14 @@ Splitting the original 845-line settings.py into focused modules:
                      (/ai/test-summary is enterprise: ee/backend/nodeglow_ee/ai)
 - ldap.py          : /ldap/save, /ldap/test
 - alerts.py        : /integration-thresholds, /integration-thresholds/save
+- heartbeat.py     : /heartbeat, /heartbeat/save, /heartbeat/test
 
 main.py imports `routers.settings` exactly as before; the public `router`
 attribute is composed here.
 """
 from fastapi import APIRouter
 
-from . import ai, alerts, api_keys, general, ldap, notifications
+from . import ai, alerts, api_keys, general, heartbeat, ldap, notifications
 
 router = APIRouter(prefix="/settings")
 router.include_router(general.router)
@@ -23,3 +24,4 @@ router.include_router(api_keys.router)
 router.include_router(ai.router)
 router.include_router(ldap.router)
 router.include_router(alerts.router)
+router.include_router(heartbeat.router)

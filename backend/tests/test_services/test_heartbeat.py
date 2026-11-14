@@ -58,7 +58,9 @@ def test_no_monitor_is_a_warning_and_off_accepts_it(monkeypatch):
     [problem] = heartbeat.problems()
     assert problem["key"] == "heartbeat:unset" and problem["severity"] == "warning"
     assert problem["title"] == "Nobody is told when Nodeglow itself stops"
-    assert heartbeat.ENV in problem["summary"] and '"off"' in problem["summary"]
+    # Where to fix it is a place in the product, not a file on the server.
+    assert "Settings, System, External monitor" in problem["summary"]
+    assert heartbeat.ENV not in problem["summary"]
     assert heartbeat.status(100.0)["mode"] == "unset"
 
     monkeypatch.setenv(heartbeat.ENV, "off")
@@ -130,9 +132,142 @@ async def test_the_self_check_reports_it_to_the_operator_only(db, monkeypatch):
 
     monkeypatch.delenv(heartbeat.ENV, raising=False)
     with tenant_scope(DEFAULT_TENANT_ID):
-        assert [p.key for p in self_check._heartbeat_problems()] == ["heartbeat:unset"]
+        assert [p.key for p in await self_check._heartbeat_problems(db)] == ["heartbeat:unset"]
     with tenant_scope(DEFAULT_TENANT_ID + 1):
-        assert self_check._heartbeat_problems() == []
+        assert await self_check._heartbeat_problems(db) == []
 
     problems = await self_check.collect_problems(db, SimpleNamespace(get_jobs=lambda: []), 1000.0, 0.0)
     assert "heartbeat:unset" in {p.key for p in problems}
+
+
+# ── Set up in the UI ────────────────────────────────────────────────────────
+
+
+async def test_the_saved_setting_wins_over_the_environment(db, monkeypatch):
+    from models.settings import set_setting
+
+    monkeypatch.delenv(heartbeat.ENV, raising=False)
+    assert await heartbeat.resolve(db) == ("unset", "", "none")
+    monkeypatch.setenv(heartbeat.ENV, "https://env.example.com/ping/1")
+    assert await heartbeat.resolve(db) == ("set", "https://env.example.com/ping/1", "environment")
+
+    await set_setting(db, heartbeat.SETTING, URL, encrypted=True)
+    assert await heartbeat.resolve(db) == ("set", URL, "setting")
+    await set_setting(db, heartbeat.SETTING, "off")
+    assert await heartbeat.resolve(db) == ("off", "", "setting")
+    # Cleared in the UI: the environment applies again.
+    await set_setting(db, heartbeat.SETTING, "")
+    assert (await heartbeat.resolve(db))[2] == "environment"
+
+
+async def test_the_self_check_follows_the_saved_setting(db, monkeypatch):
+    from models.settings import set_setting
+    from services import self_check
+
+    monkeypatch.delenv(heartbeat.ENV, raising=False)
+    assert [p.key for p in await self_check._heartbeat_problems(db)] == ["heartbeat:unset"]
+    await set_setting(db, heartbeat.SETTING, "off")
+    assert await self_check._heartbeat_problems(db) == []
+
+
+@pytest.mark.parametrize("url,ok", [
+    ("https://hc-ping.com/abc", True),
+    ("http://10.20.30.40:3001/api/push/abc", True),      # an Uptime Kuma next door
+    ("ftp://hc-ping.com/abc", False),
+    ("hc-ping.com/abc", False),
+    ("https://", False),
+    ("http://169.254.169.254/latest/meta-data", False),  # cloud metadata
+    ("http://127.0.0.1:9000/ping", False),               # stops together with Nodeglow
+    ("http://0.0.0.0/ping", False),
+    ("http://clickhouse:8123/ping", False),              # one of Nodeglow's own services
+])
+def test_which_urls_can_be_a_monitor(url, ok, monkeypatch):
+    import ipaddress
+
+    monkeypatch.setattr("utils.net_safety.resolve_all",
+                        lambda host: [ipaddress.ip_address("203.0.113.10")])
+    assert (heartbeat.url_problem(url) is None) is ok
+
+
+async def test_the_settings_endpoints(monkeypatch):
+    """Save, read back without the URL, test, switch off, and back to unset."""
+    import ipaddress
+
+    from tests.conftest import setting_row
+    from tests.test_routers.conftest import make_client
+
+    monkeypatch.delenv(heartbeat.ENV, raising=False)
+    monkeypatch.setattr("utils.net_safety.resolve_all",
+                        lambda host: [ipaddress.ip_address("203.0.113.10")])
+    requested = []
+
+    async def fake_request(url):
+        requested.append(url)
+        return None if "good" in url else "the monitor answered HTTP 404"
+    monkeypatch.setattr(heartbeat, "request", fake_request)
+
+    async with make_client() as (client, sf):
+        assert (await client.get("/settings/heartbeat")).json()["mode"] == "unset"
+        # Nothing to test, nothing to keep.
+        assert (await client.post("/settings/heartbeat/test", json={})).status_code == 400
+        assert (await client.post("/settings/heartbeat/save", json={"mode": "url"})).status_code == 400
+        refused = await client.post("/settings/heartbeat/save",
+                                    json={"mode": "url", "url": "http://169.254.169.254/x"})
+        assert refused.status_code == 400 and "metadata" in refused.json()["error"]
+
+        good = "https://hc.example.com/ping/good-secret"
+        saved = await client.post("/settings/heartbeat/save", json={"mode": "url", "url": good})
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["mode"] == "set" and saved.json()["source"] == "setting"
+        # The URL is a credential: not in any answer, and encrypted at rest.
+        assert "good-secret" not in saved.text
+        assert "good-secret" not in (await client.get("/settings/heartbeat")).text
+        async with sf() as db:
+            row = await setting_row(db, heartbeat.SETTING)
+            assert row.encrypted and "good-secret" not in row.value
+
+        tested = await client.post("/settings/heartbeat/test", json={})
+        assert tested.json() == {"ok": True, "error": None} and requested == [good]
+        assert (await client.get("/settings/heartbeat")).json()["last_ok_seconds_ago"] is not None
+
+        # "url" without a URL keeps the saved one.
+        assert (await client.post("/settings/heartbeat/save", json={"mode": "url"})).status_code == 200
+        assert (await client.post("/settings/heartbeat/test", json={})).json()["ok"] is True
+
+        bad = await client.post("/settings/heartbeat/save",
+                                json={"mode": "url", "url": "https://hc.example.com/ping/gone"})
+        # What was counted belongs to the previous target.
+        assert bad.json()["last_ok_seconds_ago"] is None
+        assert (await client.post("/settings/heartbeat/test", json={})).json() == {
+            "ok": False, "error": "the monitor answered HTTP 404"}
+
+        off = await client.post("/settings/heartbeat/save", json={"mode": "off"})
+        assert off.json()["mode"] == "off"
+        assert (await client.post("/settings/heartbeat/save", json={"mode": "unset"})).json()["mode"] == "unset"
+        assert (await client.post("/settings/heartbeat/save", json={"mode": "x"})).status_code == 400
+
+
+async def test_the_job_requests_the_saved_url(db, monkeypatch):
+    """Saved in the UI and nothing in the environment: the job still sends."""
+    from contextlib import asynccontextmanager
+
+    import scheduler
+    from models.settings import set_setting
+
+    monkeypatch.delenv(heartbeat.ENV, raising=False)
+    await set_setting(db, heartbeat.SETTING, URL, encrypted=True)
+
+    @asynccontextmanager
+    async def session():
+        yield db
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session)
+    monkeypatch.setattr(scheduler, "_postgres_answers", AsyncMock(return_value=True))
+    requested = []
+
+    async def fake_request(url):
+        requested.append(url)
+        return None
+    monkeypatch.setattr(heartbeat, "request", fake_request)
+
+    await scheduler.send_heartbeat()
+    assert requested == [URL] and heartbeat.status(0.0)["failures_in_a_row"] == 0
