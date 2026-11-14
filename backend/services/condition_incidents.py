@@ -13,6 +13,7 @@ rolled back.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -50,12 +51,15 @@ class Note:
 
 
 async def sync_rule(db, rule: str, wanted: dict[str, Condition], *,
-                    event_type: str, resolved_summary: str) -> list[Note]:
+                    event_type: str, resolved_summary: str,
+                    resolved_summary_for: Callable[[str], str] | None = None) -> list[Note]:
     """Make the open incidents of ``rule`` match ``wanted`` (key -> condition).
 
     Returns the notifications to send after the caller's commit: one for each
     incident opened, escalated to a higher severity, or resolved. An incident
     that a wanted condition absorbs is closed without one.
+    ``resolved_summary_for`` gives the closing text per key where one rule
+    covers problems that end in different ways.
     """
     from services.correlation import _find_or_create_incident
 
@@ -96,9 +100,9 @@ async def sync_rule(db, rule: str, wanted: dict[str, Condition], *,
             db.add(IncidentEvent(incident_id=incident.id, event_type="resolved",
                                  summary=f"Continued as: {absorbed_by[key].title}"))
             continue
-        db.add(IncidentEvent(incident_id=incident.id, event_type="resolved",
-                             summary=resolved_summary))
-        notes.append(Note(f"✅ Resolved: {incident.title}", resolved_summary, "info", incident.id))
+        closing = resolved_summary_for(key) if resolved_summary_for else resolved_summary
+        db.add(IncidentEvent(incident_id=incident.id, event_type="resolved", summary=closing))
+        notes.append(Note(f"✅ Resolved: {incident.title}", closing, "info", incident.id))
     return notes
 
 

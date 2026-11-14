@@ -59,6 +59,8 @@ interface ComplianceData {
   overdue: BackupJob[];
   failed: BackupJob[];
   never_run: BackupJob[];
+  /** Past the interval, but the source is not read: a newer run would not be known. */
+  unverified?: BackupJob[];
 }
 
 interface HistoryEntry {
@@ -169,7 +171,9 @@ export default function BackupsPage() {
   const failed = compliance?.failed ?? [];
   const overdue = compliance?.overdue ?? [];
   const neverRun = compliance?.never_run ?? [];
-  const hasComplianceIssues = failed.length + overdue.length + neverRun.length > 0;
+  const unverified = compliance?.unverified ?? [];
+  const attentionCount = failed.length + overdue.length + neverRun.length + unverified.length;
+  const hasComplianceIssues = attentionCount > 0;
   const asOf = formatAsOf(query.dataUpdatedAt);
 
   return (
@@ -213,7 +217,7 @@ export default function BackupsPage() {
           <CardHeader
             title="Needs attention"
             titleId="backup-attention"
-            meta={`${failed.length + overdue.length + neverRun.length} job${failed.length + overdue.length + neverRun.length === 1 ? '' : 's'}`}
+            meta={`${attentionCount} job${attentionCount === 1 ? '' : 's'}`}
           />
           <ul className="divide-y divide-border">
             {failed.map((job) => (
@@ -233,6 +237,18 @@ export default function BackupsPage() {
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
                 <div className="min-w-0">
                   <p className="text-ui font-medium text-fg">{job.name} <span className="font-normal text-warning">overdue</span></p>
+                  <p className="mt-0.5 text-meta text-fg-2">
+                    Target: {job.target_name}
+                    {job.status_reason && <> — {job.status_reason}</>}
+                  </p>
+                </div>
+              </li>
+            ))}
+            {unverified.map((job) => (
+              <li key={`unverified-${job.id}`} className="flex items-start gap-3 py-2.5">
+                <Clock size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="text-ui font-medium text-fg">{job.name} <span className="font-normal text-warning">not checked</span></p>
                   <p className="mt-0.5 text-meta text-fg-2">
                     Target: {job.target_name}
                     {job.status_reason && <> — {job.status_reason}</>}

@@ -1426,13 +1426,14 @@ async def run_backup_compliance():
     else: a backup that stopped running was never an alert."""
     from services import condition_incidents as cond
     from services.backup_monitor import (
-        backup_conditions, check_backup_compliance, get_compliance_groups,
+        RESOLVED, backup_conditions, check_backup_compliance, get_compliance_groups,
+        resolved_summary,
     )
     async with AsyncSessionLocal() as db:
         wanted = backup_conditions(await get_compliance_groups(db))
         notes = await cond.sync_rule(
             db, "backup", wanted, event_type="backup_issue",
-            resolved_summary="Auto-resolved: a backup ran successfully and on schedule",
+            resolved_summary=RESOLVED, resolved_summary_for=resolved_summary,
         )
         await db.commit()
     await cond.send(notes)
