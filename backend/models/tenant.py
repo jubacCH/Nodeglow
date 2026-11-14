@@ -49,6 +49,8 @@ GLOBAL_UNIQUE_COLUMNS: dict[tuple[str, str], str] = {
     ("api_keys", "key_hash"): "API key, resolves the tenant",
     ("agent_install_tokens", "token_hash"): "install token, resolves the tenant",
     ("snmp_host_configs", "host_id"): "host ids are unique across the installation",
+    ("identity_providers", "login_key"): "sign-in address of a provider, resolves the tenant",
+    ("sso_flows", "state_hash"): "state of a started sign-in, resolves the tenant at the callback",
 }
 
 
@@ -230,10 +232,10 @@ class SupportGrant(TenantScoped, Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     granted_by = Column(Integer, nullable=True)  # user id (no FK: users may be purged)
-    granted_by_name = Column(String(64), nullable=True)
+    granted_by_name = Column(String(255), nullable=True)
     revoked_at = Column(DateTime, nullable=True)
     revoked_by = Column(Integer, nullable=True)
-    revoked_by_name = Column(String(64), nullable=True)
+    revoked_by_name = Column(String(255), nullable=True)
     # Set by the expiry job once the end of the grant has been audited.
     ended_audited_at = Column(DateTime, nullable=True)
 

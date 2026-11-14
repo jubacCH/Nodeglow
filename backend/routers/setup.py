@@ -48,6 +48,9 @@ async def complete_setup(
         return RedirectResponse(url="/setup?error=password_required", status_code=303)
     from utils.password import validate_password
     pw_error = validate_password(password)
+    from models.identity import RESERVED_USERNAME_ERROR, is_reserved_username
+    if not pw_error and is_reserved_username(username):
+        pw_error = RESERVED_USERNAME_ERROR
     if pw_error:
         from urllib.parse import quote
         return RedirectResponse(url=f"/setup?error={quote(pw_error)}", status_code=303)

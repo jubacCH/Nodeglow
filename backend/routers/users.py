@@ -14,6 +14,7 @@ from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import User, get_db
+from models.identity import RESERVED_USERNAME_ERROR, is_reserved_username
 from models.settings import Session as UserSession, _hash_token, _hash_token_legacy
 from models.tenant import ProviderMembership, TenantMembership
 from ratelimit import rate_limit
@@ -170,6 +171,8 @@ async def create_user_api(request: Request, db: AsyncSession = Depends(get_db)):
     role = body.get("role", "readonly")
     if not username or not password:
         return JSONResponse({"error": "Username and password required"}, status_code=400)
+    if is_reserved_username(username):
+        return JSONResponse({"error": RESERVED_USERNAME_ERROR}, status_code=400)
     pw_error = validate_password(password)
     if pw_error:
         return JSONResponse({"error": pw_error}, status_code=400)
@@ -334,6 +337,8 @@ async def add_user(
 ):
     if err := _refuse_change(request):
         return err
+    if is_reserved_username(username):
+        return JSONResponse({"error": RESERVED_USERNAME_ERROR}, status_code=400)
     pw_error = validate_password(password)
     if pw_error:
         return JSONResponse({"error": pw_error}, status_code=400)

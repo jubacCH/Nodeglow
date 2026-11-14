@@ -198,3 +198,49 @@ def test_http_checks_use_the_guarded_transport():
             await ping.close_http_clients()
 
     assert asyncio.run(build()) is True
+
+
+# ── public_only: targets a stranger may choose on a shared installation ─────
+
+
+@pytest.mark.parametrize("value", [
+    "10.0.0.5", "192.168.1.10", "172.16.0.1", "100.64.0.1", "[fd12::1]", "192.0.2.10",
+])
+def test_public_only_refuses_private_and_reserved_literals(value):
+    assert validate_host(value, resolve=False) is None
+    assert validate_host(value, resolve=False, public_only=True) is not None
+
+
+def test_public_only_keeps_public_addresses_and_still_blocks_the_rest():
+    assert validate_host("1.1.1.1", resolve=False, public_only=True) is None
+    assert validate_host("127.0.0.1", resolve=False, public_only=True) is not None
+    assert validate_host("db", resolve=False, public_only=True) is not None
+
+
+def test_public_only_checks_what_a_name_resolves_to():
+    mapping = {"idp.lan.example": ["192.168.1.20"], "idp.example": ["93.184.215.14"]}
+    with patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo(mapping)):
+        assert validate_host("https://idp.lan.example/x") is None
+        assert "public" in validate_host("https://idp.lan.example/x", public_only=True)
+        assert validate_host("https://idp.example/x", public_only=True) is None
+
+
+async def test_public_only_backend_refuses_a_private_answer_at_connect_time():
+    inner = _RecordingBackend()
+    backend = _GuardedBackend(inner, public_only=True)
+    with patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo({"nas.lan": ["192.168.1.20"]})):
+        with pytest.raises(httpcore.ConnectError, match="Only public addresses"):
+            await backend.connect_tcp("nas.lan", 443)
+    assert inner.hosts == []
+
+
+async def test_public_only_client_blocks_a_name_rebound_to_a_private_address():
+    with patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo({"idp.example": ["10.1.2.3"]})):
+        async with safe_async_client(public_only=True, timeout=2) as client:
+            with pytest.raises(UnsafeTargetError):
+                await client.get("https://idp.example/.well-known/openid-configuration")
+        # Without the flag the same address is an allowed LAN target (it then
+        # fails to connect, which is not the guard's doing).
+        backend = _GuardedBackend(_RecordingBackend())
+        with pytest.raises(httpcore.ConnectError, match="recorded"):
+            await backend.connect_tcp("idp.example", 443)

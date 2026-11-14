@@ -47,6 +47,7 @@ from models.tenant import (
     DEFAULT_PROVIDER_ID, DEFAULT_TENANT_ID, DEFAULT_SITE_ID,
     ensure_default_tenant,
 )
+from models.identity import IdentityProvider, UserIdentity, SsoFlow
 
 # The tenant filter hooks into every SQLAlchemy session; installing it here
 # means nothing can open a session before it is active.

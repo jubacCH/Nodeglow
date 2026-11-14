@@ -16,6 +16,11 @@ Two layers:
   name rebound between validation and use (DNS rebinding) or a redirect to an
   internal address still cannot reach a blocked target. TLS SNI and
   certificate verification keep using the hostname from the URL.
+
+``public_only`` (both layers) tightens the rule for targets a stranger may
+choose on a shared installation, such as the identity provider of another
+customer's tenant: then every address that is not globally routable is
+refused too, RFC1918 and ULA included.
 """
 from __future__ import annotations
 
@@ -76,8 +81,11 @@ def extract_host(value: str) -> str:
     return host.strip().rstrip(".").lower()
 
 
-def blocked_ip_reason(addr) -> str | None:
-    """Why an address must not be an outbound target, or None if allowed."""
+def blocked_ip_reason(addr, *, public_only: bool = False) -> str | None:
+    """Why an address must not be an outbound target, or None if allowed.
+
+    ``public_only``: also refuse every address that is not globally routable
+    (private networks, shared address space, documentation ranges)."""
     if getattr(addr, "ipv4_mapped", None) is not None:
         addr = addr.ipv4_mapped
     if addr in METADATA_IPS:
@@ -90,6 +98,8 @@ def blocked_ip_reason(addr) -> str | None:
         return "Link-local addresses are not allowed (cloud metadata risk)"
     if addr.is_multicast:
         return "Multicast addresses are not allowed"
+    if public_only and not addr.is_global:
+        return "Only public addresses are allowed for this target"
     return None
 
 
@@ -123,7 +133,7 @@ def resolve_all(host: str) -> list:
     return out
 
 
-def validate_host(value: str, resolve: bool = True) -> str | None:
+def validate_host(value: str, resolve: bool = True, *, public_only: bool = False) -> str | None:
     """Validate a host/URL value against SSRF. Returns an error or None.
 
     A name that does not resolve is allowed: the device may simply be offline,
@@ -142,17 +152,17 @@ def validate_host(value: str, resolve: bool = True) -> str | None:
         return reason
     literal = _parse_ip(host)
     if literal is not None:
-        return blocked_ip_reason(literal)
+        return blocked_ip_reason(literal, public_only=public_only)
     if resolve:
         for addr in resolve_all(host):
-            reason = blocked_ip_reason(addr)
+            reason = blocked_ip_reason(addr, public_only=public_only)
             if reason:
                 return f"{reason} ({host} resolves to {addr})"
     return None
 
 
-async def validate_host_async(value: str) -> str | None:
-    return await asyncio.to_thread(validate_host, value)
+async def validate_host_async(value: str, *, public_only: bool = False) -> str | None:
+    return await asyncio.to_thread(validate_host, value, public_only=public_only)
 
 
 def url_error(url: str, resolve: bool = True) -> str | None:
@@ -190,13 +200,14 @@ class _GuardedBackend(httpcore.AsyncNetworkBackend):
     IP literal keeps SNI and hostname verification intact.
     """
 
-    def __init__(self, inner: httpcore.AsyncNetworkBackend):
+    def __init__(self, inner: httpcore.AsyncNetworkBackend, *, public_only: bool = False):
         self._inner = inner
+        self._public_only = public_only
 
     async def connect_tcp(self, host: str, port: int, timeout: float | None = None,
                           local_address: str | None = None,
                           socket_options: Iterable[Any] | None = None):
-        addrs = await _checked_addresses(host, port)
+        addrs = await _checked_addresses(host, port, public_only=self._public_only)
         last_exc: Exception | None = None
         for addr in addrs:
             try:
@@ -217,7 +228,7 @@ class _GuardedBackend(httpcore.AsyncNetworkBackend):
         await self._inner.sleep(seconds)
 
 
-async def _checked_addresses(host: str, port: int) -> list:
+async def _checked_addresses(host: str, port: int, *, public_only: bool = False) -> list:
     name = host.strip().strip("[]")
     if reason := blocked_name_reason(name):
         raise httpcore.ConnectError(f"Blocked outbound connection to {host}: {reason}")
@@ -238,7 +249,7 @@ async def _checked_addresses(host: str, port: int) -> list:
     # Any blocked answer refuses the whole name: an attacker controlling DNS
     # could otherwise mix a public and an internal address.
     for addr in addrs:
-        if reason := blocked_ip_reason(addr):
+        if reason := blocked_ip_reason(addr, public_only=public_only):
             raise httpcore.ConnectError(
                 f"Blocked outbound connection to {host} ({addr}): {reason}"
             )
@@ -254,14 +265,14 @@ class GuardedAsyncTransport(httpx.AsyncHTTPTransport):
     governed by the proxy; the pre-request URL check still applies to them.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, public_only: bool = False, **kwargs: Any) -> None:
         kwargs.pop("proxy", None)
         kwargs.pop("uds", None)
         super().__init__(**kwargs)
         pool = self._pool
         if not hasattr(pool, "_network_backend"):  # httpcore internals changed
             raise RuntimeError("httpcore pool has no _network_backend; SSRF guard unavailable")
-        pool._network_backend = _GuardedBackend(pool._network_backend)
+        pool._network_backend = _GuardedBackend(pool._network_backend, public_only=public_only)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         try:
@@ -276,12 +287,12 @@ _TRANSPORT_KWARGS = ("verify", "cert", "http1", "http2", "limits", "retries",
                      "trust_env", "local_address", "socket_options")
 
 
-def safe_async_client(**kwargs: Any) -> httpx.AsyncClient:
+def safe_async_client(*, public_only: bool = False, **kwargs: Any) -> httpx.AsyncClient:
     """Drop-in for ``httpx.AsyncClient(...)`` with the connect-time SSRF guard.
 
     Transport-level options (``verify``, ``cert``, ``http2``, …) are handed to
     the guarded transport, because httpx ignores them on the client when an
-    explicit transport is given.
+    explicit transport is given. ``public_only``: see the module docstring.
     """
     if "transport" in kwargs:
         raise TypeError("safe_async_client builds its own transport")
@@ -289,4 +300,5 @@ def safe_async_client(**kwargs: Any) -> httpx.AsyncClient:
     if "trust_env" in transport_kwargs:
         kwargs["trust_env"] = transport_kwargs["trust_env"]
     kwargs.setdefault("follow_redirects", False)
-    return httpx.AsyncClient(transport=GuardedAsyncTransport(**transport_kwargs), **kwargs)
+    return httpx.AsyncClient(
+        transport=GuardedAsyncTransport(public_only=public_only, **transport_kwargs), **kwargs)

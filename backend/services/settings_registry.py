@@ -82,6 +82,8 @@ _DEFS: tuple[SettingDef, ...] = (
     _i("agent_server_url", note="what agents are told to call"),
     _i("nodeglow_ip", note="Proxmox helper; revisit with probe-side integrations"),
     _i("public_url", note="external URL of this installation, used for links"),
+    _i("sso_private_issuers", "bool", "0",
+       note="identity providers of other tenants than the default may use private addresses (ee)"),
     _i("heartbeat_url", secret=True,
        note="check URL of the external monitor, or 'off'; wins over NODEGLOW_HEARTBEAT_URL"),
     _i("geoip_enabled", "bool", "0"),

@@ -25,14 +25,14 @@ class Incident(TenantScoped, Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
-    acknowledged_by = Column(String(128), nullable=True)
+    acknowledged_by = Column(String(255), nullable=True)
     postmortem = Column(Text, nullable=True)
     postmortem_generated_at = Column(DateTime, nullable=True)
 
     # ── Operator feedback loop (Phase 3) ───────────────────────────────────
     feedback = Column(String(16), nullable=True)          # 'real' | 'noise' | NULL
     feedback_at = Column(DateTime, nullable=True)
-    feedback_by = Column(String(128), nullable=True)
+    feedback_by = Column(String(255), nullable=True)
     # Precursor template text for learned_precursor incidents, so 'noise'
     # feedback can map the incident back to the noisy template and blacklist it.
     precursor_template = Column(Text, nullable=True)

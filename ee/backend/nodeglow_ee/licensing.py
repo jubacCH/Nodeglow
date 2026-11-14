@@ -79,6 +79,7 @@ TRUSTED_KEYS: dict[str, str] = {
 # features added after the license was issued.
 KNOWN_FEATURES: tuple[str, ...] = (
     "ha_scheduler", "ai_assistant", "ai_postmortem", "ai_daily_summary", "multi_tenancy",
+    "sso",
 )
 
 # Features that keep running after the grace period. Leader election protects

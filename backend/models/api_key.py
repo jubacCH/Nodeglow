@@ -18,7 +18,7 @@ class ApiKey(TenantScoped, Base):
     enabled = Column(Boolean, default=True)
     last_used = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    created_by = Column(String(64), nullable=True)
+    created_by = Column(String(255), nullable=True)
     note = Column(Text, nullable=True)
     # Which hashing scheme produced key_hash. 'hmac' = current (HMAC-SHA256 with
     # SECRET_KEY pepper). NULL = legacy plain SHA256 that has not yet been

@@ -22,12 +22,13 @@ class EnterprisePlugin:
         # used (nodeglow_ee.license_runtime), so a license installed or
         # removed in Settings applies without a restart. Without a usable
         # license the features stay inactive and the core is unaffected.
-        from nodeglow_ee import ai, ha, license_runtime, tenancy
+        from nodeglow_ee import ai, ha, license_runtime, sso, tenancy
 
         license_runtime.register(registry)
         ha.register(registry)
         ai.register(registry)
         tenancy.register(registry)
+        sso.register(registry)
 
 
 plugin = EnterprisePlugin()

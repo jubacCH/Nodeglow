@@ -230,6 +230,11 @@ async def _try_ldap_login(db: AsyncSession, username: str, password: str):
     # directory entry "admin" became Nodeglow's local admin. Such a user
     # keeps logging in with the local password; resolving the clash is an
     # admin decision (rename or delete the local account).
+    # Names of single sign-on users ("…#<provider id>") are never directory
+    # names: a directory entry of that shape must not become one of them.
+    from models.identity import is_reserved_username
+    if is_reserved_username(username):
+        return None, False
     result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
     if user is not None and (user.auth_source or "local") != "ldap":
@@ -395,6 +400,10 @@ async def login(
     # Skip local auth for LDAP-only users (no valid local password)
     if user and user.auth_source == "ldap":
         return await _fail("LDAP authentication failed")
+    # Single sign-on users have no password here either (a random
+    # placeholder hash); they sign in through their identity provider.
+    if user and user.auth_source == "oidc":
+        return await _fail()
 
     _dummy_hash = b"$2b$12$000000000000000000000uGHEjmFMntPDYjXJPBT3V44YS5gL0nS"
     stored_hash = user.password_hash.encode() if user else _dummy_hash

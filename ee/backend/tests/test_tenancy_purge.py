@@ -366,3 +366,23 @@ async def test_audit_rows_are_purged_over_the_owner_connection(env, monkeypatch)
     assert await purge._delete_batched(table, B) == 3
     assert used == [("audit_logs", B)]
 
+
+
+async def test_sessions_opened_through_the_tenants_providers_end_with_the_purge(env):
+    """A session through one of B's identity providers is deleted, not just
+    detached from B (the shared user keeps its account and other sessions)."""
+    from nodeglow_ee.tenancy import purge
+
+    _client, sf, shared_id = env
+    async with sf() as s:
+        s.add(Session(token="through-b-idp", user_id=shared_id, active_tenant_id=B,
+                      identity_provider_id=BASE[B], expires_at=datetime.utcnow() + timedelta(hours=1)))
+        s.add(Session(token="password-session", user_id=shared_id, active_tenant_id=A,
+                      expires_at=datetime.utcnow() + timedelta(hours=1)))
+        await s.commit()
+    with clickhouse(PurgeClickHouse()):
+        await purge.purge_tenant(B)
+    async with sf() as s:
+        assert await s.get(Session, "through-b-idp") is None
+        assert await s.get(Session, "password-session") is not None
+        assert await s.get(User, shared_id) is not None

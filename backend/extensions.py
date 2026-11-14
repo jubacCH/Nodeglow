@@ -53,6 +53,8 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "ai_daily_summary": False,
     # More than one tenant: lifecycle, plans, tenant switcher, support access.
     "multi_tenancy": False,
+    # Single sign-on (OIDC) per tenant.
+    "sso": False,
 }
 
 

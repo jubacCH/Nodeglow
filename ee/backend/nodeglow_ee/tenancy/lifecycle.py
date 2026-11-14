@@ -282,6 +282,10 @@ async def create_tenant(db, request, body: dict) -> Tenant:
 
     admin = (await db.execute(select(User).where(User.username == admin_username))).scalar_one_or_none()
     if admin is None:
+        from models.identity import RESERVED_USERNAME_ERROR, is_reserved_username
+
+        if is_reserved_username(admin_username):
+            raise LifecycleError(RESERVED_USERNAME_ERROR)
         password = body.get("admin_password")
         if not isinstance(password, str) or not password:
             raise LifecycleError("Set a password for the new admin user.")

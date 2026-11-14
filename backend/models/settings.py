@@ -30,13 +30,14 @@ class Setting(Base):
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
-    username = Column(String(64), unique=True, nullable=False)
+    # 255: usernames of single sign-on users are "<mail address>#<provider id>".
+    username = Column(String(255), unique=True, nullable=False)
     password_hash = Column(String(128), nullable=False)
     # Mirror of the membership role in the default tenant, kept in sync for
     # one release so a rollback to before the auth binding (revision 043)
     # still finds every user's role. tenant_memberships is the source of truth.
     role = Column(String(16), default="admin")   # admin | editor | readonly
-    auth_source = Column(String(16), default="local")  # local | ldap
+    auth_source = Column(String(16), default="local")  # local | ldap | oidc
     display_name = Column(String(128), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     # Installation operator: manages providers and installation settings. No
@@ -61,6 +62,14 @@ class Session(Base):
     active_tenant_id = Column(
         Integer, ForeignKey("tenants.id", ondelete="SET NULL", name="fk_sessions_active_tenant"),
         nullable=True,
+    )
+    # The identity provider the session was opened through (single sign-on,
+    # ee); NULL for a password session. Deleting the provider ends its
+    # sessions.
+    identity_provider_id = Column(
+        Integer,
+        ForeignKey("identity_providers.id", ondelete="CASCADE", name="fk_sessions_identity_provider"),
+        nullable=True, index=True,
     )
 
 

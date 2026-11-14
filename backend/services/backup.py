@@ -23,6 +23,10 @@ EXPORT_TABLES: list[str] = [
     "tenant_keys",
     "tenant_settings",
     "user_preferences",
+    # Single sign-on (ee): the client secret stays under the tenant's data
+    # key above. Flow state (sso_flows) and sessions are not exported.
+    "identity_providers",
+    "user_identities",
     "ping_hosts",
     "ping_results",
     "integration_configs",

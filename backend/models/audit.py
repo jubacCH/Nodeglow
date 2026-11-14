@@ -14,7 +14,7 @@ class AuditLog(TenantScoped, Base):
     id          = Column(Integer, primary_key=True, autoincrement=True)
     timestamp   = Column(DateTime, default=datetime.utcnow, index=True)
     user_id     = Column(Integer, nullable=True)
-    username    = Column(String(64), nullable=True)
+    username    = Column(String(255), nullable=True)
     action      = Column(String(64), nullable=False)    # login, create, update, delete
     target_type = Column(String(64), nullable=True)     # host, integration, rule, user, setting, agent
     target_id   = Column(Integer, nullable=True)
