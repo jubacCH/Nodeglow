@@ -297,36 +297,51 @@ button.tile:hover { background: var(--surface-3); }
 .need .row.done { opacity: .45; }
 .need .row.done button { background: transparent; color: var(--ok-text); border: 0; }
 
-/* host grid */
-.hsum { display: flex; gap: 3px; height: 10px; margin: 2px 0 10px; }
-.hsum i { border-radius: 5px; min-width: 6px; }
-.hleg { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--text-2); margin-bottom: 16px; }
+/* host overview: scales from 48 to 500+ hosts.
+   One proportional bar per site, problem hosts folded by shared cause, lists capped. */
+#hostCard { position: relative; }
+.hleg { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); margin-bottom: 12px; }
 .hleg span { display: inline-flex; align-items: center; gap: 6px; }
-.hleg i { width: 9px; height: 9px; border-radius: 50%; }
+.hleg i { width: 10px; height: 10px; border-radius: 3px; }
 .hleg b { color: var(--text); font-weight: 600; }
-.hgroup + .hgroup { margin-top: 16px; }
-.hgroup h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; font: 500 12.5px var(--font-ui); color: var(--text-2); }
-.hgroup h3 b { color: var(--text); font-weight: 600; }
-.hgroup h3 .tag { height: 20px; font-size: 10.5px; }
-.hosts { display: flex; flex-wrap: wrap; gap: 6px; }
-.host { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px 0 5px; border-radius: 19px; background: var(--surface-2); font: 500 12px var(--font-mono); white-space: nowrap; position: relative; border: 1px solid transparent; max-width: 100%; }
-.host:hover { background: var(--surface-3); }
-.host .hd { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none; }
-.host .hd svg { width: 14px; height: 14px; }
-.h-ok .hd { background: color-mix(in srgb, var(--ok) 13%, transparent); color: var(--ok-text); }
-.h-deg { background: color-mix(in srgb, var(--degraded) 10%, var(--surface-2)); }
-.h-deg .hd { background: color-mix(in srgb, var(--degraded) 22%, transparent); color: var(--degraded-text); }
-.h-warn { background: color-mix(in srgb, var(--warn) 10%, var(--surface-2)); }
-.h-warn .hd { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn-text); }
-.h-down { background: color-mix(in srgb, var(--down) 12%, var(--surface-2)); }
-.h-down .hd { background: var(--down); color: #fff; box-shadow: var(--glow-crit); }
-.h-maint .hd { background: color-mix(in srgb, var(--maint) 20%, transparent); color: var(--maint-text); }
-.h-unknown { background: transparent; border: 1.5px dashed var(--unknown); color: var(--text-3); }
-.h-unknown .hd { background: var(--hatch); color: var(--text-3); }
-.host .inc { font: 600 10px var(--font-ui); padding: 2px 7px; border-radius: 9px; background: var(--down); color: #fff; }
-.h-warn .inc { background: var(--warn); }
-.host .note { font: 500 10.5px var(--font-ui); color: var(--text-2); }
-.host.hide, .hgroup.hide { display: none; }
+.sites { display: flex; flex-direction: column; gap: 4px; }
+.site { display: grid; grid-template-columns: 180px minmax(0, 1fr) 190px; align-items: center; gap: 16px; padding: 10px 12px; border-radius: 16px; }
+.site:hover { background: var(--surface-2); }
+.site .sn b { display: block; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.site .sn small { color: var(--text-2); font-size: 11.5px; white-space: nowrap; }
+.sbar { display: flex; gap: 3px; height: 14px; min-width: 0; overflow: hidden; }
+.sbar i { border-radius: 4px; min-width: 6px; }
+.site .sv { font-size: 12px; color: var(--text-2); text-align: right; white-space: nowrap; }
+.site .sv b { color: var(--text); font-weight: 600; }
+.site .sv .bad { color: var(--down-text); font-weight: 500; }
+.more { margin: 6px 12px 0; font-size: 12.5px; }
+.htitle { display: flex; align-items: center; gap: 8px; margin: 18px 0 6px; padding: 14px 4px 0; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); }
+.htitle b { color: var(--text); font-weight: 600; }
+.plist { display: flex; flex-direction: column; gap: 2px; }
+.prow { display: flex; align-items: center; gap: 10px; padding: 8px 8px; border-radius: 12px; text-align: left; min-width: 0; width: 100%; }
+.prow:hover { background: var(--surface-2); }
+.prow .pd { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.prow .pc { min-width: 26px; height: 22px; padding: 0 7px; border-radius: 11px; display: grid; place-items: center; font: 600 11px var(--font-ui); flex: none; }
+.prow .pn { font: 500 12.5px var(--font-mono); white-space: nowrap; }
+.prow .pr { color: var(--text-2); font-size: 12px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prow .ps { color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
+.prow .inc { font: 600 10px var(--font-ui); padding: 2px 7px; border-radius: 9px; background: var(--down); color: #fff; flex: none; }
+.prow .inc.w { background: var(--warn); }
+.prow .chev { color: var(--text-3); transition: transform .15s; flex: none; }
+.prow[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.members { display: none; flex-wrap: wrap; gap: 4px 14px; padding: 2px 8px 10px 52px; }
+.members.open { display: flex; }
+.members span { display: inline-flex; align-items: center; gap: 6px; font: 500 12px var(--font-mono); }
+.members span i { width: 8px; height: 8px; border-radius: 50%; }
+#htip { pointer-events: none; }
+@media (max-width: 760px) {
+  .site { grid-template-columns: 1fr auto; gap: 6px 10px; padding: 10px 6px; }
+  .site .sbar { grid-column: 1 / -1; grid-row: 2; }
+  .site .sv { white-space: normal; }
+  .site { grid-template-columns: minmax(0, 1fr) auto; }
+  .prow .ps { display: none; }
+  .members { padding-left: 10px; }
+}
 
 /* topology canvas */
 .canvas-wrap { overflow-x: auto; border-radius: 20px; }
@@ -486,18 +501,19 @@ button.tile:hover { background: var(--surface-3); }
         <section class="card" id="hostCard">
           <div class="card-h">
             <span class="ico"><i data-ic="server"></i></span>
-            <div><h2>Hosts</h2><p>48 monitored · grouped by site · click a host</p></div>
+            <div><h2>Hosts</h2><p id="hsub"></p></div>
             <div class="end">
-              <div class="seg" id="hfilter" role="tablist">
-                <button role="tab" class="on" aria-selected="true" data-f="all">All 48</button>
-                <button role="tab" aria-selected="false" data-f="problem">Problems 9</button>
-                <button role="tab" aria-selected="false" data-f="unknown">No data 9</button>
+              <div class="seg" id="hscale" role="tablist" title="Scale test with simulated data">
+                <button role="tab" class="on" aria-selected="true" data-s="sme">48 hosts</button>
+                <button role="tab" aria-selected="false" data-s="ent">480 hosts</button>
               </div>
             </div>
           </div>
-          <div class="hsum" id="hsum" aria-hidden="true"></div>
           <div class="hleg" id="hleg"></div>
-          <div id="hgrid"></div>
+          <div class="sites" id="sites"></div>
+          <div class="htitle"><b>Needs a look</b><span id="pcount"></span><button class="link" style="margin-left:auto" data-toast="Opens the Hosts page, filtered to problems">All hosts</button></div>
+          <div class="plist" id="plist"></div>
+          <div class="tip" id="htip"></div>
         </section>
 
         <div class="split">
@@ -812,82 +828,167 @@ document.querySelectorAll('.segs').forEach((el) => {
   }).join('');
 });
 
-/* ---------- host grid (48 hosts, counts as in SCENARIO.md) ---------- */
+/* ---------- host overview (simulated; 48 = SCENARIO.md, 480 = enterprise scale test) ---------- */
 const ST = {
-  ok:      { label: 'Healthy',     color: 'var(--ok)' },
-  deg:     { label: 'Degraded',    color: 'var(--degraded)' },
-  warn:    { label: 'Warning',     color: 'var(--warn)' },
   down:    { label: 'Down',        color: 'var(--down)' },
+  warn:    { label: 'Warning',     color: 'var(--warn)' },
+  deg:     { label: 'Degraded',    color: 'var(--degraded)' },
   maint:   { label: 'Maintenance', color: 'var(--maint)' },
   unknown: { label: 'No data',     color: 'var(--hatch)' },
+  ok:      { label: 'Healthy',     color: 'color-mix(in srgb, var(--ok) 55%, var(--surface))' },
 };
-const H = (n, t, st = 'ok', extra = {}) => ({ n, t, st, ...extra });
-const BEHIND = 'behind SW-ZH-CORE-02';
-const SITES = [
-  { name: 'Zürich HQ', meta: 'monitored directly', hosts: [
-    H('pve-zh-01', 'layers'), H('pve-zh-02', 'layers'),
-    H('SW-ZH-CORE-01', 'switch'),
-    H('SW-ZH-CORE-02', 'switch', 'ok', { inc: '#1071', info: 'Up, but uplink Te1/0/48 is flapping. Parent of the 7 affected hosts.' }),
-    H('SW-ZH-ACC-01', 'switch'), H('SW-ZH-ACC-02', 'switch'), H('SW-ZH-ACC-03', 'switch'), H('fw-zh-01', 'shield'),
-    H('SRV-DC-01', 'server', 'deg', { info: `Latency 12 ms instead of 0.3 ms, ${BEHIND}.` }),
-    H('SRV-FILE-01', 'server', 'ok', { note: 'D: 91 %', info: 'Healthy. Volume D: at 91 %, full in ~5 days.' }),
-    H('SRV-BACKUP-01', 'server', 'warn', { inc: '#1072', info: 'VeeamBackupSvc stopped for 3 agent reports.' }),
-    H('SRV-APP-01', 'server', 'down', { info: `No response since 14:07, ${BEHIND}.` }),
-    H('SRV-RDS-01', 'server', 'ok', { info: 'Healthy. Agent updated to 0.4.2 today.' }),
-    H('web-01', 'server', 'warn', { info: 'Port 443 check failed.' }), H('web-02', 'server'),
-    H('db-01', 'server'), H('db-02', 'server', 'deg', { info: `Latency 8 ms instead of 0.3 ms, ${BEHIND}.` }),
-    H('sql-01', 'server'), H('mon-01', 'server'), H('git-01', 'server'), H('mail-01', 'server'), H('proxy-01', 'server'),
-    H('dns-01', 'server'), H('ipam-01', 'server'), H('pbs-01', 'server'), H('ha-01', 'server'), H('vpn-01', 'server'), H('ntp-01', 'server'),
-    H('AP-ZH-OG1', 'wifi', 'deg', { info: `Latency peaks at 40 ms, ${BEHIND}.` }),
-    H('AP-ZH-OG2', 'wifi', 'deg', { info: `Latency 21 ms, ${BEHIND}.` }),
-    H('AP-ZH-OG3', 'wifi', 'ok', { info: 'Healthy. Latency spike #1068 resolved at 11:09.' }), H('AP-ZH-OG4', 'wifi'),
-    H('NAS-ZH-01', 'drive', 'maint', { note: 'until 15:00', info: 'Maintenance window "NAS firmware update" 14:00–15:00.' }),
-    H('PRN-ZH-01', 'printer', 'deg', { info: `Latency 3 ms instead of 0.3 ms, ${BEHIND}.` }),
-    H('PRN-ZH-02', 'printer', 'down', { info: `No response since 14:07, ${BEHIND}.` }),
-    H('CAM-ZH-01', 'scan'), H('UPS-ZH-01', 'zap'),
-  ] },
-  { name: 'Bern branch', meta: 'via probe-bern-01', tag: '<span class="tag susp">Probe silent 11 min</span>', hosts: [
-    'SW-BE-01:switch', 'fw-be-01:shield', 'AP-BE-01:wifi', 'AP-BE-02:wifi', 'AP-BE-03:wifi', 'AP-BE-04:wifi', 'NAS-BE-01:drive', 'BE-SRV-01:server', 'BE-PRN-01:printer',
-  ].map((x) => { const [n, t] = x.split(':'); return H(n, t, 'unknown', { info: 'Last data 14:21 via probe-bern-01. Unknown, not up.' }); }) },
-  { name: 'Cloud', meta: 'HTTP and TLS checks', hosts: [
-    H('portal.mustertreuhand.ch', 'globe', 'ok', { note: 'TLS 9 d', info: 'Healthy. Certificate expires in 9 days.' }),
-    H('intranet', 'globe', 'ok', { info: 'Healthy. 503 incident #1069 resolved at 13:48.' }),
-  ] },
-];
-const ALL_HOSTS = SITES.flatMap((s) => s.hosts);
-const PROBLEM = ['deg', 'warn', 'down'];
-// Worst first inside each site; an open incident lifts a host that still answers.
-const RANK = { down: 0, warn: 1, deg: 2, maint: 4, unknown: 5, ok: 6 };
-const rank = (h) => (h.inc ? Math.min(RANK[h.st], 1.5) : RANK[h.st]);
-SITES.forEach((s) => s.hosts.sort((x, y) => rank(x) - rank(y)));
-function renderHosts() {
-  const cnt = {};
-  ALL_HOSTS.forEach((h) => { cnt[h.st] = (cnt[h.st] || 0) + 1; });
-  const order = Object.keys(ST).filter((k) => cnt[k]);
-  document.getElementById('hsum').innerHTML = order.map((k) => `<i style="flex:${cnt[k]};background:${ST[k].color}"></i>`).join('');
-  document.getElementById('hleg').innerHTML = order.map((k) => `<span><i style="background:${ST[k].color}"></i>${ST[k].label} <b>${cnt[k]}</b></span>`).join('');
-  document.getElementById('hgrid').innerHTML = SITES.map((s) => `
-    <div class="hgroup"><h3><b>${s.name}</b>${s.hosts.length} · ${s.meta}${s.tag || ''}</h3>
-      <div class="hosts">${s.hosts.map((h) => `<button class="host h-${h.st}" data-st="${h.st}" data-n="${h.n}" title="${h.n} · ${ST[h.st].label}${h.info ? ' · ' + h.info : ''}"><span class="hd">${ic(h.t)}</span>${h.n}${h.note ? `<span class="note">${h.note}</span>` : ''}${h.inc ? `<span class="inc">${h.inc}</span>` : ''}</button>`).join('')}</div>
-    </div>`).join('');
-}
-function filterHosts(f) {
-  document.querySelectorAll('#hfilter button').forEach((b) => { b.classList.toggle('on', b.dataset.f === f); b.setAttribute('aria-selected', String(b.dataset.f === f)); });
-  document.querySelectorAll('#hgrid .host').forEach((el) => {
-    const st = el.dataset.st;
-    const show = f === 'all' || (f === 'unknown' ? st === 'unknown' : PROBLEM.includes(st));
-    el.classList.toggle('hide', !show);
+const PROBLEM = ['down', 'warn', 'deg'];
+const RANK = { down: 0, warn: 1, deg: 2, maint: 3, unknown: 4, ok: 5 };
+
+// A cause folds hosts that share one reason into one row (topology parent, rule, probe).
+function mkSite(name, meta, n, prefix, spec = []) {
+  const hosts = [];
+  spec.forEach((g) => {
+    (g.names || Array.from({ length: g.count }, (_, i) => `${prefix}-${String(hosts.length + i + 1).padStart(3, '0')}`))
+      .forEach((nm) => hosts.push({ n: nm, st: g.st, cause: g.cause, why: g.why, inc: g.inc }));
   });
-  document.querySelectorAll('#hgrid .hgroup').forEach((g) => g.classList.toggle('hide', !g.querySelector('.host:not(.hide)')));
+  for (let i = hosts.length; i < n; i++) hosts.push({ n: `${prefix}-${String(i + 1).padStart(3, '0')}`, st: 'ok' });
+  return { name, meta, hosts };
+}
+const C1071 = { id: '#1071', text: 'behind SW-ZH-CORE-02 · uplink Te1/0/48 flapping' };
+const SCALE = {
+  sme: [
+    mkSite('Zürich HQ', 'monitored directly', 37, 'zh', [
+      { names: ['SRV-APP-01', 'PRN-ZH-02'], st: 'down', cause: C1071 },
+      { names: ['SRV-DC-01', 'db-02', 'AP-ZH-OG1', 'AP-ZH-OG2', 'PRN-ZH-01'], st: 'deg', cause: C1071 },
+      { names: ['SRV-BACKUP-01'], st: 'warn', why: 'VeeamBackupSvc stopped', inc: '#1072' },
+      { names: ['web-01'], st: 'warn', why: 'Port 443 check failed' },
+      { names: ['NAS-ZH-01'], st: 'maint', why: 'NAS firmware update until 15:00' },
+    ]),
+    mkSite('Bern branch', 'via probe-bern-01', 9, 'be', [
+      { count: 9, st: 'unknown', cause: { id: '', text: 'probe-bern-01 silent for 11 min' } },
+    ]),
+    mkSite('Cloud', 'HTTP and TLS checks', 2, 'cloud', []),
+  ],
+  ent: [
+    mkSite('DC Lupfig', 'data centre · direct', 140, 'lup', [
+      { count: 3, st: 'down', cause: { id: '#2214', text: 'behind SW-DC-AGG-03 · LACP member down' } },
+      { count: 18, st: 'deg', cause: { id: '#2214', text: 'behind SW-DC-AGG-03 · LACP member down' } },
+      { names: ['lup-sql-07'], st: 'warn', why: 'Log volume 94 %', inc: '#2219' },
+      { names: ['lup-esx-12'], st: 'warn', why: 'Memory ballooning 3 h' },
+      { names: ['lup-k8s-w04'], st: 'warn', why: 'Disk pressure on /var' },
+      { names: ['lup-bkp-02'], st: 'warn', why: 'Backup job 6 h overdue' },
+      { count: 2, st: 'maint', why: 'Firmware window until 16:00' },
+    ]),
+    mkSite('Zürich HQ', 'monitored directly', 96, 'zh', [
+      { names: ['zh-prn-14'], st: 'down', why: 'No response since 13:52' },
+      { names: ['zh-rds-03'], st: 'warn', why: 'Service TermService restarting' },
+      { names: ['zh-web-02'], st: 'warn', why: 'TLS handshake slow (1.8 s)' },
+      { count: 6, st: 'maint', why: 'Patch window until 18:00' },
+    ]),
+    mkSite('Bern', 'via probe-bern-01', 44, 'be', [
+      { count: 44, st: 'unknown', cause: { id: '', text: 'probe-bern-01 silent for 11 min' } },
+    ]),
+    mkSite('Genève', 'via probe-ge-01', 58, 'ge', [
+      { names: ['ge-fs-01'], st: 'warn', why: 'Volume E: 92 %' },
+    ]),
+    mkSite('Basel', 'via probe-bs-01', 40, 'bs', [
+      { count: 3, st: 'deg', cause: { id: '#2217', text: 'WAN latency Basel ↔ DC 48 ms' } },
+    ]),
+    mkSite('Lugano', 'via probe-lu-01', 28, 'lu'),
+    mkSite('St. Gallen', 'via probe-sg-01', 26, 'sg'),
+    mkSite('Luzern', 'via probe-lz-01', 24, 'lz'),
+    mkSite('Cloud', 'HTTP and TLS checks', 24, 'cloud', [
+      { names: ['shop.example.ch'], st: 'warn', why: 'Certificate expires in 6 days' },
+    ]),
+  ],
+};
+let scale = 'sme';
+const showAll = { sites: false, probs: false };
+const openGroups = new Set();
+const SITE_CAP = 6, PROB_CAP = 6;
+const count = (hosts) => hosts.reduce((c, h) => { c[h.st] = (c[h.st] || 0) + 1; return c; }, {});
+
+function renderHosts() {
+  const sites = SCALE[scale];
+  const all = sites.flatMap((s) => s.hosts.map((h) => ({ ...h, site: s.name })));
+  const tot = count(all);
+  document.getElementById('hsub').textContent = `${all.length} monitored at ${sites.length} sites · simulated`;
+  document.getElementById('hleg').innerHTML = Object.keys(ST).filter((k) => tot[k])
+    .map((k) => `<span><i style="background:${ST[k].color}"></i>${ST[k].label} <b>${tot[k]}</b></span>`).join('');
+
+  // Sites, worst first: silent probes and down hosts lead.
+  const ranked = sites.map((s) => {
+    const c = count(s.hosts);
+    const bad = PROBLEM.reduce((n, k) => n + (c[k] || 0), 0);
+    const score = (c.unknown || 0) * 50 + (c.down || 0) * 100 + (c.warn || 0) * 10 + (c.deg || 0);
+    return { s, c, bad, score };
+  }).sort((a, b) => b.score - a.score);
+  const shown = showAll.sites ? ranked : ranked.slice(0, SITE_CAP);
+  document.getElementById('sites').innerHTML = shown.map(({ s, c, bad }) => {
+    const segs = Object.keys(ST).filter((k) => c[k]).map((k) =>
+      `<i style="flex:${c[k]};background:${ST[k].color}" data-tip="${s.name} · ${ST[k].label} ${c[k]}"></i>`).join('');
+    const sv = c.unknown === s.hosts.length
+      ? '<span>no data · probe silent</span>'
+      : `<b>${c.ok || 0}</b> / ${s.hosts.length} healthy${bad ? ` · <span class="bad">${bad} ${bad === 1 ? 'issue' : 'issues'}</span>` : ''}`;
+    return `<div class="site"><div class="sn"><b>${s.name}</b><small>${s.hosts.length} hosts · ${s.meta}</small></div><div class="sbar">${segs}</div><div class="sv">${sv}</div></div>`;
+  }).join('') + (ranked.length > SITE_CAP
+    ? `<button class="link more" data-more="sites">${showAll.sites ? 'Show fewer sites' : `Show all ${ranked.length} sites`}</button>` : '');
+
+  // Problems: fold by cause, then single hosts; worst first; capped.
+  const groups = new Map();
+  const singles = [];
+  all.filter((h) => PROBLEM.includes(h.st) || (h.st === 'unknown' && h.cause)).forEach((h) => {
+    if (h.cause) {
+      const key = h.cause.text;
+      if (!groups.has(key)) groups.set(key, { cause: h.cause, site: h.site, hosts: [] });
+      groups.get(key).hosts.push(h);
+    } else singles.push(h);
+  });
+  const rows = [
+    ...[...groups.values()].map((g) => ({ g, r: Math.min(...g.hosts.map((h) => RANK[h.st])), size: g.hosts.length })),
+    ...singles.map((h) => ({ h, r: RANK[h.st] - (h.inc ? 0.5 : 0), size: 1 })),
+  ].sort((a, b) => a.r - b.r || b.size - a.size);
+  const affected = rows.reduce((n, x) => n + x.size, 0);
+  document.getElementById('pcount').textContent = `${affected} hosts in ${rows.length} ${rows.length === 1 ? 'item' : 'items'}`;
+  const vis = showAll.probs ? rows : rows.slice(0, PROB_CAP);
+  document.getElementById('plist').innerHTML = vis.map((x, i) => {
+    if (x.g) {
+      const c = count(x.g.hosts);
+      const worst = Object.keys(ST).find((k) => c[k]);
+      const mix = Object.keys(ST).filter((k) => c[k]).map((k) => `${c[k]} ${ST[k].label.toLowerCase()}`).join(', ');
+      const key = x.g.cause.text;
+      const isOpen = openGroups.has(key);
+      return `<button class="prow" data-grp="${key}" aria-expanded="${isOpen}"><span class="pc" style="background:${ST[worst].color};color:${worst === 'unknown' ? 'var(--text)' : '#fff'}">${x.size}</span><span class="pr"><b style="color:var(--text);font-weight:500">${x.size} hosts ${x.g.cause.text}</b> · ${mix}</span><span class="ps">${x.g.site}</span>${x.g.cause.id ? `<span class="inc">${x.g.cause.id}</span>` : ''}${ic('chevron').replace('class="i"', 'class="i chev"')}</button>
+        <div class="members${isOpen ? ' open' : ''}">${x.g.hosts.slice(0, 40).map((h) => `<span><i style="background:${ST[h.st].color}"></i>${h.n}</span>`).join('')}${x.g.hosts.length > 40 ? `<span>+${x.g.hosts.length - 40} more</span>` : ''}</div>`;
+    }
+    const h = x.h;
+    return `<button class="prow" data-host="${h.n}"><span class="pd" style="background:${ST[h.st].color}"></span><span class="pn">${h.n}</span><span class="pr">${h.why || ST[h.st].label}</span><span class="ps">${h.site}</span>${h.inc ? `<span class="inc${h.st === 'warn' ? ' w' : ''}">${h.inc}</span>` : ''}</button>`;
+  }).join('') + (rows.length > PROB_CAP
+    ? `<button class="link more" data-more="probs">${showAll.probs ? 'Show fewer' : `Show all ${rows.length} items`}</button>` : '');
 }
 renderHosts();
-// On a phone 48 tiles are a long scroll, so start with the problems.
-if (matchMedia('(max-width: 760px)').matches) filterHosts('problem');
-document.getElementById('hfilter').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) filterHosts(b.dataset.f); });
-document.getElementById('hgrid').addEventListener('click', (e) => {
-  const b = e.target.closest('.host'); if (!b) return;
-  const h = ALL_HOSTS.find((x) => x.n === b.dataset.n);
-  toast(`${h.n} · ${ST[h.st].label}${h.info ? ' · ' + h.info : ''}`);
+
+const hostCard = document.getElementById('hostCard');
+const htip = document.getElementById('htip');
+hostCard.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[data-tip]');
+  if (!el) { htip.style.opacity = 0; return; }
+  const r = el.getBoundingClientRect(), c = hostCard.getBoundingClientRect();
+  htip.textContent = el.dataset.tip;
+  htip.style.left = (r.left - c.left + r.width / 2) + 'px';
+  htip.style.top = (r.top - c.top - 2) + 'px';
+  htip.style.opacity = 1;
+});
+hostCard.addEventListener('mouseleave', () => { htip.style.opacity = 0; });
+hostCard.addEventListener('click', (e) => {
+  const sc = e.target.closest('#hscale button');
+  if (sc) {
+    scale = sc.dataset.s; showAll.sites = showAll.probs = false; openGroups.clear();
+    document.querySelectorAll('#hscale button').forEach((b) => { b.classList.toggle('on', b === sc); b.setAttribute('aria-selected', String(b === sc)); });
+    renderHosts(); return;
+  }
+  const more = e.target.closest('[data-more]');
+  if (more) { showAll[more.dataset.more] = !showAll[more.dataset.more]; renderHosts(); return; }
+  const grp = e.target.closest('[data-grp]');
+  if (grp) { const k = grp.dataset.grp; openGroups.has(k) ? openGroups.delete(k) : openGroups.add(k); renderHosts(); return; }
+  const host = e.target.closest('[data-host]');
+  if (host) toast(`Opens host ${host.dataset.host}`);
 });
 
 /* ---------- topology canvas ---------- */

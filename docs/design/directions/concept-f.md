@@ -20,7 +20,7 @@ simulierte Daten aus [`SCENARIO.md`](../prototypes/SCENARIO.md)). Nur die Übers
 | KPI | einzelne Karten | Kachelreihe in der Chart-Karte; die aktive Kachel bestimmt den Chart |
 | Charts | Linien/Flächen | Pill-Balken mit Punkt-Markern, Segment-Gauges für Füllstände |
 | Topologie | Baum | Canvas mit runden Knoten, Leitungen in Statusfarbe |
-| Hosts | eigene Seite | Host-Grid auf der Übersicht: alle 48 Hosts als Pills nach Standort, schlimmste zuerst |
+| Hosts | eigene Seite | Host-Karte auf der Übersicht: pro Standort ein Anteilsbalken, darunter nur, was Aufmerksamkeit braucht |
 
 ## Farbrollen
 
@@ -40,8 +40,14 @@ simulierte Daten aus [`SCENARIO.md`](../prototypes/SCENARIO.md)). Nur die Übers
 - KPI-Kacheln schalten den Chart um (Incidents, Syslog, Latenz), die Pill-Tabs den Zeitraum.
 - Hover auf einen Balken zeigt den Wert.
 - „Needs you“: Klick erledigt den Eintrag, der Zähler sinkt.
-- Topologie: Klick auf einen Knoten zeigt Details darunter.
-- Host-Grid: Statusleiste mit Legende, Filter „All / Problems / No data“, Klick auf einen Host zeigt den Zustand. Pro Standort sortiert: Down, Warnung, offener Incident, Degraded, Wartung, keine Daten, gesund. Hosts hinter der stillen Bern-Probe sind gestrichelt und schraffiert, nie grün. Auf dem Handy startet der Filter auf „Problems“.
+- Topologie: Klick auf einen Knoten zeigt D- Host-Karte, gebaut für 48 bis 500+ Hosts (Umschalter „48 hosts / 480 hosts“, beides simuliert):
+  - Pro Standort eine Zeile mit Anteilsbalken und „x / y healthy · n issues“, keine einzelnen Hosts.
+    Sortiert nach Schwere (stille Probe und Down zuerst), höchstens 6 Standorte, Rest hinter „Show all“.
+  - „Needs a look“ fasst Hosts mit gemeinsamer Ursache zu einer Zeile zusammen
+    („21 hosts behind SW-DC-AGG-03 · 3 down, 18 degraded · #2214“), aufklappbar auf die Host-Namen.
+    Einzelne Probleme danach, höchstens 6 Einträge, Rest hinter „Show all“.
+  - Gesunde Hosts erscheinen nie einzeln. Eine Zeile pro Host gehört auf die Hosts-Seite, nicht auf die Übersicht.
+ auf „Problems“.
 - Leiste einklappbar, Hell/Dunkel umschaltbar (beides in `localStorage`, abgesichert).
 - Unter 760 px: Leiste wird zur schwebenden Tab-Bar unten.
 
