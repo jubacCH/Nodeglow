@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from services import bandwidth as bw
 from services import clickhouse_client as ch
 
@@ -109,7 +111,7 @@ async def test_the_agent_format_is_read():
                                    {"name": "docker0", "rx_bytes": 500, "tx_bytes": 100}]}
     rows = await _written(bw.extract_agent_bandwidth, 7, body, source_name="web")
     assert set(rows) == {"eth0", "docker0", "total"}
-    assert rows["total"]["rx_bytes"] == 3000 and rows["total"]["source_type"] == "agent"
+    assert rows["total"]["rx_bytes"] == 2500 and rows["total"]["source_type"] == "agent"
 
     legacy = {"network": {"rx_bytes": 9, "tx_bytes": 1, "interfaces": [{"name": "eth0", "rx_bytes": 9, "tx_bytes": 1}]}}
     assert set(await _written(bw.extract_agent_bandwidth, 7, legacy)) == {"eth0", "total"}
@@ -157,3 +159,44 @@ async def test_total_history_query_is_tenant_scoped_and_bucketed():
     for basis in bw.TOTAL_BASES:
         assert f"AS {basis}_rx" in captured["sql"] and f"AS {basis}_n" in captured["sql"]
     assert captured["params"]["b"] == 900 and captured["params"]["h"] == 24
+
+
+async def test_an_agent_total_counts_the_network_cards_only():
+    """The agent adds up every interface but loopback. On a Docker host that
+    is the card, the bridge and each container's end of it: one byte three
+    times. Seen on a media server: 1.5 Mbit/s total with 0.04 on eth0."""
+    body = {"rx_bytes": 9000, "tx_bytes": 900, "network_interfaces": [
+        {"name": "lo", "rx_bytes": 50, "tx_bytes": 50},
+        {"name": "eth0", "rx_bytes": 1000, "tx_bytes": 100},
+        {"name": "eth1", "rx_bytes": 200, "tx_bytes": 20},
+        {"name": "docker0", "rx_bytes": 0, "tx_bytes": 0},
+        {"name": "br-a46a998b0f34", "rx_bytes": 3900, "tx_bytes": 390},
+        {"name": "veth5d78eef", "rx_bytes": 3900, "tx_bytes": 390},
+    ]}
+    rows = await _written(bw.extract_agent_bandwidth, 7, body, source_name="media")
+    assert (rows["total"]["rx_bytes"], rows["total"]["tx_bytes"]) == (1200, 120)
+    # Every interface is still listed.
+    assert set(rows) == {"lo", "eth0", "eth1", "docker0", "br-a46a998b0f34", "veth5d78eef", "total"}
+
+
+@pytest.mark.parametrize("name,own", [
+    ("eth0", True), ("ens18", True), ("enp3s0", True), ("eno1", True), ("wlan0", True),
+    ("Ethernet", True), ("Ethernet 2", True), ("Wi-Fi", True), ("WLAN", True), ("en0", True),
+    ("lo", False), ("docker0", False), ("br-5f380e66f205", False), ("veth0d56c47", False),
+    ("vmbr0", False), ("bond0", False), ("tap100i0", False), ("fwbr101i0", False),
+    ("wg0", False), ("tailscale0", False), ("eth0.30", False), ("virbr0", False),
+    ("vEthernet (WSL)", False), ("Loopback Pseudo-Interface 1", False),
+    ("Ethernet-WFP Native MAC Layer LightWeight Filter-0000", False),
+    ("Ethernet-QoS Packet Scheduler-0000", False), ("total", False), ("", False),
+])
+def test_which_interfaces_are_a_hosts_own_cards(name, own):
+    assert bw.carries_own_traffic(name) is own
+
+
+async def test_an_agent_without_a_recognisable_card_keeps_its_own_total():
+    body = {"rx_bytes": 700, "tx_bytes": 70, "network_interfaces": [
+        {"name": "lo", "rx_bytes": 50, "tx_bytes": 50},
+        {"name": "wg0", "rx_bytes": 700, "tx_bytes": 70},
+    ]}
+    rows = await _written(bw.extract_agent_bandwidth, 7, body)
+    assert (rows["total"]["rx_bytes"], rows["total"]["tx_bytes"]) == (700, 70)
