@@ -33,6 +33,10 @@ class Condition:
     severity: str
     summary: str
     host_ids: list[int] = field(default_factory=list)
+    # Keys of narrower incidents this one stands for. An open incident under
+    # one of them is closed without a "resolved" notification: its problem is
+    # not over, it is reported here from now on.
+    absorbs: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -48,7 +52,8 @@ async def sync_rule(db, rule: str, wanted: dict[str, Condition], *,
     """Make the open incidents of ``rule`` match ``wanted`` (key -> condition).
 
     Returns the notifications to send after the caller's commit: one for each
-    incident opened, escalated to a higher severity, or resolved.
+    incident opened, escalated to a higher severity, or resolved. An incident
+    that a wanted condition absorbs is closed without one.
     """
     from services.correlation import _find_or_create_incident
 
@@ -79,11 +84,16 @@ async def sync_rule(db, rule: str, wanted: dict[str, Condition], *,
             notes.append(Note(f"🔴 Now {cond.severity}: {cond.title}", cond.summary,
                               cond.severity, incident.id))
 
+    absorbed_by = {key: cond for cond in wanted.values() for key in cond.absorbs}
     for key, incident in by_key.items():
         if key in wanted:
             continue
         incident.status = "resolved"
         incident.resolved_at = datetime.utcnow()
+        if key in absorbed_by:
+            db.add(IncidentEvent(incident_id=incident.id, event_type="resolved",
+                                 summary=f"Continued as: {absorbed_by[key].title}"))
+            continue
         db.add(IncidentEvent(incident_id=incident.id, event_type="resolved",
                              summary=resolved_summary))
         notes.append(Note(f"✅ Resolved: {incident.title}", resolved_summary, "info", incident.id))

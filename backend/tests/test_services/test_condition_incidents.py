@@ -60,3 +60,29 @@ async def test_auto_resolve_leaves_these_incidents_to_their_job(db):
         await db.commit()
     (incident,) = await _incidents(db, "backup")
     assert incident.status == "open"
+
+
+async def test_incidents_folded_into_a_group_close_without_a_notification(db):
+    """Three overdue jobs become one incident: the two that were open are not
+    reported as resolved, because nothing was resolved."""
+    from services import backup_monitor as bk
+
+    def job(i):
+        return {"id": i, "name": f"vzdump-{i}", "target_name": f"vm-{i}", "source_type": "proxmox",
+                "source_config_id": 1, "hours_since_last": 80.0, "last_error": None,
+                "status_reason": "Last backup 3 days ago"}
+
+    async def sync(jobs):
+        notes = await cond.sync_rule(db, "backup", bk.backup_conditions({"failed": [], "overdue": jobs}),
+                                     event_type="backup_issue", resolved_summary="ran again")
+        await db.commit()
+        return [n.title for n in notes]
+
+    assert len(await sync([job(1), job(2)])) == 2
+    assert await sync([job(1), job(2), job(3)]) == ["🔴 Incident: 3 backups overdue (proxmox)"]
+    incidents = await _incidents(db, "backup")
+    assert sorted(i.status for i in incidents) == ["open", "resolved", "resolved"]
+
+    # The group itself does announce its end.
+    assert await sync([]) == ["✅ Resolved: 3 backups overdue (proxmox)"]
+

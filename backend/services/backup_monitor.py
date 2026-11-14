@@ -545,7 +545,8 @@ def backup_conditions(groups: dict[str, list[dict]]) -> dict:
                 if reasons:
                     summary += f" Reported: {'; '.join(reasons[:2])[:200]}."
             wanted[f"bk-{kind}:{source}:{source_id}"[:64]] = Condition(
-                f"{len(jobs)} backups {word} ({source})", severity, summary)
+                f"{len(jobs)} backups {word} ({source})", severity, summary,
+                absorbs=frozenset(f"bk:{j['id']}" for j in jobs))
     return wanted
 
 
