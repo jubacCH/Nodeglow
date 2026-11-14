@@ -4,10 +4,13 @@ import { useState, type ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, Plug, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Checkbox, Field, Input, Switch } from '@/components/ui/Field';
+import { useFeatures } from '@/hooks/queries/useFeatures';
 import { api, post } from '@/lib/api';
+import { useIsAdmin } from '@/stores/auth';
 import { useToastStore } from '@/stores/toast';
 import { Notice, SaveBar, SettingsSection, useSaveStatus, type SectionForm } from './formKit';
 import { buildLdapFormData, type LdapForm, type SettingsData } from './settingsForm';
+import { SsoSection } from './SsoSection';
 
 type TestResult = { ok: boolean; error?: string; users_found?: number };
 
@@ -37,6 +40,10 @@ export function AuthTab({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const { data: features } = useFeatures();
+  const isAdmin = useIsAdmin();
+  // Single sign-on per tenant is ee: its routes exist only where it is installed.
+  const ssoInstalled = features?.installed?.sso === true;
 
   async function handleSave() {
     save.start();
@@ -72,6 +79,12 @@ export function AuthTab({
 
   return (
     <div className="space-y-4">
+      {ssoInstalled && isAdmin && <SsoSection />}
+      {features && !ssoInstalled && (
+        <SettingsSection id="sso" title="Single sign-on (OpenID Connect)">
+          <p className="text-ui text-fg-2">Single sign-on with OpenID Connect per tenant is part of Nodeglow Enterprise.</p>
+        </SettingsSection>
+      )}
       <SettingsSection
         id="ldap"
         title="LDAP / Active Directory"

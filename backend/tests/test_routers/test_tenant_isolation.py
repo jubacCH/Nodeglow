@@ -187,6 +187,21 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
                                 granted_by=b, granted_by_name=c("granted_by"))],
         "user_preferences": [dict(user_id=b, dashboard_layout=json.dumps(
             [{"i": c("user_preferences"), "x": 0, "y": 0, "w": 4, "h": 4}]))],
+        # Single sign-on (052): a provider, a linked identity of the tenant's
+        # user, a started flow.
+        "identity_providers": [dict(id=b, name=c("identity_providers"), login_key=f"seed-idp-{tid}",
+                                    issuer=f"https://idp{tid}.example.test/{c('issuer')}",
+                                    client_id=c("client_id"),
+                                    client_secret=_secret(tid, c("client_secret")),
+                                    allowed_domains=json.dumps([f"{tag.lower()}.example.test"]),
+                                    role_rules=json.dumps([{"group": c("group"), "role": "admin"}]),
+                                    discovery_json=json.dumps({"issuer": c("discovery")}))],
+        "user_identities": [dict(id=b, identity_provider_id=b, user_id=b, external_subject=c("sub"),
+                                 email=f"{tag.lower()}@example.test", display_name=c("user_identities"),
+                                 created_via="invite")],
+        "sso_flows": [dict(id=b, state_hash=f"seed-state-{tid}", identity_provider_id=b, purpose="test",
+                           browser_hash=f"seed-browser-{tid}", nonce=c("nonce"),
+                           code_verifier=c("sso_flows"), next_path=f"/{c('next')}")],
     }
 
 
@@ -262,6 +277,7 @@ REF_TARGETS = {
     "job_id": "backup_jobs", "schedule_id": "subnet_scan_schedules",
     "incident_id": "incidents", "entity_id": "integration_configs",
     "collected_by": "agents",
+    "identity_provider_id": "identity_providers",
 }
 
 
@@ -317,6 +333,7 @@ PARAM_TABLE = {
     "user_id": "users",
     "template_hash": "log_templates",
     "grant_id": "support_grants",
+    "provider_id": "identity_providers",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",
 }

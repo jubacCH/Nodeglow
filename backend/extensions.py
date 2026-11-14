@@ -13,6 +13,8 @@ to it; the core reads it at the few places where it can be extended:
 * the request middleware and the per-tenant jobs ask the **tenancy backend**
   which tenant a request belongs to and which tenants exist — without one
   registered, ``services.tenancy.SingleTenancy`` (always tenant 1);
+* a backup restore calls the **restore hooks** after the rows are back, so a
+  plugin can bring restored rows in line with what this version allows;
 * the retention settings (form and nightly cleanup) ask the **retention
   policy** for a tenant's cap on top of the installation's ``<key>_max``
   (ee: the tenant's plan tier) — without one only the installation caps;
@@ -53,6 +55,8 @@ DEFAULT_FEATURES: dict[str, bool] = {
     "ai_daily_summary": False,
     # More than one tenant: lifecycle, plans, tenant switcher, support access.
     "multi_tenancy": False,
+    # Single sign-on (OIDC) per tenant.
+    "sso": False,
 }
 
 
@@ -124,6 +128,9 @@ IncidentResolvedHook = Callable[[int], Awaitable[None]]
 # (days), or None for no cap beyond the installation's.
 RetentionPolicy = Callable[[Any, int, str], Awaitable["int | None"]]
 SchedulerHook = Callable[[Any], Awaitable[None]]
+# ``await hook(db)`` after a backup restore (the request's session; the
+# restore commits afterwards).
+RestoreHook = Callable[[Any], Awaitable[None]]
 # ``await provider()`` → ``{"license": {...summary...}, "active": {feature: bool}}``
 LicenseProvider = Callable[[], Awaitable[dict]]
 
@@ -136,6 +143,7 @@ class Registry:
     routers: list[Any] = field(default_factory=list)
     scheduler_hooks: list[SchedulerHook] = field(default_factory=list)
     incident_resolved_hooks: list[IncidentResolvedHook] = field(default_factory=list)
+    restore_hooks: list[RestoreHook] = field(default_factory=list)
     scheduler_coordinator: SchedulerCoordinator | None = None
     license_provider: LicenseProvider | None = None
     tenancy_backend: TenancyBackend | None = None
@@ -156,6 +164,10 @@ class Registry:
     def on_incident_resolved(self, hook: IncidentResolvedHook) -> None:
         """``hook(incident_id)`` runs as a background task after a resolve commits."""
         self.incident_resolved_hooks.append(hook)
+
+    def after_restore(self, hook: RestoreHook) -> None:
+        """``await hook(db)`` runs at the end of a backup restore."""
+        self.restore_hooks.append(hook)
 
     def set_scheduler_coordinator(self, coordinator: SchedulerCoordinator) -> None:
         if self.scheduler_coordinator is not None:

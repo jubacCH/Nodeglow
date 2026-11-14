@@ -23,6 +23,10 @@ EXPORT_TABLES: list[str] = [
     "tenant_keys",
     "tenant_settings",
     "user_preferences",
+    # Single sign-on (ee): the client secret stays under the tenant's data
+    # key above. Flow state (sso_flows) and sessions are not exported.
+    "identity_providers",
+    "user_identities",
     "ping_hosts",
     "ping_results",
     "integration_configs",
@@ -246,6 +250,15 @@ async def import_backup(db: AsyncSession, data: dict) -> dict:
         with tenancy.system_scope(f"backup: restored secrets of tenant {tid} to its key"):
             moved_secrets += (await tenant_keys.reencrypt_legacy(db, tid)).converted
     if moved_secrets:
+        await db.commit()
+
+    # Plugins bring restored rows in line with what this version allows
+    # (ee: identity providers stay off while sign-in is not released).
+    import extensions
+
+    if extensions.registry.restore_hooks:
+        for hook in extensions.registry.restore_hooks:
+            await hook(db)
         await db.commit()
 
     warnings = [key_warning] if key_warning else []

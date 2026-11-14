@@ -12,7 +12,7 @@
 export type Edition = 'community' | 'enterprise';
 
 export type FeatureName =
-  | 'ha_scheduler' | 'ai_assistant' | 'ai_postmortem' | 'ai_daily_summary' | 'multi_tenancy';
+  | 'ha_scheduler' | 'ai_assistant' | 'ai_postmortem' | 'ai_daily_summary' | 'multi_tenancy' | 'sso';
 
 export type LicenseState = 'missing' | 'invalid' | 'valid' | 'grace' | 'expired' | 'error';
 

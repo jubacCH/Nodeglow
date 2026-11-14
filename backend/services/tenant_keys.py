@@ -2,7 +2,8 @@
 
 Every tenant has its own **data-encryption key** (DEK): 32 random bytes,
 used as a Fernet key for that tenant's secrets — integration configs
-(``integration_configs.config_json``), credentials (``credentials.data_json``)
+(``integration_configs.config_json``), credentials (``credentials.data_json``),
+the client secrets of identity providers (``identity_providers.client_secret``)
 and the secret tenant settings (``tenant_settings``: rows flagged
 ``encrypted`` and the keys the settings registry declares ``secret``). The
 DEK is stored only **wrapped** (encrypted) in ``tenant_keys`` by the
@@ -471,6 +472,7 @@ async def _secret_rows(db, tenant_id: int):
     from sqlalchemy import or_, select
 
     from models.credential import Credential
+    from models.identity import IdentityProvider
     from models.integration import IntegrationConfig
     from models.tenant import TenantSetting
 
@@ -491,6 +493,11 @@ async def _secret_rows(db, tenant_id: int):
         ).execution_options(populate_existing=True)
     )).scalars():
         out.append((row, "value", "tenant_settings.value"))
+    for idp in (await db.execute(
+        select(IdentityProvider).where(IdentityProvider.tenant_id == tenant_id)
+        .execution_options(populate_existing=True)
+    )).scalars():
+        out.append((idp, "client_secret", "identity_providers.client_secret"))
     return out
 
 
@@ -701,6 +708,7 @@ async def scan(db) -> dict:
     from sqlalchemy import or_, select
 
     from models.credential import Credential
+    from models.identity import IdentityProvider
     from models.integration import IntegrationConfig
     from models.tenant import TenantKey, TenantSetting
     from services import tenancy
@@ -723,6 +731,8 @@ async def scan(db) -> dict:
              select(TenantSetting.tenant_id, TenantSetting.value).where(
                  or_(TenantSetting.encrypted.is_(True),
                      TenantSetting.key.in_(sorted(_secret_setting_keys()))))),
+            ("identity_providers.client_secret",
+             select(IdentityProvider.tenant_id, IdentityProvider.client_secret)),
         ]
         for label, stmt in sources:
             counts: dict[str, int] = {}

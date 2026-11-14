@@ -20,7 +20,8 @@ so an interrupted purge resumes from the top on the next run
    nothing left to resume from.
 3. **PostgreSQL** — every tenant-owned table, children before parents
    (``Base.metadata.sorted_tables`` reversed; self references cleared
-   first), in batches of :data:`BATCH` rows with a commit each, in
+   first; the sessions opened through the tenant's identity providers
+   before that), in batches of :data:`BATCH` rows with a commit each, in
    ``system_scope`` (as ``nodeglow_app`` under RLS: ``nodeglow.system =
    on``; plain ``DELETE``, no TRUNCATE). The exception is the audit log:
    the app role may not delete from it (``pg_rls.APPEND_ONLY_TABLES``), so
@@ -186,6 +187,14 @@ async def purge_postgres(tenant_id: int, state: dict) -> dict[str, int]:
     counts: dict[str, int] = dict(state.get("postgres") or {})
     order = purge_order()
     async with _session_factory()() as db:
+        with system_scope(f"purge tenant {tenant_id}: sessions opened through its providers"):
+            # Single sign-on sessions end before their providers go, whatever
+            # the database does with the foreign key (sessions are global).
+            from models.identity import IdentityProvider
+
+            await db.execute(delete(Session).where(Session.identity_provider_id.in_(
+                select(IdentityProvider.id).where(IdentityProvider.tenant_id == tenant_id))))
+            await db.commit()
         with system_scope(f"purge tenant {tenant_id}: clear self references"):
             for table in order:
                 for col in _self_references(table):

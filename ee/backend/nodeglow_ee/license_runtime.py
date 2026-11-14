@@ -68,6 +68,7 @@ FEATURE_LABELS = {
     "ai_postmortem": "AI postmortems",
     "ai_daily_summary": "the AI daily summary",
     "multi_tenancy": "multi-tenancy",
+    "sso": "single sign-on",
 }
 
 

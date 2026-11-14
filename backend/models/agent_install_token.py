@@ -34,7 +34,7 @@ class AgentInstallToken(TenantScoped, Base):
     used_count = Column(Integer, default=0, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    created_by = Column(String(64), nullable=True)
+    created_by = Column(String(255), nullable=True)
     # The site an agent enrolled with this token lands in.
     site_id = Column(Integer, nullable=True)
 

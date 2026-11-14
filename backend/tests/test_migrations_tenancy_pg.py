@@ -32,6 +32,10 @@ Covered:
   at rev 1 and keep collecting identically; the collector/probe constraints,
   the composite probe FK and the "needs a probe" state after a probe is
   deleted; the downgrade refuses while a probe collects a config.
+* 052 (identity providers): the three tables with the isolation policy and
+  RLS, the composite provider references, the installation-wide sign-in
+  key, sessions ending with their provider, the widened name columns; the
+  downgrade refuses while a long username exists and restores 051's shape.
 """
 from __future__ import annotations
 
@@ -846,6 +850,9 @@ ROUTER_TESTS_ON_PG = [
     # Phase 9 hardening: shared identities, installation AI keys, support
     # access without IAM, default tenant plan, fail-closed retention cap.
     "../ee/backend/tests/test_tenancy_hardening.py",
+    # Single sign-on administration (052): providers of another tenant are
+    # invisible under RLS too, secrets under the tenant key, delete cascade.
+    "../ee/backend/tests/test_sso_admin.py",
     # Phase 10: probe syslog relay (a probe of A never writes into B, site
     # scoping) with the composite site FKs and RLS of a real database.
     "tests/test_routers/test_probe_syslog_relay_api.py",
@@ -1007,3 +1014,86 @@ def test_app_role_cannot_change_the_audit_log(pg_db):
     q(pg_db, "DELETE FROM audit_logs WHERE action = 'test.entry'")
     assert q(pg_db, "SELECT count(*) FROM audit_logs WHERE action = 'test.entry'")[0][0] == 0
 
+
+
+WIDENED_052 = (("users", "username"), ("audit_logs", "username"), ("api_keys", "created_by"),
+               ("agent_install_tokens", "created_by"), ("support_grants", "granted_by_name"),
+               ("support_grants", "revoked_by_name"), ("incidents", "acknowledged_by"),
+               ("incidents", "feedback_by"))
+
+
+def _widths(dsn: str) -> dict[tuple[str, str], int]:
+    rows = q(dsn, "SELECT table_name, column_name, character_maximum_length "
+                  "FROM information_schema.columns WHERE table_schema = 'public'")
+    return {(r[0], r[1]): r[2] for r in rows if (r[0], r[1]) in WIDENED_052}
+
+
+def test_052_identity_providers_up_and_down(pg_db):
+    import asyncpg
+
+    env = _rls_env(pg_db)
+    _alembic(pg_db, "upgrade", "051", **env)
+    q(pg_db, "INSERT INTO tenants (id, provider_id, name, slug, status, created_at) "
+             "VALUES (2, 1, 'B', 'b', 'active', now())")
+    q(pg_db, "INSERT INTO users (id, username, password_hash, role, auth_source, created_at, "
+             "is_operator) VALUES (1, 'admin', 'x', 'admin', 'local', now(), false), "
+             "(3, 'legacy#3', 'x', 'readonly', 'local', now(), false)")
+    proc = _alembic(pg_db, "upgrade", "052", **env)
+    # A local name of the shape now reserved for single sign-on is reported.
+    assert "legacy#3" in proc.stdout + proc.stderr
+    q(pg_db, "DELETE FROM users WHERE id = 3")
+
+    tables = ("identity_providers", "user_identities", "sso_flows")
+    assert set(tables) <= _policies(pg_db)
+    assert all(_rls_flags(pg_db)[t] == (True, True) for t in tables)
+    assert set(_widths(pg_db).values()) == {255}
+
+    provider = ("INSERT INTO identity_providers (id, tenant_id, type, name, login_key, enabled, "
+                "issuer, client_id, scopes, groups_claim, jit_enabled, allowed_domains, "
+                "required_groups, role_rules, default_role, issuer_is_own_organisation, "
+                "session_hours, sso_required, created_at, updated_at) VALUES ($1, $2, 'oidc', 'p', "
+                "$3, false, 'https://idp.example', 'c', 'openid', 'groups', true, '[]', '[]', '[]', "
+                "'readonly', false, 12, false, now(), now())")
+    q(pg_db, provider, 11, 1, "key-a")
+    q(pg_db, provider, 21, 2, "key-b")
+    # The sign-in key is unique across the installation.
+    with pytest.raises(asyncpg.UniqueViolationError):
+        q(pg_db, provider, 22, 2, "key-a")
+    # As the app: each tenant sees its own provider only, no tenant nothing.
+    assert q_app(pg_db, "SELECT count(*) FROM identity_providers", tenant=1)[0][0] == 1
+    assert q_app(pg_db, "SELECT id FROM identity_providers", tenant=2)[0][0] == 21
+    assert q_app(pg_db, "SELECT count(*) FROM identity_providers")[0][0] == 0
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        q_app(pg_db, provider.replace("$1", "23").replace("$2", "2").replace("$3", "'key-x'"),
+              tenant=1)
+    # An identity of tenant 1 cannot point at tenant 2's provider.
+    identity = ("INSERT INTO user_identities (tenant_id, identity_provider_id, user_id, "
+                "external_subject, created_via, created_at) VALUES ($1, $2, 1, 'sub', 'link', now())")
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        q(pg_db, identity, 1, 21)
+    q(pg_db, identity, 1, 11)
+    # A session ends with the provider it was opened through.
+    q(pg_db, "INSERT INTO sessions (token, user_id, expires_at, identity_provider_id) "
+             "VALUES ('t-sso', 1, now() + interval '1 hour', 11)")
+    q(pg_db, "DELETE FROM identity_providers WHERE id = 11")
+    assert not q(pg_db, "SELECT 1 FROM sessions WHERE token = 't-sso'")
+    assert not q(pg_db, "SELECT 1 FROM user_identities")
+
+    # Down: refused while a username does not fit the old width.
+    q(pg_db, "INSERT INTO users (id, username, password_hash, role, auth_source, created_at, "
+             "is_operator) VALUES (2, $1, 'x', 'readonly', 'oidc', now(), false)",
+      "a-rather-long-address-of-somebody@a-long-company-domain.example.ch#21")
+    with pytest.raises(AssertionError, match="052 downgrade refused"):
+        _alembic(pg_db, "downgrade", "051", **env)
+    q(pg_db, "DELETE FROM users WHERE id = 2")
+    q(pg_db, "INSERT INTO audit_logs (timestamp, action, username) VALUES (now(), 'x', $1)", "u" * 100)
+    _alembic(pg_db, "downgrade", "051", **env)
+    assert not set(tables) & {r[0] for r in q(
+        pg_db, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")}
+    assert "identity_provider_id" not in {r[0] for r in q(
+        pg_db, "SELECT column_name FROM information_schema.columns WHERE table_name = 'sessions'")}
+    widths = _widths(pg_db)
+    assert widths[("users", "username")] == 64 and widths[("incidents", "feedback_by")] == 128
+    assert q(pg_db, "SELECT length(username) FROM audit_logs WHERE action = 'x'")[0][0] == 64
+    _alembic(pg_db, "upgrade", "head", **env)
+    _alembic(pg_db, "check", **env)
