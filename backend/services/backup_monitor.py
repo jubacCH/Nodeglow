@@ -501,6 +501,54 @@ async def get_compliance_groups(db: AsyncSession) -> dict[str, list[dict]]:
     return {"failed": failed, "overdue": overdue, "never_run": never_run}
 
 
+# From this many jobs of one source with the same problem on, they are one
+# incident. A backup server that stopped, or a host that fell out of the
+# schedule, makes dozens of jobs overdue at once: that is one thing to tell
+# somebody about, not one notification per virtual machine.
+GROUP_FROM = 3
+
+
+def backup_conditions(groups: dict[str, list[dict]]) -> dict:
+    """The incidents the compliance findings call for: dedup key -> condition.
+
+    One incident per job while a source has only a few jobs in trouble, one
+    per source and kind of problem (failed, overdue) from ``GROUP_FROM`` on.
+    The grouped key names the source, not the jobs, so the incident stays the
+    same one while jobs join or recover.
+    """
+    from services.condition_incidents import Condition
+
+    wanted: dict[str, Condition] = {}
+    for kind, severity, word in (("failed", "critical", "failed"),
+                                 ("overdue", "warning", "overdue")):
+        by_source: dict[tuple, list[dict]] = {}
+        for job in groups.get(kind, []):
+            by_source.setdefault((job.get("source_type"), job.get("source_config_id")), []).append(job)
+        for (source_type, source_id), jobs in by_source.items():
+            if len(jobs) < GROUP_FROM:
+                for job in jobs:
+                    wanted.setdefault(f"bk:{job['id']}", Condition(
+                        f"Backup {word}: {job['target_name']}", severity,
+                        f"Backup {job['name']} of {job['target_name']}: {job['status_reason']}"))
+                continue
+            names = sorted(str(j["target_name"]) for j in jobs)
+            shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+            source = str(source_type or "backup source")
+            summary = f"{len(jobs)} backups of {source} are {word}: {shown}."
+            if kind == "overdue":
+                ages = [j["hours_since_last"] for j in jobs if j.get("hours_since_last") is not None]
+                if ages:
+                    summary += f" The oldest last ran {_hours(max(ages))} ago."
+                summary += " Check that the backup job itself still runs."
+            else:
+                reasons = sorted({str(j.get("last_error")) for j in jobs if j.get("last_error")})
+                if reasons:
+                    summary += f" Reported: {'; '.join(reasons[:2])[:200]}."
+            wanted[f"bk-{kind}:{source}:{source_id}"[:64]] = Condition(
+                f"{len(jobs)} backups {word} ({source})", severity, summary)
+    return wanted
+
+
 # ── Job history ─────────────────────────────────────────────────────────────
 
 

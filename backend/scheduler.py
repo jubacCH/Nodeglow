@@ -1400,18 +1400,11 @@ async def run_backup_compliance():
     incidents. This job used to write its findings to the log and nowhere
     else: a backup that stopped running was never an alert."""
     from services import condition_incidents as cond
-    from services.backup_monitor import check_backup_compliance, get_compliance_groups
+    from services.backup_monitor import (
+        backup_conditions, check_backup_compliance, get_compliance_groups,
+    )
     async with AsyncSessionLocal() as db:
-        groups = await get_compliance_groups(db)
-        wanted: dict[str, cond.Condition] = {}
-        for job in groups["failed"]:
-            wanted[f"bk:{job['id']}"] = cond.Condition(
-                f"Backup failed: {job['target_name']}", "critical",
-                f"Backup {job['name']} of {job['target_name']}: {job['status_reason']}")
-        for job in groups["overdue"]:
-            wanted.setdefault(f"bk:{job['id']}", cond.Condition(
-                f"Backup overdue: {job['target_name']}", "warning",
-                f"Backup {job['name']} of {job['target_name']}: {job['status_reason']}"))
+        wanted = backup_conditions(await get_compliance_groups(db))
         notes = await cond.sync_rule(
             db, "backup", wanted, event_type="backup_issue",
             resolved_summary="Auto-resolved: a backup ran successfully and on schedule",

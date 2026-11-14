@@ -80,3 +80,47 @@ async def test_summary_has_the_shape_the_page_reads(db):
     assert [j["name"] for j in groups["failed"]] == ["c"]
     assert [j["name"] for j in groups["overdue"]] == ["b"]
     assert [j["name"] for j in groups["never_run"]] == ["d"]
+
+
+def _finding(i, *, source="proxmox", config=1, hours=80.0, error=None):
+    return {"id": i, "name": f"vzdump-{i}", "target_name": f"vm-{i:02d}", "source_type": source,
+            "source_config_id": config, "hours_since_last": hours, "last_error": error,
+            "status_reason": "Last backup 3 days ago, expected every 24 h"}
+
+
+def test_many_overdue_jobs_of_one_source_are_one_incident():
+    """A host that fell out of the backup schedule is one alert, not 45.
+
+    The first run on a real installation would have opened one incident and
+    sent one notification per virtual machine.
+    """
+    groups = {"failed": [], "overdue": [_finding(i, hours=70 + i) for i in range(45)]}
+    wanted = bk.backup_conditions(groups)
+    assert list(wanted) == ["bk-overdue:proxmox:1"]
+    cond = wanted["bk-overdue:proxmox:1"]
+    assert cond.title == "45 backups overdue (proxmox)" and cond.severity == "warning"
+    assert "vm-00, vm-01" in cond.summary and "and 39 more" in cond.summary
+    assert "The oldest last ran 5 days ago" in cond.summary
+
+    # The key does not depend on which jobs are in it: one more, same incident.
+    groups["overdue"].append(_finding(99))
+    assert list(bk.backup_conditions(groups)) == ["bk-overdue:proxmox:1"]
+
+
+def test_a_few_jobs_keep_their_own_incident_and_sources_stay_apart():
+    groups = {
+        "overdue": [_finding(1), _finding(2), *[_finding(10 + i, source="pbs", config=7) for i in range(3)]],
+        "failed": [_finding(3, error="exit code 255")],
+    }
+    wanted = bk.backup_conditions(groups)
+    assert set(wanted) == {"bk:1", "bk:2", "bk:3", "bk-overdue:pbs:7"}
+    assert wanted["bk:3"].severity == "critical" and wanted["bk:3"].title == "Backup failed: vm-03"
+    assert wanted["bk:1"].title == "Backup overdue: vm-01"
+
+
+def test_failed_jobs_group_too_and_name_the_error():
+    groups = {"overdue": [], "failed": [_finding(i, error="storage offline") for i in range(4)]}
+    (key, cond), = bk.backup_conditions(groups).items()
+    assert key == "bk-failed:proxmox:1" and cond.severity == "critical"
+    assert cond.title == "4 backups failed (proxmox)" and "storage offline" in cond.summary
+
