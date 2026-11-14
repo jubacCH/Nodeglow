@@ -1,38 +1,38 @@
-# Konzept F — „Lime“
+# Konzept F — weiche Formen, E3-Farben
 
 Prototyp: [`../prototypes/concept-f/index.html`](../prototypes/concept-f/index.html) (eine Datei,
 simulierte Daten aus [`SCENARIO.md`](../prototypes/SCENARIO.md)). Nur die Übersicht ist gebaut.
 
-> Kurzform: weicher, heller Look mit **einem Lime-Akzent** und **Schwarz als zweiter Betonung**.
-> Runde Karten ohne harte Ränder, Pill-Buttons, eine schwarze, einklappbare Navigationsleiste und
-> eine grosse Begrüssungszeile, die die Lage in einem Satz sagt. Dark Mode gleichwertig.
+> Kurzform: Das **Farbkonzept von E3 bleibt** (Glow Violet, Flächen, Statusfarben, Glow-Regeln,
+> Werte 1:1 aus `frontend/design-tokens/tokens.json`). Neu sind **Formen und Aufbau**: runde
+> Karten, Pill-Buttons und Pill-Tabs, eine einklappbare Navigationsleiste mit Text, eine
+> Begrüssungszeile, die die Lage in einem Satz sagt, Pill-Balken und ein Topologie-Canvas.
+> Eine erste Fassung mit Lime-Akzent wurde verworfen.
 
 ## Was sich gegenüber E3 ändert
 
 | Bereich | E3 (heute) | F |
 |---|---|---|
-| Grundton | dunkel zuerst, Violett | hell zuerst, warmes Grau; Dark Mode mit schwarzen Flächen |
-| Akzent | Glow Violet | Lime `#D4F04A`, **nur als Fläche**, Text darauf immer dunkel |
-| Zweite Betonung | — | Schwarz: aktive KPI-Kachel, Prognose-Karte, Primär-Button |
-| Form | Karten mit Rand, Radius 12–16 | Radius 18–28, Schatten statt Rand, Pills überall |
-| Navigation | Rail mit Sub-Navigation | schwarze Leiste mit Text, einklappbar auf Icons, Zähler als Badges |
+| Farben | Tokens aus `tokens.json` | unverändert |
+| Form | Karten mit Rand, Radius 10–12 | Radius 18–28, Rand als feiner Schatten, Pills überall |
+| Navigation | schmale Rail (60 px) mit Sub-Navigation | Leiste mit Text (216 px), einklappbar auf Icons, Zähler als Badges |
 | Kopf der Übersicht | Seitentitel | Satz mit eingebetteten Chips: „2 ⚠ incidents need you, while 29 hosts run fine“ |
+| KPI | einzelne Karten | Kachelreihe in der Chart-Karte; die aktive Kachel bestimmt den Chart |
 | Charts | Linien/Flächen | Pill-Balken mit Punkt-Markern, Segment-Gauges für Füllstände |
 | Topologie | Baum | Canvas mit runden Knoten, Leitungen in Statusfarbe |
 
-## Regeln
+## Farbrollen
 
-- **Lime ist Marke, nicht Status.** OK bleibt Grün (`#1E9E6A`), deutlich dunkler und blauer als
-  Lime, damit „gesund“ und „Akzent“ nicht verwechselt werden. Warnung Orange, Ausfall Rot,
-  Wartung Grau-Blau, keine Daten grau schraffiert.
-- **Glow bleibt Nodeglow-Signatur**, aber sparsam: nur kritische Elemente (Incident-Icon,
-  Kopf-Switch, betroffene Leitung). Im Dark Mode atmet er langsam, im Light Mode ist es ein
-  getönter Schatten.
-- **Lime als Text** nur im Dark Mode. Im Light Mode heisst die Textvariante `--lime-text`
-  (Oliv `#4F5E00`).
+- **Akzent** (`accent`): aktive Navigation, Hauptreihe in Charts, gesunde Leitungen und Knoten in
+  der Topologie, Gauge-Karte „Disk D:“, Logo. Primär-Button = `accent-btn` mit `accent-glow`.
+- **Dunkle Betonung** = E3-Tooltip-Fläche `tip-bg` (immer dunkel): aktive KPI-Kachel (mit
+  Akzent-Rand), Prognose-Karte, sekundäre Aktions-Buttons, Pill „Confirmed“.
+- **Zweite Chart-Reihe** = Textfarbe (`text`), damit Charts zweifarbig bleiben, ohne eine
+  Statusfarbe zu belegen.
+- **Status** und **Glow** exakt nach E3: nur Kritisches leuchtet, im Light Mode als getönter
+  Schatten, unbekannt bleibt grau schraffiert.
 - **Ehrlichkeitsregel** aus `SCENARIO.md` gilt weiter: Beziehungen tragen „Confirmed“,
   „Rule-based“ oder „Suspected“ als Pill.
-- In Charts heisst die dunkle Reihe `--chart-ink`: Schwarz im Light Mode, Hellgrau im Dark Mode.
 
 ## Interaktion im Prototyp
 
@@ -45,8 +45,7 @@ simulierte Daten aus [`SCENARIO.md`](../prototypes/SCENARIO.md)). Nur die Übers
 
 ## Umsetzung, falls gewählt
 
-Die Token-Pipeline (`design-tokens/tokens.json`) trägt den Grossteil: Farben, Radien, Schatten,
-Akzent. Danach `components/ui` (Button, Tabs, Card, BigNumber) und `components/layout`
-(Rail, TopBar). Neu wären die Pill-Balken als ECharts-Serie, die Segment-Gauge und die
-Begrüssungszeile. Kontraste prüft `npm run check:contrast`; Lime als Textfarbe auf Hell fällt
-dort durch und ist deshalb nur als Fläche erlaubt.
+Die Farb-Tokens bleiben. Anzupassen sind die Radien in `tokens.json` (`radius*`), danach
+`components/ui` (Button, Tabs, Card, BigNumber als Kachel) und `components/layout`
+(Rail mit Text und Einklappen, TopBar). Neu wären die Pill-Balken als ECharts-Serie, die
+Segment-Gauge, die Begrüssungszeile und der Topologie-Canvas.

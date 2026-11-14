@@ -3,94 +3,111 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nodeglow · Concept F (Lime)</title>
+<title>Nodeglow · Concept F</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Sora:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <!--
-  Concept F: soft light-first shell, one lime accent, black as the second
+  Concept F: soft light-first shell, one accent accent, black as the second
   emphasis colour. Single file, simulated data from ../SCENARIO.md.
   Nothing here is imported by the application.
 -->
 <style>
 :root {
+  /* Colours are the E3 tokens from frontend/design-tokens/tokens.json (Glow Violet). */
   --font-ui: "Inter Tight", system-ui, sans-serif;
   --font-display: "Sora", "Inter Tight", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
-  --bg: #ECEDE8;
-  --surface: #F7F7F3;
-  --surface-2: #E7E8E2;
-  --surface-3: #DCDDD6;
-  --line: #D9DAD3;
-  --grid: #E1E2DB;
-  --text: #15160F;
-  --text-2: #5C5F56;
-  --text-3: #73766C;
-  --ink: #121310;          /* black emphasis surface */
-  --ink-2: #26271F;
-  --on-ink: #F3F4EC;
-  --on-ink-2: #A9AB9F;
+  --bg: #F4F5F8;
+  --rail: #FFFFFF;
+  --surface: #FFFFFF;
+  --surface-2: #F2F3F6;
+  --surface-3: #E8EAEF;
+  --border: #E3E5EA;
+  --border-2: #D6D9E0;
+  --line: #C9CED7;
+  --hover: rgba(20, 24, 32, 0.035);
+  --grid: #EEF0F3;
+  --text: #191B21;
+  --text-2: #5A5E69;
+  --text-3: #666B76;
+  --rail-text: var(--text-2);
+  --rail-hover: var(--surface-2);
+
+  --accent: #5B4BE0;
+  --accent-text: #5242D6;
+  --accent-btn: #5B4BE0;
+  --accent-btn-hover: #4C3CD2;
+  --on-accent: #FFFFFF;
+  --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-glow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+
+  /* neutral dark emphasis = E3 tooltip/toast surface (always dark) */
+  --ink: #1D1F25;
+  --ink-2: #2A2D35;
+  --on-ink: #F2F3F5;
+  --on-ink-2: #A2A6B1;
   --ink-border: transparent;
-  --chart-ink: #121310;     /* dark series in charts */
-  --chart-dot: #FFFFFF;
-  --rail: #0E0F0B;
-  --rail-text: #C9CBBF;
-  --rail-hover: #1D1E18;
-  --lime: #D4F04A;          /* brand accent, surface only */
-  --lime-2: #E6F79A;
-  --lime-soft: color-mix(in srgb, var(--lime) 32%, transparent);
-  --on-lime: #171A06;
-  --lime-text: #4F5E00;     /* lime as text on light surfaces */
+  --chart-ink: var(--text);
+  --chart-dot: var(--surface);
 
-  --ok: #1E9E6A;   --ok-text: #157A51;
-  --degraded: #C08F00; --degraded-text: #7E5E00;
-  --warn: #E07B1A; --warn-text: #A9520B;
-  --down: #D93A44; --down-text: #B82632;
-  --maint: #6F7788; --maint-text: #555C6B;
-  --unknown: #A3A69C;
-  --hatch: repeating-linear-gradient(135deg, #DADBD3 0 4px, #EDEEE8 4px 8px);
+  --ok: #1E9E57;       --ok-text: #167A43;
+  --degraded: #B98A00; --degraded-text: #806000;
+  --warn: #DD6B12;     --warn-text: #AE520B;
+  --down: #DC3540;     --down-text: #C42A35;
+  --maint: #6F7788;    --maint-text: #5A6170;
+  --unknown: #A4A8B0;
+  --hatch-2: #E3E5E9;
+  --hatch: repeating-linear-gradient(135deg, var(--unknown) 0 2px, var(--hatch-2) 2px 5px);
 
-  --shadow: 0 1px 2px rgba(20,22,10,.05), 0 8px 24px -12px rgba(20,22,10,.12);
-  --shadow-pop: 0 18px 40px -16px rgba(20,22,10,.35);
-  --glow-crit: 0 0 0 4px color-mix(in srgb, var(--down) 16%, transparent), 0 8px 22px -6px color-mix(in srgb, var(--down) 45%, transparent);
+  --shadow: 0 0 0 1px var(--border), 0 1px 2px rgba(20, 24, 32, 0.06);
+  --shadow-pop: 0 16px 48px rgba(20, 24, 32, 0.16), 0 1px 3px rgba(20, 24, 32, 0.06);
+  --glow-crit: 0 0 0 1px color-mix(in srgb, var(--down) 26%, transparent), 0 6px 16px -6px color-mix(in srgb, var(--down) 34%, transparent);
+  --wire-glow: none;
   --r-card: 26px;
   --r-tile: 18px;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
-  --bg: #0A0B09;
-  --surface: #141511;
-  --surface-2: #1D1E19;
-  --surface-3: #292A24;
-  --line: #2A2B25;
-  --grid: #20211C;
-  --text: #EEEFE8;
-  --text-2: #A7AA9E;
-  --text-3: #8C8F84;
-  --ink: #000000;
-  --ink-2: #1A1B16;
-  --on-ink: #F3F4EC;
-  --on-ink-2: #A9AB9F;
-  --ink-border: color-mix(in srgb, var(--lime) 22%, transparent);
-  --chart-ink: #E4E6DA;
-  --chart-dot: #141511;
-  --rail: #000000;
-  --rail-hover: #1A1B15;
-  --lime: #D4F04A;
-  --lime-2: #3B4410;
-  --lime-soft: color-mix(in srgb, var(--lime) 18%, transparent);
-  --lime-text: #D4F04A;
-  --ok: #3CC98A;   --ok-text: #5ED6A0;
+  --bg: #101217;
+  --rail: #0C0E12;
+  --surface: #181A20;
+  --surface-2: #1F222A;
+  --surface-3: #282B34;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-2: rgba(255, 255, 255, 0.11);
+  --line: #363A45;
+  --hover: rgba(255, 255, 255, 0.04);
+  --grid: rgba(255, 255, 255, 0.05);
+  --text: #ECEEF2;
+  --text-2: #A2A6B1;
+  --text-3: #8A8F9B;
+
+  --accent: #7C6CFF;
+  --accent-text: #9488FF;
+  --accent-btn: #6656F2;
+  --accent-btn-hover: #5A4AE6;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-glow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 18px 0 color-mix(in srgb, var(--accent) 36%, transparent);
+
+  --ink: #262932;
+  --ink-2: #30343E;
+  --on-ink: #ECEEF2;
+  --ink-border: rgba(255, 255, 255, 0.11);
+
+  --ok: #3CC37A;       --ok-text: #3CC37A;
   --degraded: #E7C04C; --degraded-text: #E7C04C;
-  --warn: #F2923C; --warn-text: #F4A15A;
-  --down: #F2545B; --down-text: #F46A70;
-  --maint: #8F97A8; --maint-text: #A3AABA;
-  --unknown: #5A5D53;
-  --hatch: repeating-linear-gradient(135deg, #24251F 0 4px, #191A15 4px 8px);
-  --shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 10px 30px -18px rgba(0,0,0,.8);
-  --shadow-pop: 0 18px 40px -16px rgba(0,0,0,.9);
-  --glow-crit: 0 0 0 1px color-mix(in srgb, var(--down) 60%, transparent), 0 0 26px color-mix(in srgb, var(--down) 55%, transparent);
+  --warn: #F2923C;     --warn-text: #F2923C;
+  --down: #F2545B;     --down-text: #F46A70;
+  --maint: #8F97A8;    --maint-text: #A3AABA;
+  --unknown: #565B66;
+  --hatch-2: #252830;
+
+  --shadow: 0 0 0 1px var(--border), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --glow-crit: 0 0 0 1px color-mix(in srgb, var(--down) 34%, transparent), 0 0 24px 2px color-mix(in srgb, var(--down) 30%, transparent);
+  --wire-glow: drop-shadow(0 0 3px color-mix(in srgb, var(--down) 65%, transparent));
   color-scheme: dark;
 }
 
@@ -105,7 +122,7 @@ body {
 }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; }
 svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
-:focus-visible { outline: 2px solid var(--lime-text); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .mono { font-family: var(--font-mono); font-size: .92em; }
 
 /* ---------- shell ---------- */
@@ -114,10 +131,10 @@ svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-widt
   position: sticky; top: 12px; height: calc(100vh - 24px); margin: 12px 0 12px 12px;
   width: 216px; background: var(--rail); border-radius: 28px; color: var(--rail-text);
   display: flex; flex-direction: column; padding: 14px 12px; transition: width .25s ease;
-  border: 1px solid var(--ink-border);
+  box-shadow: var(--shadow);
 }
-.brand { display: flex; align-items: center; gap: 12px; padding: 2px 2px 18px; color: #fff; }
-.mark { width: 44px; height: 44px; border-radius: 14px; background: var(--lime); display: grid; place-items: center; flex: none; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 2px 2px 18px; color: var(--text); }
+.mark { width: 44px; height: 44px; border-radius: 14px; background: var(--accent); color: var(--on-accent); box-shadow: var(--accent-glow); display: grid; place-items: center; flex: none; }
 .mark svg { width: 24px; height: 24px; }
 .brand b { font: 600 19px var(--font-display); letter-spacing: -.03em; white-space: nowrap; }
 .nav { display: flex; flex-direction: column; gap: 4px; }
@@ -125,17 +142,17 @@ svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-widt
   display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 13px; border-radius: 15px;
   color: var(--rail-text); white-space: nowrap; position: relative; text-align: left;
 }
-.nav button:hover { background: var(--rail-hover); color: #fff; }
-.nav button.on { background: var(--lime); color: var(--on-lime); font-weight: 500; }
+.nav button:hover { background: var(--rail-hover); color: var(--text); }
+.nav button.on { background: var(--accent); color: var(--on-accent); font-weight: 500; }
 .nav .lbl { flex: 1; overflow: hidden; }
-.nav .cnt { min-width: 20px; height: 20px; border-radius: 10px; background: var(--lime); color: var(--on-lime); font-size: 11px; font-weight: 600; display: grid; place-items: center; padding: 0 5px; }
+.nav .cnt { min-width: 20px; height: 20px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; display: grid; place-items: center; padding: 0 5px; }
 .nav .cnt.crit { background: var(--down); color: #fff; }
-.nav button.on .cnt { background: var(--on-lime); color: var(--lime); }
+.nav button.on .cnt { background: var(--on-accent); color: var(--accent); }
 .rail .spacer { flex: 1; }
-.rail .me { display: flex; align-items: center; gap: 10px; padding: 10px 6px 2px; border-top: 1px solid #23241e; margin-top: 8px; white-space: nowrap; overflow: hidden; }
-.avatar { width: 38px; height: 38px; border-radius: 50%; background: var(--lime); color: var(--on-lime); display: grid; place-items: center; font: 600 12px var(--font-display); flex: none; }
-.me small { display: block; color: #8D8F84; font-size: 12px; }
-.me b { color: #fff; font-weight: 500; font-size: 13px; }
+.rail .me { display: flex; align-items: center; gap: 10px; padding: 10px 6px 2px; border-top: 1px solid var(--border); margin-top: 8px; white-space: nowrap; overflow: hidden; }
+.avatar { width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; font: 600 12px var(--font-display); flex: none; }
+.me small { display: block; color: var(--text-3); font-size: 12px; }
+.me b { color: var(--text); font-weight: 500; font-size: 13px; }
 .rail.collapsed { width: 72px; }
 .rail.collapsed .lbl, .rail.collapsed .brand b, .rail.collapsed .me div { display: none; }
 .rail.collapsed .nav button { justify-content: center; padding: 0; }
@@ -165,6 +182,8 @@ main { min-width: 0; padding: 12px 20px 40px 20px; }
 .iconbtn .badge { position: absolute; top: 5px; right: 5px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--down); color: #fff; font-size: 10px; font-weight: 600; display: grid; place-items: center; }
 .btn-ink { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 18px; border-radius: 22px; background: var(--ink); color: var(--on-ink); font-weight: 500; white-space: nowrap; border: 1px solid var(--ink-border); }
 .btn-ink:hover { background: var(--ink-2); }
+.btn-primary { background: var(--accent-btn); color: var(--on-accent); border-color: transparent; }
+.btn-primary:hover { background: var(--accent-btn-hover); box-shadow: var(--accent-glow); }
 .sim { height: 30px; padding: 0 12px; border-radius: 15px; border: 1.5px dashed var(--text-3); color: var(--text-2); font-size: 12px; display: inline-flex; align-items: center; white-space: nowrap; }
 
 /* ---------- hero ---------- */
@@ -174,11 +193,11 @@ h1 { font: 500 clamp(26px, 3.1vw, 40px)/1.18 var(--font-display); letter-spacing
 h1 .chip { display: inline-flex; align-items: center; gap: 4px; height: 1.05em; padding: 0 .35em; border-radius: 999px; vertical-align: -.12em; margin: 0 .08em; }
 h1 .chip svg { width: .58em; height: .58em; margin: 0 .12em; }
 h1 .chip.crit { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down-text); }
-h1 .chip.stack { background: var(--lime-soft); padding: 0 .18em; }
+h1 .chip.stack { background: var(--accent-soft); padding: 0 .18em; }
 .stack i { font: 600 .24em var(--font-display); width: 3.1em; height: 3.1em; border-radius: 50%; display: grid; place-items: center; letter-spacing: 0; font-style: normal; margin-left: -.8em; border: 2px solid var(--bg); }
 .stack i:first-child { margin-left: 0; }
 .hero-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-.pill.lime { background: var(--lime); color: var(--on-lime); box-shadow: none; font-weight: 500; }
+.pill.accent { background: var(--accent); color: var(--on-accent); box-shadow: none; font-weight: 500; }
 .pill.btn:hover { filter: brightness(.97); }
 
 /* ---------- grid ---------- */
@@ -190,7 +209,7 @@ h1 .chip.stack { background: var(--lime-soft); padding: 0 .18em; }
 .card-h h2 { font: 500 15px var(--font-ui); margin: 0; }
 .card-h p { margin: 0; color: var(--text-2); font-size: 12px; display: flex; align-items: center; gap: 6px; }
 .card-h .end { margin-left: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
-.link { color: var(--lime-text); font-size: 12.5px; font-weight: 500; }
+.link { color: var(--accent-text); font-size: 12.5px; font-weight: 500; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 9px; height: 9px; border-radius: 50%; }
@@ -205,10 +224,10 @@ h1 .chip.stack { background: var(--lime-soft); padding: 0 .18em; }
 .tile b { font: 500 22px var(--font-display); letter-spacing: -.03em; }
 .tile b em { font-style: normal; font-size: 13px; color: var(--text-2); letter-spacing: 0; margin-left: 3px; }
 button.tile:hover { background: var(--surface-3); }
-.tile.on { background: var(--ink); color: var(--on-ink); border: 1px solid var(--ink-border); }
+.tile.on { background: var(--ink); color: var(--on-ink); border: 1px solid var(--accent); box-shadow: var(--accent-glow); }
 .tile.on small, .tile.on b em { color: var(--on-ink-2); }
 .tile .t-down { color: var(--down-text); }
-.tile.on .t-down { color: #FF8C91; }
+.tile.on .t-down { color: #F46A70; }
 .tile .hatchbar { height: 6px; border-radius: 3px; background: var(--hatch); margin-top: 4px; }
 .tile.static { cursor: default; }
 
@@ -231,19 +250,19 @@ button.tile:hover { background: var(--surface-3); }
 .st.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-text); }
 .st.ok { background: var(--surface-2); color: var(--ok-text); }
 .st.maint { background: color-mix(in srgb, var(--maint) 16%, transparent); color: var(--maint-text); }
-.st.lime { background: var(--lime-soft); color: var(--lime-text); }
+.st.accent { background: var(--accent-soft); color: var(--accent-text); }
 .row .tx { flex: 1; min-width: 0; }
 .row .tx b { display: block; font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .tx small { color: var(--text-2); font-size: 12px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .when { color: var(--text-2); font-size: 12px; white-space: nowrap; text-align: right; }
 .row .when b { display: block; color: var(--text); font: 500 14px var(--font-display); }
 .bar { height: 5px; border-radius: 3px; background: var(--surface-3); margin-top: 6px; overflow: hidden; width: 70px; margin-left: auto; }
-.bar i { display: block; height: 100%; background: var(--lime); border-radius: 3px; }
+.bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
 
 /* aside */
 .gauges { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .gauge { border-radius: 22px; padding: 14px; background: var(--surface); box-shadow: var(--shadow); text-align: left; }
-.gauge.lime { background: var(--lime); color: var(--on-lime); box-shadow: none; }
+.gauge.accent { background: var(--accent); color: var(--on-accent); box-shadow: none; }
 .gauge .gh { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 18px; }
 .gauge .gh svg:last-child { margin-left: auto; opacity: .6; }
 .gauge .gv { display: flex; align-items: baseline; gap: 4px; margin-bottom: 10px; }
@@ -252,24 +271,25 @@ button.tile:hover { background: var(--surface-3); }
 .gauge .gv em { margin-left: auto; font-style: normal; font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: var(--ink); color: var(--on-ink); }
 .segs { display: flex; gap: 4px; height: 40px; }
 .segs i { flex: 1; border-radius: 8px; border: 1.5px solid currentColor; opacity: .28; position: relative; overflow: hidden; }
-.segs i.f { opacity: 1; background: var(--ink); border-color: var(--ink); }
-.gauge.lime .segs i { color: var(--on-lime); }
+.segs i.f { opacity: 1; background: var(--accent); border-color: var(--accent); }
+.gauge.accent .segs i.f, .gauge.accent .segs i.p::after { background: var(--on-accent); border-color: var(--on-accent); }
+.gauge.accent .segs i { color: var(--on-accent); }
 .segs i.p { opacity: 1; border-color: currentColor; }
-.segs i.p::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: var(--p); background: var(--ink); }
+.segs i.p::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: var(--p); background: var(--accent); }
 .forecast { background: var(--ink); color: var(--on-ink); border-radius: var(--r-card); padding: 18px; position: relative; overflow: hidden; border: 1px solid var(--ink-border); }
-.forecast::before { content: ""; position: absolute; width: 220px; height: 220px; right: -60px; top: -90px; background: radial-gradient(circle, color-mix(in srgb, var(--lime) 30%, transparent), transparent 65%); }
+.forecast::before { content: ""; position: absolute; width: 220px; height: 220px; right: -60px; top: -90px; background: radial-gradient(circle, color-mix(in srgb, var(--accent) 30%, transparent), transparent 65%); }
 .forecast .kick { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--on-ink-2); }
-.forecast .kick i { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); }
+.forecast .kick i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .forecast h3 { font: 500 19px/1.25 var(--font-display); letter-spacing: -.03em; margin: 10px 0 6px; position: relative; }
-.forecast h3 em { font-style: normal; color: var(--lime); }
+.forecast h3 em { font-style: normal; color: #9488FF; }
 .forecast p { margin: 0 0 16px; color: var(--on-ink-2); font-size: 12.5px; }
-.ftrack { height: 9px; border-radius: 5px; background: #2B2C25; position: relative; margin-bottom: 18px; }
-.ftrack i { position: absolute; inset: 0 auto 0 0; width: 91%; background: var(--lime); border-radius: 5px; }
-.ftrack b { position: absolute; top: -5px; bottom: -5px; width: 2px; left: 95%; background: #FF6B70; border-radius: 1px; }
+.ftrack { height: 9px; border-radius: 5px; background: var(--ink-2); position: relative; margin-bottom: 18px; }
+.ftrack i { position: absolute; inset: 0 auto 0 0; width: 91%; background: var(--accent); border-radius: 5px; }
+.ftrack b { position: absolute; top: -5px; bottom: -5px; width: 2px; left: 95%; background: #F46A70; border-radius: 1px; }
 .fact { display: flex; gap: 8px; flex-wrap: wrap; }
 .fact button { height: 40px; padding: 0 15px; border-radius: 20px; display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
-.fact .w { background: #fff; color: #111; }
-.fact .d { background: #2A2B24; color: var(--on-ink); }
+.fact .w { background: var(--accent-btn); color: var(--on-accent); }
+.fact .d { background: var(--ink-2); color: var(--on-ink); }
 .fact button:hover { filter: brightness(1.08); }
 .need .row { background: var(--surface-2); margin-bottom: 6px; padding: 10px; transition: opacity .3s; }
 .need .row .st { width: 30px; height: 30px; }
@@ -291,7 +311,7 @@ button.tile:hover { background: var(--surface-3); }
 .node.right { flex-direction: row; text-align: left; gap: 10px; transform: translate(-29px, -50%); }
 .node.right .sub { margin-top: 0; }
 .node .bdg { position: absolute; top: -6px; right: -6px; min-width: 22px; height: 22px; border-radius: 11px; background: var(--ink); color: var(--on-ink); font-size: 10.5px; font-weight: 600; display: grid; place-items: center; padding: 0 5px; border: 1px solid var(--ink-border); }
-.n-ok .disc { background: var(--lime); color: var(--on-lime); border-color: color-mix(in srgb, var(--lime) 50%, var(--surface)); }
+.n-ok .disc { background: var(--accent); color: var(--on-accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--surface)); }
 .n-crit .disc { background: var(--surface); color: var(--down-text); border-color: var(--down); box-shadow: var(--glow-crit); }
 .n-down .disc { background: color-mix(in srgb, var(--down) 18%, var(--surface)); color: var(--down-text); border-color: color-mix(in srgb, var(--down) 40%, var(--surface)); }
 .n-deg .disc { background: color-mix(in srgb, var(--degraded) 22%, var(--surface)); color: var(--degraded-text); border-color: color-mix(in srgb, var(--degraded) 45%, var(--surface)); }
@@ -301,7 +321,7 @@ button.tile:hover { background: var(--surface-3); }
 .tag { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 11px; font-size: 11px; font-weight: 500; white-space: nowrap; }
 .tag.conf { background: var(--ink); color: var(--on-ink); border: 1px solid var(--ink-border); }
 .tag.susp { background: var(--surface); color: var(--text-2); border: 1.5px dashed var(--text-3); }
-.tag.rule { background: var(--lime); color: var(--on-lime); }
+.tag.rule { background: var(--accent); color: var(--on-accent); }
 .canvas .tag { position: absolute; transform: translate(-50%, -50%); }
 @media (prefers-reduced-motion: no-preference) {
   :root[data-theme="dark"] .n-crit .disc, :root[data-theme="dark"] .st.crit { animation: breathe 6s ease-in-out infinite; }
@@ -315,7 +335,7 @@ button.tile:hover { background: var(--surface-3); }
 
 /* toast */
 .toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 30px); opacity: 0; background: var(--ink); color: var(--on-ink); border-radius: 22px; padding: 11px 18px; display: flex; align-items: center; gap: 9px; font-size: 13px; box-shadow: var(--shadow-pop); transition: .25s; z-index: 20; border: 1px solid var(--ink-border); max-width: calc(100vw - 32px); }
-.toast svg { color: var(--lime); }
+.toast svg { color: var(--accent); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* mobile tab bar */
@@ -349,9 +369,9 @@ button.tile:hover { background: var(--surface-3); }
   .card-h { flex-wrap: wrap; }
   .card-h .end { margin-left: 0; width: 100%; justify-content: space-between; }
   .chart { height: 210px; }
-  .tabbar { display: flex; position: fixed; left: 12px; right: 12px; bottom: 12px; height: 62px; background: var(--rail); border-radius: 31px; padding: 7px; gap: 4px; z-index: 10; border: 1px solid var(--ink-border); }
+  .tabbar { display: flex; position: fixed; left: 12px; right: 12px; bottom: 12px; height: 62px; background: var(--rail); border-radius: 31px; padding: 7px; gap: 4px; z-index: 10; box-shadow: var(--shadow-pop); }
   .tabbar button { flex: 1; border-radius: 24px; color: var(--rail-text); display: grid; place-items: center; position: relative; }
-  .tabbar button.on { background: var(--lime); color: var(--on-lime); }
+  .tabbar button.on { background: var(--accent); color: var(--on-accent); }
   .tabbar .cnt { position: absolute; top: 4px; right: calc(50% - 20px); min-width: 16px; height: 16px; border-radius: 8px; background: var(--down); color: #fff; font-size: 10px; display: grid; place-items: center; }
 }
 .sim-m { display: none; }
@@ -362,7 +382,7 @@ button.tile:hover { background: var(--surface-3); }
   <aside class="rail" id="rail" aria-label="Main navigation">
     <div class="brand">
       <div class="mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#171A06" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2" fill="#171A06"/><circle cx="4.5" cy="6" r="1.8"/><circle cx="19.5" cy="6" r="1.8"/><circle cx="12" cy="20.5" r="1.8"/><path d="M6 7.2 9.6 10M18 7.2 14.4 10M12 15.2v3.5"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="4.5" cy="6" r="1.8"/><circle cx="19.5" cy="6" r="1.8"/><circle cx="12" cy="20.5" r="1.8"/><path d="M6 7.2 9.6 10M18 7.2 14.4 10M12 15.2v3.5"/></svg>
       </div>
       <b>nodeglow</b>
     </div>
@@ -395,18 +415,18 @@ button.tile:hover { background: var(--surface-3); }
       <span class="sim" title="Every value on this page is simulated">Simulated data</span>
       <button class="iconbtn" id="themeBtn" aria-label="Toggle colour mode"><i data-ic="moon"></i></button>
       <button class="iconbtn" aria-label="Notifications" data-toast="2 open incidents, 2 hosts awaiting review"><i data-ic="bell"></i><span class="badge">4</span></button>
-      <button class="btn-ink" data-toast="Add host: opens the existing host dialog"><i data-ic="plus"></i><span>Add host</span></button>
+      <button class="btn-ink btn-primary" data-toast="Add host: opens the existing host dialog"><i data-ic="plus"></i><span>Add host</span></button>
     </header>
 
     <section class="hero">
       <div>
         <div class="hello">Good afternoon, Julian · Friday 10.10.2026, 14:32 <span class="sim sim-m" style="margin-left:6px">Simulated</span></div>
         <h1><span class="num">2</span> <span class="chip crit"><i data-ic="alert"></i></span> incidents need you,<br>
-          while <span class="num">29</span> <span class="chip stack"><i style="background:var(--ink);color:var(--on-ink)">PVE</i><i style="background:var(--lime);color:var(--on-lime)">SRV</i><i style="background:var(--surface);color:var(--text)">SW</i></span> hosts run fine</h1>
+          while <span class="num">29</span> <span class="chip stack"><i style="background:var(--ink);color:var(--on-ink)">PVE</i><i style="background:var(--accent);color:var(--on-accent)">SRV</i><i style="background:var(--surface);color:var(--text)">SW</i></span> hosts run fine</h1>
       </div>
       <div class="hero-actions">
         <button class="pill btn" data-toast="9 changes since your last visit at 09:12"><i data-ic="history"></i>Since 09:12</button>
-        <button class="pill btn lime" data-toast="NAS firmware update runs until 15:00"><i data-ic="wrench"></i>Maintenance</button>
+        <button class="pill btn accent" data-toast="NAS firmware update runs until 15:00"><i data-ic="wrench"></i>Maintenance</button>
       </div>
     </section>
 
@@ -436,7 +456,7 @@ button.tile:hover { background: var(--surface-3); }
           <section class="card">
             <div class="card-h">
               <span class="ico"><i data-ic="activity"></i></span>
-              <div><h2>Live incidents</h2><p><i class="dot" style="background:var(--lime)"></i>Updating as they change</p></div>
+              <div><h2>Live incidents</h2><p><i class="dot" style="background:var(--accent)"></i>Updating as they change</p></div>
               <div class="end"><button class="link" data-toast="Opens Incidents › History">History</button></div>
             </div>
             <div class="rows">
@@ -454,7 +474,7 @@ button.tile:hover { background: var(--surface-3); }
             </div>
             <div class="rows">
               <div class="row"><span class="st maint"><i data-ic="wrench"></i></span><div class="tx"><b>NAS firmware update</b><small>NAS-ZH-01 · alerts paused</small></div><div class="when"><b>15:00</b><div class="bar"><i style="width:53%"></i></div></div></div>
-              <div class="row"><span class="st lime"><i data-ic="chart"></i></span><div class="tx"><b>Weekly report</b><small>Digest to 3 recipients</small></div><div class="when"><b>Mo 07:00</b></div></div>
+              <div class="row"><span class="st accent"><i data-ic="chart"></i></span><div class="tx"><b>Weekly report</b><small>Digest to 3 recipients</small></div><div class="when"><b>Mo 07:00</b></div></div>
               <div class="row"><span class="st warn"><i data-ic="drive"></i></span><div class="tx"><b>D: on SRV-FILE-01 full</b><small>Linear projection · 91 % now</small></div><div class="when"><b>~5 days</b></div></div>
               <div class="row"><span class="st warn"><i data-ic="shield"></i></span><div class="tx"><b>portal.mustertreuhand.ch</b><small>TLS certificate expires</small></div><div class="when"><b>9 days</b></div></div>
             </div>
@@ -487,7 +507,7 @@ button.tile:hover { background: var(--surface-3); }
             <div class="gv"><b>39</b><span>/ 48</span><em>81%</em></div>
             <div class="segs" data-fill="0.81"></div>
           </button>
-          <button class="gauge lime" data-toast="SRV-FILE-01 · D: 91 % used, 0.9 TB of 1 TB">
+          <button class="gauge accent" data-toast="SRV-FILE-01 · D: 91 % used, 0.9 TB of 1 TB">
             <div class="gh"><i data-ic="drive"></i>Disk D:<i data-ic="upright"></i></div>
             <div class="gv"><b>91</b><span>%</span><em>FILE-01</em></div>
             <div class="segs" data-fill="0.91"></div>
@@ -516,7 +536,7 @@ button.tile:hover { background: var(--surface-3); }
             <div class="row"><span class="st warn"><i data-ic="server"></i></span><div class="tx"><b>SRV-BACKUP-01</b><small>VeeamBackupSvc stopped</small></div><button data-done="Acknowledged #1072">Ack</button></div>
             <div class="row"><span class="st maint" style="background:var(--hatch)"><i data-ic="radio"></i></span><div class="tx"><b>probe-bern-01 silent</b><small>11 min · 9 hosts without data</small></div><button data-done="Probe check started">Check</button></div>
             <div class="row"><span class="st warn"><i data-ic="shield"></i></span><div class="tx"><b>Certificate in 9 days</b><small>portal.mustertreuhand.ch</small></div><button data-done="Reminder set for the owner">Remind</button></div>
-            <div class="row"><span class="st lime"><i data-ic="scan"></i></span><div class="tx"><b>2 new hosts found</b><small>Subnet scan · awaiting review</small></div><button data-done="2 hosts added to monitoring">Review</button></div>
+            <div class="row"><span class="st accent"><i data-ic="scan"></i></span><div class="tx"><b>2 new hosts found</b><small>Subnet scan · awaiting review</small></div><button data-done="2 hosts added to monitoring">Review</button></div>
           </div>
         </section>
       </div>
@@ -620,18 +640,18 @@ const LAT1_PK = LAT1_AVG.map((v, i) => i < 2 ? .5 : Math.min(40, v + 6 + ((i * 1
 
 const CHARTS = {
   incidents: {
-    title: 'Incidents', sub: 'Opened per day, every rule counts', dark: 'Critical', lime: 'Other',
+    title: 'Incidents', sub: 'Opened per day, every rule counts', dark: 'Critical', accent: 'Other',
     ranges: { '7 days': 7, '14 days': 14 }, def: '14 days', max: 5, ticks: [0, 1, 2, 3, 4, 5],
     data(r) { const n = this.ranges[r]; return DAYS.slice(-n).map((l, i, a) => { const k = DAYS.length - a.length + i; return { l, total: INC_TOTAL[k], dark: INC_CRIT[k], tip: `${INC_TOTAL[k]} opened · ${INC_CRIT[k]} critical` }; }); },
   },
   syslog: {
-    title: 'Syslog', sub: 'Messages per minute, network vs. servers', dark: 'Network', lime: 'Servers',
+    title: 'Syslog', sub: 'Messages per minute, network vs. servers', dark: 'Network', accent: 'Servers',
     ranges: { '24 h': 'h', '6 h': 'q' }, def: '24 h', max: 50, ticks: [0, 10, 20, 30, 40, 50],
     line: { v: 14, label: 'Friday baseline 14/min' },
     data(r) { const h = this.ranges[r] === 'h'; const L = h ? hrs : q, T = h ? SYS_H : SYS_Q, N = h ? SYS_H_NET : SYS_Q_NET; return L.map((l, i) => ({ l, total: T[i], dark: N[i], tip: `${T[i]}/min · ${N[i]} from network gear` })); },
   },
   latency: {
-    title: 'Latency behind SW-ZH-CORE-02', sub: '7 affected hosts, average and peak', dark: 'Peak', lime: 'Average',
+    title: 'Latency behind SW-ZH-CORE-02', sub: '7 affected hosts, average and peak', dark: 'Peak', accent: 'Average',
     ranges: { '2 h': 5, '30 min': 1 }, def: '2 h', max: 42, ticks: [0, 10, 20, 30, 40], unit: ' ms',
     line: { v: 10, label: 'Alert at 10 ms' },
     data(r) { const five = this.ranges[r] === 5; const L = five ? l5 : l1, A = five ? LAT_AVG : LAT1_AVG, K = five ? LAT_PK : LAT1_PK; return L.map((l, i) => ({ l, total: K[i], dark: K[i] - A[i], tip: `avg ${A[i]} ms · peak ${K[i]} ms` })); },
@@ -655,7 +675,7 @@ function drawChart() {
   const slot = iw / data.length;
   const bw = Math.max(6, Math.min(slot * 0.6, 44));
   const y = (v) => padT + ih - (v / cfg.max) * ih;
-  const lime = css('--lime'), ink = css('--chart-ink'), dot = css('--chart-dot'), grid = css('--grid'), down = css('--down'), line = css('--line');
+  const accent = css('--accent'), ink = css('--chart-ink'), dot = css('--chart-dot'), grid = css('--grid'), down = css('--down'), line = css('--line');
   let s = '';
   cfg.ticks.forEach((t) => {
     s += `<line x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}" stroke="${grid}" stroke-dasharray="${t ? '2 4' : ''}"/>`;
@@ -667,7 +687,7 @@ function drawChart() {
     const x = cx - bw / 2;
     const last = i === data.length - 1;
     // ghost column
-    s += `<rect x="${x}" y="${padT}" width="${bw}" height="${ih}" rx="${bw / 2}" fill="none" stroke="${last ? lime : line}" stroke-width="${last ? 2 : 1}" stroke-dasharray="${last ? '' : '2 3'}" opacity="${last ? 1 : .7}"/>`;
+    s += `<rect x="${x}" y="${padT}" width="${bw}" height="${ih}" rx="${bw / 2}" fill="none" stroke="${last ? accent : line}" stroke-width="${last ? 2 : 1}" stroke-dasharray="${last ? '' : '2 3'}" opacity="${last ? 1 : .7}"/>`;
     const top = y(d.total);
     const hTot = padT + ih - top;
     if (d.total <= 0) {
@@ -682,8 +702,8 @@ function drawChart() {
       }
       if (limeH > 0) {
         const ly = padT + ih - Math.min(limeH, fullH);
-        s += `<rect x="${x}" y="${ly}" width="${bw}" height="${Math.min(limeH, fullH)}" rx="${bw / 2}" fill="${lime}"/>`;
-        s += `<circle cx="${cx}" cy="${ly + bw / 2}" r="${Math.min(3.2, bw / 6)}" fill="${css('--on-lime')}"/>`;
+        s += `<rect x="${x}" y="${ly}" width="${bw}" height="${Math.min(limeH, fullH)}" rx="${bw / 2}" fill="${accent}"/>`;
+        s += `<circle cx="${cx}" cy="${ly + bw / 2}" r="${Math.min(3.2, bw / 6)}" fill="${css('--on-accent')}"/>`;
       }
     }
     if (last || (i % every === 0 && data.length - 1 - i >= Math.max(2, every))) {
@@ -723,7 +743,7 @@ function setChart(kind) {
   document.getElementById('chartTitle').textContent = cfg.title;
   document.getElementById('chartSub').textContent = cfg.sub;
   document.getElementById('legend').innerHTML =
-    `<span><i style="background:var(--chart-ink)"></i>${cfg.dark}</span><span><i style="background:var(--lime)"></i>${cfg.lime}</span>`;
+    `<span><i style="background:var(--chart-ink)"></i>${cfg.dark}</span><span><i style="background:var(--accent)"></i>${cfg.accent}</span>`;
   const rg = document.getElementById('range');
   const active = rangeSel[kind] || cfg.def;
   rg.innerHTML = Object.keys(cfg.ranges).map((k) => `<button role="tab" class="${k === active ? 'on' : ''}" aria-selected="${k === active}">${k}</button>`).join('');
@@ -759,7 +779,7 @@ const EDGES = [
   ['core2', 'app', 'crit'], ['core2', 'prn', 'crit'], ['core2', 'deg', 'deg'], ['fw', 'probe', 'unknown'],
 ];
 const TAGS = [
-  { x: 36, y: 71, cls: 'conf', t: 'Confirmed · shared parent' },
+  { x: 35, y: 46, cls: 'conf', t: 'Confirmed · shared parent' },
   { x: 59, y: 92, cls: 'rule', t: 'Rule-based · syslog burst' },
   { x: 24, y: 31, cls: 'susp', t: 'Suspected · filterlog +420 %' },
 ];
@@ -769,16 +789,15 @@ canvas.insertAdjacentHTML('beforeend',
   TAGS.map((t) => `<span class="tag ${t.cls}" style="left:${t.x}%;top:${t.y}%">${t.t}</span>`).join(''));
 
 function drawEdges() {
-  const col = { ok: css('--lime'), crit: css('--down'), maint: css('--maint'), deg: css('--degraded'), unknown: css('--unknown') };
+  const col = { ok: css('--accent'), crit: css('--down'), maint: css('--maint'), deg: css('--degraded'), unknown: css('--unknown') };
   const by = Object.fromEntries(NODES.map((n) => [n.id, n]));
-  const dark = root.dataset.theme === 'dark';
   document.getElementById('edges').innerHTML = EDGES.map(([a, b, k]) => {
     const A = by[a], B = by[b];
     const x1 = A.x * 10, y1 = A.y * 4.2, x2 = B.x * 10, y2 = B.y * 4.2;
     const mx = (x1 + x2) / 2;
     const d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`;
     const dash = k === 'unknown' ? 'stroke-dasharray="6 6"' : k === 'maint' ? 'stroke-dasharray="2 5"' : '';
-    const glow = k === 'crit' && dark ? `style="filter:drop-shadow(0 0 5px ${col.crit})"` : '';
+    const glow = k === 'crit' ? 'style="filter:var(--wire-glow)"' : '';
     return `<path d="${d}" fill="none" stroke="${col[k]}" stroke-width="${k === 'ok' ? 4 : 3}" stroke-linecap="round" vector-effect="non-scaling-stroke" ${dash} ${glow}/>`;
   }).join('') +
   // suspected link: firewall to the incident, dotted
@@ -790,7 +809,7 @@ function select(id) {
   canvas.querySelectorAll('.node').forEach((el) => el.classList.toggle('sel', el.dataset.id === id));
   const stCls = n.cls.includes('crit') ? 'crit' : n.cls.includes('down') ? 'crit' : n.cls.includes('deg') ? 'warn' : n.cls.includes('maint') ? 'maint' : n.cls.includes('unknown') ? 'maint' : 'ok';
   document.getElementById('detail').innerHTML =
-    `<span class="row" style="padding:0"><span class="st ${stCls}">${ic(n.icon)}</span></span><div class="tx"><b>${n.nm}</b> <span style="color:var(--text-2)">· ${n.sub}</span><p>${n.info}</p></div><button class="btn-ink" style="height:38px" data-toast="Opens ${n.nm}">Open${ic('right')}</button>`;
+    `<span class="row" style="padding:0"><span class="st ${stCls}">${ic(n.icon)}</span></span><div class="tx"><b>${n.nm}</b> <span style="color:var(--text-2)">· ${n.sub}</span><p>${n.info}</p></div><button class="btn-ink btn-primary" style="height:38px" data-toast="Opens ${n.nm}">Open${ic('right')}</button>`;
 }
 canvas.addEventListener('click', (e) => { const b = e.target.closest('.node'); if (b) select(b.dataset.id); });
 
