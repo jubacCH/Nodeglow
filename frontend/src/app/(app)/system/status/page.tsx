@@ -126,6 +126,13 @@ interface SystemStatus {
     maintenance: { active?: number; timed?: number; indefinite?: number };
     log_intelligence: { templates?: number; baselines?: number; precursors?: number };
     data_retention: { ping_age?: string; snap_age?: string; syslog_age?: string };
+    /** The heartbeat to an external monitor (NODEGLOW_HEARTBEAT_URL). */
+    heartbeat?: {
+      mode: 'unset' | 'off' | 'set';
+      last_ok_seconds_ago: number | null;
+      failures_in_a_row: number;
+      last_error: string | null;
+    };
   };
 }
 
@@ -158,6 +165,20 @@ function pingState(p: SystemStatus['operational']['ping_stats']): HealthState {
 function syslogState(s: SystemStatus['operational']['syslog_status']): HealthState {
   if (s.running === undefined) return 'unknown';
   return s.running ? 'ok' : 'down';
+}
+
+/** Who notices when Nodeglow itself stops: nobody, unless a monitor outside is requested. */
+function heartbeatRow(h: SystemStatus['operational']['heartbeat']): { state: HealthState; detail: string; label: string } {
+  if (!h) return { state: 'unknown', detail: 'Not reported', label: 'No data' };
+  if (h.mode === 'unset') {
+    return { state: 'warning', detail: 'Nothing reports an outage of Nodeglow itself (NODEGLOW_HEARTBEAT_URL)', label: 'Not set up' };
+  }
+  if (h.mode === 'off') return { state: 'unknown', detail: 'Switched off in the configuration', label: 'Off' };
+  if (h.failures_in_a_row >= 5) {
+    return { state: 'down', detail: `${h.failures_in_a_row} requests failed in a row: ${h.last_error ?? 'no error text'}`, label: 'Failing' };
+  }
+  if (h.last_ok_seconds_ago === null) return { state: 'unknown', detail: 'No request answered yet', label: 'Waiting' };
+  return { state: 'ok', detail: `Last request answered ${h.last_ok_seconds_ago} s ago`, label: 'Reporting' };
 }
 
 function integrationState(ok: boolean | null): HealthState {
@@ -385,6 +406,7 @@ export default function SystemStatusPage() {
                       detail={jobs.length > 0 ? `${jobs.length} scheduled · ${jobs.filter((j) => j.next_run === 'paused').length} paused` : 'Scheduler reported no jobs'}
                       label={jobs.length > 0 ? 'Scheduled' : undefined}
                     />
+                    <ComponentRow name="External monitor" {...heartbeatRow(ops.heartbeat)} />
                   </ul>
                 </Card>
 

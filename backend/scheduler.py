@@ -1347,14 +1347,15 @@ async def send_heartbeat():
     requests it once a minute, and only while Postgres answers, so the
     absence of the request is the alarm.
     """
-    import os
     import time
 
     global last_tick
     last_tick = time.time()
 
-    url = os.getenv("NODEGLOW_HEARTBEAT_URL", "").strip()
-    if not url:
+    from services import heartbeat
+
+    mode, url = heartbeat.setting()
+    if mode != "set":
         return
     if not await _postgres_answers():
         logger.warning("Heartbeat withheld: Postgres does not answer")
@@ -1364,8 +1365,13 @@ async def send_heartbeat():
 
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             (await client.get(url)).raise_for_status()
+        heartbeat.record_ok(time.time())
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Heartbeat to the external monitor failed: %s", exc)
+        # Not the exception text: it carries the check URL, which is the
+        # credential of the monitor.
+        error = heartbeat.describe_error(exc)
+        heartbeat.record_failure(error)
+        logger.warning("Heartbeat to the external monitor failed: %s", error)
 
 
 @instrument_job("legacy_api_key_cleanup")

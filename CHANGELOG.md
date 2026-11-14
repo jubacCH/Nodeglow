@@ -209,6 +209,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   interface list was read in the format of its Python predecessor, and
   Proxmox guests under keys the snapshot never had; neither ever reached
   the traffic data.
+- Heartbeat: an installation without an external monitor says so. With
+  `NODEGLOW_HEARTBEAT_URL` unset there is a warning incident and a line
+  "External monitor" on the System status page; `off` accepts it. Five
+  failed requests in a row are a critical incident. The error text and the
+  log line no longer contain the check URL.
 - Backups: a job is no longer "overdue" because its source cannot be read.
   With the integration down nobody knows whether a backup ran; jobs that
   were on schedule at the last reading now say "not checked" with the

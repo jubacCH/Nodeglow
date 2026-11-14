@@ -9,6 +9,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-pytest")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("DATA_DIR", os.path.join(os.path.dirname(__file__), ".test_data"))
+# The test installation runs without an external monitor on purpose; the
+# tests of the heartbeat set the variable themselves.
+os.environ.setdefault("NODEGLOW_HEARTBEAT_URL", "off")
 
 from datetime import datetime
 
