@@ -151,6 +151,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- CI runs the backend suite a second time with the clock thirty days ahead
+  (`tests/clockshift.py`). Tests whose fixtures carry fixed dates fail there
+  before they are merged, instead of on their own days later.
 - Backup incidents are grouped: from three failed or overdue jobs of one
   source on, they are one incident ("45 backups overdue (proxmox)") that
   names the jobs, instead of one incident and one notification per job. A

@@ -81,6 +81,7 @@ cd backend
 pip install -r requirements-dev.txt
 pytest -q                                      # core + ee/backend/tests
 NODEGLOW_DISABLE_EE=1 pytest -q                # core alone (community edition)
+NG_SHIFT_DAYS=30 python -m pytest -p tests.clockshift -q   # the suite, 30 days from now
 ruff check .                                   # CI pins ruff==0.17.0
 ruff check --config ruff.toml ../ee/backend
 
