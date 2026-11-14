@@ -356,6 +356,17 @@ async def _notification_problems(db) -> list[Problem]:
     return problems
 
 
+def _heartbeat_problems() -> list[Problem]:
+    from models.tenant import DEFAULT_TENANT_ID
+    from services import heartbeat, tenancy
+
+    ctx = tenancy.current()
+    if ctx is not None and ctx.tenant_id not in (None, DEFAULT_TENANT_ID):
+        return []
+    return [Problem(key=p["key"], title=p["title"], severity=p["severity"], summary=p["summary"])
+            for p in heartbeat.problems()]
+
+
 async def collect_problems(db, scheduler, now: float, process_start: float) -> list[Problem]:
     """Gather everything currently wrong with Nodeglow itself."""
     problems: list[Problem] = []
@@ -398,7 +409,15 @@ async def collect_problems(db, scheduler, now: float, process_start: float) -> l
     except Exception as exc:  # noqa: BLE001
         log.warning("Self-check notification pass failed: %s", exc)
 
-    # 4. Jobs that stopped completing.
+    # 4. The heartbeat to an external monitor: none set up, or one that
+    # rejects the requests. A matter of the installation, so it is reported
+    # to its operator only, not to every tenant.
+    try:
+        problems.extend(_heartbeat_problems())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Self-check heartbeat pass failed: %s", exc)
+
+    # 5. Jobs that stopped completing.
     try:
         from prometheus_client import REGISTRY
 

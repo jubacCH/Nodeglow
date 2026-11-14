@@ -725,6 +725,12 @@ service alert you when the requests stop:
 NODEGLOW_HEARTBEAT_URL=https://hc-ping.com/your-uuid
 ```
 
+Without the setting Nodeglow says so: a warning incident ("Nobody is told
+when Nodeglow itself stops") and the line "External monitor" on the System
+status page. Set the variable to `off` to accept running without one. When
+five requests in a row fail, that is a critical incident; the error is shown
+without the URL, which is the credential of the monitor.
+
 Nodeglow requests the URL once a minute, and only while Postgres answers.
 Give the service a grace time of five minutes or so; an update restarts the
 backend. `/readyz` reports `scheduler_last_tick_seconds_ago` for a quick
@@ -1095,7 +1101,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `DEBUG` | `nodeglow` | unset | `1` serves the OpenAPI docs at `/api/docs` — never in production |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` | `nodeglow` | unset | OpenTelemetry tracing export (OTLP/HTTP) |
 | `NODEGLOW_SETUP_TOKEN` | `nodeglow` | generated | Token the first-run setup wizard asks for. `install.sh` writes it to `.env` and prints it; otherwise it is generated at start, logged, and stored in `/data/setup-token` until setup is done (passed through by the shipped compose files) |
-| `NODEGLOW_HEARTBEAT_URL` | `nodeglow` | unset | Dead-man check URL, requested once a minute (passed through by the shipped compose files) |
+| `NODEGLOW_HEARTBEAT_URL` | `nodeglow` | unset | Dead-man check URL, requested once a minute (passed through by the shipped compose files). Unset raises a warning incident; `off` accepts running without a monitor |
 | `NODEGLOW_INTEGRATION_CONCURRENCY` | `nodeglow` | `8` | Integrations collected in parallel |
 | `NODEGLOW_INTEGRATION_TIMEOUT` | `nodeglow` | `60` | Seconds per integration collect |
 | `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |
