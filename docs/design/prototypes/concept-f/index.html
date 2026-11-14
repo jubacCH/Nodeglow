@@ -368,7 +368,20 @@ button.tile:hover { background: var(--surface-3); }
 .tag.conf { background: var(--ink); color: var(--on-ink); border: 1px solid var(--ink-border); }
 .tag.susp { background: var(--surface); color: var(--text-2); border: 1.5px dashed var(--text-3); }
 .tag.rule { background: var(--accent); color: var(--on-accent); }
-.canvas .tag { position: absolute; transform: translate(-50%, -50%); }
+.canvas .node { transform: translate(-50%, -24px); }
+.canvas .node.right { transform: translate(-24px, -50%); }
+.canvas .node:not(.right) .lb { align-items: center; }
+.canvas .node .disc { width: 48px; height: 48px; }
+.canvas .node .disc svg { width: 19px; height: 19px; }
+.canvas .lb { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 3px 8px 4px; border-radius: 10px; background: color-mix(in srgb, var(--surface-2) 88%, transparent); }
+.canvas .node .bdg { top: -9px; right: auto; left: 30px; }
+.canvas .node.right .bdg { left: -12px; }
+.canvas .lb .sub { margin: 0; }
+.canvas .lb .tag { height: 20px; font-size: 10.5px; margin-top: 2px; }
+.disc.cl { border: 0 !important; }
+.disc.cl .cn { position: absolute; inset: 6px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; font: 600 13px var(--font-display); color: var(--text); letter-spacing: -.02em; }
+.n-more .disc.cl .cn { background: var(--surface-2); }
+.n-more .nm { color: var(--accent-text); }
 @media (prefers-reduced-motion: no-preference) {
   :root[data-theme="dark"] .n-crit .disc, :root[data-theme="dark"] .st.crit { animation: breathe 6s ease-in-out infinite; }
 }
@@ -503,7 +516,7 @@ button.tile:hover { background: var(--surface-3); }
             <span class="ico"><i data-ic="server"></i></span>
             <div><h2>Hosts</h2><p id="hsub"></p></div>
             <div class="end">
-              <div class="seg" id="hscale" role="tablist" title="Scale test with simulated data">
+              <div class="seg tscale" id="hscale" role="tablist" title="Scale test with simulated data">
                 <button role="tab" class="on" aria-selected="true" data-s="sme">48 hosts</button>
                 <button role="tab" aria-selected="false" data-s="ent">480 hosts</button>
               </div>
@@ -549,8 +562,12 @@ button.tile:hover { background: var(--surface-3); }
         <section class="card">
           <div class="card-h">
             <span class="ico"><i data-ic="network"></i></span>
-            <div><h2>Where it breaks</h2><p>Zürich HQ and Bern branch · click a node</p></div>
+            <div><h2>Where it breaks</h2><p>Problem paths open, healthy branches folded into counts · click a node</p></div>
             <div class="end">
+              <div class="seg tscale" role="tablist" title="Scale test with simulated data">
+                <button role="tab" class="on" aria-selected="true" data-s="sme">48 hosts</button>
+                <button role="tab" aria-selected="false" data-s="ent">480 hosts</button>
+              </div>
               <div class="legend">
                 <span><span class="tag conf">Confirmed</span></span>
                 <span><span class="tag rule">Rule-based</span></span>
@@ -558,7 +575,7 @@ button.tile:hover { background: var(--surface-3); }
               </div>
             </div>
           </div>
-          <div class="canvas-wrap"><div class="canvas" id="canvas"><svg class="edges" id="edges" viewBox="0 0 1000 420" preserveAspectRatio="none"></svg></div></div>
+          <div class="canvas-wrap"><div class="canvas" id="canvas"></div></div>
           <div class="detail" id="detail"></div>
           <div class="hint">No light means no data: hosts behind a silent probe stay grey and hatched, never green.</div>
         </section>
@@ -672,7 +689,7 @@ function applyTheme(t) {
   document.querySelectorAll('#themeBtn, #themeBtnM').forEach((b) => { b.innerHTML = ic(t === 'dark' ? 'sun' : 'moon'); });
   store.set('ngf-theme', t);
   if (window.drawChart) drawChart();
-  if (window.drawEdges) drawEdges();
+  if (document.getElementById('canvas')?._nodes) renderTopo();
 }
 const savedTheme = store.get('ngf-theme');
 root.dataset.theme = savedTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -977,12 +994,6 @@ hostCard.addEventListener('mouseover', (e) => {
 });
 hostCard.addEventListener('mouseleave', () => { htip.style.opacity = 0; });
 hostCard.addEventListener('click', (e) => {
-  const sc = e.target.closest('#hscale button');
-  if (sc) {
-    scale = sc.dataset.s; showAll.sites = showAll.probs = false; openGroups.clear();
-    document.querySelectorAll('#hscale button').forEach((b) => { b.classList.toggle('on', b === sc); b.setAttribute('aria-selected', String(b === sc)); });
-    renderHosts(); return;
-  }
   const more = e.target.closest('[data-more]');
   if (more) { showAll[more.dataset.more] = !showAll[more.dataset.more]; renderHosts(); return; }
   const grp = e.target.closest('[data-grp]');
@@ -991,63 +1002,153 @@ hostCard.addEventListener('click', (e) => {
   if (host) toast(`Opens host ${host.dataset.host}`);
 });
 
-/* ---------- topology canvas ---------- */
-const NODES = [
-  { id: 'inet', x: 6, y: 50, cls: 'n-neutral', icon: 'globe', nm: 'Internet', sub: '942 / 98 Mbit/s', info: 'Speedtest 942 / 98 Mbit/s, 6 ms. Upstream healthy.' },
-  { id: 'fw', x: 24, y: 50, cls: 'n-ok', icon: 'shield', nm: 'fw-zh-01', sub: 'pfSense', info: 'Healthy. Filterlog volume +420 % against the Friday 14:00 baseline. It overlaps #1071 in time only, so the link is suspected, not confirmed.' },
-  { id: 'core1', x: 47, y: 22, cls: 'n-ok', icon: 'switch', nm: 'SW-ZH-CORE-01', sub: '18 hosts ok', info: 'Healthy. 18 hosts behind it, all fresh data.' },
-  { id: 'core2', x: 47, y: 64, cls: 'n-crit', icon: 'switch', nm: 'SW-ZH-CORE-02', sub: 'Te1/0/48 flapping', bdg: '7', info: '%LINK-3-UPDOWN on uplink Te1/0/48, 38 events in 10 min. 7 hosts share this parent in the topology; their alerts are folded into #1071.' },
-  { id: 'nas', x: 72, y: 13, cls: 'n-maint right', icon: 'wrench', nm: 'NAS-ZH-01', sub: 'Maintenance until 15:00', info: 'Window "NAS firmware update" 14:00–15:00. Alerts paused.' },
-  { id: 'app', x: 72, y: 45, cls: 'n-down right', icon: 'server', nm: 'SRV-APP-01', sub: 'Down since 14:07', info: 'No response since 14:07. Parent SW-ZH-CORE-02 is degraded, so this is downstream of #1071.' },
-  { id: 'prn', x: 72, y: 65, cls: 'n-down right', icon: 'printer', nm: 'PRN-ZH-02', sub: 'Down since 14:07', info: 'No response since 14:07. Downstream of #1071.' },
-  { id: 'deg', x: 72, y: 85, cls: 'n-deg right', icon: 'layers', nm: '5 hosts degraded', sub: '3–40 ms instead of 0.3 ms', bdg: '5', info: 'Latency 3–40 ms instead of ~0.3 ms since 14:05. All behind SW-ZH-CORE-02.' },
-  { id: 'probe', x: 24, y: 84, cls: 'n-unknown', icon: 'radio', nm: 'probe-bern-01', sub: 'Silent 11 min · 9 hosts', bdg: '9', info: 'Last heartbeat 14:21 (threshold 3 min). Its 9 hosts are unknown, not up.' },
-];
-const EDGES = [
-  ['inet', 'fw', 'ok'], ['fw', 'core1', 'ok'], ['fw', 'core2', 'crit'], ['core1', 'nas', 'maint'],
-  ['core2', 'app', 'crit'], ['core2', 'prn', 'crit'], ['core2', 'deg', 'deg'], ['fw', 'probe', 'unknown'],
-];
-const TAGS = [
-  { x: 35, y: 46, cls: 'conf', t: 'Confirmed · shared parent' },
-  { x: 59, y: 92, cls: 'rule', t: 'Rule-based · syslog burst' },
-  { x: 24, y: 31, cls: 'susp', t: 'Suspected · filterlog +420 %' },
-];
-const canvas = document.getElementById('canvas');
-canvas.insertAdjacentHTML('beforeend',
-  NODES.map((n) => `<button class="node ${n.cls}" data-id="${n.id}" style="left:${n.x}%;top:${n.y}%"><span class="disc">${ic(n.icon)}${n.bdg ? `<span class="bdg">${n.bdg}</span>` : ''}</span><span><span class="nm">${n.nm}</span><br><span class="sub">${n.sub}</span></span></button>`).join('') +
-  TAGS.map((t) => `<span class="tag ${t.cls}" style="left:${t.x}%;top:${t.y}%">${t.t}</span>`).join(''));
+/* ---------- topology (scales like the host card) ----------
+   Rules: the path to a problem stays open; healthy branches fold into one count node
+   with a status ring; a parent shows at most 5 children, the rest sit behind "+N";
+   more than 2 hosts in the same state under one parent fold into a count node. */
+const TOPO = {
+  sme: {
+    sel: 'core2',
+    root: { id: 'inet', nm: 'Internet', sub: '942 / 98 Mbit/s', st: 'neutral', icon: 'globe', info: 'Speedtest 942 / 98 Mbit/s, 6 ms. Upstream healthy.', kids: [
+      { id: 'fw', nm: 'fw-zh-01', sub: 'pfSense', st: 'ok', icon: 'shield', tag: ['susp', 'Suspected · filterlog +420 %'], info: 'Healthy. Filterlog volume +420 % against the Friday 14:00 baseline. It overlaps #1071 in time only, so the link is suspected, not confirmed.', kids: [
+        { id: 'core1', nm: 'SW-ZH-CORE-01', sub: 'core switch', st: 'ok', icon: 'switch', info: 'Healthy. 27 hosts behind it.', kids: [
+          { id: 'c-zh', nm: '27 hosts', sub: '2 warnings · 1 maintenance', counts: { warn: 2, maint: 1, ok: 24 }, info: 'SRV-BACKUP-01 and web-01 warn, NAS-ZH-01 in maintenance until 15:00. The warnings have no topology cause, so they stay folded here and appear in the host card.' },
+        ] },
+        { id: 'core2', nm: 'SW-ZH-CORE-02', sub: 'Te1/0/48 flapping', st: 'crit', icon: 'switch', bdg: '#1071', tag: ['conf', 'Confirmed · shared parent'], info: '%LINK-3-UPDOWN on uplink Te1/0/48, 38 events in 10 min. 7 hosts share this parent in the topology; their alerts are folded into #1071.', kids: [
+          { id: 'app', nm: 'SRV-APP-01', sub: 'down since 14:07', st: 'down', icon: 'server', info: 'No response since 14:07. Downstream of #1071.' },
+          { id: 'prn', nm: 'PRN-ZH-02', sub: 'down since 14:07', st: 'down', icon: 'printer', info: 'No response since 14:07. Downstream of #1071.' },
+          { id: 'c-deg', nm: '5 hosts', sub: 'degraded · 3–40 ms', counts: { deg: 5 }, tag: ['rule', 'Rule-based · syslog burst'], info: 'SRV-DC-01, db-02, AP-ZH-OG1, AP-ZH-OG2, PRN-ZH-01. Latency 3–40 ms instead of ~0.3 ms since 14:05.' },
+        ] },
+        { id: 'probe', nm: 'probe-bern-01', sub: 'silent 11 min', st: 'unknown', icon: 'radio', info: 'Last heartbeat 14:21 (threshold 3 min). Its 9 hosts are unknown, not up.', kids: [
+          { id: 'c-be', nm: '9 hosts', sub: 'Bern · no data', counts: { unknown: 9 }, info: 'All 9 Bern hosts report through probe-bern-01. No light means no data.' },
+        ] },
+      ] },
+      { id: 'c-cloud', nm: '2 checks', sub: 'Cloud · HTTP and TLS', counts: { ok: 2 }, info: 'portal.mustertreuhand.ch and intranet, both healthy. Certificate of the portal expires in 9 days.' },
+    ] },
+  },
+  ent: {
+    sel: 'agg03',
+    root: { id: 'inet', nm: 'Internet', sub: '2 uplinks · 10 Gbit/s', st: 'neutral', icon: 'globe', info: 'Both uplinks healthy.', kids: [
+      { id: 'fwdc', nm: 'fw-dc-01', sub: 'HA pair', st: 'ok', icon: 'shield', info: 'Healthy, active/passive.', kids: [
+        { id: 'dccore', nm: 'SW-DC-CORE-01', sub: 'DC Lupfig core', st: 'ok', icon: 'switch', info: 'Healthy. 140 hosts in DC Lupfig behind it.', kids: [
+          { id: 'agg03', nm: 'SW-DC-AGG-03', sub: 'LACP member Po3 down', st: 'crit', icon: 'switch', bdg: '#2214', tag: ['conf', 'Confirmed · shared parent'], info: 'Port-channel Po3 lost one member at 13:58. 40 hosts share this parent; 21 are affected and folded into #2214.', kids: [
+            { id: 'e-down', nm: '3 hosts', sub: 'down since 13:58', counts: { down: 3 }, info: 'lup-db-03, lup-app-11, lup-app-12. No response since 13:58.' },
+            { id: 'e-deg', nm: '18 hosts', sub: 'degraded · packet loss 4 %', counts: { deg: 18 }, tag: ['rule', 'Rule-based · same minute'], info: '18 hosts with 2–6 % packet loss since 13:58.' },
+            { id: 'e-ok3', nm: '19 hosts', sub: 'healthy', counts: { ok: 19 }, info: 'Still healthy behind the remaining LACP member.' },
+          ] },
+          { id: 'e-agg', nm: '98 hosts', sub: 'via AGG-01, -02, -04', counts: { warn: 4, maint: 2, ok: 92 }, info: '3 aggregation switches and 95 hosts. 4 warnings without a topology cause (see host card), 2 in a firmware window.' },
+        ] },
+        { id: 'wan', nm: 'SD-WAN', sub: '7 branch sites', st: 'neutral', icon: 'network', info: 'Branch overlay. Each site reports through its own probe.', kids: [
+          { id: 'e-be', nm: '44 hosts', sub: 'Bern · probe silent 11 min', counts: { unknown: 44 }, info: 'probe-bern-01 last heartbeat 14:21. 44 hosts unknown, not up.' },
+          { id: 'e-bs', nm: '40 hosts', sub: 'Basel · WAN latency 48 ms', counts: { deg: 3, ok: 37 }, bdg: '#2217', tag: ['rule', 'Rule-based · WAN latency'], info: 'Latency Basel ↔ DC 48 ms instead of 9 ms. 3 latency-sensitive hosts degraded.' },
+          { id: 'e-zh', nm: '96 hosts', sub: 'Zürich HQ', counts: { down: 1, warn: 2, maint: 6, ok: 87 }, info: 'zh-prn-14 down without a shared cause, 2 warnings, 6 in a patch window.' },
+        ], more: [
+          { id: 'e-ge', nm: '58 hosts', sub: 'Genève', counts: { warn: 1, ok: 57 }, info: 'ge-fs-01 volume E: 92 %.' },
+          { id: 'e-lu', nm: '28 hosts', sub: 'Lugano', counts: { ok: 28 }, info: 'All healthy.' },
+          { id: 'e-sg', nm: '26 hosts', sub: 'St. Gallen', counts: { ok: 26 }, info: 'All healthy.' },
+          { id: 'e-lz', nm: '24 hosts', sub: 'Luzern', counts: { ok: 24 }, info: 'All healthy.' },
+        ] },
+      ] },
+      { id: 'e-cloud', nm: '24 checks', sub: 'Cloud · HTTP and TLS', counts: { warn: 1, ok: 23 }, info: 'shop.example.ch certificate expires in 6 days.' },
+    ] },
+  },
+};
+const ORDER = ['down', 'warn', 'deg', 'unknown', 'maint', 'ok'];
+const RING = { down: '--down', warn: '--warn', deg: '--degraded', unknown: '--unknown', maint: '--maint', ok: '--ok' };
+const EDGE = { crit: '--down', down: '--down', warn: '--warn', deg: '--degraded', unknown: '--unknown', maint: '--maint', ok: '--accent', neutral: '--accent' };
+const expanded = new Set();
+let topoSel = null;
 
-function drawEdges() {
-  const col = { ok: css('--accent'), crit: css('--down'), maint: css('--maint'), deg: css('--degraded'), unknown: css('--unknown') };
-  const by = Object.fromEntries(NODES.map((n) => [n.id, n]));
-  document.getElementById('edges').innerHTML = EDGES.map(([a, b, k]) => {
-    const A = by[a], B = by[b];
-    const x1 = A.x * 10, y1 = A.y * 4.2, x2 = B.x * 10, y2 = B.y * 4.2;
-    const mx = (x1 + x2) / 2;
-    const d = `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`;
+function worst(n) {
+  if (!n.counts) return n.st;
+  return ORDER.find((k) => n.counts[k] && k !== 'ok') || 'ok';
+}
+function visibleKids(n) {
+  const kids = n.kids || [];
+  if (!n.more) return kids;
+  if (expanded.has(n.id)) return [...kids, ...n.more];
+  const sum = {};
+  n.more.forEach((m) => Object.entries(m.counts).forEach(([k, v]) => { sum[k] = (sum[k] || 0) + v; }));
+  const total = Object.values(sum).reduce((a, b) => a + b, 0);
+  return [...kids, { id: `${n.id}-more`, fold: true, of: n.id, nm: `+${n.more.length} sites`, sub: `${total} hosts · ${n.more.map((m) => m.sub).join(', ')}`, counts: sum, info: 'Folded because the parent already shows its 3 most urgent children. Click to unfold.' }];
+}
+function ring(c) {
+  const total = Object.values(c).reduce((a, b) => a + b, 0);
+  let acc = 0;
+  return 'conic-gradient(' + ORDER.filter((k) => c[k]).map((k) => {
+    const a = acc / total * 360; acc += c[k]; const b = acc / total * 360;
+    return `var(${RING[k]}) ${a}deg ${b}deg`;
+  }).join(', ') + ')';
+}
+function renderTopo() {
+  const T = TOPO[scale];
+  const nodes = [], edges = [];
+  let leaf = 0, maxD = 0;
+  (function walk(n, d, parent) {
+    maxD = Math.max(maxD, d);
+    const kids = visibleKids(n);
+    kids.forEach((k) => walk(k, d + 1, n));
+    n._d = d;
+    n._y = kids.length ? (kids[0]._y + kids[kids.length - 1]._y) / 2 : leaf++;
+    nodes.push(n);
+    if (parent) edges.push([parent, n]);
+  })(T.root, 0, null);
+  const ROW = 76, PAD = 46;
+  const H = Math.max(300, PAD * 2 + (leaf - 1) * ROW);
+  const xOf = (n) => 9 + n._d * (62 / maxD);
+  const yOf = (n) => PAD + n._y * ROW;
+  const canvas = document.getElementById('canvas');
+  canvas.style.height = H + 'px';
+  const paths = edges.map(([a, b]) => {
+    const k = worst(b);
+    const x1 = xOf(a) * 10, y1 = yOf(a), x2 = xOf(b) * 10, y2 = yOf(b), mx = (x1 + x2) / 2;
     const dash = k === 'unknown' ? 'stroke-dasharray="6 6"' : k === 'maint' ? 'stroke-dasharray="2 5"' : '';
-    const glow = k === 'crit' ? 'style="filter:var(--wire-glow)"' : '';
-    return `<path d="${d}" fill="none" stroke="${col[k]}" stroke-width="${k === 'ok' ? 4 : 3}" stroke-linecap="round" vector-effect="non-scaling-stroke" ${dash} ${glow}/>`;
-  }).join('') +
-  // suspected link: firewall to the incident, dotted
-  `<path d="M${24 * 10} ${50 * 4.2 - 30} C ${30 * 10} ${20 * 4.2}, ${40 * 10} ${30 * 4.2}, ${47 * 10 - 20} ${64 * 4.2 - 30}" fill="none" stroke="${css('--text-3')}" stroke-width="1.5" stroke-dasharray="2 5" vector-effect="non-scaling-stroke"/>`;
+    const glow = k === 'crit' || k === 'down' ? 'style="filter:var(--wire-glow)"' : '';
+    return `<path d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" fill="none" stroke="${css(EDGE[k])}" stroke-width="${k === 'ok' || k === 'neutral' ? 3.5 : 3}" stroke-linecap="round" vector-effect="non-scaling-stroke" ${dash} ${glow}/>`;
+  }).join('');
+  // parents first, so deeper nodes paint on top of long parent labels
+  nodes.sort((a, b) => a._d - b._d);
+  const html = nodes.map((n) => {
+    const cls = n.counts ? (n.fold ? 'n-more' : `n-${worst(n) === 'ok' ? 'neutral' : worst(n)}`) : `n-${n.st}`;
+    const disc = n.counts
+      ? `<span class="disc cl" style="background:${ring(n.counts)}"><span class="cn">${n.fold ? '+' : Object.values(n.counts).reduce((a, b) => a + b, 0)}</span>${n.bdg ? `<span class="bdg">${n.bdg}</span>` : ''}</span>`
+      : `<span class="disc">${ic(n.icon)}${n.bdg ? `<span class="bdg">${n.bdg}</span>` : ''}</span>`;
+    const tag = n.tag ? `<span class="tag ${n.tag[0]}">${n.tag[1]}</span>` : '';
+    const side = (visibleKids(n).length ? '' : 'right ');
+    return `<button class="node ${side}${cls}${topoSel === n.id ? ' sel' : ''}" data-id="${n.id}" style="left:${xOf(n)}%;top:${yOf(n)}px"><span class="disc-wrap">${disc}</span><span class="lb"><span class="nm">${n.nm}</span><span class="sub">${n.sub}</span>${tag}</span></button>`;
+  }).join('');
+  canvas.innerHTML = `<svg class="edges" viewBox="0 0 1000 ${H}" preserveAspectRatio="none">${paths}</svg>${html}`;
+  canvas._nodes = nodes;
 }
-
-function select(id) {
-  const n = NODES.find((x) => x.id === id);
-  canvas.querySelectorAll('.node').forEach((el) => el.classList.toggle('sel', el.dataset.id === id));
-  const stCls = n.cls.includes('crit') ? 'crit' : n.cls.includes('down') ? 'crit' : n.cls.includes('deg') ? 'warn' : n.cls.includes('maint') ? 'maint' : n.cls.includes('unknown') ? 'maint' : 'ok';
+function selectNode(id) {
+  topoSel = id;
+  const n = document.getElementById('canvas')._nodes.find((x) => x.id === id);
+  document.querySelectorAll('#canvas .node').forEach((el) => el.classList.toggle('sel', el.dataset.id === id));
+  const k = worst(n);
+  const stCls = k === 'crit' || k === 'down' ? 'crit' : k === 'warn' || k === 'deg' ? 'warn' : k === 'maint' || k === 'unknown' ? 'maint' : 'ok';
+  const counts = n.counts ? ' · ' + ORDER.filter((x) => n.counts[x]).map((x) => `${n.counts[x]} ${ST[x].label.toLowerCase()}`).join(', ') : '';
   document.getElementById('detail').innerHTML =
-    `<span class="row" style="padding:0"><span class="st ${stCls}">${ic(n.icon)}</span></span><div class="tx"><b>${n.nm}</b> <span style="color:var(--text-2)">· ${n.sub}</span><p>${n.info}</p></div><button class="btn-ink btn-primary" style="height:38px" data-toast="Opens ${n.nm}">Open${ic('right')}</button>`;
+    `<span class="row" style="padding:0"><span class="st ${stCls}">${ic(n.icon || 'layers')}</span></span><div class="tx"><b>${n.nm}</b> <span style="color:var(--text-2)">· ${n.sub}${counts}</span><p>${n.info}</p></div><button class="btn-ink btn-primary" style="height:38px" data-toast="Opens ${n.nm} in the topology page">Open${ic('right')}</button>`;
 }
-canvas.addEventListener('click', (e) => { const b = e.target.closest('.node'); if (b) select(b.dataset.id); });
+document.getElementById('canvas').addEventListener('click', (e) => {
+  const b = e.target.closest('.node'); if (!b) return;
+  const n = document.getElementById('canvas')._nodes.find((x) => x.id === b.dataset.id);
+  if (n.fold) { expanded.add(n.of); renderTopo(); selectNode(n.of); return; }
+  selectNode(n.id);
+});
+function setScale(s2) {
+  scale = s2; showAll.sites = showAll.probs = false; openGroups.clear(); expanded.clear();
+  document.querySelectorAll('.tscale button').forEach((b) => { const on = b.dataset.s === s2; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); });
+  renderHosts(); renderTopo(); selectNode(TOPO[s2].sel);
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('.tscale button'); if (b) setScale(b.dataset.s); });
 
 /* ---------- wiring ---------- */
 paintIcons();
 applyTheme(root.dataset.theme);
 setChart('incidents');
-drawEdges();
-select('core2');
+renderTopo();
+selectNode(TOPO[scale].sel);
 
 document.querySelectorAll('#tiles .tile[data-chart]').forEach((t) => t.addEventListener('click', () => setChart(t.dataset.chart)));
 document.addEventListener('click', (e) => {
