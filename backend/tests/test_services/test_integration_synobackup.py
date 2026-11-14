@@ -10,6 +10,20 @@ import integrations.synobackup as sb
 from integrations.synobackup import SynobackupIntegration, nas_utc_offset, parse_synobackup_data, to_utc_iso
 
 NOW = datetime(2026, 11, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class _FrozenDatetime(datetime):
+    """``datetime`` whose ``now()`` is the day the fixtures were written for.
+
+    ``collect()`` reads the wall clock, and the fixtures carry fixed dates:
+    two days after they were written every backup in them was "overdue", and
+    tests that expect no alert started to fail on their own.
+    """
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is not None else NOW.replace(tzinfo=None)
+
 # The NAS runs on CET (+01:00): its local clock reads 13:00 when NOW is 12:00 UTC.
 NAS_TIME = "Thu Nov 12 13:00:00 2026"
 
@@ -320,6 +334,8 @@ async def test_nas_clock_failure_with_wall_clock_times_is_flagged(monkeypatch):
     answers = base_answers()
     answers[("SYNO.DSM.Info", "getinfo")] = err(105)
     install(monkeypatch, answers)
+    # Only here: the other tests derive the NAS clock from the real one.
+    monkeypatch.setattr(sb, "datetime", _FrozenDatetime)
     res = await SynobackupIntegration(CFG).collect()
     assert res.success and res.data["unavailable"] == ["backup times"]
     assert [t for t in res.data["tasks"] if t["source"] == "hyper_backup"][0]["last_run"] is None

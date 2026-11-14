@@ -12,6 +12,20 @@ from integrations.pbs import PbsIntegration, parse_pbs_data
 NOW = datetime(2026, 11, 12, 12, 0, 0, tzinfo=timezone.utc)
 
 
+class _FrozenDatetime(datetime):
+    """``datetime`` whose ``now()`` is the day the fixtures were written for.
+
+    ``collect()`` reads the wall clock, and the fixtures carry fixed dates:
+    two days after they were written every backup in them was "overdue", and
+    tests that expect no alert started to fail on their own.
+    """
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is not None else NOW.replace(tzinfo=None)
+
+
+
 def ep(hours_ago: float) -> int:
     return int((NOW - timedelta(hours=hours_ago)).timestamp())
 
@@ -201,6 +215,7 @@ def install(monkeypatch, routes: dict[str, object], seen: list | None = None):
         return httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
 
     monkeypatch.setattr(pbs, "safe_async_client", factory)
+    monkeypatch.setattr(pbs, "datetime", _FrozenDatetime)
 
 
 CFG = {"host": "pbs.example.com", "token_id": "mon@pbs!ng", "token_secret": "s3cr3t"}
