@@ -641,9 +641,15 @@ async def test_a_new_ca_certificate_clears_the_secret_too(env, idp_server):
 
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
-    now = datetime.now(timezone.utc)
+    # The class cryptography checks against, looked up now: the clock-shift
+    # CI job replaces datetime.datetime after this module imported its own
+    # reference. The dates do not matter here.
+    import datetime as dt
+
+    start = dt.datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = dt.datetime(2100, 1, 1, tzinfo=timezone.utc)
     cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
-            .serial_number(1).not_valid_before(now).not_valid_after(now + timedelta(days=1))
+            .serial_number(1).not_valid_before(start).not_valid_after(end)
             .sign(key, hashes.SHA256()))
     pem = cert.public_bytes(serialization.Encoding.PEM).decode()
     r = await env.client.patch(f"/api/identity-providers/{env.pid}", json={"ca_pem": pem})
