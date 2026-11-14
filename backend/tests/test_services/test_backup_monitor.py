@@ -124,3 +124,126 @@ def test_failed_jobs_group_too_and_name_the_error():
     assert key == "bk-failed:proxmox:1" and cond.severity == "critical"
     assert cond.title == "4 backups failed (proxmox)" and "storage offline" in cond.summary
 
+
+# ── Proxmox sync: one job per guest and cluster ─────────────────────────────
+
+
+def _cluster(*vmids, online=True, files=None, ctime=None):
+    """A Proxmox snapshot with the given guests and one backup file each."""
+    ctime = ctime or int(datetime.utcnow().timestamp()) - 3600
+    files = vmids if files is None else files
+    return {
+        "nodes": [{"name": "pve1", "online": True}, {"name": "pve2", "online": online}],
+        "vms": [{"id": v, "name": f"vm-{v}"} for v in vmids],
+        "containers": [],
+        "tasks": [],
+        "backups": {"nfs": [{"vmid": v, "ctime": ctime, "size": 1, "volid": f"nfs:{v}"} for v in files]},
+    }
+
+
+async def _two_integrations(db, group="lab"):
+    from models.integration import IntegrationConfig
+
+    a = IntegrationConfig(type="proxmox", name="pve1", config_json="{}", cluster_group=group)
+    b = IntegrationConfig(type="proxmox", name="pve2", config_json="{}", cluster_group=group)
+    db.add_all([a, b])
+    await db.flush()
+    return a.id, b.id
+
+
+async def _jobs(db):
+    from sqlalchemy import select
+
+    return (await db.execute(select(BackupJob).order_by(BackupJob.id))).scalars().all()
+
+
+async def test_the_standby_of_a_cluster_has_no_backup_jobs_of_its_own(db):
+    """Two integrations on one cluster: one collects, one stands by.
+
+    On a real installation every guest had a job under each. The ones of the
+    standby were three days old and never updated: 43 "overdue" incidents for
+    backups that ran every night.
+    """
+    from sqlalchemy import select
+
+    from models.backup import BackupHistory
+
+    primary, standby = await _two_integrations(db)
+    old = datetime.utcnow().replace(microsecond=0) - timedelta(days=3)
+    stale = _job(name="vzdump-101-vm-101", source_config_id=standby, target_vmid=101, last_run_at=old)
+    db.add(stale)
+    await db.flush()
+    db.add(BackupHistory(job_id=stale.id, timestamp=old, status="ok"))
+    await db.flush()
+
+    result = await bk.sync_proxmox_backups(db, primary, _cluster(101))
+    await db.commit()
+    (job,) = await _jobs(db)
+    assert job.source_config_id == primary and result["created"] == 0
+    assert bk.job_state(job, datetime.utcnow())["is_overdue"] is False
+    stamps = (await db.execute(select(BackupHistory.timestamp).where(BackupHistory.job_id == job.id))).scalars().all()
+    assert len(stamps) == 2 and old in stamps, "the history of the standby moves along"
+
+    # Roles change: the same job, now under the other integration.
+    await bk.sync_proxmox_backups(db, standby, _cluster(101))
+    await db.commit()
+    (job,) = await _jobs(db)
+    assert job.source_config_id == standby
+
+
+async def test_duplicate_jobs_of_a_cluster_are_folded_into_the_newest(db):
+    primary, standby = await _two_integrations(db)
+    now = datetime.utcnow()
+    db.add_all([
+        _job(name="a", source_config_id=primary, target_vmid=101, last_run_at=now - timedelta(hours=2)),
+        _job(name="b", source_config_id=standby, target_vmid=101, last_run_at=now - timedelta(days=3)),
+    ])
+    await db.flush()
+    result = await bk.sync_proxmox_backups(db, primary, _cluster(101))
+    await db.commit()
+    assert result["merged"] == 1
+    assert [j.name for j in await _jobs(db)] == ["a"]
+
+
+async def test_integrations_of_different_clusters_keep_their_jobs_apart(db):
+    from models.integration import IntegrationConfig
+
+    a = IntegrationConfig(type="proxmox", name="site-a", config_json="{}", cluster_group="a")
+    b = IntegrationConfig(type="proxmox", name="site-b", config_json="{}", cluster_group="b")
+    c = IntegrationConfig(type="proxmox", name="single", config_json="{}")
+    db.add_all([a, b, c])
+    await db.flush()
+    for cfg in (a, b, c):
+        await bk.sync_proxmox_backups(db, cfg.id, _cluster(101))
+    await db.commit()
+    assert sorted(j.source_config_id for j in await _jobs(db)) == sorted([a.id, b.id, c.id])
+
+
+async def test_a_deleted_guest_has_no_backup_job(db):
+    """Its files stay on the storage and only get older. The job was overdue
+    for ever."""
+    primary, _ = await _two_integrations(db)
+    db.add(_job(name="vzdump-114-guest-114", source_config_id=primary, target_vmid=114,
+                last_run_at=datetime.utcnow() - timedelta(days=11)))
+    await db.flush()
+
+    # A node is offline: a guest that is missing from the list proves nothing.
+    await bk.sync_proxmox_backups(db, primary, _cluster(101, files=(101, 114), online=False))
+    assert len(await _jobs(db)) == 2
+
+    result = await bk.sync_proxmox_backups(db, primary, _cluster(101, files=(101, 114)))
+    await db.commit()
+    assert result["removed"] == 1
+    assert [j.target_vmid for j in await _jobs(db)] == [101]
+
+
+async def test_an_older_file_does_not_hide_a_newer_run(db):
+    primary, _ = await _two_integrations(db)
+    newer = datetime.utcnow().replace(microsecond=0) - timedelta(hours=1)
+    db.add(_job(source_config_id=primary, target_vmid=101, last_run_at=newer))
+    await db.flush()
+    await bk.sync_proxmox_backups(
+        db, primary, _cluster(101, ctime=int((newer - timedelta(days=2)).timestamp())))
+    (job,) = await _jobs(db)
+    assert job.last_run_at == newer
+

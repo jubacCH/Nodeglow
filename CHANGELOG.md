@@ -187,6 +187,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Proxmox backups: a cluster watched by two integrations (one collecting,
+  one standing by) no longer has two backup jobs per guest. The jobs of the
+  standby were never updated and read as overdue although the backup ran
+  every night. Existing duplicates are folded into one on the next
+  collection, their history included.
+- Proxmox backups: the job of a guest that was deleted is removed instead of
+  staying overdue for ever. Only when every node of the cluster is online.
 - "Template diversity spike" no longer fires on every agent host after a
   release. An agent that updates itself logs a dozen lines it has not sent
   in the past week (update found, verified, applied, unit stopped and

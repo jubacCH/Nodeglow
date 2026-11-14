@@ -119,6 +119,7 @@ async def sync_proxmox_backups(
       - vms / containers: for name lookups
     """
     created = updated = history_added = 0
+    merged = await _adopt_cluster_jobs(db, config_id)
 
     # Build VMID → name map from VMs and containers
     vmid_names: dict[int, str] = {}
@@ -127,8 +128,17 @@ async def sync_proxmox_backups(
         if gid:
             vmid_names[int(gid)] = guest.get("name", f"guest-{gid}")
 
+    # Is the guest list the whole cluster? Only then does a VMID that is not
+    # in it mean "this guest was deleted". With a node offline, or nothing
+    # read at all, a missing guest means nothing.
+    nodes = proxmox_data.get("nodes") or []
+    guests_complete = bool(vmid_names) and bool(nodes) and all(n.get("online") for n in nodes)
+
+    def _gone(vmid: int) -> bool:
+        return guests_complete and vmid not in vmid_names
+
     # ── 1. Process backup files from storage content ─────────────────────────
-    backup_files: dict[str, list[dict]] = proxmox_data.get("backups", {})
+    backup_files: dict[str, list[dict]] = proxmox_data.get("backups") or {}
     # Group backup files by (vmid, storage) to find the latest per guest
     # Each entry: {"volid": ..., "size": ..., "ctime": ..., "vmid": ..., "format": ...}
     guest_latest: dict[tuple[int, str], dict] = {}  # (vmid, storage) -> best file
@@ -145,6 +155,10 @@ async def sync_proxmox_backups(
                 guest_latest[key] = {**f, "_storage": storage_name}
 
     for (vmid, storage_name), info in guest_latest.items():
+        if _gone(vmid):
+            # Backup files of a deleted guest stay on the storage. They are
+            # not a job anybody expects to run again.
+            continue
         guest_name = vmid_names.get(vmid, f"guest-{vmid}")
         job_name = f"vzdump-{vmid}-{guest_name}"
 
@@ -168,11 +182,14 @@ async def sync_proxmox_backups(
         size = info.get("size", 0)
         if ctime:
             run_dt = datetime.utcfromtimestamp(ctime)
-            job.last_run_at = run_dt
-            job.last_size_bytes = size
-            job.last_status = "ok"
-            job.last_error = None
-            job.storage_name = storage_name
+            # Never backwards: the same guest on a second storage, or an
+            # older snapshot, must not hide a newer run.
+            if job.last_run_at is None or run_dt >= job.last_run_at:
+                job.last_run_at = run_dt
+                job.last_size_bytes = size
+                job.last_status = "ok"
+                job.last_error = None
+                job.storage_name = storage_name
 
             # Add history if not already recorded
             exists = await db.execute(
@@ -202,7 +219,7 @@ async def sync_proxmox_backups(
 
         # Parse VMID from task id (format: "VMID" or various forms)
         vmid = _parse_vmid_from_task(task_id, task_type)
-        if vmid is None:
+        if vmid is None or _gone(vmid):
             continue
 
         guest_name = vmid_names.get(vmid, f"guest-{vmid}")
@@ -274,7 +291,101 @@ async def sync_proxmox_backups(
                 history_added += 1
 
     await db.flush()
-    return {"created": created, "updated": updated, "history_added": history_added}
+    removed = await _remove_jobs_of_deleted_guests(db, config_id, set(vmid_names)) if guests_complete else 0
+    return {"created": created, "updated": updated, "history_added": history_added,
+            "merged": merged, "removed": removed}
+
+
+async def _adopt_cluster_jobs(db: AsyncSession, config_id: int) -> int:
+    """Make the backup jobs of a cluster belong to the integration that is
+    collecting it now. Returns the number of duplicate jobs folded away.
+
+    Several integrations can point at one cluster (``cluster_group``): one
+    collects, the others stand by. Jobs were kept per integration, so after
+    the first change of roles every guest had two jobs, and the ones of the
+    standby were never updated again: each read as overdue although the
+    backup ran every night.
+    """
+    from models.integration import IntegrationConfig
+
+    own = (await db.execute(
+        select(IntegrationConfig).where(IntegrationConfig.id == config_id)
+    )).scalar_one_or_none()
+    if own is None or not own.cluster_group:
+        return 0
+    sibling_ids = (await db.execute(
+        select(IntegrationConfig.id).where(
+            IntegrationConfig.type == own.type,
+            IntegrationConfig.cluster_group == own.cluster_group,
+            IntegrationConfig.id != config_id,
+        )
+    )).scalars().all()
+    if not sibling_ids:
+        return 0
+
+    jobs = (await db.execute(
+        select(BackupJob).where(
+            BackupJob.source_type == "proxmox",
+            BackupJob.source_config_id.in_([config_id, *sibling_ids]),
+            BackupJob.target_vmid.is_not(None),
+        ).order_by(BackupJob.id)
+    )).scalars().all()
+    by_vmid: dict[int, list[BackupJob]] = {}
+    for job in jobs:
+        by_vmid.setdefault(job.target_vmid, []).append(job)
+
+    merged = 0
+    for group in by_vmid.values():
+        # The job that knows the newest run is the one to keep.
+        keep = max(group, key=lambda j: (j.last_run_at or datetime.min, -j.id))
+        keep.source_config_id = config_id
+        for dup in group:
+            if dup is keep:
+                continue
+            known = set((await db.execute(
+                select(BackupHistory.timestamp).where(BackupHistory.job_id == keep.id)
+            )).scalars().all())
+            rows = (await db.execute(
+                select(BackupHistory).where(BackupHistory.job_id == dup.id)
+            )).scalars().all()
+            for row in rows:
+                if row.timestamp in known:
+                    await db.delete(row)
+                else:
+                    row.job_id = keep.id
+                    known.add(row.timestamp)
+            await db.flush()
+            await db.delete(dup)
+            merged += 1
+    if merged:
+        await db.flush()
+        logger.info("Backup jobs: folded %d duplicate job(s) of cluster %s into integration %d",
+                    merged, own.cluster_group, config_id)
+    return merged
+
+
+async def _remove_jobs_of_deleted_guests(db: AsyncSession, config_id: int, vmids: set[int]) -> int:
+    """Drop the jobs of guests the cluster no longer has.
+
+    Their last backup only gets older: such a job was "overdue" for ever, for
+    a machine nobody can back up any more.
+    """
+    jobs = (await db.execute(
+        select(BackupJob).where(
+            BackupJob.source_type == "proxmox",
+            BackupJob.source_config_id == config_id,
+            BackupJob.target_vmid.is_not(None),
+            BackupJob.target_vmid.not_in(vmids),
+        )
+    )).scalars().all()
+    for job in jobs:
+        logger.info("Backup job %s removed: guest %s no longer exists in the cluster",
+                    job.name, job.target_vmid)
+        await db.execute(delete(BackupHistory).where(BackupHistory.job_id == job.id))
+        await db.delete(job)
+    if jobs:
+        await db.flush()
+    return len(jobs)
 
 
 def _parse_vmid_from_task(task_id: str, task_type: str) -> int | None:
