@@ -1342,10 +1342,10 @@ async def send_heartbeat():
 
     Everything else Nodeglow knows about its own health it reports through
     itself: an incident, a notification. A stopped scheduler or a database
-    that is gone silences those too. With ``NODEGLOW_HEARTBEAT_URL`` set
-    (a check URL of a dead-man service such as healthchecks.io) this job
-    requests it once a minute, and only while Postgres answers, so the
-    absence of the request is the alarm.
+    that is gone silences those too. With a monitor configured (Settings,
+    System, or ``NODEGLOW_HEARTBEAT_URL``: a check URL of a dead-man service
+    such as healthchecks.io) this job requests it once a minute, and only
+    while Postgres answers, so the absence of the request is the alarm.
     """
     import time
 
@@ -1354,22 +1354,23 @@ async def send_heartbeat():
 
     from services import heartbeat
 
-    mode, url = heartbeat.setting()
+    # The setting saved in the UI lives in the database: an environment
+    # variable alone must still work without asking it.
+    if heartbeat.setting()[0] != "set" and not await _postgres_answers():
+        return
+    async with AsyncSessionLocal() as db:
+        mode, url, _ = await heartbeat.resolve(db)
     if mode != "set":
         return
     if not await _postgres_answers():
         logger.warning("Heartbeat withheld: Postgres does not answer")
         return
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            (await client.get(url)).raise_for_status()
+    # Not the exception text: it carries the check URL, which is the
+    # credential of the monitor.
+    error = await heartbeat.request(url)
+    if error is None:
         heartbeat.record_ok(time.time())
-    except Exception as exc:  # noqa: BLE001
-        # Not the exception text: it carries the check URL, which is the
-        # credential of the monitor.
-        error = heartbeat.describe_error(exc)
+    else:
         heartbeat.record_failure(error)
         logger.warning("Heartbeat to the external monitor failed: %s", error)
 

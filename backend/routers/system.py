@@ -191,13 +191,14 @@ def _tenant_job_stats(request: Request) -> dict:
     return out
 
 
-def _heartbeat_status() -> dict:
+async def _heartbeat_status(db) -> dict:
     """The heartbeat to an external monitor, as this process knows it. Only
     the scheduler leader sends it; another instance reports no request."""
     import time
 
     from services import heartbeat
-    return heartbeat.status(time.time())
+    mode, _, source = await heartbeat.resolve(db)
+    return heartbeat.status(time.time(), mode, source)
 
 
 @router.get("/api/system/status")
@@ -627,7 +628,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "maintenance": maintenance_stats,
             "log_intelligence": log_intelligence,
             "clickhouse_tenant_rebuild": ch_rebuild,
-            "heartbeat": _heartbeat_status(),
+            "heartbeat": await _heartbeat_status(db),
         },
         "disk_forecast": disk_forecast,
         "dashboard_perf": _get_dashboard_perf(),

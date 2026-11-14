@@ -2,6 +2,7 @@
 
 import { Field, Input, Select, Switch, Textarea } from '@/components/ui/Field';
 import { SaveBar, SettingsSection, type SaveStatus } from './formKit';
+import { HeartbeatSection } from './HeartbeatSection';
 import { IntegrationThresholds } from './IntegrationThresholds';
 import type { GeneralForm } from './settingsForm';
 
@@ -62,6 +63,7 @@ export function SystemTab({ form, set, status, onSave, onDiscard }: GeneralTabPr
         </div>
       </SettingsSection>
       <SaveBar status={status} onSave={onSave} onDiscard={onDiscard} note={SHARED_NOTE} />
+      <HeartbeatSection />
     </div>
   );
 }

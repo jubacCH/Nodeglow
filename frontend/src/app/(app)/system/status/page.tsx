@@ -129,6 +129,7 @@ interface SystemStatus {
     /** The heartbeat to an external monitor (NODEGLOW_HEARTBEAT_URL). */
     heartbeat?: {
       mode: 'unset' | 'off' | 'set';
+      source?: 'setting' | 'environment' | 'none';
       last_ok_seconds_ago: number | null;
       failures_in_a_row: number;
       last_error: string | null;
@@ -171,9 +172,9 @@ function syslogState(s: SystemStatus['operational']['syslog_status']): HealthSta
 function heartbeatRow(h: SystemStatus['operational']['heartbeat']): { state: HealthState; detail: string; label: string } {
   if (!h) return { state: 'unknown', detail: 'Not reported', label: 'No data' };
   if (h.mode === 'unset') {
-    return { state: 'warning', detail: 'Nothing reports an outage of Nodeglow itself (NODEGLOW_HEARTBEAT_URL)', label: 'Not set up' };
+    return { state: 'warning', detail: 'Nothing reports an outage of Nodeglow itself. Set it up under Settings, System', label: 'Not set up' };
   }
-  if (h.mode === 'off') return { state: 'unknown', detail: 'Switched off in the configuration', label: 'Off' };
+  if (h.mode === 'off') return { state: 'unknown', detail: 'Switched off under Settings, System', label: 'Off' };
   if (h.failures_in_a_row >= 5) {
     return { state: 'down', detail: `${h.failures_in_a_row} requests failed in a row: ${h.last_error ?? 'no error text'}`, label: 'Failing' };
   }
