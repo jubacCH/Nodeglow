@@ -143,6 +143,10 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- Backup incidents are grouped: from three failed or overdue jobs of one
+  source on, they are one incident ("45 backups overdue (proxmox)") that
+  names the jobs, instead of one incident and one notification per job. A
+  backup server that stops makes every job overdue at once.
 - `docker-compose.yml` (installations run from a checkout) uses ClickHouse
   26.8 LTS; 24.8 is end of life. **An installation that still runs 24.8
   must not jump in one step**: set the image to 25.3, start, then 25.8,
