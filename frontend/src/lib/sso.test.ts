@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildBody, EMPTY_FORM, formFromProvider, isOpenToEveryone, lines, parseRules, rulesText, type Provider,
+  buildBody, CALLBACK_ERRORS, callbackErrorText, EMPTY_FORM, formFromProvider, isOpenToEveryone, lines,
+  parseRules, rulesText, verdict, type Provider,
 } from './sso';
 
 const provider: Provider = {
@@ -72,5 +73,32 @@ describe('isOpenToEveryone', () => {
     expect(isOpenToEveryone({ ...EMPTY_FORM, allowedDomains: 'x.ch' })).toBe(false);
     expect(isOpenToEveryone({ ...EMPTY_FORM, requiredGroups: 'staff' })).toBe(false);
     expect(isOpenToEveryone({ ...EMPTY_FORM, jitEnabled: false })).toBe(false);
+  });
+});
+
+describe('test sign-in results', () => {
+  const base = { ok: true, code: null, message: 'ok' };
+  const preview = {
+    mail_domain: 'beta.ch', email_verified: true, domain_allowed: true, required_groups_met: null,
+    matched_rules: [], role: 'readonly' as const, role_from: 'default' as const,
+    would_sign_in: true, new_account: true, reasons: [],
+  };
+
+  it('names failures, a person who would not get in, and a stale test', () => {
+    expect(verdict({ ...base, ok: false, code: 'nonce', message: 'nonce' })).toEqual({ tone: 'down', text: 'nonce' });
+    expect(verdict({ ...base, preview: { ...preview, would_sign_in: false } }).tone).toBe('warning');
+    expect(verdict({ ...base, preview, counted: false }).tone).toBe('warning');
+    expect(verdict({ ...base, preview, counted: true }).tone).toBe('ok');
+  });
+
+  it('has a text for every callback error and a fallback', () => {
+    for (const code of ['invalid_request', 'expired', 'not_released', 'not_supported']) {
+      expect(callbackErrorText(code)).toBe(CALLBACK_ERRORS[code]);
+    }
+    expect(callbackErrorText('<script>')).toBe(CALLBACK_ERRORS.invalid_request);
+    for (const inherited of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+      expect(callbackErrorText(inherited)).toBe(CALLBACK_ERRORS.invalid_request);
+    }
+    expect(callbackErrorText(null)).toBe(CALLBACK_ERRORS.invalid_request);
   });
 });

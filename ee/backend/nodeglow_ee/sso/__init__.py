@@ -11,9 +11,13 @@ What exists so far (implementation plan, pull request 1):
   and signing keys, fetched through the guarded HTTP client;
 * :mod:`.api` — the administration routes (``/api/identity-providers``) and
   the operator's installation setting for private issuer addresses;
-* :mod:`.cleanup` — what deleting a provider removes.
+* :mod:`.cleanup` — what deleting a provider removes;
+* :mod:`.oidc` — the protocol: PKCE, state, nonce, token exchange, id token
+  checks (pull request 2);
+* :mod:`.flow` — the test sign-in: start, callback, result (pull request 2).
 
-Nobody can sign in through a provider yet. :data:`SIGN_IN_RELEASED` keeps it
+Nobody can sign in through a provider yet; only a test sign-in exists, which
+creates no account and no session. :data:`SIGN_IN_RELEASED` keeps it
 that way whatever the licence says (a ``*`` licence grants features added
 later, this one included): providers cannot be enabled while it is False.
 It becomes True in the release step after the security review.
@@ -31,9 +35,11 @@ SIGN_IN_RELEASED = False
 
 
 def register(registry: Registry) -> None:
-    from nodeglow_ee.sso import api
+    from nodeglow_ee.sso import api, flow
 
     registry.add_router(api.router)
+    registry.add_router(flow.router)
+    registry.add_scheduler_hook(flow.schedule)
     registry.after_restore(after_restore)
     registry.enable_feature(FEATURE)
 

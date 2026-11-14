@@ -853,6 +853,9 @@ ROUTER_TESTS_ON_PG = [
     # Single sign-on administration (052): providers of another tenant are
     # invisible under RLS too, secrets under the tenant key, delete cascade.
     "../ee/backend/tests/test_sso_admin.py",
+    # Single sign-on test sign-in (053): flow rows of another tenant are
+    # invisible, the callback finds its flow before any tenant is known.
+    "../ee/backend/tests/test_sso_flow.py",
     # Phase 10: probe syslog relay (a probe of A never writes into B, site
     # scoping) with the composite site FKs and RLS of a real database.
     "tests/test_routers/test_probe_syslog_relay_api.py",
@@ -1095,5 +1098,21 @@ def test_052_identity_providers_up_and_down(pg_db):
     widths = _widths(pg_db)
     assert widths[("users", "username")] == 64 and widths[("incidents", "feedback_by")] == 128
     assert q(pg_db, "SELECT length(username) FROM audit_logs WHERE action = 'x'")[0][0] == 64
+    _alembic(pg_db, "upgrade", "head", **env)
+    _alembic(pg_db, "check", **env)
+
+
+def test_053_flow_result_columns_up_and_down(pg_db):
+    env = _rls_env(pg_db)
+    _alembic(pg_db, "upgrade", "052", **env)
+    _alembic(pg_db, "upgrade", "053", **env)
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name = 'sso_flows'")}
+    assert {"redirect_uri", "config_hash", "result_json"} <= cols
+    assert _rls_flags(pg_db)["sso_flows"] == (True, True)
+    _alembic(pg_db, "downgrade", "052", **env)
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name = 'sso_flows'")}
+    assert not {"redirect_uri", "config_hash", "result_json"} & cols
     _alembic(pg_db, "upgrade", "head", **env)
     _alembic(pg_db, "check", **env)

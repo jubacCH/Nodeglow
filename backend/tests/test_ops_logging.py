@@ -183,3 +183,102 @@ def test_install_is_idempotent():
     first = app.build_middleware_stack
     request_id.install(app)
     assert app.build_middleware_stack is first
+
+
+def test_credentials_in_query_strings_are_redacted():
+    """The single sign-on callback carries the authorization code and state,
+    the installers an install token; none of them reaches a log line."""
+    import logging
+
+    from logging_config import RedactSecretsFilter
+
+    f = RedactSecretsFilter()
+    # uvicorn's access log: the path is an argument.
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                            ("10.0.0.1:5000", "GET",
+                             "/api/auth/sso/callback?code=SECRET-CODE&state=SECRET-STATE&iss=x",
+                             "1.1", 303), None)
+    assert f.filter(rec) is True
+    line = rec.getMessage()
+    assert "SECRET" not in line and "code=[redacted]&state=[redacted]&iss=x" in line
+    rec = logging.LogRecord("x", logging.INFO, "", 0,
+                            "GET /install/linux?token=ngi_abc&arch=x64 failed", None, None)
+    f.filter(rec)
+    assert rec.getMessage() == "GET /install/linux?token=[redacted]&arch=x64 failed"
+    rec = logging.LogRecord("x", logging.INFO, "", 0, "nothing to hide in %s", ("/hosts?page=2",), None)
+    f.filter(rec)
+    assert rec.getMessage() == "nothing to hide in /hosts?page=2"
+
+
+def test_the_console_handler_redacts():
+    from logging_config import build_config
+
+    assert "redact_secrets" in build_config()["handlers"]["console"]["filters"]
+
+
+def test_url_objects_in_log_arguments_are_redacted():
+    import logging
+
+    import httpx
+
+    from logging_config import RedactSecretsFilter
+
+    rec = logging.LogRecord("httpx", logging.INFO, "", 0, 'HTTP Request: %s %s "%s"',
+                            ("GET", httpx.URL("https://x.example/api/auth/sso/callback?code=abc&ok=1"), 200), None)
+    RedactSecretsFilter().filter(rec)
+    assert rec.getMessage() ==         'HTTP Request: GET https://x.example/api/auth/sso/callback?code=[redacted]&ok=1 "200"'
+
+
+
+def test_redaction_covers_exceptions_stacks_extras_and_form_bodies():
+    import logging
+
+    from logging_config import JsonFormatter, RedactSecretsFilter
+
+    try:
+        raise RuntimeError("token request failed: code_verifier=SECRET-V&grant_type=x")
+    except RuntimeError:
+        import sys
+
+        info = sys.exc_info()
+    rec = logging.LogRecord("x", logging.ERROR, "", 0, "failed", None, info)
+    rec.stack_info = "Stack: /api/auth/sso/callback?code=SECRET-C"
+    rec.target = "/api/auth/sso/callback?state=SECRET-S"
+    RedactSecretsFilter().filter(rec)
+    text = logging.Formatter("%(message)s %(target)s").format(rec)
+    assert "SECRET" not in text and "code_verifier=[redacted]" in text
+    assert "SECRET" not in JsonFormatter().format(rec)
+
+
+def test_ordinary_code_and_state_values_stay_outside_the_sso_paths():
+    from logging_config import redact_query
+
+    assert redact_query("GET /api/v1/incidents?state=open&code=500") ==         "GET /api/v1/incidents?state=open&code=500"
+    assert redact_query("/api/auth/sso/callback?code=a&state=b") ==         "/api/auth/sso/callback?code=[redacted]&state=[redacted]"
+    assert redact_query("agent_token=keep&token=drop") == "agent_token=keep&token=[redacted]"
+
+
+def test_a_broken_argument_never_breaks_logging():
+    import logging
+
+    from logging_config import RedactSecretsFilter
+
+    class Exploding:
+        def __str__(self):
+            raise RuntimeError("no")
+
+    class URL(Exploding):
+        pass
+
+    calls = []
+
+    class Counting:
+        def __str__(self):
+            calls.append(1)
+            return "counted"
+
+    for arg in (Exploding(), URL(), Counting()):
+        rec = logging.LogRecord("x", logging.INFO, "", 0, "value %s", (arg,), None)
+        assert RedactSecretsFilter().filter(rec) is True
+        assert rec.args[0] is arg
+    assert calls == []   # objects that are not URLs are not formatted here

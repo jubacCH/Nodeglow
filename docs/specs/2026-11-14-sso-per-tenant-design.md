@@ -1,6 +1,6 @@
 # Single sign-on per tenant (OIDC)
 
-Status: design · 2026-11-14 · owner decisions taken 2026-11-14 (see "Owner decisions") · PR 1 of the plan (data model and administration) in review; no sign-in yet. Phase 13 of
+Status: design · 2026-11-14 · owner decisions taken 2026-11-14 (see "Owner decisions") · PR 1 (data model and administration) merged and deployed 2026-11-14; PR 2 (test sign-in) in review; no sign-in yet. Phase 13 of
 [2026-10-10-multi-tenancy-design.md](2026-10-10-multi-tenancy-design.md)
 ("Identity, LDAP, SSO"), narrowed to OIDC.
 
@@ -581,6 +581,7 @@ given tenant, audit `auth.login`, set the cookie.
 | Malicious or compromised issuer: key substitution | The issuer is fixed by the tenant admin, the discovery document must state the same issuer, keys come only from that document's `jwks_uri` over verified TLS, algorithm allow-list with key-type match, no `none`, no `HS*` (no confusion of the client secret or a public key with an HMAC key). What remains is inherent: whoever controls the issuer controls who signs in to *that* tenant. |
 | Replay of a callback | Flow consumed atomically and once; ten-minute lifetime; nonce checked; codes are single-use at the provider. |
 | A tenant admin points the provider at an issuer they control | Inside their own tenant: accepted. They are admin there already and gain nothing. Anywhere else: not possible. Session confinement, no operator rights from a non-default tenant's provider, no linking to existing accounts by an admin, disjoint usernames, default role never admin. |
+| A tenant admin (or a taken-over admin account) points the provider at an issuer they control so that the stored client secret is posted to their token endpoint | Changing the issuer, the client ID or the CA certificate without entering a new secret clears the stored secret (found in the security review of PR 2). The callback refuses before any outbound request when the provider's settings changed since the flow started, so a flow begun under issuer A never sends code, verifier or secret to the token endpoint of issuer B. |
 | Open redirect after sign-in | `next` validated as a relative path at the start, stored server-side, never taken from the callback. Error redirects go to fixed paths with a code, not a message. |
 | Log lines and error messages leak tokens or secrets | Codes, tokens, the verifier and the client secret are never logged; outbound errors are logged as category plus host. The provider's `error_description` is cut to 200 printable characters before it is stored. The API never returns the client secret. The test page shows claims, not the raw token. |
 | Enumeration of tenants | No listing endpoint; uniform answers for unknown keys; rate limits; default keys carry a random part. |
@@ -707,6 +708,47 @@ PR), against the threat table. Sign-in stays unreleased until it is done.
 
 Each PR states what was tested and what is not covered, and runs the backend
 suite with and without `ee/`.
+
+## Implementation notes
+
+Where the built code goes beyond or differs from the text above, as found
+while building it.
+
+**PR 1 (data model and administration).** The discovery document is fetched
+by "Check connection" (and by a test sign-in when the stored one is older
+than a day), not on every save. Check connection has one overall deadline
+and holds no database transaction while waiting on the provider. The
+outbound guard also judges the IPv4 address inside NAT64, IPv4-compatible,
+IPv4-translated, 6to4 and Teredo addresses.
+
+**PR 2 (test sign-in).**
+
+- The test starts with `POST /api/identity-providers/{id}/test` (a normal
+  admin route with session and CSRF), which answers the authorization URL
+  and sets the flow cookie; the browser tab then goes to the provider.
+- The callback stores the outcome in the flow row (`sso_flows.result_json`,
+  revision 053, with the flow's `redirect_uri` and the provider's
+  `config_hash` at start) and redirects to `/login/sso/result`. That page is
+  under `/login` so the frontend's session check does not bounce it (the
+  Strict session cookie is not sent on the cross-site redirect); it loads the
+  result with a same-site fetch, which carries the cookie. Only the admin who
+  started the test can read it; flows and results are deleted after an hour.
+- A passed test records `tested_hash` only if the provider's settings did not
+  change after the test started.
+- The access log would show the callback's request line with the
+  authorization code and state. The core's log handler now replaces the
+  values of `code`, `state`, `token` and the OAuth token names in every
+  record by `[redacted]` (this also covers the install token in the
+  installers' query string).
+- Purposes other than `test` are refused at the callback while
+  `SIGN_IN_RELEASED` is False.
+- After the security review of PR 2: changing issuer, client ID or CA
+  certificate clears the stored client secret; the callback refuses before
+  any outbound request when the provider changed since the start; the
+  signing-key cache is keyed by the keys' address, the trusted CA and the
+  address rules and dropped on every change; a test sign-in needs an https
+  public URL; the log filter covers exception texts, stacks, `extra=` fields
+  and `code_verifier`, and redacts `code` and `state` only on the SSO paths.
 
 ## Owner decisions
 

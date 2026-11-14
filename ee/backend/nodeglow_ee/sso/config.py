@@ -57,6 +57,12 @@ REQUIRED_ON_CREATE = ("name", "issuer", "client_id")
 # What a test sign-in depends on; changing any of it makes a tested
 # provider untested again (config_hash).
 TESTED_FIELDS = ("issuer", "client_id", "scopes", "groups_claim", "ca_pem")
+# What decides where the client secret goes (the issuer names the token
+# endpoint, the CA decides whom TLS trusts) and whose secret it is (the
+# client): changing any of them without a new secret clears the stored one.
+SECRET_BOUND_FIELDS = ("issuer", "client_id", "ca_pem")
+SECRET_CLEARED = ("The stored client secret was removed because the issuer, client ID or CA "
+                  "certificate changed. Enter it again.")
 
 NOT_RELEASED = ("Sign-in through single sign-on is not available in this version yet. "
                 "Providers can be prepared and checked; they cannot be enabled.")
@@ -366,6 +372,9 @@ def blockers(idp: IdentityProvider, *, public_url: str) -> list[str]:
     if not public_url:
         out.append("The installation's public address is not set (Settings → Notifications, "
                    "'Public URL'); the redirect address is built from it.")
+    elif not public_url.startswith("https://"):
+        out.append("The installation's public address is not an https:// address; the "
+                   "provider would send sign-in codes to it in the clear.")
     if not idp.client_secret:
         out.append("No client secret is stored.")
     if not idp.discovery_at:
@@ -421,4 +430,64 @@ def public(idp: IdentityProvider, *, public_url: str) -> dict:
         "created_at": _iso(idp.created_at),
         "updated_at": _iso(idp.updated_at),
         "blockers": blockers(idp, public_url=public_url),
+    }
+
+
+_ROLE_RANK = {"readonly": 1, "editor": 2, "admin": 3}
+
+
+def preview(idp: IdentityProvider, shown: dict) -> dict:
+    """What the provider's current settings would decide for these claims —
+    shown by the test sign-in; nothing is created from it."""
+    domains = _json_list(idp.allowed_domains)
+    required = _json_list(idp.required_groups)
+    rules = _json_list(idp.role_rules)
+    groups = shown.get("groups") or []
+    email = shown.get("email") or ""
+    domain = email.rsplit("@", 1)[1].lower() if "@" in email else None
+    verified = shown.get("email_verified") is True
+    reasons: list[str] = []
+
+    domain_ok = None
+    if domains:
+        domain_ok = bool(domain and verified and domain in domains)
+        if not domain:
+            reasons.append("The provider sent no mail address, and mail domains are restricted.")
+        elif not verified:
+            reasons.append("The mail address is not marked as verified, so the domain does not count.")
+        elif domain not in domains:
+            reasons.append(f"The mail domain {domain} is not among the allowed ones.")
+    groups_ok = None
+    if required:
+        matched = [g for g in required if g in groups]
+        groups_ok = bool(matched)
+        if not matched:
+            reasons.append("None of the required groups is in the groups claim.")
+
+    matching = [r for r in rules if isinstance(r, dict) and r.get("group") in groups]
+    if matching:
+        role = max((r["role"] for r in matching), key=lambda r: _ROLE_RANK.get(r, 0))
+        role_from = "rules"
+    else:
+        role = idp.default_role
+        role_from = "default"
+    if role == "none":
+        reasons.append("No role rule matches and the role without a rule is 'no access'.")
+
+    restricted = domain_ok is not None or groups_ok is not None
+    if not restricted and idp.jit_enabled and not idp.issuer_is_own_organisation:
+        reasons.append("Without a domain or group restriction the provider cannot be enabled "
+                       "for new accounts.")
+    allowed = (domain_ok is not False) and (groups_ok is not False) and role != "none"
+    return {
+        "mail_domain": domain,
+        "email_verified": verified,
+        "domain_allowed": domain_ok,
+        "required_groups_met": groups_ok,
+        "matched_rules": matching,
+        "role": None if role == "none" else role,
+        "role_from": role_from,
+        "would_sign_in": allowed,
+        "new_account": allowed and bool(idp.jit_enabled),
+        "reasons": reasons,
     }

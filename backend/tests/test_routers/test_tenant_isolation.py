@@ -334,6 +334,7 @@ PARAM_TABLE = {
     "template_hash": "log_templates",
     "grant_id": "support_grants",
     "provider_id": "identity_providers",
+    "flow_id": "sso_flows",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",
 }
@@ -415,6 +416,14 @@ TENANTLESS_ROUTES = {
     ("GET", "/install/windows"): "install-token auth",
     ("GET", "/agents/download/{platform}"): "public agent binaries",
 }
+# ee single sign-on: the provider sends the browser back here; the flow row
+# (found by its state, with the flow cookie) names the tenant, never the
+# request (test_sso_flow.py: a tenant header or parameter is ignored).
+EE_TENANTLESS_ROUTES = {
+    ("GET", "/api/auth/sso/callback"): "sign-in callback; tenant from the flow row (test_sso_flow.py)",
+}
+if _ee_loaded():
+    TENANTLESS_ROUTES.update(EE_TENANTLESS_ROUTES)
 
 # Path keys that are content, not row ids: the same log template (same text,
 # same hash) can exist in both tenants, so B's hash is no secret of B's and

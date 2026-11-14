@@ -13,6 +13,10 @@ export interface RoleRule {
   role: RuleRole;
 }
 
+export interface SaveResult {
+  client_secret_cleared?: boolean;
+}
+
 export interface Provider {
   id: number;
   type: 'oidc';
@@ -69,6 +73,85 @@ export interface CheckResult {
   signing_keys?: number;
   notes?: string[];
   provider?: Provider;
+}
+
+export interface TestStart {
+  ok: boolean;
+  authorization_url?: string;
+  flow?: number;
+  code?: string;
+  message?: string;
+}
+
+export interface TestClaims {
+  sub: string | null;
+  iss: string | null;
+  aud: string[];
+  email: string | null;
+  email_verified: boolean | null;
+  name: string | null;
+  preferred_username: string | null;
+  groups_claim: string;
+  groups: string[];
+  groups_present: boolean;
+}
+
+export interface TestPreview {
+  mail_domain: string | null;
+  email_verified: boolean;
+  domain_allowed: boolean | null;
+  required_groups_met: boolean | null;
+  matched_rules: RoleRule[];
+  role: RuleRole | null;
+  role_from: 'rules' | 'default';
+  would_sign_in: boolean;
+  new_account: boolean;
+  reasons: string[];
+}
+
+export interface TestOutcome {
+  ok: boolean;
+  code: string | null;
+  message: string;
+  counted?: boolean;
+  claims?: TestClaims;
+  preview?: TestPreview | null;
+  notes?: string[];
+  userinfo_used?: boolean;
+  provider_error?: string | null;
+  provider_error_description?: string | null;
+}
+
+export interface TestResultResponse {
+  done: boolean;
+  provider: { id: number; name: string | null };
+  result?: TestOutcome;
+}
+
+/** Texts for the errors the callback redirects with (no flow to show). */
+export const CALLBACK_ERRORS: Record<string, string> = {
+  invalid_request: 'This sign-in cannot be completed here: it was started in another browser, or the link is not valid. Start the test again from the settings.',
+  expired: 'This sign-in was already used or took longer than ten minutes. Start the test again.',
+  not_released: 'Signing in through single sign-on is not available in this version yet.',
+  not_supported: 'This kind of sign-in is not available in this version.',
+};
+
+export function callbackErrorText(code: string | null): string {
+  // Own keys only: the code comes from the address bar ("__proto__" too).
+  return code && Object.hasOwn(CALLBACK_ERRORS, code) ? CALLBACK_ERRORS[code] : CALLBACK_ERRORS.invalid_request;
+}
+
+/** One line on what the test decided, for the result page. */
+export function verdict(outcome: TestOutcome): { tone: 'ok' | 'warning' | 'down'; text: string } {
+  if (!outcome.ok) return { tone: 'down', text: outcome.message };
+  const p = outcome.preview;
+  if (p && !p.would_sign_in) {
+    return { tone: 'warning', text: 'The provider works, but with the current settings this person would not get in.' };
+  }
+  if (outcome.counted === false) {
+    return { tone: 'warning', text: 'The provider works, but its settings changed meanwhile: run the test again.' };
+  }
+  return { tone: 'ok', text: 'The provider works and every check passed.' };
 }
 
 /** What the form edits. Lists are kept as text, one entry per line. */

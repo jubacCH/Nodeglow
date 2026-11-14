@@ -49,7 +49,7 @@ def test_plugin_registers_everything_on_a_fresh_registry():
     assert reg.scheduler_coordinator is not None and reg.license_provider is not None
     assert reg.tenancy_backend is not None and reg.retention_policy is not None
     # The license hook first, then the daily summary job, then the tenancy jobs.
-    assert len(reg.incident_resolved_hooks) == 1 and len(reg.scheduler_hooks) == 3
+    assert len(reg.incident_resolved_hooks) == 1 and len(reg.scheduler_hooks) == 4
 
 
 async def test_daily_summary_hook_schedules_the_job():

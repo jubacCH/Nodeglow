@@ -37,10 +37,10 @@ def test_the_tenancy_revisions_are_linear():
     """044 -> 045 (phase 9) -> 046 (tenant keys) -> 047 (phase 10)
     -> 048 (probe-side integrations P1) -> 049 (speedtest server fields)
     -> 050 (baseline template sample count) -> 051 (user TOTP)
-    -> 052 (identity providers)."""
+    -> 052 (identity providers) -> 053 (SSO flow results)."""
     scripts = _scripts()
-    revs = ("045", "046", "047", "048", "049", "050", "051", "052")
+    revs = ("045", "046", "047", "048", "049", "050", "051", "052", "053")
     chain = {r: scripts.get_revision(r).down_revision for r in revs}
     assert chain == {"045": "044", "046": "045", "047": "046", "048": "047", "049": "048",
-                     "050": "049", "051": "050", "052": "051"}
-    assert list(scripts.get_heads()) == ["052"]
+                     "050": "049", "051": "050", "052": "051", "053": "052"}
+    assert list(scripts.get_heads()) == ["053"]
