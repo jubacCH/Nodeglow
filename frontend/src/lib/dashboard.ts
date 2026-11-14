@@ -254,6 +254,16 @@ export function speedSourceLabel(internet: Pick<InternetSection, 'source' | 'mea
   return 'UniFi';
 }
 
+/**
+ * From when a speed result is flagged as old. The Nodeglow host tests
+ * hourly; a gateway once a day, and the backend shows its result for up to
+ * 48 hours. Judged by the hourly limit every gateway result looked stale.
+ */
+export function speedStaleAfterSeconds(internet: Pick<InternetSection, 'source' | 'measured_at'>): number {
+  const atGateway = internet.measured_at === 'gateway' || (internet.measured_at == null && internet.source === 'unifi');
+  return (atGateway ? 48 : 3) * 3600;
+}
+
 function fmtLink(mbps: number): string {
   return mbps >= 1000 ? `${mbps / 1000} Gbit/s` : `${mbps} Mbit/s`;
 }

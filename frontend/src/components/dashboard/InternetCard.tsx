@@ -8,15 +8,13 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { StatusPill } from '@/components/ui/StatusPill';
 import {
   describeSpeedHistory, fmtMs, formatAgo, formatWhen, hostState, isStale, speedBars, speedLimitHint,
-  speedSourceLabel, wanState,
+  speedSourceLabel, speedStaleAfterSeconds, wanState,
 } from '@/lib/dashboard';
 import { cn } from '@/lib/utils';
 import type { InternetSection, SectionError } from '@/types/dashboard';
 import { DashboardCard, KeyValues, StaleHint, useDashboardCtx } from './DashboardCard';
 import { StatusDot } from '@/components/ui/StatusDot';
 
-/** A speed test older than this is flagged (tests usually run hourly). */
-const SPEEDTEST_STALE_S = 3 * 3600;
 
 export function InternetCard({ internet, loading, error, className }: {
   internet: InternetSection | null | undefined;
@@ -27,7 +25,7 @@ export function InternetCard({ internet, loading, error, className }: {
   const { now, open } = useDashboardCtx();
   const wan = wanState(internet?.wan?.status);
   const latest = internet?.latest ?? null;
-  const stale = latest ? isStale(latest.at, now, SPEEDTEST_STALE_S) : false;
+  const stale = latest && internet ? isStale(latest.at, now, speedStaleAfterSeconds(internet)) : false;
   const bars = internet ? speedBars(internet.history) : [];
   const source = internet ? speedSourceLabel(internet) : 'UniFi';
   const limitHint = internet ? speedLimitHint(internet) : null;
