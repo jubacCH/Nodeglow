@@ -209,6 +209,10 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   interface list was read in the format of its Python predecessor, and
   Proxmox guests under keys the snapshot never had; neither ever reached
   the traffic data.
+- Traffic: an agent's `total` counts the host's own network cards only.
+  The agent adds up every interface but loopback; on a Docker host that is
+  the card, the bridge and each container's end of it, and the total was a
+  multiple of the real traffic.
 - Agent: `quinn-udp` 0.5.14 -> 0.5.16 (RUSTSEC-2026-0538, a receive loop
   that can spin after a truncated datagram). Lock file only.
 - Proxmox backups: a cluster watched by two integrations (one collecting,

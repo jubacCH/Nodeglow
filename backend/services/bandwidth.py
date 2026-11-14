@@ -44,6 +44,44 @@ def total_basis_of(source_type: str, interface_name: str) -> str | None:
     return None
 
 
+# Interfaces that carry bytes a network card of the same host counts already:
+# bridges and the container ends attached to them, bonds, tunnels, and the
+# filter layers Windows lists next to each adapter. A Docker host reported
+# forty times its real traffic with them in the sum.
+_STACKED_PREFIXES = (
+    "lo", "veth", "br-", "docker", "virbr", "vmbr", "cni", "flannel", "cali", "kube",
+    "tap", "tun", "fwbr", "fwpr", "fwln", "wg", "tailscale", "zt", "bond", "team",
+    "dummy", "sit", "gre", "ip6tnl", "vxlan", "podman", "lxcbr", "lxdbr", "incusbr",
+    "loopback", "vethernet", "isatap", "teredo",
+)
+_STACKED_MARKERS = ("filter", "virtual", "pseudo", "qos packet scheduler", "npcap")
+
+
+def carries_own_traffic(interface_name: str) -> bool:
+    """True for an interface whose bytes are not counted again by another one
+    of the same host. Decided by name: the agent sends nothing else."""
+    name = (interface_name or "").strip().lower()
+    if not name or name == AGENT_TOTAL:
+        return False
+    if "." in name or "@" in name:  # VLAN on top of a card
+        return False
+    if name.startswith(_STACKED_PREFIXES):
+        return False
+    return not any(marker in name for marker in _STACKED_MARKERS)
+
+
+def agent_total(interfaces: list[dict]) -> tuple[int, int] | None:
+    """A host's traffic: the byte counters of its own network cards added up.
+    None when no interface qualifies."""
+    own = [i for i in interfaces
+           if carries_own_traffic(i.get("name") or i.get("interface") or "")
+           and (i.get("rx_bytes") is not None or i.get("tx_bytes") is not None)]
+    if not own:
+        return None
+    return (sum(int(i.get("rx_bytes") or 0) for i in own),
+            sum(int(i.get("tx_bytes") or 0) for i in own))
+
+
 # ── Rate calculation ────────────────────────────────────────────────────────
 
 
@@ -114,12 +152,19 @@ async def extract_agent_bandwidth(
     # only that, no agent's traffic was recorded after the switch.
     legacy = body.get("network") if isinstance(body.get("network"), dict) else {}
     interfaces = list(body.get("network_interfaces") or legacy.get("interfaces") or [])
-    total_rx = body.get("rx_bytes", legacy.get("rx_bytes"))
-    total_tx = body.get("tx_bytes", legacy.get("tx_bytes"))
-    if interfaces and (total_rx is not None or total_tx is not None):
-        # The host's whole traffic (the agent leaves out loopback): what the
-        # traffic total adds up, see TOTAL_BASES.
-        interfaces.append({"name": AGENT_TOTAL, "rx_bytes": total_rx, "tx_bytes": total_tx})
+    # The host's whole traffic, what the traffic total adds up (TOTAL_BASES).
+    # Built here from the host's own network cards. The agent's own total
+    # leaves out loopback only, so on a Docker host it counts each byte on
+    # the card, on the bridge and on the container's end of it. It is used
+    # where no interface can be told to be a card.
+    total = agent_total(interfaces)
+    if total is None and interfaces:
+        total_rx = body.get("rx_bytes", legacy.get("rx_bytes"))
+        total_tx = body.get("tx_bytes", legacy.get("tx_bytes"))
+        if total_rx is not None or total_tx is not None:
+            total = (int(total_rx or 0), int(total_tx or 0))
+    if total is not None:
+        interfaces.append({"name": AGENT_TOTAL, "rx_bytes": total[0], "tx_bytes": total[1]})
     if not interfaces:
         return 0
 

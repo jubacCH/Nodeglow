@@ -511,7 +511,8 @@ async def test_bandwidth_extraction_stamps_the_source_tenant(monkeypatch):
         await bandwidth.extract_proxmox_bandwidth(
             3, {"nodes": [{"node": "pve", "netin": 1, "netout": 2}]}, tenant_id=A,
         )
-    assert len(written) == 3 and {r["tenant_id"] for r in written} == {A}
+    # eth0 and the agent total built from it, one device, one node.
+    assert len(written) == 4 and {r["tenant_id"] for r in written} == {A}
 
 
 # ── Retention per tenant ─────────────────────────────────────────────────────
