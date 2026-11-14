@@ -187,6 +187,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Agent: `quinn-udp` 0.5.14 -> 0.5.16 (RUSTSEC-2026-0538, a receive loop
+  that can spin after a truncated datagram). Lock file only.
 - Proxmox backups: a cluster watched by two integrations (one collecting,
   one standing by) no longer has two backup jobs per guest. The jobs of the
   standby were never updated and read as overdue although the backup ran
