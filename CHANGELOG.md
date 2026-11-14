@@ -209,6 +209,16 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   interface list was read in the format of its Python predecessor, and
   Proxmox guests under keys the snapshot never had; neither ever reached
   the traffic data.
+- UniFi: the gateway's speed tests are read again. Current Network
+  versions answer the old report with an empty list; the results are now
+  taken from the v2 API when it does.
+- Dashboard, Internet card: it says where the speed was measured. A recent
+  result of the gateway is shown in preference to a test run on the
+  Nodeglow host, which measures through that host's own network link too
+  (931 Mbit/s on a 10 Gbit/s line behind a 1 Gbit/s card); the other result
+  is listed next to it, and a note explains a host result that is limited
+  by its link. `/api/v2/dashboard` carries `measured_at`, `other` and
+  `limit` in the Internet section.
 - Heartbeat: the external monitor is set up under Settings, System
   ("External monitor"): the check URL, or running without one, and a test
   request. Stored encrypted, never shown again; it wins over

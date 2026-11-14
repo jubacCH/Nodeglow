@@ -284,8 +284,49 @@ async def agent_counts(db, now: datetime) -> dict:
 _wan_cache: dict = {}
 
 
+# A gateway result this recent is preferred over a test run by Nodeglow
+# itself. Gateways test once a day at most; two days allow for a missed run.
+GATEWAY_SPEED_FRESH = timedelta(hours=48)
+# Nominal link speeds a measurement can run into (Mbit/s).
+LINK_SPEEDS = (100, 1000, 2500, 5000, 10000)
+
+
+def _speed_time(at) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(at).replace("Z", "")) if at else None
+    except ValueError:
+        return None
+
+
+def speed_limit(host: dict | None, gateway: dict | None) -> dict | None:
+    """Why a test run on the Nodeglow host may show less than the line carries.
+
+    The test measures the path from that host to the Internet, and the host's
+    own network link is part of it. Known when the gateway measures clearly
+    more; suspected when download and upload both end just under a nominal
+    link speed, which a line seldom does in both directions.
+    """
+    if not host or not host.get("download_mbps"):
+        return None
+    down = float(host["download_mbps"])
+    up = float(host.get("upload_mbps") or 0)
+    if gateway and gateway.get("download_mbps") and float(gateway["download_mbps"]) >= 1.5 * down:
+        return {"kind": "below_gateway", "gateway_mbps": round(float(gateway["download_mbps"]))}
+    for link in LINK_SPEEDS:
+        if 0.88 * link <= down <= 0.975 * link and 0.88 * link <= up <= 0.975 * link:
+            return {"kind": "link_speed", "link_mbps": link}
+    return None
+
+
 async def section_internet(db, base: Base) -> dict | None:
-    """Latest speedtest + the last 24 results, WAN status from UniFi if known."""
+    """The latest speed measurement and where it was taken, its history, and
+    the WAN status from UniFi if known.
+
+    Two places can measure: the gateway (UniFi) and Nodeglow's own host (the
+    speedtest integration). The gateway sits on the line; the host measures
+    through its own network link as well. A recent gateway result is shown,
+    the other one is returned next to it (``other``).
+    """
     from models.integration import IntegrationConfig, Snapshot
 
     configs = (await db.execute(
@@ -297,9 +338,7 @@ async def section_internet(db, base: Base) -> dict | None:
     speed_cfg = next((c for c in configs if c.type == "speedtest"), None)
     unifi_cfgs = [c for c in configs if c.type == "unifi"]
 
-    latest = None
-    history: list[dict] = []
-    source = None
+    measured: dict[str, dict] = {}
     if speed_cfg:
         rows = (await db.execute(
             select(Snapshot.timestamp, Snapshot.data_json)
@@ -307,6 +346,7 @@ async def section_internet(db, base: Base) -> dict | None:
                    Snapshot.ok == True)  # noqa: E712
             .order_by(Snapshot.timestamp.desc()).limit(SPEEDTEST_HISTORY)
         )).all()
+        history = []
         for ts, raw in reversed(rows):
             d = _json(raw)
             history.append({
@@ -316,9 +356,10 @@ async def section_internet(db, base: Base) -> dict | None:
                 "latency_ms": d.get("ping_ms"),
             })
         if history:
-            source = "speedtest"
-            last = history[-1]
-            latest = {**last, "server": _json(rows[0][1]).get("server_name") or None}
+            measured["host"] = {
+                "source": "speedtest", "history": history,
+                "latest": {**history[-1], "server": _json(rows[0][1]).get("server_name") or None},
+            }
 
     wan = None
     gateway = None
@@ -328,10 +369,10 @@ async def section_internet(db, base: Base) -> dict | None:
             continue
         if extract["wan"] and wan is None:
             wan = {**extract["wan"], "source": "unifi", "integration": ucfg.name}
-        if latest is None and extract["speedtest"]:
-            source = "unifi"
+        if "gateway" not in measured and extract["speedtest"]:
             history = extract["speedtest"][-SPEEDTEST_HISTORY:]
-            latest = {**history[-1], "server": "UniFi gateway"}
+            measured["gateway"] = {"source": "unifi", "history": history,
+                                   "latest": {**history[-1], "server": "UniFi gateway"}}
     if base.gateways:
         gw_id = sorted(base.gateways)[0]
         h = next((x for x in base.all_hosts if x.id == gw_id), None)
@@ -339,9 +380,38 @@ async def section_internet(db, base: Base) -> dict | None:
             st = base.states.get(h.id)
             gateway = {"id": h.id, "name": h.name, "state": st.state if st else None}
 
-    if latest is None and wan is None:
+    if not measured and wan is None:
         return None
-    return {"source": source, "latest": latest, "history": history, "wan": wan, "gateway": gateway}
+
+    host_m, gw_m = measured.get("host"), measured.get("gateway")
+    shown = None
+    if gw_m and host_m:
+        gw_at = _speed_time(gw_m["latest"]["at"])
+        host_at = _speed_time(host_m["latest"]["at"])
+        recent = gw_at is not None and datetime.utcnow() - gw_at <= GATEWAY_SPEED_FRESH
+        newer = gw_at is not None and (host_at is None or gw_at >= host_at)
+        shown = "gateway" if (recent or newer) else "host"
+    elif gw_m or host_m:
+        shown = "gateway" if gw_m else "host"
+
+    chosen = measured.get(shown) if shown else None
+    other_key = next((k for k in measured if k != shown), None)
+    other = None
+    if other_key:
+        o = measured[other_key]["latest"]
+        other = {"measured_at": other_key, "at": o["at"], "download_mbps": o["download_mbps"],
+                 "upload_mbps": o["upload_mbps"], "latency_ms": o["latency_ms"], "server": o["server"]}
+    return {
+        "source": chosen["source"] if chosen else None,
+        # "gateway" or "host": where the shown speed was measured.
+        "measured_at": shown,
+        "latest": chosen["latest"] if chosen else None,
+        "history": chosen["history"] if chosen else [],
+        "other": other,
+        # Set when the host's own test cannot stand for the line.
+        "limit": speed_limit(host_m["latest"] if host_m else None, gw_m["latest"] if gw_m else None),
+        "wan": wan, "gateway": gateway,
+    }
 
 
 async def _unifi_extract(db, config_id: int) -> dict | None:

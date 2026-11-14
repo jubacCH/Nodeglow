@@ -306,9 +306,81 @@ async def test_unifi_wan_and_speedtest_fallback():
             await db.commit()
         with fake_clickhouse():
             inet = (await client.get("/api/v2/dashboard")).json()["internet"]
-        assert inet["source"] == "unifi"
+        assert inet["source"] == "unifi" and inet["measured_at"] == "gateway"
         assert inet["wan"]["status"] == "up" and inet["wan"]["latency_ms"] == 7
         assert inet["latest"]["download_mbps"] == 940.0
+        assert inet["other"] is None and inet["limit"] is None
+
+
+async def _internet(sf, client, *, gateway_age_h, gateway=(8152.0, 7967.0), host=(930.64, 938.38)):
+    """A gateway speed test of the given age and an hourly test from the host."""
+    from models.integration import IntegrationConfig, Snapshot
+
+    now = datetime.utcnow()
+    async with sf() as db:
+        unifi = IntegrationConfig(type="unifi", name="UDM", config_json="{}")
+        speed = IntegrationConfig(type="speedtest", name="Speedtest", config_json="{}")
+        db.add_all([unifi, speed])
+        await db.flush()
+        tests = []
+        if gateway:
+            at = (now - timedelta(hours=gateway_age_h)).strftime("%Y-%m-%d %H:%M")
+            tests = [{"timestamp": at, "download_mbps": gateway[0], "upload_mbps": gateway[1], "latency_ms": 2}]
+        db.add(Snapshot(entity_type="unifi", entity_id=unifi.id, ok=True, data_json=json.dumps({
+            "wan": {"status": "ok", "latency": 3}, "speedtest": tests, "devices": [], "clients": []})))
+        db.add(Snapshot(entity_type="speedtest", entity_id=speed.id, ok=True,
+                        timestamp=now - timedelta(minutes=50), data_json=json.dumps({
+                            "download_mbps": host[0], "upload_mbps": host[1], "ping_ms": 1.1,
+                            "server_name": "Quickline AG"})))
+        await db.commit()
+    with fake_clickhouse():
+        return (await client.get("/api/v2/dashboard")).json()["internet"]
+
+
+async def test_the_gateway_result_is_shown_and_the_host_result_next_to_it():
+    """A 10 Gbit/s line, measured from a host with a 1 Gbit/s card: the card
+    said 931 Mbit/s and called it "Internet". The gateway measures 8152."""
+    async with make_client() as (client, sf):
+        inet = await _internet(sf, client, gateway_age_h=20)
+    assert inet["measured_at"] == "gateway" and inet["source"] == "unifi"
+    assert inet["latest"]["download_mbps"] == 8152.0
+    assert inet["other"]["measured_at"] == "host" and inet["other"]["download_mbps"] == 930.64
+    assert inet["other"]["server"] == "Quickline AG"
+    assert inet["limit"] == {"kind": "below_gateway", "gateway_mbps": 8152}
+
+
+async def test_an_old_gateway_result_does_not_hide_the_current_host_test():
+    async with make_client() as (client, sf):
+        inet = await _internet(sf, client, gateway_age_h=24 * 20)
+    assert inet["measured_at"] == "host" and inet["source"] == "speedtest"
+    assert inet["latest"]["download_mbps"] == 930.64 and len(inet["history"]) == 1
+    assert inet["other"]["measured_at"] == "gateway"
+    # Old, but it still shows that the host test is not the line.
+    assert inet["limit"] == {"kind": "below_gateway", "gateway_mbps": 8152}
+
+
+async def test_without_a_gateway_result_the_link_of_the_host_is_suspected():
+    async with make_client() as (client, sf):
+        inet = await _internet(sf, client, gateway_age_h=0, gateway=None)
+    assert inet["measured_at"] == "host" and inet["other"] is None
+    assert inet["limit"] == {"kind": "link_speed", "link_mbps": 1000}
+
+
+def test_which_host_results_look_limited():
+    from services.dashboard_v2 import speed_limit
+
+    def host(down, up):
+        return {"download_mbps": down, "upload_mbps": up}
+
+    assert speed_limit(host(930.6, 938.4), None) == {"kind": "link_speed", "link_mbps": 1000}
+    assert speed_limit(host(94.1, 93.0), None) == {"kind": "link_speed", "link_mbps": 100}
+    # An asymmetric line, or one that is simply slower than a link speed.
+    assert speed_limit(host(940.0, 99.0), None) is None
+    assert speed_limit(host(412.0, 398.0), None) is None
+    # The gateway agrees with the host: nothing to explain.
+    assert speed_limit(host(930.6, 938.4), host(945.0, 940.0)) == {"kind": "link_speed", "link_mbps": 1000}
+    assert speed_limit(host(412.0, 398.0), host(430.0, 400.0)) is None
+    assert speed_limit(None, host(8152, 7967)) is None
 
 
 async def test_upcoming_lists_disk_predictions_from_the_cache():

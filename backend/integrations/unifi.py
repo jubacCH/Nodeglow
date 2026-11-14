@@ -38,6 +38,12 @@ class UnifiAPI:
             return f"{self.base}/proxy/network/api/s/{self.site}"
         return f"{self.base}/api/s/{self.site}"
 
+    @property
+    def _v2_base(self) -> str:
+        if self.is_udm:
+            return f"{self.base}/proxy/network/v2/api/site/{self.site}"
+        return f"{self.base}/v2/api/site/{self.site}"
+
     async def fetch_all(self) -> dict:
         async with safe_async_client(verify=self.verify_ssl, timeout=15.0, follow_redirects=True) as client:
             resp = await client.post(
@@ -60,13 +66,22 @@ class UnifiAPI:
             devices_r.raise_for_status()
             clients_r.raise_for_status()
             health_r.raise_for_status()
+            raw_speedtest = speedtest_r.json().get("data", []) if speedtest_r.is_success else []
+            speedtest_ok = speedtest_r.is_success
+            if not raw_speedtest:
+                # Current Network versions answer the report above with an
+                # empty list and keep the gateway's speed tests here.
+                v2_r = await client.get(f"{self._v2_base}/speedtest", headers=hdrs)
+                if v2_r.is_success:
+                    raw_speedtest = speedtests_from_v2(v2_r.json())
+                    speedtest_ok = True
             unavailable = []
-            for label, resp in (("events", events_r), ("gateway speedtest", speedtest_r)):
-                if not resp.is_success:
-                    logger.warning("UniFi %s unavailable: HTTP %s", label, resp.status_code)
+            for label, ok, code in (("events", events_r.is_success, events_r.status_code),
+                                    ("gateway speedtest", speedtest_ok, speedtest_r.status_code)):
+                if not ok:
+                    logger.warning("UniFi %s unavailable: HTTP %s", label, code)
                     unavailable.append(label)
             raw_events = events_r.json().get("data", []) if events_r.is_success else []
-            raw_speedtest = speedtest_r.json().get("data", []) if speedtest_r.is_success else []
 
             data = parse_unifi_data(
                 devices_r.json().get("data", []),
@@ -111,6 +126,24 @@ _EVENT_KEY_LABELS = {
     "EVT_GW_WAN_Transition": "WAN status changed", "EVT_GW_Failover": "WAN failover",
     "EVT_AD_Login": "Admin login", "EVT_AD_Logout": "Admin logout",
 }
+
+
+# Gateway speed tests kept in a snapshot; the dashboard shows 24.
+SPEEDTEST_KEEP = 30
+
+
+def speedtests_from_v2(payload) -> list[dict]:
+    """The v2 speed test list in the shape of the older report.
+
+    One row per run and WAN: ``download_mbps``, ``upload_mbps``,
+    ``latency_ms`` and ``time`` in milliseconds.
+    """
+    rows = payload.get("data", []) if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return []
+    return [{"time": r.get("time"), "xput_download": r.get("download_mbps"),
+             "xput_upload": r.get("upload_mbps"), "latency": r.get("latency_ms")}
+            for r in rows if isinstance(r, dict)]
 
 
 def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
@@ -264,6 +297,7 @@ def parse_unifi_data(raw_devices: list, raw_clients: list, raw_health: list,
     # sorts as text). It ignored _sort while "time" was not among the attrs,
     # so the "latest" result used to be the oldest one.
     speedtest_results.sort(key=lambda r: r["timestamp"], reverse=True)
+    del speedtest_results[SPEEDTEST_KEEP:]
     speedtest_latest = speedtest_results[0] if speedtest_results else None
 
     access_points = sum(1 for d in devices if d.get("type") == "uap")

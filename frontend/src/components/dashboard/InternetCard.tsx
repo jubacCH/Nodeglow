@@ -7,7 +7,8 @@ import { BigNumber } from '@/components/ui/BigNumber';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatusPill } from '@/components/ui/StatusPill';
 import {
-  describeSpeedHistory, fmtMs, formatAgo, formatWhen, hostState, isStale, speedBars, wanState,
+  describeSpeedHistory, fmtMs, formatAgo, formatWhen, hostState, isStale, speedBars, speedLimitHint,
+  speedSourceLabel, wanState,
 } from '@/lib/dashboard';
 import { cn } from '@/lib/utils';
 import type { InternetSection, SectionError } from '@/types/dashboard';
@@ -28,7 +29,9 @@ export function InternetCard({ internet, loading, error, className }: {
   const latest = internet?.latest ?? null;
   const stale = latest ? isStale(latest.at, now, SPEEDTEST_STALE_S) : false;
   const bars = internet ? speedBars(internet.history) : [];
-  const source = internet?.source === 'unifi' ? 'UniFi gateway speed test' : internet?.source === 'speedtest' ? 'Speedtest integration' : 'UniFi';
+  const source = internet ? speedSourceLabel(internet) : 'UniFi';
+  const limitHint = internet ? speedLimitHint(internet) : null;
+  const other = internet?.other ?? null;
 
   return (
     <DashboardCard
@@ -61,6 +64,8 @@ export function InternetCard({ internet, loading, error, className }: {
               <BigNumber value={latest?.upload_mbps != null ? Math.round(latest.upload_mbps) : null} unit="Mbit/s" stale={stale} />
             </div>
           </div>
+
+          {limitHint && <p className="mt-3 text-meta text-warning">{limitHint}</p>}
 
           {bars.length > 0 && (
             <div className="mt-[22px]">
@@ -103,7 +108,15 @@ export function InternetCard({ internet, loading, error, className }: {
                     </button>,
                   ] as [string, ReactNode]]
                 : []),
-              ['Source', <span key="src" className="font-normal text-fg-2">{source}{latest?.server ? ` · ${latest.server}` : ''}</span>],
+              ['Source', <span key="src" className="font-normal text-fg-2">{source}{latest?.server && internet.measured_at !== 'gateway' ? ` · ${latest.server}` : ''}</span>],
+              ...(other && other.download_mbps != null
+                ? [[
+                    other.measured_at === 'gateway' ? 'At the gateway' : 'From the Nodeglow host',
+                    <span key="other" className="font-normal text-fg-2">
+                      {Math.round(other.download_mbps)} / {other.upload_mbps != null ? Math.round(other.upload_mbps) : '—'} Mbit/s · {formatAgo(other.at, now)}
+                    </span>,
+                  ] as [string, ReactNode]]
+                : []),
             ]}
           />
         </>

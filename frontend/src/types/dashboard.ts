@@ -74,6 +74,12 @@ export interface InternetSection {
   latest: (SpeedPoint & { server: string | null }) | null;
   /** Last 24 results, oldest first. */
   history: SpeedPoint[];
+  /** Where the shown speed was measured: at the gateway, or from the Nodeglow host. */
+  measured_at?: 'gateway' | 'host' | null;
+  /** The latest result of the other measuring point, when both exist. */
+  other?: (SpeedPoint & { measured_at: 'gateway' | 'host'; server: string | null }) | null;
+  /** Why the host's own test may show less than the line carries. */
+  limit?: { kind: 'below_gateway'; gateway_mbps: number } | { kind: 'link_speed'; link_mbps: number } | null;
   /** Only with UniFi; `status` is "up"/"down" or the raw lower-cased value. */
   wan: { status: string; raw_status?: string | null; latency_ms: number | null; source: string; integration?: string } | null;
   gateway: { id: number; name: string; state: HostStateName | null } | null;
