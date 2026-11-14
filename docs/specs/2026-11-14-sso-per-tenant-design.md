@@ -1,6 +1,6 @@
 # Single sign-on per tenant (OIDC)
 
-Status: design · 2026-11-14 · nothing implemented. Phase 13 of
+Status: design · 2026-11-14 · owner decisions taken 2026-11-14 (see "Owner decisions") · nothing implemented. Phase 13 of
 [2026-10-10-multi-tenancy-design.md](2026-10-10-multi-tenancy-design.md)
 ("Identity, LDAP, SSO"), narrowed to OIDC.
 
@@ -311,7 +311,7 @@ this one validation and then dropped; no access, refresh or id token is stored.
 
 Verification uses **PyJWT** (with the already pinned `cryptography`), called
 with an explicit algorithm list, and our own guarded JWKS fetch instead of its
-`PyJWKClient` (which would bypass the outbound checks). See open question 5.
+`PyJWKClient` (which would bypass the outbound checks). Owner decision 5.
 
 ### Redirect URI behind a proxy
 
@@ -513,7 +513,7 @@ given tenant, audit `auth.login`, set the cookie.
 
 | Existing piece | Behaviour with SSO |
 |---|---|
-| **Two-factor (TOTP)** | Not asked after an SSO sign-in. The second factor is the provider's job, and a JIT user has no TOTP here. A linked local account keeps its TOTP for password sign-ins. Not configurable per provider in the first version (open question 2). |
+| **Two-factor (TOTP)** | Not asked after an SSO sign-in. The second factor is the provider's job, and a JIT user has no TOTP here. A linked local account keeps its TOTP for password sign-ins. Not configurable per provider in the first version (owner decision 2). |
 | **Lockout / throttling** | The per-username soft lock does not apply (no username, no password). Start, options and callback are rate limited per address; failed callbacks count into `failed_auth_throttled`. SSO failures never lock a local account. |
 | **Local password of an SSO user** | `auth_source = 'oidc'` users have a placeholder hash; the password login refuses them explicitly, as it does for `ldap`. |
 | **API keys** | Unchanged: a key belongs to a tenant, not to a person or a session. Removing a person at the provider does not revoke keys they created. Same as for local users today; named here so nobody assumes otherwise. |
@@ -692,38 +692,18 @@ PR), against the threat table. Sign-in stays unreleased until it is done.
 Each PR states what was tested and what is not covered, and runs the backend
 suite with and without `ee/`.
 
-## Open questions for the owner
+## Owner decisions
 
-1. **Finding the provider: tenant sign-in address in the first version?**
-   Recommendation: yes, as designed. Mail-domain discovery later, together
-   with domain verification. The alternative delays the feature for a
-   convenience the hint cookie mostly covers.
-2. **nodeglow's own second factor after SSO?** Recommendation: no, and not
-   configurable for now. The provider enforces it; asking twice is what makes
-   people dislike SSO, and JIT users would first have to enrol. A per-provider
-   switch can follow if a customer asks.
-3. **Default lifetime of an SSO session: 12 hours?** Recommendation: yes,
-   adjustable per provider from 1 hour to 7 days. Shorter than local sessions
-   because it is the only thing that removes a person who was disabled at the
-   provider until SCIM exists.
-4. **Licence: `sso` as its own feature?** Recommendation: yes, independent of
-   `multi_tenancy`, and usable on a one-tenant installation.
-5. **A new dependency, PyJWT, for id token verification?** Recommendation:
-   yes. The repo prefers the standard library where the algorithm is a dozen
-   lines (TOTP), but JWS verification is where hand-written code has
-   historically gone wrong, and a reviewer can check a well-known library's
-   call more quickly than a new parser. Pinned, on top of the `cryptography`
-   already in use. The alternative is about a hundred lines on `cryptography`
-   alone.
-6. **Providers of the default tenant give ordinary sessions (other tenants,
-   support access, operator rights)?** Recommendation: yes. Otherwise a
-   one-tenant company needs a local account for every installation setting.
-   The cost: on a SaaS installation the operator's own IdP becomes as trusted
-   as the operator's passwords, which is the operator's decision to make.
-7. **Private issuer addresses for non-default tenants: refused unless the
-   operator allows it?** Recommendation: yes, default off. An MSP running
-   on-prem for customers with their own IdPs in connected networks turns it on
-   once.
-8. **Sign-in continues after the licence expires?** Recommendation: yes,
-   administration read-only, as for tenants. The alternative locks customers
-   out of their monitoring over an invoice.
+Decided by the owner on 2026-11-14, each as recommended in the first version
+of this document.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | How does the sign-in page find the provider? | A sign-in address per tenant (`/login/sso/<key>`) plus the hint cookie. Mail-domain discovery comes later, together with domain verification. |
+| 2 | Does nodeglow's own second factor apply after SSO? | No, and not configurable for now. The provider enforces the second factor. A per-provider switch can follow if a customer asks. |
+| 3 | Default lifetime of an SSO session? | 12 hours, adjustable per provider from 1 hour to 7 days. |
+| 4 | How is the feature licensed? | Its own licence feature `sso`, independent of `multi_tenancy`, usable on a one-tenant installation. |
+| 5 | New dependency for id token verification? | PyJWT, pinned, on top of the `cryptography` already in use, called with an explicit algorithm list and fed by our own guarded JWKS fetch. |
+| 6 | Do providers of the default tenant give ordinary sessions (other tenants, support access, operator rights)? | Yes. Sessions through any other tenant's provider stay confined to that tenant. |
+| 7 | Private issuer addresses for non-default tenants? | Refused unless the operator turns on the installation setting; default off. |
+| 8 | Does sign-in continue after the licence expires? | Yes; the administration becomes read-only, as for tenants. |
