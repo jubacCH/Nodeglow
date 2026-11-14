@@ -11,6 +11,11 @@ request). Uvicorn's own loggers (``uvicorn``, ``uvicorn.error``,
 ``uvicorn.access``) are routed through the same handler, so the access log has
 the same shape and the same request ID as the application log.
 
+Query values that are credentials (``code``, ``state``, ``token`` and the
+OAuth token names) are replaced by ``[redacted]`` in every record, the access
+log included: the single sign-on callback carries an authorization code and
+state in its query string, the installers an install token.
+
 Call :func:`configure_logging` once, as early as possible in main.py: uvicorn
 installs its own config before it imports the app, and this replaces it.
 Stdlib only — no extra dependency for the JSON formatter.
@@ -21,6 +26,7 @@ import json
 import logging
 import logging.config
 import os
+import re
 from datetime import datetime, timezone
 
 from request_id import get_request_id
@@ -40,6 +46,45 @@ _CHATTY_LOGGERS = ("apscheduler", "httpx", "httpcore")
 _RESERVED = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
     "message", "asctime", "request_id", "color_message", "taskName",
 }
+
+
+_SECRET_QUERY = re.compile(
+    r"([?&](?:code|state|token|id_token|access_token|refresh_token|session_state|client_secret)=)"
+    r"[^&\s\"']*",
+    re.IGNORECASE,
+)
+
+
+def redact_query(text: str) -> str:
+    return _SECRET_QUERY.sub(lambda m: m.group(1) + "[redacted]", text) if "=" in text else text
+
+
+class RedactSecretsFilter(logging.Filter):
+    """Replace credential values in query strings by ``[redacted]`` — in the
+    message and in its arguments (uvicorn's access log passes the path as an
+    argument)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_query(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(_redact_arg(a) for a in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {k: _redact_arg(v) for k, v in record.args.items()}
+        return True
+
+
+def _redact_arg(value):
+    """A log argument with credential query values removed. Strings, and
+    objects that print as a URL (httpx passes ``httpx.URL``), are checked;
+    numbers and the like stay as they are, so ``%d`` keeps working."""
+    if isinstance(value, str):
+        return redact_query(value)
+    if value is None or isinstance(value, (bool, int, float, bytes)):
+        return value
+    text = str(value)
+    redacted = redact_query(text)
+    return redacted if redacted != text else value
 
 
 class RequestIdFilter(logging.Filter):
@@ -97,7 +142,8 @@ def build_config(level: str | None = None, fmt: str | None = None) -> dict:
     return {
         "version": 1,
         "disable_existing_loggers": False,
-        "filters": {"request_id": {"()": RequestIdFilter}},
+        "filters": {"request_id": {"()": RequestIdFilter},
+                    "redact_secrets": {"()": RedactSecretsFilter}},
         "formatters": {
             "text": {"format": TEXT_FORMAT},
             "json": {"()": JsonFormatter},
@@ -107,7 +153,7 @@ def build_config(level: str | None = None, fmt: str | None = None) -> dict:
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stderr",
                 "formatter": fmt,
-                "filters": ["request_id"],
+                "filters": ["redact_secrets", "request_id"],
             },
         },
         "root": {"level": level, "handlers": ["console"]},

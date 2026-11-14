@@ -143,6 +143,15 @@ class SsoFlow(TenantScoped, Base):
         nullable=True,
     )
     next_path = Column(String(512), nullable=True)
+    # The redirect URI sent with the authorization request: the token request
+    # must repeat it exactly, even if the public URL changes meanwhile (053).
+    redirect_uri = Column(String(600), nullable=True)
+    # The provider's config_hash when the flow started: a test counts only
+    # for the settings it ran with (053).
+    config_hash = Column(String(64), nullable=True)
+    # Outcome of a test sign-in, shown to the admin who ran it: claims and
+    # the decision preview, never tokens (053). Deleted with the flow.
+    result_json = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     consumed_at = Column(DateTime, nullable=True)
 

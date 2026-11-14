@@ -130,13 +130,26 @@ def _is_tls_error(exc: BaseException) -> bool:
     return False
 
 
-async def _get_json(client: httpx.AsyncClient, url: str, public_only: bool) -> Any:
+async def request_json(client: httpx.AsyncClient, method: str, url: str, public_only: bool, *,
+                       data: dict | None = None, headers: dict | None = None,
+                       error_json: bool = False) -> tuple[int, Any]:
+    """``(status, parsed JSON)`` of one request through the guarded client.
+
+    Every URL — the issuer's and every endpoint its discovery document names
+    — gets the same address check before the request (and the transport's
+    at connect time). Redirects are refused, the answer is read up to
+    :data:`MAX_BYTES`. A status other than 200 raises ``http_status``, unless
+    ``error_json``: then a 4xx answer with a JSON body is returned too (the
+    token endpoint reports ``invalid_grant`` and the like that way).
+    Callers bound the whole exchange with one deadline.
+    """
     await _precheck(url, public_only)
     try:
-        async with client.stream("GET", url) as response:
-            if 300 <= response.status_code < 400:
+        async with client.stream(method, url, data=data, headers=headers) as response:
+            status = response.status_code
+            if 300 <= status < 400:
                 raise CheckFailed("redirect")
-            if response.status_code != 200:
+            if status != 200 and not (error_json and 400 <= status < 500):
                 raise CheckFailed("http_status")
             body = bytearray()
             async for chunk in response.aiter_bytes():
@@ -155,9 +168,15 @@ async def _get_json(client: httpx.AsyncClient, url: str, public_only: bool) -> A
     except ssl.SSLError:
         raise CheckFailed("tls") from None
     try:
-        return json.loads(bytes(body))
+        return status, json.loads(bytes(body))
     except ValueError:
+        if status != 200:
+            raise CheckFailed("http_status") from None
         raise CheckFailed("not_json") from None
+
+
+async def _get_json(client: httpx.AsyncClient, url: str, public_only: bool) -> Any:
+    return (await request_json(client, "GET", url, public_only))[1]
 
 
 def _https(value: Any) -> bool:

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, KeyRound, Plug, Plus, XCircle } from 'lucide-react';
+import { CheckCircle2, FlaskConical, KeyRound, Plug, Plus, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Checkbox, Field, Input, Select, Switch, Textarea } from '@/components/ui/Field';
@@ -12,7 +12,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { apiErrorBody, apiErrorMessage, del, get, patch, post, put } from '@/lib/api';
 import {
   buildBody, EMPTY_FORM, formFromProvider, isOpenToEveryone, STATE_LABEL,
-  type CheckResult, type Provider, type ProviderForm, type ProvidersState,
+  type CheckResult, type Provider, type ProviderForm, type ProvidersState, type TestStart,
 } from '@/lib/sso';
 import type { HealthState } from '@/lib/status';
 import { useToastStore } from '@/stores/toast';
@@ -69,6 +69,24 @@ function Providers({ state }: { state: ProvidersState }) {
     }
   }
 
+  // Test sign-in: the server answers the provider's sign-in address and sets
+  // the flow cookie; this tab goes there and comes back to the result page.
+  async function testSignIn(p: Provider) {
+    setChecking(p.id);
+    try {
+      const started = await post<TestStart>(`/api/identity-providers/${p.id}/test`);
+      if (started.ok && started.authorization_url) {
+        window.location.assign(started.authorization_url);
+        return;
+      }
+      setChecks((c) => ({ ...c, [p.id]: { ok: false, message: started.message ?? 'The test could not start' } }));
+      setChecking(null);
+    } catch (e) {
+      setChecks((c) => ({ ...c, [p.id]: { ok: false, message: apiErrorMessage(e, 'The test could not start') } }));
+      setChecking(null);
+    }
+  }
+
   async function remove(p: Provider) {
     const detail = await get<Provider>(`/api/identity-providers/${p.id}`).catch(() => p);
     const people = detail.affected_users ?? 0;
@@ -107,8 +125,9 @@ function Providers({ state }: { state: ProvidersState }) {
       {ConfirmDialogElement}
       {!state.sign_in_released && (
         <Notice tone="info" className="mb-4">
-          Signing in through single sign-on comes with a later version. You can prepare and check providers now;
-          nobody can sign in through them yet, and local accounts keep working as they do.
+          Signing in through single sign-on comes with a later version. You can prepare, check and test providers
+          now: a test sign-in shows what the provider sends and creates no account and no session. Local accounts keep
+          working as they do.
         </Notice>
       )}
       {state.licence === 'off' && (
@@ -144,6 +163,11 @@ function Providers({ state }: { state: ProvidersState }) {
                     <Button variant="secondary" size="sm" loading={checking === p.id}
                             disabled={checking !== null} onClick={() => void check(p)}>
                       {checking !== p.id && <Plug size={13} aria-hidden="true" />} Check connection
+                    </Button>
+                    <Button variant="secondary" size="sm" disabled={checking !== null || !p.client_secret_set || !state.redirect_uri}
+                            title={!p.client_secret_set ? 'Store the client secret first' : undefined}
+                            onClick={() => void testSignIn(p)}>
+                      <FlaskConical size={13} aria-hidden="true" /> Test sign-in
                     </Button>
                     <Button variant="secondary" size="sm" onClick={() => setEditing(p.id)}>Edit</Button>
                   </>

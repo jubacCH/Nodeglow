@@ -1,6 +1,6 @@
 # Single sign-on per tenant (OIDC)
 
-Status: design · 2026-11-14 · owner decisions taken 2026-11-14 (see "Owner decisions") · PR 1 of the plan (data model and administration) in review; no sign-in yet. Phase 13 of
+Status: design · 2026-11-14 · owner decisions taken 2026-11-14 (see "Owner decisions") · PR 1 (data model and administration) merged and deployed 2026-11-14; PR 2 (test sign-in) in review; no sign-in yet. Phase 13 of
 [2026-10-10-multi-tenancy-design.md](2026-10-10-multi-tenancy-design.md)
 ("Identity, LDAP, SSO"), narrowed to OIDC.
 
@@ -707,6 +707,40 @@ PR), against the threat table. Sign-in stays unreleased until it is done.
 
 Each PR states what was tested and what is not covered, and runs the backend
 suite with and without `ee/`.
+
+## Implementation notes
+
+Where the built code goes beyond or differs from the text above, as found
+while building it.
+
+**PR 1 (data model and administration).** The discovery document is fetched
+by "Check connection" (and by a test sign-in when the stored one is older
+than a day), not on every save. Check connection has one overall deadline
+and holds no database transaction while waiting on the provider. The
+outbound guard also judges the IPv4 address inside NAT64, IPv4-compatible,
+IPv4-translated, 6to4 and Teredo addresses.
+
+**PR 2 (test sign-in).**
+
+- The test starts with `POST /api/identity-providers/{id}/test` (a normal
+  admin route with session and CSRF), which answers the authorization URL
+  and sets the flow cookie; the browser tab then goes to the provider.
+- The callback stores the outcome in the flow row (`sso_flows.result_json`,
+  revision 053, with the flow's `redirect_uri` and the provider's
+  `config_hash` at start) and redirects to `/login/sso/result`. That page is
+  under `/login` so the frontend's session check does not bounce it (the
+  Strict session cookie is not sent on the cross-site redirect); it loads the
+  result with a same-site fetch, which carries the cookie. Only the admin who
+  started the test can read it; flows and results are deleted after an hour.
+- A passed test records `tested_hash` only if the provider's settings did not
+  change after the test started.
+- The access log would show the callback's request line with the
+  authorization code and state. The core's log handler now replaces the
+  values of `code`, `state`, `token` and the OAuth token names in every
+  record by `[redacted]` (this also covers the install token in the
+  installers' query string).
+- Purposes other than `test` are refused at the callback while
+  `SIGN_IN_RELEASED` is False.
 
 ## Owner decisions
 

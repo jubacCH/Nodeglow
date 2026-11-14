@@ -49,6 +49,15 @@ PUBLIC_ROUTES = {
     ("GET", "/agents/download/{platform}"),
 }
 
+# Public routes a plugin adds (ee): public when present, no stale check
+# (they are absent with NODEGLOW_DISABLE_EE=1).
+PLUGIN_PUBLIC_ROUTES = {
+    # Single sign-on: the provider sends the browser back here. Authenticated
+    # by the flow's state together with the flow cookie of the browser that
+    # started it; without both it redirects to the result page with an error.
+    ("GET", "/api/auth/sso/callback"),
+}
+
 # Whole path prefixes that are public (static assets, websocket handshakes
 # that authenticate themselves before accepting).
 PUBLIC_PREFIXES = ("/static",)
@@ -93,7 +102,7 @@ async def test_every_route_rejects_anonymous_callers(auth_client):
     failures = []
     checked = 0
     for method, path in _http_routes(app):
-        if (method, path) in PUBLIC_ROUTES or path.startswith(PUBLIC_PREFIXES):
+        if (method, path) in PUBLIC_ROUTES | PLUGIN_PUBLIC_ROUTES or path.startswith(PUBLIC_PREFIXES):
             continue
         url = _concrete_path(path)
         kwargs = {}

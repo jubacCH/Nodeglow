@@ -183,3 +183,47 @@ def test_install_is_idempotent():
     first = app.build_middleware_stack
     request_id.install(app)
     assert app.build_middleware_stack is first
+
+
+def test_credentials_in_query_strings_are_redacted():
+    """The single sign-on callback carries the authorization code and state,
+    the installers an install token; none of them reaches a log line."""
+    import logging
+
+    from logging_config import RedactSecretsFilter
+
+    f = RedactSecretsFilter()
+    # uvicorn's access log: the path is an argument.
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                            ("10.0.0.1:5000", "GET",
+                             "/api/auth/sso/callback?code=SECRET-CODE&state=SECRET-STATE&iss=x",
+                             "1.1", 303), None)
+    assert f.filter(rec) is True
+    line = rec.getMessage()
+    assert "SECRET" not in line and "code=[redacted]&state=[redacted]&iss=x" in line
+    rec = logging.LogRecord("x", logging.INFO, "", 0,
+                            "GET /install/linux?token=ngi_abc&arch=x64 failed", None, None)
+    f.filter(rec)
+    assert rec.getMessage() == "GET /install/linux?token=[redacted]&arch=x64 failed"
+    rec = logging.LogRecord("x", logging.INFO, "", 0, "nothing to hide in %s", ("/hosts?page=2",), None)
+    f.filter(rec)
+    assert rec.getMessage() == "nothing to hide in /hosts?page=2"
+
+
+def test_the_console_handler_redacts():
+    from logging_config import build_config
+
+    assert "redact_secrets" in build_config()["handlers"]["console"]["filters"]
+
+
+def test_url_objects_in_log_arguments_are_redacted():
+    import logging
+
+    import httpx
+
+    from logging_config import RedactSecretsFilter
+
+    rec = logging.LogRecord("httpx", logging.INFO, "", 0, 'HTTP Request: %s %s "%s"',
+                            ("GET", httpx.URL("https://x.example/cb?code=abc&ok=1"), 200), None)
+    RedactSecretsFilter().filter(rec)
+    assert rec.getMessage() == 'HTTP Request: GET https://x.example/cb?code=[redacted]&ok=1 "200"'
