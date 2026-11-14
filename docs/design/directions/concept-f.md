@@ -20,6 +20,7 @@ simulierte Daten aus [`SCENARIO.md`](../prototypes/SCENARIO.md)). Nur die Übers
 | KPI | einzelne Karten | Kachelreihe in der Chart-Karte; die aktive Kachel bestimmt den Chart |
 | Charts | Linien/Flächen | Pill-Balken mit Punkt-Markern, Segment-Gauges für Füllstände |
 | Topologie | Baum | Canvas mit runden Knoten, Leitungen in Statusfarbe |
+| Hosts | eigene Seite | Host-Grid auf der Übersicht: alle 48 Hosts als Pills nach Standort, schlimmste zuerst |
 
 ## Farbrollen
 
@@ -40,6 +41,7 @@ simulierte Daten aus [`SCENARIO.md`](../prototypes/SCENARIO.md)). Nur die Übers
 - Hover auf einen Balken zeigt den Wert.
 - „Needs you“: Klick erledigt den Eintrag, der Zähler sinkt.
 - Topologie: Klick auf einen Knoten zeigt Details darunter.
+- Host-Grid: Statusleiste mit Legende, Filter „All / Problems / No data“, Klick auf einen Host zeigt den Zustand. Pro Standort sortiert: Down, Warnung, offener Incident, Degraded, Wartung, keine Daten, gesund. Hosts hinter der stillen Bern-Probe sind gestrichelt und schraffiert, nie grün. Auf dem Handy startet der Filter auf „Problems“.
 - Leiste einklappbar, Hell/Dunkel umschaltbar (beides in `localStorage`, abgesichert).
 - Unter 760 px: Leiste wird zur schwebenden Tab-Bar unten.
 
