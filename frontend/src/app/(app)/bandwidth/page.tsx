@@ -55,11 +55,21 @@ const HOUR_OPTIONS = [
   { label: '7d', value: 168, long: 'last 7 days' },
 ] as const;
 
+/** Rates of interfaces are not additive: one download passes the gateway,
+ *  several switch ports and the host. The total is one of these, never all. */
+const BASIS_LABEL: Record<string, { short: string; long: string }> = {
+  wan: { short: 'Internet', long: 'Internet link (WAN)' },
+  guests: { short: 'Guests', long: 'Virtual machines and containers, combined' },
+  agents: { short: 'Hosts', long: 'Hosts with an agent, combined' },
+};
+
 /* ---------- types ---------- */
 
 interface BandwidthSummary {
   total_rx_bps?: number;
   total_tx_bps?: number;
+  /** What the totals add up; null when nothing that can be added up reports. */
+  total_basis?: 'wan' | 'guests' | 'agents' | null;
   total_interfaces?: number;
   top_talkers?: Array<{
     source_type?: string;
@@ -232,8 +242,9 @@ export default function BandwidthPage() {
     };
   }, [talkers, t]);
 
-  const rx = splitBps(summary?.total_rx_bps);
-  const tx = splitBps(summary?.total_tx_bps);
+  const basis = summary?.total_basis ? BASIS_LABEL[summary.total_basis] : undefined;
+  const rx = basis ? splitBps(summary?.total_rx_bps) : null;
+  const tx = basis ? splitBps(summary?.total_tx_bps) : null;
   const top = topTalker ? splitBps((topTalker.rx_rate_bps ?? 0) + (topTalker.tx_rate_bps ?? 0)) : null;
   const asOf = formatAsOf(summaryQ.dataUpdatedAt);
 
@@ -257,12 +268,12 @@ export default function BandwidthPage() {
         <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
           <Card>
             {summaryQ.isLoading ? <Skeleton className="h-[52px] w-28" /> : (
-              <BigNumber size="sm" value={rx?.value ?? null} unit={rx?.unit} label="Total download" />
+              <BigNumber size="sm" value={rx?.value ?? null} unit={rx?.unit} label={basis ? `${basis.short} download` : 'Download'} />
             )}
           </Card>
           <Card>
             {summaryQ.isLoading ? <Skeleton className="h-[52px] w-28" /> : (
-              <BigNumber size="sm" value={tx?.value ?? null} unit={tx?.unit} label="Total upload" />
+              <BigNumber size="sm" value={tx?.value ?? null} unit={tx?.unit} label={basis ? `${basis.short} upload` : 'Upload'} />
             )}
           </Card>
           <Card>
@@ -296,7 +307,7 @@ export default function BandwidthPage() {
         <CardHeader
           title="Traffic"
           titleId="h-traffic"
-          meta={range.long}
+          meta={basis ? `${basis.long} · ${range.long}` : range.long}
           actions={
             <SegmentedControl
               label="Time range"
@@ -317,7 +328,7 @@ export default function BandwidthPage() {
             <EChart
               option={trafficOption}
               height={300}
-              ariaLabel={`Total download and upload in Mbps over the ${range.long}.`}
+              ariaLabel={`${basis?.long ?? 'Traffic'}: download and upload in Mbps over the ${range.long}.`}
             />
           </>
         ) : (
@@ -327,7 +338,7 @@ export default function BandwidthPage() {
               variant="not-configured"
               icon={ArrowUpDown}
               title="No traffic data yet"
-              description="Data appears after agent or integration snapshots with interface counters are collected."
+              description="The chart shows the Internet link of a gateway, or else the combined traffic of virtual machines or of hosts with an agent. Single switch ports are listed below."
             />
           </div>
         )}

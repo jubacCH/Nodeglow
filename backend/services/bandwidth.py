@@ -18,6 +18,32 @@ from services.host_state import iso
 logger = logging.getLogger(__name__)
 
 
+# ── What "total traffic" adds up ─────────────────────────────────────────────
+
+# Interface names this module writes for the rows a total is built from.
+WAN = "wan"
+AGENT_TOTAL = "total"
+
+# In order of preference; the first one that has data is the total. Rates of
+# interfaces are not additive in general: one download passes the gateway,
+# several switch ports and the host itself, and the sum of all of them showed
+# five times the real traffic. Keep in step with
+# clickhouse_client.BANDWIDTH_TOTAL_BASES.
+TOTAL_BASES = ("wan", "guests", "agents")
+
+
+def total_basis_of(source_type: str, interface_name: str) -> str | None:
+    """Which total an interface belongs to; None for one that is never summed
+    (switch ports, device uplinks, an agent's single interfaces)."""
+    if interface_name == WAN:
+        return "wan"
+    if source_type == "proxmox" and interface_name.startswith(("qemu/", "lxc/")):
+        return "guests"
+    if source_type == "agent" and interface_name == AGENT_TOTAL:
+        return "agents"
+    return None
+
+
 # ── Rate calculation ────────────────────────────────────────────────────────
 
 
@@ -83,7 +109,17 @@ async def extract_agent_bandwidth(
     """
     if not body:
         return 0
-    interfaces = body.get("network", {}).get("interfaces") or []
+    # The agent sends ``network_interfaces`` and its own total at the top
+    # level. Its Python predecessor nested both under ``network``; reading
+    # only that, no agent's traffic was recorded after the switch.
+    legacy = body.get("network") if isinstance(body.get("network"), dict) else {}
+    interfaces = list(body.get("network_interfaces") or legacy.get("interfaces") or [])
+    total_rx = body.get("rx_bytes", legacy.get("rx_bytes"))
+    total_tx = body.get("tx_bytes", legacy.get("tx_bytes"))
+    if interfaces and (total_rx is not None or total_tx is not None):
+        # The host's whole traffic (the agent leaves out loopback): what the
+        # traffic total adds up, see TOTAL_BASES.
+        interfaces.append({"name": AGENT_TOTAL, "rx_bytes": total_rx, "tx_bytes": total_tx})
     if not interfaces:
         return 0
 
@@ -154,7 +190,9 @@ async def extract_proxmox_bandwidth(
         node_name = node.get("node", node.get("name", "unknown"))
         netin = node.get("netin")
         netout = node.get("netout")
-        if netin is None and netout is None:
+        # The cluster resource list has no network counters for a node; the
+        # snapshot fills in 0. A row of zeros every minute is not a reading.
+        if not netin and not netout:
             continue
         rx = int(netin) if netin is not None else 0
         tx = int(netout) if netout is not None else 0
@@ -173,8 +211,10 @@ async def extract_proxmox_bandwidth(
         })
 
     # VMs / containers
-    for vm_type in ("qemu", "lxc"):
-        for vm in data.get(vm_type, []):
+    # The snapshot lists guests as ``vms`` and ``containers``. This read
+    # ``qemu`` and ``lxc``, which it never had: no guest was ever recorded.
+    for vm_type, keys in (("qemu", ("vms", "qemu")), ("lxc", ("containers", "lxc"))):
+        for vm in [g for key in keys for g in (data.get(key) or [])]:
             vmid = vm.get("vmid", vm.get("id", "?"))
             vm_name = vm.get("name", f"{vm_type}-{vmid}")
             netin = vm.get("netin")
@@ -236,6 +276,23 @@ async def extract_unifi_bandwidth(
     ts = timestamp or datetime.utcnow()
     source_id = str(config_id)
     rows: list[dict] = []
+
+    # The Internet link, as the controller's WAN health reports it. This is
+    # what the traffic total shows: every switch port on the way carries the
+    # same bytes again.
+    wan = data.get("wan") or {}
+    if wan.get("status") and ("rx_bytes_r" in wan or "tx_bytes_r" in wan):
+        rows.append({
+            "timestamp": ts,
+            "source_type": "unifi",
+            "source_id": source_id,
+            "source_name": source_name,
+            "interface_name": WAN,
+            "rx_bytes": 0,
+            "tx_bytes": 0,
+            "rx_rate_bps": int(wan.get("rx_bytes_r") or 0) * 8,
+            "tx_rate_bps": int(wan.get("tx_bytes_r") or 0) * 8,
+        })
 
     for device in data.get("devices", []):
         dev_mac = device.get("mac", device.get("_id", "unknown"))
@@ -328,18 +385,25 @@ async def get_bandwidth_history(
     ]
 
 
-async def get_bandwidth_total_history(hours: int = 24) -> list[dict]:
-    """Total download / upload over time, for the traffic chart."""
+async def get_bandwidth_total_history(hours: int = 24) -> dict:
+    """Download / upload over time for the traffic chart, on one basis.
+
+    ``basis`` names what the points add up (see ``TOTAL_BASES``), ``None``
+    when nothing that can be added up reported in the range.
+    """
     rows = await ch.get_bandwidth_total_history_ch(hours=hours)
-    return [
+    basis = next((b for b in TOTAL_BASES if any(int(r.get(f"{b}_n") or 0) for r in rows)), None)
+    if basis is None:
+        return {"basis": None, "samples": []}
+    return {"basis": basis, "samples": [
         {
             "timestamp": _ts(r["timestamp"]),
-            "rx_rate_bps": int(r.get("rx_rate_bps") or 0),
-            "tx_rate_bps": int(r.get("tx_rate_bps") or 0),
-            "interfaces": int(r.get("interfaces") or 0),
+            "rx_rate_bps": int(r.get(f"{basis}_rx") or 0),
+            "tx_rate_bps": int(r.get(f"{basis}_tx") or 0),
+            "interfaces": int(r.get(f"{basis}_n") or 0),
         }
-        for r in rows
-    ]
+        for r in rows if int(r.get(f"{basis}_n") or 0)
+    ]}
 
 
 async def get_bandwidth_summary() -> dict:
@@ -352,8 +416,12 @@ async def get_bandwidth_summary() -> dict:
         key=lambda r: int(r.get("rx_rate_bps") or 0) + int(r.get("tx_rate_bps") or 0),
         reverse=True,
     )
-    total_rx_bps = sum(int(r.get("rx_rate_bps") or 0) for r in latest)
-    total_tx_bps = sum(int(r.get("tx_rate_bps") or 0) for r in latest)
+    # One basis, never every interface: see TOTAL_BASES.
+    kinds = [total_basis_of(r["source_type"], r["interface_name"]) for r in latest]
+    basis = next((b for b in TOTAL_BASES if b in kinds), None)
+    counted = [r for r, kind in zip(latest, kinds) if basis is not None and kind == basis]
+    total_rx_bps = sum(int(r.get("rx_rate_bps") or 0) for r in counted)
+    total_tx_bps = sum(int(r.get("tx_rate_bps") or 0) for r in counted)
 
     by_source: dict[str, dict] = {}
     for r in latest:
@@ -375,6 +443,7 @@ async def get_bandwidth_summary() -> dict:
     return {
         "total_rx_bps": total_rx_bps,
         "total_tx_bps": total_tx_bps,
+        "total_basis": basis,
         "total_interfaces": len(latest),
         "top_talkers": [
             {
