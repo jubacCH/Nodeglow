@@ -10,6 +10,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Silent agents are an incident. An agent or probe that has not reported
+  for ten minutes opens "Agent silent: <name>" (rule `agent_silent`,
+  warning) with the time of its last report, linked to its host, and
+  resolves when it reports again. Not raised for agents that never
+  reported, are disabled, or whose host is in maintenance, and not in the
+  first ten minutes after a server start. Three or more in one run are one
+  notification. Until now a stopped agent raised nothing: its host still
+  answered a ping.
 - Two-factor sign-in (TOTP). Every user can turn it on for their own account
   under the new **Account** page (account menu): scan a QR code with an
   authenticator app, confirm with a code, keep ten one-time recovery codes. Signing in then asks for

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import logging
 import sys
 from contextlib import ExitStack, asynccontextmanager
@@ -51,6 +52,7 @@ JOBS = [
     "run_log_intelligence", "run_log_analytics", "run_snmp_polls", "run_port_discovery",
     "run_backup_compliance", "resolve_host_dns", "cleanup_old_results", "update_ssl_expiry",
     "run_self_check_job", "refresh_disk_predictions", "run_weekly_digest", "check_disk_space",
+    "check_agent_silence",
 ]
 # Installation jobs: no tenant data (system scope by design).
 INSTALLATION_JOBS = {"cleanup_clickhouse_logs", "cleanup_legacy_api_keys", "update_geoip",
@@ -311,10 +313,26 @@ def _foreign_tag(tid: int) -> str:
     return TAG[B if tid == A else A]
 
 
+async def _silence_the_agents(sf, monkeypatch):
+    """Every agent last reported an hour ago, on a server that has been up
+    for longer: what the silence check exists for."""
+    from sqlalchemy import update
+
+    from models.agent import Agent
+
+    monkeypatch.setenv("NODEGLOW_START_TIME", str(time.time() - 3600))
+    async with sf.maker() as s:
+        with system_scope("test: silence the agents", audit=False):
+            await s.execute(update(Agent).values(last_seen=datetime.utcnow() - timedelta(hours=1)))
+            await s.commit()
+
+
 @pytest.mark.parametrize("job_name", JOBS)
-async def test_job_keeps_each_tenants_data_in_its_tenant(job_name, sf, boundaries, caplog):
+async def test_job_keeps_each_tenants_data_in_its_tenant(job_name, sf, boundaries, caplog, monkeypatch):
     if job_name == "run_alert_rules":
         await _run(job_name)  # required_consecutive defaults to 2: the 2nd run fires
+    if job_name == "check_agent_silence":
+        await _silence_the_agents(sf, monkeypatch)
     await assert_job_isolated(job_name, sf, boundaries, caplog)
 
 
