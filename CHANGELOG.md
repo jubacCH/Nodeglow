@@ -209,6 +209,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   interface list was read in the format of its Python predecessor, and
   Proxmox guests under keys the snapshot never had; neither ever reached
   the traffic data.
+- Dashboard, Internet card: a result measured at the gateway is flagged as
+  old after 48 hours, not after three. Gateways test once a day, so every
+  one of their results was shown dimmed with "Last test ... ago".
 - UniFi: the gateway's speed tests are read again. Current Network
   versions answer the old report with an empty list; the results are now
   taken from the v2 API when it does.

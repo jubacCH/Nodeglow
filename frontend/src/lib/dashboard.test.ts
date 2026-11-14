@@ -3,7 +3,7 @@ import {
   availabilityScale, changeHref, changeTiles, describeLatency, describeStates, formatDuration,
   glyphFor, groupFreshness, healthSegments, hostState, incidentDayBars, incidentHostsLabel,
   isEmptyInstall, isStale, reachabilityFlipped, sectionError, speedBars, speedLimitHint, speedSourceLabel,
-  stateSegments, syslogLevel, topologyColumns, upcomingView, wanState,
+  speedStaleAfterSeconds, stateSegments, syslogLevel, topologyColumns, upcomingView, wanState,
 } from './dashboard';
 import type {
   ChangeItem, DashboardV2, HostGroup, LatencySection, TopoParent, TopologySection, UpcomingItem,
@@ -313,6 +313,16 @@ describe('where a speed was measured', () => {
       .toContain('just under 1 Gbit/s');
     expect(speedLimitHint({ measured_at: 'host', limit: { kind: 'link_speed', link_mbps: 100 } }))
       .toContain('just under 100 Mbit/s');
+  });
+
+  it('does not call a daily gateway result old after three hours', () => {
+    const at = '2026-10-10T01:05:00Z'; // 13 h 27 min before NOW
+    expect(isStale(at, NOW, speedStaleAfterSeconds({ source: 'unifi', measured_at: 'gateway' }))).toBe(false);
+    expect(isStale(at, NOW, speedStaleAfterSeconds({ source: 'unifi' }))).toBe(false);
+    // The hourly test of the host is old after three hours, as before.
+    expect(isStale(at, NOW, speedStaleAfterSeconds({ source: 'speedtest', measured_at: 'host' }))).toBe(true);
+    // A gateway that stopped testing is flagged after two days.
+    expect(isStale('2026-10-08T14:00:00Z', NOW, speedStaleAfterSeconds({ source: 'unifi', measured_at: 'gateway' }))).toBe(true);
   });
 
   it('says nothing while the gateway result is on show, or nothing is limited', () => {
