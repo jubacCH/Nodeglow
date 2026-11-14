@@ -12,6 +12,19 @@ from integrations.veeam import VeeamIntegration, parse_veeam_data
 NOW = datetime(2026, 11, 12, 12, 0, 0, tzinfo=timezone.utc)
 
 
+class _FrozenDatetime(datetime):
+    """``datetime`` whose ``now()`` is the day the fixtures were written for.
+
+    ``collect()`` reads the wall clock and the fixtures carry fixed dates:
+    two days later every job in them was "overdue" and a test that expects
+    exactly one alert started to fail on its own.
+    """
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is not None else NOW.replace(tzinfo=None)
+
+
 def ts(hours_ago: float, offset: str = "+01:00", fraction: str = "") -> str:
     """A .NET style timestamp, hours_ago before NOW, expressed in the given offset."""
     sign = 1 if offset[0] == "+" else -1
@@ -176,6 +189,7 @@ def install(monkeypatch, routes: dict[str, object], seen: list | None = None):
         return httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
 
     monkeypatch.setattr(veeam, "safe_async_client", factory)
+    monkeypatch.setattr(veeam, "datetime", _FrozenDatetime)
 
 
 def page(items, total=None):
