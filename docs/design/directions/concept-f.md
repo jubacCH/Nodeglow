@@ -12,26 +12,34 @@ simulierte Daten aus [`SCENARIO.md`](../prototypes/SCENARIO.md) plus ein Enterpr
 
 ## Aufbau der Übersicht
 
-Reihenfolge nach Dringlichkeit, jedes Problem erscheint an genau einer Stelle:
+Reihenfolge nach Dringlichkeit, jedes Problem erscheint an genau einer Stelle. Die Seite ist etwa
+1,2 Bildschirme hoch (48 Hosts) bzw. 1,5 (480 Hosts, Incidents zugeklappt).
 
 1. **Kopf:** „2 ⚠ incidents need you“, darunter die ehrliche Lage als Balken und Satz
    („28 of 48 hosts healthy · 10 with issues · 9 without data · 1 in maintenance“).
-2. **Open incidents** (links oben): worst first, der kritische offen. Jede Beziehung trägt ihr Label
-   (Confirmed / Rule-based / Suspected) mit Beleg, dazu ein kleiner Verlauf der betroffenen Metrik,
-   „Open incident“ und „Acknowledge“. Ein bestätigter Incident atmet nicht mehr. Darunter eine Zeile
-   „Resolved today“.
-3. **Needs a look** (rechts oben): alles, was kein offener Incident ist. Hosts ohne Incident, stille
-   Probes (zusammengefasst), Kapazität, Zertifikate, Discovery. Bei vielen Einträgen aggregiert
-   („12 volumes full within 14 days“), höchstens 6 Zeilen, Rest hinter „Show all“.
+2. **Open incidents** (links oben), worst first, **zugeklappt eine Zeile**: Titel, betroffene Hosts,
+   Alter und die vorhandenen Beleg-Arten als kleine Pills (Confirmed / Rule-based / Suspected).
+   Aufgeklappt per Klick:
+   - **Mini-Pfad** vom Netzrand zum Verursacher und dann zu den Betroffenen
+     („fw-zh-01 → SW-ZH-CORE-02 → 2 down · 5 degraded“), mit „Show in topology“.
+   - Belege mit Label, Verlauf der betroffenen Metrik.
+   - Buttons „Open incident“ und „Acknowledge“. Ein bestätigter Incident atmet nicht mehr.
+
+   Darunter steht die Zeile „Resolved today“.
+3. **Needs a look** (rechts oben, 400 px breit, Titel bis zwei Zeilen): alles, was kein offener
+   Incident ist. Hosts ohne Incident, stille Probes (zusammengefasst), Kapazität, Zertifikate,
+   Discovery. Bei vielen Einträgen aggregiert („12 volumes full within 14 days“), höchstens 6 Zeilen.
 4. **Coming up** (rechts): Wartungsfenster und geplante Arbeit.
-5. **Trends:** Kacheln „Open incidents“ und „Syslog“ schalten den Chart, „Availability“ und
-   „Reporting“ sind reine Kennzahlen.
+5. **At a glance:** vier Kennzahlen, zwei davon mit Sparkline (Incidents pro Tag über 14 Tage,
+   Syslog pro Stunde über 24 h). Ein grosser Chart entfällt.
 6. **Hosts by site:** pro Standort ein Anteilsbalken mit Zahlen als Text, keine einzelnen Hosts.
-7. **Where it breaks:** Topologie, Problempfade offen, gesunde Äste gefaltet.
+
+Die **grosse Topologie** ist eine eigene Ansicht (Navigation „Topology“ oder „Show in topology“ aus
+einem Incident). Auf der Übersicht hat sie den Pfad aus dem Incident nur doppelt gezeigt.
 
 Gestrichen gegenüber der ersten Fassung: Gauge „Disk D:“, Prognose-Karte, „Live incidents“ als
-eigene Karte, doppelte Listen „Needs you“ / „Needs a look“, KPI-Kachel zur Latenz hinter einem
-Switch (der Verlauf steckt jetzt im Incident), Avatar-Chips im Kopf.
+eigene Karte, doppelte Listen, grosser Trend-Chart mit Zeitraum-Umschalter, Topologie auf der
+Übersicht, Avatar-Chips im Kopf.
 
 ## Was sich gegenüber E3 ändert
 
@@ -41,9 +49,9 @@ Switch (der Verlauf steckt jetzt im Incident), Avatar-Chips im Kopf.
 | Form | Karten mit Rand, Radius 10–12 | Radius 18–24, Rand als feiner Schatten, Pills |
 | Navigation | schmale Rail (60 px) mit Sub-Navigation | Leiste mit Text (216 px), einklappbar auf Icons |
 | Kopf der Übersicht | Seitentitel | Satz plus Lagebalken |
-| Incidents | Karte mit Liste | aufklappbare Incidents mit Belegen und Metrik-Verlauf |
-| Charts | Linien/Flächen | Pill-Balken, Höhe exakt, Rundung wird abgeschnitten statt aufgeschlagen |
-| Topologie | Baum | Canvas, Problempfade offen, gesunde Äste als Zähl-Knoten mit Statusring |
+| Incidents | Karte mit Liste | eine Zeile pro Incident, aufgeklappt Mini-Pfad, Belege und Metrik-Verlauf |
+| Charts | Linien/Flächen | Sparklines in Kennzahlen, Pill-Balken im Incident (Höhe exakt, Rundung abgeschnitten statt aufgeschlagen) |
+| Topologie | Baum | eigene Ansicht: Canvas, Problempfade offen, gesunde Äste als Zähl-Knoten mit Statusring |
 
 ## Farbrollen
 
@@ -90,7 +98,7 @@ die Dark-Werte), `card-shadow` (Kartenrand als 1-px-Schatten).
 - Chartbalken sind fokussierbar und tragen ihren Wert als Label. Der Tooltip erscheint bei Hover,
   Fokus und Tap.
 - Umschalter sind Buttons mit `aria-pressed` (keine Tab-Rollen ohne Panels). Incidents sind
-  `aria-expanded`-Buttons.
+  `aria-expanded`-Buttons. Sparklines und Mini-Pfad tragen ihren Inhalt als Label.
 - Nach jedem Neuzeichnen bleibt der Tastaturfokus auf dem gleichen Element (`data-fk`).
 - Eingeklappte Leiste und mobiler „Add host“ behalten ihren Namen (visuell versteckt, nicht entfernt).
 - Theme wird vor dem ersten Paint gesetzt. Gespeichert wird nur eine bewusste Wahl, sonst folgt

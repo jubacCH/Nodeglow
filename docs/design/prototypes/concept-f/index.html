@@ -223,7 +223,7 @@ h1 .chip svg { width: .58em; height: .58em; }
 .hero-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* ---------- grid ---------- */
-.grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 18px; align-items: start; }
 .col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .card { background: var(--surface); border-radius: var(--r-card); box-shadow: var(--card-shadow); padding: 18px; min-width: 0; position: relative; }
 .card-h { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
@@ -263,11 +263,26 @@ h1 .chip svg { width: .58em; height: .58em; }
 .inc-h { display: flex; align-items: center; gap: 12px; padding: 12px; width: 100%; text-align: left; border-radius: 20px; }
 .inc-h .tx { flex: 1; min-width: 0; }
 .inc-h .tx b { display: block; font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.inc-h .tx small { color: var(--text-2); font-size: 12px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inc-h .tx small { color: var(--text-2); font-size: 12.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+.inc-h .tx small .tag { height: 20px; font-size: 10.5px; padding: 0 8px; }
 .inc-h .age { color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .inc-h .chev { color: var(--text-3); transition: transform .15s; }
 .inc-h[aria-expanded="true"] .chev { transform: rotate(180deg); }
 .inc-b { padding: 0 14px 14px 58px; }
+/* mini path: the chain from the edge of the network to the cause, then the affected hosts */
+.path { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 0; margin: 2px 0 14px; }
+.path .pn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px 0 4px; border-radius: 16px; background: var(--surface); box-shadow: var(--card-shadow); font: 500 12px var(--font-mono); white-space: nowrap; }
+.path .pn .disc { width: 24px; height: 24px; box-shadow: none; }
+.path .pn .disc svg { width: 13px; height: 13px; }
+.path .pn.cause { box-shadow: 0 0 0 1.5px var(--st-degraded), var(--shadow-sm); }
+.path .pn.cause.warn { box-shadow: 0 0 0 1.5px var(--st-warning), var(--shadow-sm); }
+.path .wire { width: 22px; height: 3px; border-radius: 2px; background: var(--accent); flex: none; }
+.path .wire.bad { background: var(--st-down); }
+.path .fan { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.path .cnt-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 16px; font-size: 12.5px; font-weight: 600; }
+.path .cnt-chip.down { background: var(--st-down-soft); color: var(--st-down-text); }
+.path .cnt-chip.deg { background: var(--st-degraded-soft); color: var(--st-degraded-text); }
+.path .to-topo { margin-left: 10px; }
 .inc-b[hidden] { display: none; }
 .rels { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .rel { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; color: var(--text-2); }
@@ -284,7 +299,12 @@ h1 .chip svg { width: .58em; height: .58em; }
 .resolved b { color: var(--text); font-weight: 500; }
 
 /* ---------- KPI tiles + charts ---------- */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 980px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.spark { display: block; width: 100%; height: 26px; margin-top: 8px; }
+.spark rect { fill: var(--accent); opacity: .55; }
+.spark rect.last { opacity: 1; }
+.tile .note { font-size: 12px; color: var(--text-2); margin-top: 6px; }
 .tile { background: var(--surface-2); border-radius: var(--r-tile); padding: 12px 14px; text-align: left; min-height: 74px; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid transparent; }
 .tile small { font-size: 11.5px; color: var(--text-2); }
 .tile b { font: 500 22px var(--font-display); letter-spacing: -.03em; }
@@ -311,7 +331,7 @@ svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
 .rows { display: flex; flex-direction: column; gap: 6px; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 16px; background: var(--surface-2); transition: opacity .3s; }
 .row .tx { flex: 1; min-width: 0; }
-.row .tx b { display: block; font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .tx b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 500; font-size: 13.5px; line-height: 1.3; }
 .row .tx small { color: var(--text-2); font-size: 12px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row.done { opacity: .55; }
 .row .when { color: var(--text-2); font-size: 12px; white-space: nowrap; text-align: right; }
@@ -382,6 +402,8 @@ svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
   .site { grid-template-columns: 140px minmax(0, 1fr) auto; }
 }
 @media (max-width: 760px) {
+  .inc-h .tx small .tag { display: none; }
+  .path .wire { width: 12px; }
   .app { display: block; }
   .rail { display: none; }
   main { padding: 8px 16px 100px; }
@@ -449,6 +471,7 @@ svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
       <button class="btn btn-primary" id="addHost" data-toast="Add host: opens the existing host dialog"><i data-ic="plus"></i><span class="add-lbl">Add host</span></button>
     </header>
 
+    <div data-view="overview">
     <section class="hero" aria-labelledby="heroTitle">
       <div>
         <div class="hello">
@@ -473,24 +496,20 @@ svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
         <section class="card" aria-labelledby="incTitle">
           <div class="card-h">
             <span class="ico"><i data-ic="alert"></i></span>
-            <div><h2 id="incTitle">Open incidents</h2><p>Worst first · every relation shows its evidence</p></div>
+            <div><h2 id="incTitle">Open incidents</h2><p>Click one for evidence, cause path and actions</p></div>
             <div class="end"><button class="link" data-toast="Opens Incidents">All incidents</button></div>
           </div>
           <div id="incidents"></div>
           <div class="resolved" id="resolved"></div>
         </section>
 
-        <section class="card" aria-labelledby="chartTitle">
+        <section class="card" aria-labelledby="kpiTitle">
           <div class="card-h">
             <span class="ico"><i data-ic="activity"></i></span>
-            <div><h2 id="chartTitle">Trends</h2><p id="chartSub"></p></div>
-            <div class="end">
-              <div class="legend" id="legend"></div>
-              <div class="seg" role="group" aria-label="Time range" id="range"></div>
-            </div>
+            <div><h2 id="kpiTitle">At a glance</h2></div>
+            <div class="end"><button class="link" data-toast="Opens Reports">Reports</button></div>
           </div>
           <div class="tiles" id="tiles"></div>
-          <div class="chart" id="chart"><svg id="chartSvg" role="group"></svg><div class="tip" id="tip" aria-hidden="true"></div></div>
         </section>
 
         <section class="card" aria-labelledby="hostTitle">
@@ -502,22 +521,6 @@ svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
           <div class="sites" id="sites"></div>
         </section>
 
-        <section class="card" aria-labelledby="topoTitle">
-          <div class="card-h">
-            <span class="ico"><i data-ic="network"></i></span>
-            <div><h2 id="topoTitle">Where it breaks</h2><p>Problem paths open, healthy branches folded into counts · click a node</p></div>
-            <div class="end">
-              <div class="legend">
-                <span class="tag conf">Confirmed</span>
-                <span class="tag rule">Rule-based</span>
-                <span class="tag susp">Suspected</span>
-              </div>
-            </div>
-          </div>
-          <div class="canvas-wrap" id="canvasWrap"><div class="canvas" id="canvas"></div></div>
-          <div class="detail" id="detail" aria-live="polite"></div>
-          <div class="hint">No light means no data: hosts behind a silent probe stay grey and hatched, never green.</div>
-        </section>
       </div>
 
       <div class="col aside">
@@ -538,6 +541,27 @@ svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
         </section>
       </div>
     </div>
+    </div>
+
+    <div data-view="topology" hidden>
+      <div class="hello" style="margin:10px 0 14px"><button class="link" data-view-go="overview">← Overview</button></div>
+      <section class="card" aria-labelledby="topoTitle">
+          <div class="card-h">
+            <span class="ico"><i data-ic="network"></i></span>
+            <div><h2 id="topoTitle">Where it breaks</h2><p>Problem paths open, healthy branches folded into counts · click a node</p></div>
+            <div class="end">
+              <div class="legend">
+                <span class="tag conf">Confirmed</span>
+                <span class="tag rule">Rule-based</span>
+                <span class="tag susp">Suspected</span>
+              </div>
+            </div>
+          </div>
+          <div class="canvas-wrap" id="canvasWrap"><div class="canvas" id="canvas"></div></div>
+          <div class="detail" id="detail" aria-live="polite"></div>
+          <div class="hint">No light means no data: hosts behind a silent probe stay grey and hatched, never green.</div>
+        </section>
+    </div>
   </main>
 </div>
 
@@ -545,7 +569,7 @@ svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
   <button aria-current="page" data-nav="Overview" aria-label="Overview"><i data-ic="home"></i></button>
   <button data-nav="Incidents" aria-label="Incidents"><i data-ic="alert"></i><span class="cnt crit" data-bind="incCount"></span></button>
   <button data-nav="Hosts" aria-label="Hosts"><i data-ic="server"></i></button>
-  <button data-nav="Logs" aria-label="Logs"><i data-ic="logs"></i></button>
+  <button data-nav="Topology" aria-label="Topology"><i data-ic="network"></i></button>
   <button id="themeBtnM" aria-label="Switch to dark mode"><i data-ic="moon"></i></button>
 </nav>
 
@@ -650,13 +674,15 @@ const SC = {
       mkSite('Cloud', 'HTTP and TLS checks', 2, 'cloud'),
     ],
     incidents: [
-      { id: '#1071', sev: 'crit', title: 'Uplink flapping on SW-ZH-CORE-02', since: '14:07', age: '25 min', affected: '7 hosts behind it · 2 down, 5 degraded', chart: 'lat',
+      { id: '#1071', sev: 'crit', title: 'Uplink flapping on SW-ZH-CORE-02', since: '14:07', age: '25 min', affected: '7 hosts · 2 down, 5 degraded', chart: 'lat', topo: 'core2',
+        path: [['fw-zh-01', 'ok', 'shield'], ['SW-ZH-CORE-02', 'deg', 'switch', true]], fan: [[2, 'down', 'down'], [5, 'deg', 'degraded']],
         rels: [
           ['conf', 'All 7 hosts share the parent SW-ZH-CORE-02 in the topology; their alerts are folded in here.'],
           ['rule', 'Syslog burst on the parent: %LINK-3-UPDOWN on Te1/0/48, 38 events in 10 min (rule host_down_syslog).'],
           ['susp', 'fw-zh-01 filterlog +420 % against the Friday 14:00 baseline. Overlaps in time only.'],
         ] },
-      { id: '#1072', sev: 'warn', title: 'VeeamBackupSvc stopped on SRV-BACKUP-01', since: '14:26', age: '6 min', affected: '1 host',
+      { id: '#1072', sev: 'warn', title: 'VeeamBackupSvc stopped on SRV-BACKUP-01', since: '14:26', age: '6 min', affected: '1 host', topo: 'c-zh',
+        path: [['SW-ZH-CORE-01', 'ok', 'switch'], ['SRV-BACKUP-01', 'warn', 'server', true]], fan: [],
         rels: [['rule', 'Windows service stopped in 3 consecutive agent reports.']] },
     ],
     resolved: [['#1069', 'intranet returned 503', '13:48'], ['#1068', 'Latency spike AP-ZH-OG3', '11:09']],
@@ -701,14 +727,17 @@ const SC = {
       mkSite('Cloud', 'HTTP and TLS checks', 24, 'cloud'),
     ],
     incidents: [
-      { id: '#2214', sev: 'crit', title: 'LACP member down on SW-DC-AGG-03', since: '13:58', age: '34 min', affected: '21 hosts behind it · 3 down, 18 degraded', chart: 'loss',
+      { id: '#2214', sev: 'crit', title: 'LACP member down on SW-DC-AGG-03', since: '13:58', age: '34 min', affected: '21 hosts · 3 down, 18 degraded', chart: 'loss', topo: 'agg03',
+        path: [['fw-dc-01', 'ok', 'shield'], ['SW-DC-CORE-01', 'ok', 'switch'], ['SW-DC-AGG-03', 'deg', 'switch', true]], fan: [[3, 'down', 'down'], [18, 'deg', 'degraded']],
         rels: [
           ['conf', '40 hosts share the parent SW-DC-AGG-03; the 21 affected ones are folded in here.'],
           ['rule', 'Syslog %LACP-4-MEMBER_DOWN on Po3 at 13:58 (rule lacp_member_down).'],
         ] },
-      { id: '#2217', sev: 'warn', title: 'WAN latency Basel ↔ DC 48 ms', since: '14:20', age: '12 min', affected: '3 hosts degraded',
+      { id: '#2217', sev: 'warn', title: 'WAN latency Basel ↔ DC 48 ms', since: '14:20', age: '12 min', affected: '3 hosts degraded', topo: 'e-bs',
+        path: [['SD-WAN', 'ok', 'network'], ['probe-bs-01', 'warn', 'radio', true]], fan: [[3, 'deg', 'degraded']],
         rels: [['conf', 'All 3 report through probe-bs-01.'], ['rule', 'WAN latency above 30 ms for 10 min.']] },
-      { id: '#2219', sev: 'warn', title: 'Log volume 94 % on lup-sql-07', since: '13:31', age: '1 h', affected: '1 host',
+      { id: '#2219', sev: 'warn', title: 'Log volume 94 % on lup-sql-07', since: '13:31', age: '1 h', affected: '1 host', topo: 'e-agg',
+        path: [['SW-DC-AGG-01', 'ok', 'switch'], ['lup-sql-07', 'warn', 'server', true]], fan: [],
         rels: [['rule', 'Volume above 90 % (rule disk_usage).']] },
     ],
     resolved: [['#2212', 'Proxy 502 burst', '13:40'], ['#2209', 'NTP drift lup-esx-03', '12:15'], ['#2207', 'Probe probe-lu-01 restart', '10:02']],
@@ -727,7 +756,7 @@ const SC = {
   },
 };
 let scale = 'sme';
-const acked = new Set(), doneNeeds = new Set(), openInc = new Set(['#1071', '#2214']);
+const acked = new Set(), doneNeeds = new Set(), openInc = new Set();
 let needsAll = false, sitesAll = false;
 
 /* ---------- pill bar chart (shared by trends and incident charts) ----------
@@ -815,18 +844,6 @@ const LAT_PK = [.5, .4, .5, .6, .4, .5, .5, .4, .6, .5, .4, .5, .5, .6, .5, .4, 
 const LOSS_AVG = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2.1, 3.4, 4.2, 3.1, 4.8, 3.9, 4.1];
 const LOSS_PK = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5.2, 7.9, 9.1, 6.4, 8.8, 7.2, 8.0];
 
-function trendCfg(kind, range) {
-  const k = SC[scale].tiles.k;
-  if (kind === 'incidents') {
-    const n = range === '7 days' ? 7 : 14, D = INC[scale];
-    return { label: `Incidents opened per day, last ${n} days`, sub: 'Incidents opened per day, every rule counts', dark: 'Critical', acc: 'Other', ranges: ['7 days', '14 days'],
-      data: DAYS.slice(-n).map((l, i) => { const j = 14 - n + i; return { l, total: D.t[j], dark: D.c[j], tip: `${D.t[j]} opened, ${D.c[j]} critical` }; }) };
-  }
-  const h = range === '24 h', L = h ? hrs : q15, T = h ? SYS_H : SYS_Q, N = h ? SYS_H_NET : SYS_Q_NET;
-  return { label: `Syslog messages per minute, last ${range}`, sub: 'Syslog messages per minute, network gear vs. servers', dark: 'Network', acc: 'Servers', ranges: ['24 h', '6 h'],
-    line: { v: Math.round(14 * k), label: `Friday baseline ${Math.round(14 * k)}/min` },
-    data: L.map((l, i) => { const t = Math.round(T[i] * k), d = Math.round(N[i] * k); return { l, total: t, dark: d, tip: `${t}/min, ${d} from network gear` }; }) };
-}
 function incCfg(chart) {
   if (chart === 'lat') return { label: 'Latency of the 7 affected hosts, last 2 hours', line: { v: 10, label: 'Alert at 10 ms' },
     data: l5.map((l, i) => ({ l, total: LAT_PK[i], dark: +(LAT_PK[i] - LAT_AVG[i]).toFixed(1), tip: `avg ${LAT_AVG[i]} ms, peak ${LAT_PK[i]} ms` })) };
@@ -855,17 +872,25 @@ function renderHero() {
 
 /* ---------- open incidents ---------- */
 const TAGNAME = { conf: 'Confirmed', rule: 'Rule-based', susp: 'Suspected' };
+function pathHtml(x) {
+  const nodes = x.path.map(([nm, st, icon, cause], i) => `${i ? `<span class="wire${cause && x.sev === 'crit' ? ' bad' : ''}" aria-hidden="true"></span>` : ''}<span class="pn${cause ? ' cause' + (st === 'warn' ? ' warn' : '') : ''}"><span class="disc ${st === 'ok' ? 'info' : st}">${ic(icon)}</span>${esc(nm)}</span>`).join('');
+  const fan = x.fan.length ? `<span class="wire bad" aria-hidden="true"></span><span class="fan">${x.fan.map(([n, st, w]) => `<span class="cnt-chip ${st}">${n} ${w}</span>`).join('')}</span>` : '';
+  const label = `Path: ${x.path.map((p) => p[0]).join(' to ')}${x.fan.length ? ', then ' + x.fan.map(([n, , w]) => `${n} ${w}`).join(' and ') : ''}`;
+  return `<div class="path" role="group" aria-label="${esc(label)}">${nodes}${fan}<button class="link to-topo" data-topo="${x.topo}">Show in topology</button></div>`;
+}
 function renderIncidents() {
   const S = SC[scale];
   $('incidents').innerHTML = S.incidents.map((x) => {
     const open = openInc.has(x.id), a = acked.has(x.id), bid = `ib-${x.id.slice(1)}`;
+    const kinds = [...new Set(x.rels.map((r) => r[0]))];
     return `<div class="inc">
       <button class="inc-h" data-inc="${esc(x.id)}" data-fk="inc-${esc(x.id)}" aria-expanded="${open}" aria-controls="${bid}">
         <span class="disc ${x.sev}${a ? ' acked' : ''}">${ic('alert')}</span>
-        <span class="tx"><b>${esc(x.id)} ${esc(x.title)}</b><small>${x.sev === 'crit' ? 'Critical' : 'Warning'} · ${esc(x.affected)}${a ? ' · acknowledged' : ''}</small></span>
-        <span class="age">since ${esc(x.since)} · ${esc(x.age)}</span>${ic('chevron', 'chev')}
+        <span class="tx"><b>${esc(x.id)} ${esc(x.title)}</b><small>${x.sev === 'crit' ? 'Critical' : 'Warning'} · ${esc(x.affected)}${a ? ' · acknowledged' : ''}${kinds.map((k) => `<span class="tag ${k}">${TAGNAME[k]}</span>`).join('')}</small></span>
+        <span class="age">${esc(x.age)}</span>${ic('chevron', 'chev')}
       </button>
       <div class="inc-b" id="${bid}" ${open ? '' : 'hidden'}>
+        ${pathHtml(x)}
         <div class="rels">${x.rels.map(([t, txt]) => `<div class="rel"><span class="tag ${t}">${TAGNAME[t]}</span><span>${esc(txt)}</span></div>`).join('')}</div>
         ${x.chart ? `<div class="mini-h"><span>${esc(incCfg(x.chart).label)}</span><span class="legend"><span><i style="background:var(--text)"></i>Peak</span><span><i style="background:var(--accent)"></i>Average</span></span></div>
           <div class="mini" data-chart="${x.chart}"><svg role="group"></svg><div class="tip" aria-hidden="true"></div></div>` : ''}
@@ -887,23 +912,21 @@ function drawIncCharts() {
 }
 
 /* ---------- trends ---------- */
-let trend = 'incidents';
-const trendRange = { incidents: '14 days', syslog: '24 h' };
-function renderTiles() {
-  const S = SC[scale], c = count(allHosts()), total = sum(c), reporting = total - (c.unknown || 0);
-  const crit = S.incidents.filter((x) => x.sev === 'crit').length;
-  $('tiles').innerHTML = `
-    <button class="tile" data-trend="incidents" data-fk="tile-incidents" aria-pressed="${trend === 'incidents'}"><small>Open incidents · show trend</small><b><span class="t-down">${S.incidents.length}</span><em>${crit} critical</em></b></button>
-    <button class="tile" data-trend="syslog" data-fk="tile-syslog" aria-pressed="${trend === 'syslog'}"><small>Syslog now · show trend</small><b>${S.tiles.syslog}<em>/min</em></b></button>
-    <div class="tile"><small>Availability · 30 days</small><b>${S.tiles.avail}<em>%</em></b></div>
-    <div class="tile"><small>Reporting</small><b>${reporting}<em>/ ${total} · ${c.unknown || 0} no data</em></b><div class="hatchbar" aria-hidden="true"><i style="width:${(reporting / total * 100).toFixed(1)}%"></i><u></u></div></div>`;
+function spark(vals, label) {
+  const max = Math.max(...vals, 1), w = 4;
+  return `<svg class="spark" viewBox="0 0 ${vals.length * w} 26" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">${vals.map((v, i) => {
+    const h = v / max * 26;
+    return `<rect${i === vals.length - 1 ? ' class="last"' : ''} x="${i * w + 0.5}" y="${26 - h}" width="${w - 1}" height="${h}" rx="1"/>`;
+  }).join('')}</svg>`;
 }
-function renderTrend() {
-  const cfg = trendCfg(trend, trendRange[trend]);
-  $('chartSub').textContent = cfg.sub;
-  $('legend').innerHTML = `<span><i style="background:var(--text)"></i>${cfg.dark}</span><span><i style="background:var(--accent)"></i>${cfg.acc}</span>`;
-  $('range').innerHTML = cfg.ranges.map((r) => `<button data-range="${r}" data-fk="range-${r}" aria-pressed="${r === trendRange[trend]}">${r}</button>`).join('');
-  drawPills($('chartSvg'), $('tip'), cfg);
+function renderTiles() {
+  const S = SC[scale], c = count(allHosts()), total = sum(c), reporting = total - (c.unknown || 0), k = S.tiles.k;
+  const crit = S.incidents.filter((x) => x.sev === 'crit').length, inc = INC[scale].t, sys = SYS_H.map((v) => Math.round(v * k));
+  $('tiles').innerHTML = `
+    <div class="tile"><small>Open incidents</small><b><span class="t-down">${S.incidents.length}</span><em>${crit} critical</em></b>${spark(inc, `Incidents opened per day, last 14 days: ${inc.join(', ')}`)}</div>
+    <div class="tile"><small>Syslog now</small><b>${S.tiles.syslog}<em>/min · baseline ${Math.round(14 * k)}</em></b>${spark(sys, `Syslog messages per minute, last 24 hours, hourly: ${sys.join(', ')}`)}</div>
+    <div class="tile"><small>Availability · 30 days</small><b>${S.tiles.avail}<em>%</em></b><div class="note">Target 99.90 %</div></div>
+    <div class="tile"><small>Reporting</small><b>${reporting}<em>/ ${total} · ${c.unknown || 0} no data</em></b><div class="hatchbar" aria-hidden="true"><i style="width:${(reporting / total * 100).toFixed(1)}%"></i><u></u></div></div>`;
 }
 
 /* ---------- hosts by site ---------- */
@@ -1087,7 +1110,7 @@ function paintThemeButtons() {
   const dark = root.dataset.theme === 'dark';
   document.querySelectorAll('#themeBtn, #themeBtnM').forEach((b) => { b.innerHTML = ic(dark ? 'sun' : 'moon'); b.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode'); });
 }
-function redrawGraphics() { renderTrend(); drawIncCharts(); renderTopo(); if (topoSel) selectNode(topoSel); }
+function redrawGraphics() { drawIncCharts(); renderTopo(); if (topoSel) selectNode(topoSel); }
 function setTheme(t, persist) {
   root.dataset.theme = t;
   if (persist) store.set('ngf-theme', t);
@@ -1108,7 +1131,7 @@ function toast(msg) {
 
 /* ---------- render all ---------- */
 function renderAll() {
-  renderHero(); renderIncidents(); renderTiles(); renderTrend(); renderSites(); renderNeeds(); renderComing();
+  renderHero(); renderIncidents(); renderTiles(); renderSites(); renderNeeds(); renderComing();
   renderTopo();
   selectNode(topoSel && topoNodes.some((n) => n.id === topoSel) ? topoSel : SC[scale].sel, true);
 }
@@ -1123,10 +1146,10 @@ document.addEventListener('click', (e) => {
   const t = e.target;
   const sc = t.closest('[data-scale]');
   if (sc) { setScale(sc.dataset.scale); return; }
-  const tile = t.closest('[data-trend]');
-  if (tile) { trend = tile.dataset.trend; keepFocus(() => { renderTiles(); renderTrend(); }); return; }
-  const rg = t.closest('[data-range]');
-  if (rg) { trendRange[trend] = rg.dataset.range; keepFocus(renderTrend); return; }
+  const tp = t.closest('[data-topo]');
+  if (tp) { setView('topology'); selectNode(tp.dataset.topo, true); document.querySelector(`[data-fk="node-${tp.dataset.topo}"]`)?.focus(); return; }
+  const vg = t.closest('[data-view-go]');
+  if (vg) { setView(vg.dataset.viewGo); return; }
   const ih = t.closest('[data-inc]');
   if (ih) { const id = ih.dataset.inc; if (openInc.has(id)) openInc.delete(id); else openInc.add(id); keepFocus(renderIncidents); return; }
   const ack = t.closest('[data-ack]');
@@ -1151,7 +1174,10 @@ document.addEventListener('click', (e) => {
   const tEl = t.closest('[data-toast]');
   if (tEl) { toast(tEl.dataset.toast); return; }
   const nav = t.closest('[data-nav]');
-  if (nav && nav.dataset.nav !== 'Overview') toast(`${nav.dataset.nav}: only the overview is prototyped`);
+  if (nav) {
+    if (nav.dataset.nav === 'Overview' || nav.dataset.nav === 'Topology') setView(nav.dataset.nav.toLowerCase());
+    else toast(`${nav.dataset.nav}: only overview and topology are prototyped`);
+  }
 });
 $('collapse').addEventListener('click', () => {
   const r = $('rail');
@@ -1163,7 +1189,15 @@ $('collapse').addEventListener('click', () => {
 });
 document.querySelectorAll('#themeBtn, #themeBtnM').forEach((b) => b.addEventListener('click', () => setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark', true)));
 let rz;
-addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { renderTrend(); drawIncCharts(); }, 120); });
+addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(drawIncCharts, 120); });
+function setView(v) {
+  document.querySelectorAll('[data-view]').forEach((el) => { el.hidden = el.dataset.view !== v; });
+  document.querySelectorAll('[data-nav]').forEach((b) => {
+    if (b.dataset.nav.toLowerCase() === v) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
+  scrollTo(0, 0);
+  if (v === 'topology') { renderTopo(); selectNode(topoSel || SC[scale].sel, true); } else drawIncCharts();
+}
 
 /* ---------- start ---------- */
 paintIcons();
