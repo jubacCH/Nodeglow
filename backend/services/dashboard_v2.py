@@ -25,7 +25,6 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from statistics import median
 
 from sqlalchemy import func, select
 
@@ -45,7 +44,6 @@ UPCOMING_HOURS = 24
 UPCOMING_DAYS = 30
 SPEEDTEST_HISTORY = 24
 LATENCY_HOURS = 2
-LATENCY_MAX_HOSTS = 200
 MAX_CHILDREN_LISTED = 40
 MAX_PARENTS_LISTED = 12
 
@@ -721,54 +719,17 @@ async def section_upcoming(db, base: Base) -> dict:
 
 
 async def section_latency(base: Base) -> dict | None:
-    """Per-minute median/max latency of the hosts of the most severe open
-    incident that recorded hosts, last 2 h (ClickHouse ping_checks)."""
-    from services import clickhouse_client as ch
+    """Latency and loss of the hosts of the most severe open incident that has
+    a chart (a reachability rule with recorded hosts), last 2 h. The same
+    builder serves GET /api/v2/incidents/{id}/latency for any other one."""
+    from services import incident_metrics
 
-    candidates = [i for i in base.open_incidents if hs.parse_host_ids(i.host_ids)]
+    candidates = [i for i in base.open_incidents if incident_metrics.has_chart(i)]
     if not candidates:
         return None
     inc = sorted(candidates, key=lambda i: (iv.SEVERITY_RANK.get(i.severity, 9), -_epoch(i.created_at)))[0]
-    host_ids = hs.parse_host_ids(inc.host_ids)[:LATENCY_MAX_HOSTS]
-    since = base.now - timedelta(hours=LATENCY_HOURS)
-    rows = await ch.query(
-        """
-        SELECT toStartOfMinute(timestamp) AS minute,
-               quantileIf(0.5)(latency_ms, success = 1) AS median_ms,
-               maxIf(latency_ms, success = 1) AS max_ms,
-               countIf(success = 1) AS ok,
-               countIf(success = 0) AS failed
-        FROM ping_checks
-        WHERE tenant_id = {nodeglow_tenant:UInt32} AND host_id IN ({hids:Array(UInt32)}) AND timestamp >= {since:DateTime64(3)}
-        GROUP BY minute ORDER BY minute
-        """,
-        {"hids": host_ids, "since": since},
-    )
-    points = []
-    for r in rows:
-        ok = int(r.get("ok") or 0)
-        points.append({
-            "t": hs.iso(r["minute"]) if isinstance(r.get("minute"), datetime) else str(r.get("minute")),
-            "median_ms": _num(r.get("median_ms")) if ok else None,
-            "max_ms": _num(r.get("max_ms")) if ok else None,
-            "ok": ok, "failed": int(r.get("failed") or 0),
-        })
-    onset = inc.created_at
-    before = [p["median_ms"] for p, r in zip(points, rows)
-              if p["median_ms"] is not None and isinstance(r.get("minute"), datetime) and r["minute"] < onset]
-    after = [p["median_ms"] for p, r in zip(points, rows)
-             if p["median_ms"] is not None and isinstance(r.get("minute"), datetime) and r["minute"] >= onset]
     names = {h.id: h.name for h in base.all_hosts}
-    return {
-        "incident_id": inc.id, "title": inc.title, "severity": inc.severity,
-        "host_ids": host_ids, "host_names": [names.get(i) for i in host_ids[:10]],
-        "host_count": len(host_ids),
-        "onset_at": hs.iso(onset),
-        "window_hours": LATENCY_HOURS,
-        "median_before_ms": round(median(before), 2) if before else None,
-        "median_since_ms": round(median(after), 2) if after else None,
-        "points": points,
-    }
+    return await incident_metrics.latency_series(inc, names=names, now=base.now, hours=LATENCY_HOURS)
 
 
 async def section_syslog(db, base: Base) -> dict:

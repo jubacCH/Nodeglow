@@ -26,6 +26,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   becomes a "Suspected" hint with its numbers ("opened 3 min before",
   "2520 messages/h, 4.2x its usual 600/h"), at most three per incident. They
   are shown, never notified, and change nothing about the incident.
+- Latency and packet loss for any incident:
+  `GET /api/v2/incidents/{id}/latency?hours=` returns the per-minute median
+  and max latency and the share of failed checks of its hosts, with the
+  medians before and since the onset. Only incidents about reachability have
+  a chart (host down, network issue, upstream failure, integration host);
+  the others answer 204. The dashboard's latency section uses the same
+  builder, gains `loss_pct` and now always follows a reachability incident.
 - Silent agents are an incident. An agent or probe that has not reported
   for ten minutes opens "Agent silent: <name>" (rule `agent_silent`,
   warning) with the time of its last report, linked to its host, and
