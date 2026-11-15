@@ -188,6 +188,19 @@ export interface HostGroup {
   staleness_window_seconds?: number;
 }
 
+/** One site in the dashboard's `sites` section (B-14). Hosts are counted by effective site. */
+export interface SiteGroup {
+  id: number;
+  name: string;
+  is_default: boolean;
+  host_count: number;
+  by_state: Partial<StateCounts>;
+  /** Worst state of its hosts; null without hosts. */
+  worst: HostStateName | null;
+  /** Probes in this site; fresh false = silent, its hosts show as no data. */
+  probes: { id: number; name: string; fresh: boolean; host_count: number }[];
+}
+
 interface UpcomingObject {
   kind: string;
   id: number | null;
@@ -321,7 +334,7 @@ export interface ChangesResponse {
 }
 
 export type DashboardSectionName =
-  | 'summary' | 'health' | 'internet' | 'incidents' | 'topology' | 'groups'
+  | 'summary' | 'health' | 'internet' | 'incidents' | 'topology' | 'groups' | 'sites'
   | 'upcoming' | 'latency' | 'syslog' | 'availability' | 'since_last_visit'
   | '_integrations' | '_agents';
 
@@ -341,6 +354,8 @@ export interface DashboardV2 {
   incidents: IncidentsSection | null;
   topology: TopologySection | null;
   groups: HostGroup[] | null;
+  /** Empty while there is a single site; then the overview groups by checker. */
+  sites?: SiteGroup[] | null;
   upcoming: UpcomingSection | null;
   latency: LatencySection | null;
   syslog: SyslogSection | null;

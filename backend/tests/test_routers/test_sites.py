@@ -139,3 +139,13 @@ async def test_hosts_and_probes_get_a_site():
             effective = {h.id: ctx.effective(h.site_id, h.probe_id) for h in hosts}
         assert effective[ids["behind_probe"]] == ids["default"]
         assert effective[ids["direct"]] == ids["branch"]
+
+
+async def test_topology_nodes_carry_the_effective_site():
+    """The topology page filters by site (concept F phase 3, PR 5)."""
+    async with make_client() as (client, sf):
+        ids = await _setup(sf)
+        nodes = {n["id"]: n for n in (await client.get("/api/v1/topology")).json()["nodes"]}
+        assert nodes[ids["direct"]]["site_id"] == ids["default"]
+        assert nodes[ids["behind_probe"]]["site_id"] == ids["branch"]
+        assert nodes[ids["unset"]]["site_id"] == ids["branch"]

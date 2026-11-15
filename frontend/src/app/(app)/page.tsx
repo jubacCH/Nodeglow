@@ -102,7 +102,7 @@ export default function DashboardPage() {
             error={sectionError(data, 'syslog', 'availability')}
             className="max-[1179px]:order-4"
           />
-          <HostsByGroup groups={data?.groups} loading={loading} error={err('groups')} className="max-[1179px]:order-5" />
+          <HostsByGroup groups={data?.groups} sites={data?.sites} loading={loading} error={err('groups') ?? err('sites')} className="max-[1179px]:order-5" />
         </div>
         <div className="flex min-w-0 flex-col gap-4 max-[1179px]:contents">
           <NeedsLook items={needs} loading={loading} error={sectionError(data, 'health', 'groups', 'upcoming')} generatedAt={data?.generated_at} className="max-[1179px]:order-2" />

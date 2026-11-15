@@ -17,6 +17,8 @@ export interface TopoNode {
   check_type: string;
   source: string;
   maintenance: boolean;
+  /** Effective site (B-14): the host's own, else its probe's, else the default. */
+  site_id?: number | null;
 }
 
 export interface TopoEdge {
@@ -100,10 +102,16 @@ export function subtreeHas(t: TreeNode, state: HealthState): boolean {
 
 export type TopoFilter = 'all' | 'problems';
 
-export function matcher(filter: TopoFilter, search: string): ((n: TopoNode) => boolean) | null {
+/**
+ * Node predicate for the filters, or null when nothing filters. A site keeps
+ * the hosts in it; their uplinks in other sites stay visible as context
+ * (applyFilter keeps the ancestors of a match).
+ */
+export function matcher(filter: TopoFilter, search: string, siteId: number | null = null): ((n: TopoNode) => boolean) | null {
   const q = search.trim().toLowerCase();
-  if (filter === 'all' && !q) return null;
+  if (filter === 'all' && !q && siteId === null) return null;
   return (n) => {
+    if (siteId !== null && n.site_id !== siteId) return false;
     if (filter === 'problems') {
       const s = nodeState(n);
       if (s === 'ok' || s === 'maint') return false;

@@ -5,7 +5,7 @@
  * place, and lists are capped so the page stays the same size at 50 or 500 hosts.
  */
 import type {
-  DashboardIncident, DashboardV2, HealthSection, HostGroup, HostStateName, StateCounts,
+  DashboardIncident, DashboardV2, HealthSection, HostGroup, HostStateName, SiteGroup, StateCounts,
   SyslogSection, TopoChild, TopologySection,
 } from '@/types/dashboard';
 import { formatAgo, formatDuration, ageSeconds, upcomingView } from './dashboard';
@@ -225,6 +225,32 @@ export function rankGroups(groups: HostGroup[]): HostGroup[] {
     .map((g, i) => ({ g, i }))
     .sort((a, b) => score(b.g) - score(a.g) || a.i - b.i)
     .map(({ g }) => g);
+}
+
+/** A site row in the checker vocabulary: silent when all its hosts sit behind silent probes. */
+export function siteAsGroup(s: SiteGroup): Pick<HostGroup, 'by_state' | 'host_count' | 'fresh'> {
+  const silentProbes = s.probes.filter((p) => !p.fresh);
+  const silent = silentProbes.length > 0 && s.host_count > 0 && (s.by_state.unknown ?? 0) === s.host_count;
+  return { by_state: s.by_state, host_count: s.host_count, fresh: silent ? false : null };
+}
+
+/** Sites worst first (silent, then down, warning, degraded); empty sites are left out. */
+export function rankSites(sites: SiteGroup[]): SiteGroup[] {
+  const score = (s: SiteGroup) => (siteAsGroup(s).fresh === false ? 1_000_000 : 0)
+    + (s.by_state.down ?? 0) * 10_000 + (s.by_state.warning ?? 0) * 100 + (s.by_state.degraded ?? 0);
+  return sites
+    .filter((s) => s.host_count > 0 || s.probes.length > 0)
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => score(b.s) - score(a.s) || a.i - b.i)
+    .map(({ s }) => s);
+}
+
+/** "via probe-bern-01", "2 probes", "default site" for the second line of a site row. */
+export function siteCheckers(s: SiteGroup): string {
+  const silent = s.probes.filter((p) => !p.fresh).length;
+  if (s.probes.length === 0) return s.is_default ? 'default site' : 'no probe';
+  const base = s.probes.length === 1 ? `via ${s.probes[0].name}` : `${s.probes.length} probes`;
+  return silent && s.probes.length > 1 ? `${base}, ${silent} silent` : base;
 }
 
 /** "26 healthy · 10 issues · 1 maint." for a group row. */

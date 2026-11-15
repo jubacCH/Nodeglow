@@ -9,8 +9,8 @@ from sqlalchemy import event
 
 from tests.test_routers.conftest import make_client
 
-SECTIONS = ("summary", "health", "internet", "incidents", "topology", "groups", "upcoming",
-            "latency", "syslog", "availability", "since_last_visit")
+SECTIONS = ("summary", "health", "internet", "incidents", "topology", "groups", "sites",
+            "upcoming", "latency", "syslog", "availability", "since_last_visit")
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +71,7 @@ async def test_empty_install_returns_every_section_without_errors():
         assert data["health"]["totals"]["hosts"] == 0
         assert data["since_last_visit"]["fallback"] is True
         assert data["groups"][0]["kind"] == "direct"
+        assert data["sites"] == []  # a single site: the overview keeps "Hosts by checker"
 
 
 async def _scenario(sf):
@@ -506,3 +507,52 @@ async def test_incidents_carry_their_evidence_and_cause():
 
     assert len(detail["relations"]) == 5, "the detail is not capped"
     assert detail["cause"]["id"] == ids["sw"]
+
+
+async def test_sites_section_groups_hosts_by_effective_site():
+    """B-14: hosts follow their probe's site unless they have their own; a silent probe's hosts stay inside."""
+    from sqlalchemy import select
+
+    from models.agent import Agent
+    from models.ping import PingHost
+    from models.tenant import Site
+
+    now = datetime.utcnow()
+    async with make_client() as (client, sf):
+        async with sf() as db:
+            default = (await db.execute(select(Site).order_by(Site.id))).scalars().first()
+            if default is None:
+                default = Site(name="Default")
+                db.add(default)
+            bern, basel = Site(name="Bern"), Site(name="Basel")
+            db.add_all([bern, basel])
+            await db.flush()
+            probe = Agent(name="probe-bern-01", token="p" * 64, is_probe=True, probe_interval_seconds=60,
+                          site_id=bern.id, last_seen=now - timedelta(minutes=11))
+            db.add(probe)
+            await db.flush()
+            zh = PingHost(name="srv-zh", hostname="10.0.0.1", site_id=default.id)
+            be = [PingHost(name=f"BE-{i}", hostname=f"10.2.0.{i}", site_id=default.id, probe_id=probe.id)
+                  for i in range(2)]
+            bs = PingHost(name="nas-bs", hostname="10.3.0.1", site_id=basel.id, probe_id=probe.id)
+            db.add_all([zh, bs] + be)
+            await db.commit()
+            ids = {"zh": zh.id, "bs": bs.id, "be": [b.id for b in be],
+                   "default": default.id, "bern": bern.id, "basel": basel.id, "probe": probe.id}
+
+        latest = {ids["zh"]: _row(ids["zh"]), ids["bs"]: _row(ids["bs"], ok=False)}
+        with fake_clickhouse(latest=latest):
+            data = (await client.get("/api/v2/dashboard")).json()
+
+        assert data["errors"] == [], data["errors"]
+        sites = {s["id"]: s for s in data["sites"]}
+        assert [s["id"] for s in data["sites"]][0] == ids["default"], "the default site comes first"
+        assert sites[ids["default"]]["host_count"] == 1 and sites[ids["default"]]["is_default"] is True
+        be_site = sites[ids["bern"]]
+        assert be_site["host_count"] == 2
+        assert be_site["by_state"] == {"unknown": 2}, "a silent probe shows its hosts as no data"
+        assert be_site["probes"] == [{"id": ids["probe"], "name": "probe-bern-01", "fresh": False,
+                                      "host_count": 3}]
+        assert sites[ids["basel"]]["host_count"] == 1, "a site on the host wins over the probe's"
+        assert sites[ids["basel"]]["probes"] == []
+        assert sites[ids["default"]]["worst"] == "up"

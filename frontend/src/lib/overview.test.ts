@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DashboardIncident, DashboardV2, HostGroup, TopologySection } from '@/types/dashboard';
-import { groupSummary, heroCounts, hourlySyslog, incidentCause, needItems, rankGroups } from './overview';
+import type { DashboardIncident, DashboardV2, HostGroup, SiteGroup, TopologySection } from '@/types/dashboard';
+import { groupSummary, heroCounts, hourlySyslog, incidentCause, needItems, rankGroups, rankSites, siteAsGroup, siteCheckers } from './overview';
 
 const NOW = Date.parse('2026-10-10T14:32:00Z');
 
@@ -124,6 +124,34 @@ describe('rankGroups / groupSummary', () => {
     expect(order).toEqual(['probe-bern-01', 'Direct']);
     expect(groupSummary(direct)).toBe('26 healthy · 10 issues · 1 maint.');
     expect(groupSummary(probe({}))).toBe('no data · probe silent');
+  });
+});
+
+describe('sites on the overview', () => {
+  const site = (over: Partial<SiteGroup>): SiteGroup => ({
+    id: 1, name: 'Zürich HQ', is_default: true, host_count: 30, by_state: { up: 28, down: 2 }, worst: 'down', probes: [], ...over,
+  });
+  const bern = site({ id: 2, name: 'Bern', is_default: false, host_count: 9, by_state: { unknown: 9 }, worst: 'unknown',
+    probes: [{ id: 7, name: 'probe-bern-01', fresh: false, host_count: 9 }] });
+
+  it('ranks a site behind a silent probe first and drops empty sites', () => {
+    const empty = site({ id: 4, name: 'Olten', is_default: false, host_count: 0, by_state: {}, worst: null });
+    expect(rankSites([site({}), empty, bern]).map((s) => s.name)).toEqual(['Bern', 'Zürich HQ']);
+  });
+
+  it('describes a silent site as no data, never healthy', () => {
+    expect(groupSummary(siteAsGroup(bern))).toBe('no data · probe silent');
+    expect(groupSummary(siteAsGroup(site({})))).toBe('28 healthy · 2 issues');
+    const mixed = site({ by_state: { up: 5, unknown: 4 }, host_count: 9, probes: [{ id: 7, name: 'p', fresh: false, host_count: 4 }] });
+    expect(siteAsGroup(mixed).fresh).toBeNull();
+  });
+
+  it('names who checks the site', () => {
+    expect(siteCheckers(bern)).toBe('via probe-bern-01');
+    expect(siteCheckers(site({}))).toBe('default site');
+    expect(siteCheckers(site({ is_default: false }))).toBe('no probe');
+    expect(siteCheckers(site({ probes: [{ id: 1, name: 'a', fresh: true, host_count: 1 }, { id: 2, name: 'b', fresh: false, host_count: 1 }] })))
+      .toBe('2 probes, 1 silent');
   });
 });
 

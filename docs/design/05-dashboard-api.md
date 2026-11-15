@@ -102,7 +102,8 @@ Parameter: `since` (optional, ISO) überschreibt „seit dem letzten Besuch“.
 | `topology.parents` | bis 12 Eltern, schlimmste zuerst: `child_count`, `descendant_count`, `descendant_states`, `worst_state`, `affected`, `link_provenance {manual, proxmox, unifi}`, `is_gateway`; bei betroffenen Eltern `children[]` mit Zustand | | ja |
 | `topology.internet_root` | WAN-Knoten `{state, latency_ms, gateway, source}` | aus `internet` | nur mit UniFi/Speedtest |
 | `topology.links_by_provenance`, `unlinked_hosts` | Herkunft der Kanten, Hosts ohne Kante | | ja |
-| `groups` | **keine Standorte**: `kind=direct` („Direct“, vom Core geprüft) und je Probe `kind=probe` mit `fresh`, `last_report`, `staleness_window_seconds`, `host_count`, `by_state` | `probe_id`, Probe-Heartbeat | ja. Echte Standorte gibt es erst mit B-14 |
+| `groups` | Gruppen nach Prüfer, **keine Standorte**: `kind=direct` („Direct“, vom Core geprüft) und je Probe `kind=probe` mit `fresh`, `last_report`, `staleness_window_seconds`, `host_count`, `by_state` | `probe_id`, Probe-Heartbeat | ja. Die Übersicht zeigt sie, solange es nur einen Standort gibt |
+| `sites` | Hosts nach wirksamem Standort (B-14): `id, name, is_default, host_count, by_state, worst`, `probes [{id, name, fresh, host_count}]`; Standard zuerst, dann nach Name. **Leer bei nur einem Standort** | `sites`, `site_id` an Host und Probe, `services/sites.py` | ja. Wirksamer Standort = eigener, sonst der der Probe, sonst der Standard (der Standard zählt als „nicht gesetzt“). Eine stille Probe lässt ihre Hosts im Standort als „keine Daten“ |
 | `upcoming.items` | sortiert nach `due_at`: Wartung (`phase` `active`/`scheduled`, nächste 24 h, Fenster und manuelle mit Ende), Zertifikate ≤ 30 Tage (Host-HTTPS-Check, NPM), Disk voll ≤ 30 Tage (`days`, `current_pct`, `trend_pct_per_day`, `confidence` ≥ 0.3, `method`) | Wartungsfenster, `ssl_expiry_days`, Integrations-Zertifikate, `services/predictions.py` | ja; Zertifikat und Disk mit `estimated_due: true` (Tage, keine exakte Uhrzeit). `agent_disk_predictions_ready=false`, bis der Scheduler die Agent-Prognosen einmal gerechnet hat |
 | `latency` | für den schwersten offenen Incident **mit Chart** (Erreichbarkeits-Regel `host_down`, `host_down_syslog`, `multi_host_down`, `upstream_failure`, `integration_host` und erfasste Hosts): je Minute `median_ms`, `max_ms`, `ok`, `failed`, `loss_pct`, letzte 2 h; `onset_at`, `median_before_ms`, `median_since_ms`, `host_names`. Für jeden anderen Incident: `GET /api/v2/incidents/{id}/latency?hours=1..24` (gleiche Form, 204 ohne Chart) | ClickHouse `ping_checks`, `services/incident_metrics.py` | ja; `null`, wenn kein offener Incident einen Chart hat |
 | `syslog` | `buckets` (15 min, 24 h, `count`, `errors` = Severity ≤ 3), `current_per_min` (letzte 15 min), `usual {low_per_min, high_per_min, mean_per_min, sources, method}`, `total_24h`, `errors_24h`, `receiving` | ClickHouse `syslog_messages` (Empfangszeit), `host_baselines` | Band nur, wenn Baselines für diese Stunde/Wochentag gelernt sind (Mittel ± 1σ, Summe über Quellen), sonst `null` |
@@ -179,7 +180,7 @@ Aufrufe sowie falsche Keys abgewiesen werden.
 
 ## 8. Offen / bewusst nicht gemacht
 
-- Standorte (B-14), Zuständigkeit/Notizen am Incident (B-11).
+- Zuständigkeit/Notizen am Incident (B-11). Syslog-Zuordnung pro Standort (Standorte gruppieren und filtern nur).
 - Beziehungslabels: „rule“ und „confirmed“ seit Migration 054 (`services/incident_relations.py`,
   geschrieben von `upstream_failure`, `multi_host_down`, `integration_host` und für jede Regel als „rule“).
   „suspected“ seit Phase 3, PR 2 (`services/suspected_relations.py`, letzter Schritt jedes

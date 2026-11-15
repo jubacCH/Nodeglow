@@ -282,7 +282,7 @@ Changes are audited (`site.create`, `site.rename`, `site.delete`). An unknown
 | GET | `/syslog` | Query syslog messages |
 | GET | `/syslog/stats` | Log overview statistics |
 | GET | `/syslog/intelligence` | Patterns, noise, bursts |
-| GET | `/topology` | Topology graph |
+| GET | `/topology` | Topology graph: `nodes` (with state and `site_id`, the effective site) and `edges` |
 
 ### Backup
 

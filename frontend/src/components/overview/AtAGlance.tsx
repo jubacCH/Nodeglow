@@ -6,11 +6,11 @@ import { TriangleAlert } from 'lucide-react';
 import { DashboardCard, useDashboardCtx } from '@/components/dashboard/DashboardCard';
 import { StateBar } from '@/components/dashboard/GroupsCard';
 import { describeStates, fmtNum, fmtPct, formatWhen } from '@/lib/dashboard';
-import { groupSummary, hourlySyslog, rankGroups, type HeroCounts } from '@/lib/overview';
+import { groupSummary, hourlySyslog, rankGroups, rankSites, siteAsGroup, siteCheckers, type HeroCounts } from '@/lib/overview';
 import { STATE_FILL } from '@/lib/status';
 import { cn } from '@/lib/utils';
 import type {
-  AvailabilitySection, HealthSection, HostGroup, IncidentsSection, SectionError, SinceLastVisitSection, SyslogSection,
+  AvailabilitySection, HealthSection, HostGroup, IncidentsSection, SectionError, SinceLastVisitSection, SiteGroup, SyslogSection,
 } from '@/types/dashboard';
 
 // ── Head ─────────────────────────────────────────────────────────────────
@@ -157,12 +157,90 @@ export function AtAGlance({ incidents, syslog, availability, health, loading, er
 
 const GROUP_CAP = 6;
 
+/** Row layout shared by the checker and the site view. */
+const ROW = 'grid w-full grid-cols-[minmax(0,170px)_minmax(0,1fr)_auto] items-center gap-4 rounded-[14px] px-3 py-2.5 text-left hover:bg-surface-2 max-[759px]:grid-cols-[minmax(0,1fr)_auto] max-[759px]:gap-y-1.5';
+const BAR = 'h-3.5 rounded-pill max-[759px]:col-span-2 max-[759px]:row-start-2';
+
+function StateLegend() {
+  return (
+    <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-micro text-fg-3" aria-hidden="true">
+      {(['ok', 'degraded', 'warning', 'down', 'maint'] as const).map((s) => (
+        <span key={s} className="inline-flex items-center gap-1.5"><i className={cn('h-2 w-2 rounded-chip', STATE_FILL[s])} />{s === 'ok' ? 'Healthy' : s === 'maint' ? 'Maintenance' : s[0].toUpperCase() + s.slice(1)}</span>
+      ))}
+      <span className="inline-flex items-center gap-1.5"><i className="ng-hatch h-2 w-2 rounded-chip" />No data</span>
+    </p>
+  );
+}
+
 /**
- * Hosts grouped by who checks them (Direct, one group per probe), one row each
- * with a proportion bar and the counts as text, worst first. Nodeglow has no
- * site model yet (B-14), so these are checkers, not sites.
+ * Hosts by site once there are two or more sites (B-14), else grouped by who
+ * checks them (Direct, one group per probe). One row each with a proportion
+ * bar and the counts as text, worst first. A silent probe's hosts are hatched
+ * as no data in either view, never green.
  */
-export function HostsByGroup({ groups, loading, error, className }: {
+export function HostsByGroup({ groups, sites, loading, error, className }: {
+  groups: HostGroup[] | null | undefined;
+  sites?: SiteGroup[] | null;
+  loading: boolean;
+  error: SectionError | null;
+  className?: string;
+}) {
+  if (sites && sites.length >= 2) {
+    return <HostsBySite sites={sites} loading={loading} error={error} className={className} />;
+  }
+  return <HostsByChecker groups={groups} loading={loading} error={error} className={className} />;
+}
+
+function HostsBySite({ sites, loading, error, className }: {
+  sites: SiteGroup[];
+  loading: boolean;
+  error: SectionError | null;
+  className?: string;
+}) {
+  const [all, setAll] = useState(false);
+  const ranked = rankSites(sites);
+  const shown = all ? ranked : ranked.slice(0, GROUP_CAP);
+  const total = ranked.reduce((a, s) => a + s.host_count, 0);
+  const hidden = sites.length - ranked.length;
+  return (
+    <DashboardCard id="dash-groups" title="Hosts by site" meta={`${total} hosts · own site, else the probe's`} loading={loading} error={error} className={className}>
+      <ul className="flex flex-col gap-0.5">
+        {shown.map((s) => {
+          const g = siteAsGroup(s);
+          const silent = g.fresh === false;
+          return (
+            <li key={s.id}>
+              <Link href={`/hosts?site=${s.id}`} className={ROW}>
+                <span className="min-w-0">
+                  <span className="block truncate text-ui font-semibold text-fg">{s.name}</span>
+                  <span className="block truncate text-meta text-fg-2">{s.host_count} hosts · {siteCheckers(s)}</span>
+                </span>
+                {silent ? (
+                  <span aria-hidden="true" className={cn('ng-hatch block', BAR)} />
+                ) : (
+                  <StateBar byState={s.by_state} label={`${s.name}: ${describeStates(s.by_state)}`} className={BAR} />
+                )}
+                <span className={cn('whitespace-nowrap text-right text-meta', silent ? 'font-medium text-down' : 'text-fg-2')}>{groupSummary(g)}</span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      {ranked.length > GROUP_CAP && (
+        <button type="button" onClick={() => setAll((v) => !v)} className="mx-auto mt-2 text-meta font-medium text-accent hover:text-accent-hover">
+          {all ? 'Show fewer' : `Show all ${ranked.length}`}
+        </button>
+      )}
+      <StateLegend />
+      <p className="mt-1.5 text-micro text-fg-3">
+        {hidden > 0 && `${hidden} empty site${hidden === 1 ? '' : 's'} hidden. `}
+        <Link href="/sites" className="text-accent hover:text-accent-hover">Manage sites</Link>
+      </p>
+    </DashboardCard>
+  );
+}
+
+function HostsByChecker({ groups, loading, error, className }: {
   groups: HostGroup[] | null | undefined;
   loading: boolean;
   error: SectionError | null;
@@ -183,16 +261,16 @@ export function HostsByGroup({ groups, loading, error, className }: {
               <button
                 type="button"
                 onClick={() => open({ kind: 'group', group: g })}
-                className="grid w-full grid-cols-[minmax(0,170px)_minmax(0,1fr)_auto] items-center gap-4 rounded-[14px] px-3 py-2.5 text-left hover:bg-surface-2 max-[759px]:grid-cols-[minmax(0,1fr)_auto] max-[759px]:gap-y-1.5"
+                className={ROW}
               >
                 <span className="min-w-0">
                   <span className="block truncate text-ui font-semibold text-fg">{g.name}</span>
                   <span className="block truncate text-meta text-fg-2">{g.host_count} hosts · {g.description}</span>
                 </span>
                 {silent ? (
-                  <span aria-hidden="true" className="ng-hatch block h-3.5 rounded-pill max-[759px]:col-span-2 max-[759px]:row-start-2" />
+                  <span aria-hidden="true" className={cn('ng-hatch block', BAR)} />
                 ) : (
-                  <StateBar byState={g.by_state} label={`${g.name}: ${describeStates(g.by_state)}`} className="h-3.5 rounded-pill max-[759px]:col-span-2 max-[759px]:row-start-2" />
+                  <StateBar byState={g.by_state} label={`${g.name}: ${describeStates(g.by_state)}`} className={BAR} />
                 )}
                 <span className={cn('whitespace-nowrap text-right text-meta', silent ? 'font-medium text-down' : 'text-fg-2')}>{groupSummary(g)}</span>
               </button>
@@ -205,12 +283,7 @@ export function HostsByGroup({ groups, loading, error, className }: {
           {all ? 'Show fewer' : `Show all ${ranked.length}`}
         </button>
       )}
-      <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-micro text-fg-3" aria-hidden="true">
-        {(['ok', 'degraded', 'warning', 'down', 'maint'] as const).map((s) => (
-          <span key={s} className="inline-flex items-center gap-1.5"><i className={cn('h-2 w-2 rounded-chip', STATE_FILL[s])} />{s === 'ok' ? 'Healthy' : s === 'maint' ? 'Maintenance' : s[0].toUpperCase() + s.slice(1)}</span>
-        ))}
-        <span className="inline-flex items-center gap-1.5"><i className="ng-hatch h-2 w-2 rounded-chip" />No data</span>
-      </p>
+      <StateLegend />
     </DashboardCard>
   );
 }
