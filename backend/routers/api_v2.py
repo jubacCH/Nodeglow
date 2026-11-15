@@ -50,6 +50,37 @@ async def features():
     return await registry.resolve_feature_payload()
 
 
+# ── Incident metrics ─────────────────────────────────────────────────────────
+
+
+@router.get("/incidents/{incident_id}/latency",
+            summary="Latency and packet loss of an incident's hosts, per minute",
+            responses={204: {"description": "The incident has no chart: not a reachability rule, "
+                                            "or no hosts recorded"}})
+async def incident_latency(
+    incident_id: int,
+    db: AsyncSession = Depends(get_db),
+    hours: int = Query(2, ge=1, le=24, description="Window in hours, ending now"),
+):
+    from fastapi import Response
+    from sqlalchemy import select
+
+    from models.incident import Incident
+    from models.ping import PingHost
+    from services import incident_metrics
+
+    incident = await db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+    if not incident_metrics.has_chart(incident):
+        return Response(status_code=204)
+    from services.host_state import parse_host_ids
+
+    ids = (parse_host_ids(incident.host_ids) or [])[:incident_metrics.NAMES_SHOWN]
+    names = dict((await db.execute(select(PingHost.id, PingHost.name).where(PingHost.id.in_(ids)))).all())
+    return await incident_metrics.latency_series(incident, names=names, now=datetime.utcnow(), hours=hours)
+
+
 # ── Dashboard + summary ──────────────────────────────────────────────────────
 
 

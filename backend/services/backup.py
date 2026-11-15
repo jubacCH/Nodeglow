@@ -35,6 +35,7 @@ EXPORT_TABLES: list[str] = [
     "agent_snapshots",
     "incidents",
     "incident_events",
+    "incident_relations",
     "alert_rules",
     "log_templates",
     "host_baselines",

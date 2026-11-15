@@ -1,7 +1,7 @@
 """Incident and IncidentEvent models for the correlation engine."""
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from models.base import Base
@@ -37,6 +37,13 @@ class Incident(TenantScoped, Base):
     # feedback can map the incident back to the noisy template and blacklist it.
     precursor_template = Column(Text, nullable=True)
 
+    # The one object the incident's hosts share (concept F, phase 3): a parent
+    # host in the topology, a probe or an integration. NULL when there is none
+    # or the rule does not know. Written by the correlation rules together
+    # with a "confirmed" IncidentRelation that says how it is known.
+    cause_kind = Column(String(16), nullable=True)   # 'host' | 'probe' | 'integration'
+    cause_id = Column(Integer, nullable=True)
+
     events = relationship("IncidentEvent", back_populates="incident",
                           cascade="all, delete-orphan", order_by="IncidentEvent.timestamp")
 
@@ -65,4 +72,40 @@ class IncidentEvent(TenantScoped, Base):
         Index("ix_incident_event_ts", "incident_id", timestamp.desc()),
         Index("ix_incident_event_type_ts", "incident_id", "event_type", timestamp.desc()),
         tenant_fk("incident_id", "incidents", name="fk_incident_events_incident"),
+    )
+
+
+class IncidentRelation(TenantScoped, Base):
+    """How an incident is related to something, and how that is known.
+
+    ``kind`` is the honesty label shown in the UI (docs/specs/
+    2026-11-15-concept-f-phase-3-design.md): ``confirmed`` only from a
+    structural link (topology parent, same probe, same integration), ``rule``
+    for the correlation rule that fired, ``suspected`` for overlap in time or a
+    baseline deviation. ``summary`` is one English sentence with the numbers,
+    shown verbatim; ``detail`` holds them as JSON. A relation that stops being
+    true keeps its ``last_seen_at`` and is reported as stale, never deleted
+    while the incident is open.
+    """
+
+    __tablename__ = "incident_relations"
+    __tenant_index__ = False  # covered by uq_incident_relations_key
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    incident_id = Column(Integer, nullable=False)
+    kind = Column(String(16), nullable=False)          # confirmed | rule | suspected
+    source = Column(String(16), nullable=False)        # topology | probe | integration | rule | syslog | baseline | incident
+    subject_kind = Column(String(16), nullable=True)   # host | probe | integration | incident
+    subject_id = Column(Integer, nullable=True)
+    summary = Column(Text, nullable=False)
+    detail = Column(Text, nullable=True)               # JSON
+    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        # NULL subjects are distinct in a SQL UNIQUE; the writer looks the row
+        # up first, so this guards concurrent duplicates of real subjects.
+        UniqueConstraint("tenant_id", "incident_id", "kind", "source", "subject_kind", "subject_id",
+                         name="uq_incident_relations_key"),
+        tenant_fk("incident_id", "incidents", name="fk_incident_relations_incident", ondelete="CASCADE"),
     )

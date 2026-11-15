@@ -75,6 +75,8 @@ export function useIncidentAction() {
       qc.invalidateQueries({ queryKey: ['incident', id] });
       qc.invalidateQueries({ queryKey: ['v1-status'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      // The overview reads its incidents from the v2 dashboard query.
+      qc.invalidateQueries({ queryKey: ['dashboard-v2'] });
     },
   });
 }

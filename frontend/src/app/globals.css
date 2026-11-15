@@ -88,6 +88,9 @@
   --color-scrim: var(--ng-scrim);
   --color-tip: var(--ng-tip-bg);
   --color-tip-fg: var(--ng-tip-text);
+  --color-tip-fg-2: var(--ng-tip-text-2);
+  --color-tip-accent: var(--ng-tip-accent);
+  --color-tip-down: var(--ng-tip-down);
 
   /* `text-ok`, `text-accent` … resolve to the AA-checked text variants
      (text-* reads --text-color-* before --color-*). */
@@ -135,6 +138,7 @@
 
   --shadow-overlay: var(--ng-shadow);
   --shadow-ng-sm: var(--ng-shadow-sm);
+  --shadow-card: var(--ng-card-shadow);
   --shadow-glow-crit: var(--ng-glow-crit);
   --shadow-glow-warn: var(--ng-glow-warn);
   --shadow-glow-dot-crit: var(--ng-glow-dot-crit);
@@ -164,6 +168,15 @@
   /* Shell breakpoint: below 760px the rail becomes a bottom tab bar. Use the
      arbitrary variants `max-[759px]:` / `min-[760px]:` for it, so the default
      sm/md/lg ordering stays intact. */
+}
+
+/* Concept F: the rail shows labels (rail-w-wide) unless the user collapsed it
+   (data-rail="narrow" on <html>, set before first paint by THEME_INIT_SCRIPT).
+   Below 1100px it always stays narrow. */
+@media (min-width: 1100px) {
+  html:not([data-rail="narrow"]) {
+    --ng-rail-w: var(--ng-rail-w-wide);
+  }
 }
 
 /* ── Tailwind 3 preflight parity ──────────────────────────────────────────

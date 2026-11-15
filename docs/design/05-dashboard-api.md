@@ -66,7 +66,7 @@ Verwendet in:
 - Jeder Eintrag zusätzlich: `acknowledged`, `host_ids`, `host_count`, `hosts` (bis 20 kompakte
   Einträge `{id, name, hostname, state, state_reason}`).
 
-`GET /api/v1/incidents/{id}`: zusätzlich `host_ids`, `host_count`, `hosts` (alle, mit aktuellem
+`GET /api/v1/incidents/{id}`: zusätzlich `relations` (alle, ungekürzt), `cause` (Pfad ohne Zustände), `host_ids`, `host_count`, `hosts` (alle, mit aktuellem
 Zustand), `acknowledged`.
 
 **Betroffene Hosts gespeichert** (Migration `037`, Spalte `incidents.host_ids`, sortierte JSON-Liste):
@@ -95,7 +95,7 @@ Parameter: `since` (optional, ISO) überschreibt „seit dem letzten Besuch“.
 | `health.failing_integrations` | bis 10 `{id, type, name, error}` | neuester Snapshot | ja |
 | `internet` | `source` (`speedtest`/`unifi`), `latest {download_mbps, upload_mbps, latency_ms, at, server}`, `history` (letzte 24 Ergebnisse, älteste zuerst), `wan {status, latency_ms, source}`, `gateway {id, name, state}` | Speedtest-Snapshots; Fallback UniFi-Snapshot (`speedtest`, `wan`) | Speedtest ja. **WAN-Status nur mit UniFi** (`wan.status` „ok“ → `up`), sonst `null`. Ganzer Abschnitt `null` ohne Speedtest/UniFi |
 | `incidents.counts` | `open` (= offen + quittiert), `acknowledged`, `unacknowledged`, `critical`, `warning`, `info` | | ja |
-| `incidents.items` | offen/quittiert, sortiert nach Schwere, unquittiert vor quittiert: `id, title, severity, rule, status, acknowledged, acknowledged_by, opened_at, age_seconds, host_count, host_ids, summary` | | ja; `host_count` `null`, wo nicht erfasst |
+| `incidents.items` | offen/quittiert, sortiert nach Schwere, unquittiert vor quittiert: `id, title, severity, rule, status, acknowledged, acknowledged_by, opened_at, age_seconds, host_count, host_ids, summary`, `relations` (höchstens 4: `kind` confirmed/rule/suspected, `source`, `summary`, `subject {kind, id, name}`, `first_seen_at`, `last_seen_at`, `stale`; Reihenfolge confirmed, rule, suspected) und `cause` (`{kind, id, name, state, path: [{id, name, state}]}` von der Topologie-Wurzel bis zur Ursache, oder `null`) | `incident_relations`, `incidents.cause_kind/cause_id` (Migration 054) | ja; `cause` `null`, wo die Regel keine gemeinsame Ursache kennt |
 | `incidents.per_day` | 14 Tage (lokale Tage), `count` + je Schwere | `created_at` | ja |
 | `incidents.resolved_today` | `id, title, severity, opened_at, resolved_at, duration_seconds` | `resolved_at` ≥ lokaler Tagesbeginn | ja |
 | `topology.roots` | oberste Eltern (Gateway zuerst) | `services/topology.py` | ja |
@@ -104,7 +104,7 @@ Parameter: `since` (optional, ISO) überschreibt „seit dem letzten Besuch“.
 | `topology.links_by_provenance`, `unlinked_hosts` | Herkunft der Kanten, Hosts ohne Kante | | ja |
 | `groups` | **keine Standorte**: `kind=direct` („Direct“, vom Core geprüft) und je Probe `kind=probe` mit `fresh`, `last_report`, `staleness_window_seconds`, `host_count`, `by_state` | `probe_id`, Probe-Heartbeat | ja. Echte Standorte gibt es erst mit B-14 |
 | `upcoming.items` | sortiert nach `due_at`: Wartung (`phase` `active`/`scheduled`, nächste 24 h, Fenster und manuelle mit Ende), Zertifikate ≤ 30 Tage (Host-HTTPS-Check, NPM), Disk voll ≤ 30 Tage (`days`, `current_pct`, `trend_pct_per_day`, `confidence` ≥ 0.3, `method`) | Wartungsfenster, `ssl_expiry_days`, Integrations-Zertifikate, `services/predictions.py` | ja; Zertifikat und Disk mit `estimated_due: true` (Tage, keine exakte Uhrzeit). `agent_disk_predictions_ready=false`, bis der Scheduler die Agent-Prognosen einmal gerechnet hat |
-| `latency` | für den schwersten offenen Incident mit erfassten Hosts: je Minute `median_ms`, `max_ms`, `ok`, `failed`, letzte 2 h; `onset_at`, `median_before_ms`, `median_since_ms`, `host_names` | ClickHouse `ping_checks` | ja; `null`, wenn kein offener Incident Hosts erfasst hat |
+| `latency` | für den schwersten offenen Incident **mit Chart** (Erreichbarkeits-Regel `host_down`, `host_down_syslog`, `multi_host_down`, `upstream_failure`, `integration_host` und erfasste Hosts): je Minute `median_ms`, `max_ms`, `ok`, `failed`, `loss_pct`, letzte 2 h; `onset_at`, `median_before_ms`, `median_since_ms`, `host_names`. Für jeden anderen Incident: `GET /api/v2/incidents/{id}/latency?hours=1..24` (gleiche Form, 204 ohne Chart) | ClickHouse `ping_checks`, `services/incident_metrics.py` | ja; `null`, wenn kein offener Incident einen Chart hat |
 | `syslog` | `buckets` (15 min, 24 h, `count`, `errors` = Severity ≤ 3), `current_per_min` (letzte 15 min), `usual {low_per_min, high_per_min, mean_per_min, sources, method}`, `total_24h`, `errors_24h`, `receiving` | ClickHouse `syslog_messages` (Empfangszeit), `host_baselines` | Band nur, wenn Baselines für diese Stunde/Wochentag gelernt sind (Mittel ± 1σ, Summe über Quellen), sonst `null` |
 | `availability` | `pct`, `target_pct` (Einstellung `availability_target`, Standard 99.9), `status` (`above_target`/`below_target`/`no_data`), `downtime_minutes`, `budget_minutes`, `budget_used_pct`, `checks`, `failed_checks`, `hosts_with_data`, `method` | ClickHouse `ping_checks`, 30 Tage | siehe unten |
 | `since_last_visit` | `since`, `fallback` (true = kein gespeicherter Besuch, letzte 24 h), `counts` je Typ, `total`, `items` (20 neueste) | `/api/v2/changes` | siehe 6. |
@@ -179,7 +179,14 @@ Aufrufe sowie falsche Keys abgewiesen werden.
 
 ## 8. Offen / bewusst nicht gemacht
 
-- Standorte (B-14), Zuständigkeit/Notizen am Incident (B-11), Beziehungslabels am Incident.
+- Standorte (B-14), Zuständigkeit/Notizen am Incident (B-11).
+- Beziehungslabels: „rule“ und „confirmed“ seit Migration 054 (`services/incident_relations.py`,
+  geschrieben von `upstream_failure`, `multi_host_down`, `integration_host` und für jede Regel als „rule“).
+  „suspected“ seit Phase 3, PR 2 (`services/suspected_relations.py`, letzter Schritt jedes
+  Korrelationslaufs): nur für Incidents der letzten 30 Minuten mit erfassten Hosts, Fenster ±10 Minuten
+  um den Beginn, höchstens 3 gespeichert. Signale: ein anderer Incident im Fenster ohne gemeinsamen Host
+  oder Topologie-Ast, oder ein nicht verbundener Host mit Syslog-Volumen ≥ 3× seiner Baseline und
+  mindestens 20 Nachrichten. Nie veraltet (`stale` immer false), nie in Benachrichtigungen.
 - Backfill von `incidents.host_ids` (Hash nicht umkehrbar).
 - Live-Push der neuen Zähler (B-16); das Frontend fragt ab.
 - `alembic check` gegen PostgreSQL lief lokal nicht (kein Postgres); die CI prüft es.

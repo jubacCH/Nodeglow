@@ -26,6 +26,12 @@ export function clampFontSize(size: unknown): number {
   return Number.isFinite(n) && n >= 10 && n <= 24 ? n : DEFAULT_FONT_SIZE;
 }
 
+/** Rail width mode on <html>: "wide" shows labels (from 1100px), "narrow" icons only. */
+export function applyRail(collapsed: boolean, root: HTMLElement = document.documentElement) {
+  const v = collapsed ? 'narrow' : 'wide';
+  if (root.getAttribute('data-rail') !== v) root.setAttribute('data-rail', v);
+}
+
 /** Apply a resolved theme and font size to <html>. */
 export function applyTheme(theme: ResolvedTheme, fontSize: number, root: HTMLElement = document.documentElement) {
   if (root.getAttribute('data-theme') !== theme) root.setAttribute('data-theme', theme);
@@ -37,4 +43,4 @@ export function applyTheme(theme: ResolvedTheme, fontSize: number, root: HTMLEle
  * Inline, dependency-free copy of resolveColorMode + applyTheme for <head>.
  * Keep in sync with the functions above (covered by lib/theme.test.ts).
  */
-export const THEME_INIT_SCRIPT = `(function(){var d=document.documentElement;try{var s=(JSON.parse(localStorage.getItem('${THEME_STORAGE_KEY}')||'{}')||{}).state||{};var m=s.colorMode;if(m!=='light'&&m!=='dark'){m=(m==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark'}var f=Number(s.fontSize);if(!(f>=10&&f<=24))f=${DEFAULT_FONT_SIZE};d.setAttribute('data-theme',m);d.style.colorScheme=m;d.style.fontSize=f+'px'}catch(e){d.setAttribute('data-theme','dark')}})();`;
+export const THEME_INIT_SCRIPT = `(function(){var d=document.documentElement;try{var s=(JSON.parse(localStorage.getItem('${THEME_STORAGE_KEY}')||'{}')||{}).state||{};var m=s.colorMode;if(m!=='light'&&m!=='dark'){m=(m==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark'}var f=Number(s.fontSize);if(!(f>=10&&f<=24))f=${DEFAULT_FONT_SIZE};d.setAttribute('data-theme',m);d.style.colorScheme=m;d.style.fontSize=f+'px';d.setAttribute('data-rail',s.sidebarCollapsed===true?'narrow':'wide')}catch(e){d.setAttribute('data-theme','dark')}})();`;

@@ -242,6 +242,8 @@ export interface LatencyPoint {
   max_ms: number | null;
   ok: number;
   failed: number;
+  /** Share of failed checks in the minute (since phase 3, PR 3). */
+  loss_pct?: number | null;
 }
 
 export interface LatencySection {

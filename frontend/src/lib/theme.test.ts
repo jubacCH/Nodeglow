@@ -16,7 +16,7 @@ function runInitScript(stored: unknown, prefersLight = false) {
   new Function('document', 'localStorage', 'window', THEME_INIT_SCRIPT)(
     { documentElement }, localStorage, window,
   );
-  return { theme: attrs['data-theme'], fontSize: style.fontSize, colorScheme: style.colorScheme };
+  return { theme: attrs['data-theme'], fontSize: style.fontSize, colorScheme: style.colorScheme, rail: attrs['data-rail'] };
 }
 
 describe('resolveColorMode', () => {
@@ -42,12 +42,16 @@ describe('clampFontSize', () => {
 
 describe('THEME_INIT_SCRIPT', () => {
   it('applies dark without a stored theme', () => {
-    expect(runInitScript(undefined)).toEqual({ theme: 'dark', fontSize: '14px', colorScheme: 'dark' });
+    expect(runInitScript(undefined)).toEqual({ theme: 'dark', fontSize: '14px', colorScheme: 'dark', rail: 'wide' });
   });
   it('applies a stored light theme and font size before paint', () => {
     expect(runInitScript({ state: { colorMode: 'light', fontSize: 16 } })).toEqual({
-      theme: 'light', fontSize: '16px', colorScheme: 'light',
+      theme: 'light', fontSize: '16px', colorScheme: 'light', rail: 'wide',
     });
+  });
+  it('keeps a collapsed rail narrow before paint', () => {
+    expect(runInitScript({ state: { sidebarCollapsed: true } }).rail).toBe('narrow');
+    expect(runInitScript({ state: { sidebarCollapsed: false } }).rail).toBe('wide');
   });
   it('resolves "system" with prefers-color-scheme', () => {
     expect(runInitScript({ state: { colorMode: 'system' } }, true).theme).toBe('light');
