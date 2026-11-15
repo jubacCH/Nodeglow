@@ -167,6 +167,17 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- New overview (design concept F, phase 2). It answers "what needs me" in one
+  sentence and shows every problem once: open incidents first, one line each;
+  opening one shows the path from the network edge to the parent its hosts
+  share, the evidence labelled Confirmed (topology) or Rule-based, the latency
+  of its hosts and the actions. Everything else that wants a look (silent
+  probes, failing integrations, hosts with issues outside every incident, disk
+  and certificate forecasts, new hosts) is one list on the right, folded and
+  capped at six rows, so the page keeps its size with 500 hosts. Figures carry
+  sparklines; hosts are shown per checker as proportion bars. The topology,
+  internet, syslog, availability and "since last visit" cards left the
+  overview; the topology has its own page.
 - Softer shapes and a labelled navigation rail (design concept F, phase 1).
   Cards, dialogs and fields are rounder, buttons and segmented controls are
   pills, and cards carry their edge as a light shadow instead of a border.
