@@ -45,6 +45,9 @@
   --ng-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --ng-tip-bg: #262932;
   --ng-tip-text: #ECEEF2;
+  --ng-tip-text-2: #A2A6B1;
+  --ng-tip-accent: #9488FF;
+  --ng-tip-down: #F46A70;
   --ng-chart-1: var(--ng-accent);
   --ng-chart-2: #5AA9F0;
   --ng-chart-3: #E37BD0;
@@ -107,6 +110,9 @@
   --ng-shadow-sm: 0 1px 2px rgba(20, 24, 32, 0.06);
   --ng-tip-bg: #1D1F25;
   --ng-tip-text: #F2F3F5;
+  --ng-tip-text-2: #A2A6B1;
+  --ng-tip-accent: #9488FF;
+  --ng-tip-down: #F46A70;
   --ng-chart-1: var(--ng-accent);
   --ng-chart-2: #2F7FD0;
   --ng-chart-3: #B8409F;
@@ -138,11 +144,12 @@
   --ng-st-maint-soft: color-mix(in srgb, var(--ng-st-maint) 15%, transparent);
   --ng-st-unknown-soft: color-mix(in srgb, var(--ng-st-unknown) 20%, transparent);
   --ng-hatch: repeating-linear-gradient(135deg, var(--ng-st-unknown) 0 2px, transparent 2px 5px);
-  --ng-radius: 10px;
-  --ng-radius-sm: 7px;
-  --ng-radius-ctl: 8px;
-  --ng-radius-chip: 5px;
-  --ng-radius-lg: 12px;
+  --ng-card-shadow: 0 0 0 1px var(--ng-border), var(--ng-shadow-sm);
+  --ng-radius: 20px;
+  --ng-radius-sm: 10px;
+  --ng-radius-ctl: 12px;
+  --ng-radius-chip: 8px;
+  --ng-radius-lg: 24px;
   --ng-radius-pill: 9999px;
   --ng-font-ui: var(--font-inter-tight), var(--font-inter-tight-ext), "Inter Tight", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
   --ng-font-display: var(--font-sora), var(--font-sora-ext), "Sora", var(--font-inter-tight), var(--font-inter-tight-ext), "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
@@ -158,6 +165,7 @@
   --ng-fs-num: 2.5714rem;
   --ng-fs-num-lg: 2.8571rem;
   --ng-rail-w: 60px;
+  --ng-rail-w-wide: 228px;
   --ng-topbar-h: 60px;
   --ng-tabbar-h: 58px;
   --ng-content-max: 1760px;

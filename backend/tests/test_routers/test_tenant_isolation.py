@@ -122,6 +122,8 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
                            postmortem=c("postmortem"), precursor_template=c("precursor"))],
         "incident_events": [dict(id=b, incident_id=b, event_type="created",
                                  summary=c("incident_events"))],
+        "incident_relations": [dict(id=b, incident_id=b, kind="confirmed", source="topology",
+                                    subject_kind="host", subject_id=b, summary=c("incident_relations"))],
         "integration_configs": [dict(id=b, type="proxmox", name=c("integration_configs"),
                                      config_json=_secret(tid, json.dumps(
                                          {"host": f"{net}.0.0.9", "token_name": c("config")})),

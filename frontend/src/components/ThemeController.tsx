@@ -2,10 +2,10 @@
 
 import { useEffect } from 'react';
 import { useThemeStore } from '@/stores/theme';
-import { applyTheme, clampFontSize, resolveColorMode } from '@/lib/theme';
+import { applyRail, applyTheme, clampFontSize, resolveColorMode } from '@/lib/theme';
 
 /**
- * Keeps `data-theme` and the root font size on <html> in sync with the theme
+ * Keeps `data-theme`, `data-rail` and the root font size on <html> in sync with the theme
  * store. The first paint is handled by THEME_INIT_SCRIPT in app/layout.tsx;
  * this takes over after hydration (toggle, "system" changes, other tabs).
  * Renders nothing. Mounted once in <Providers>.
@@ -13,6 +13,9 @@ import { applyTheme, clampFontSize, resolveColorMode } from '@/lib/theme';
 export function ThemeController() {
   const colorMode = useThemeStore((s) => s.colorMode);
   const fontSize = useThemeStore((s) => s.fontSize);
+  const sidebarCollapsed = useThemeStore((s) => s.sidebarCollapsed);
+
+  useEffect(() => { applyRail(sidebarCollapsed); }, [sidebarCollapsed]);
 
   useEffect(() => {
     const mq = window.matchMedia?.('(prefers-color-scheme: light)');

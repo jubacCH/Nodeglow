@@ -1797,9 +1797,20 @@ async def get_incident(
     host_summary = await iv.host_summaries(db, [incident], limit_per_item=None)
 
     from services import integration_alerts
+    from services import incident_relations as relations
+    from services.topology import cached_topology
+
+    try:
+        topology = (await cached_topology(db))[0]
+    except Exception:  # noqa: BLE001 — the detail must open without a topology
+        logger.warning("topology unavailable for incident %s", incident_id, exc_info=True)
+        topology = None
+    evidence = (await relations.describe(db, [incident], topology=topology)).get(incident.id, {})
 
     return {
         **iv.host_fields(incident, host_summary),
+        "relations": evidence.get("relations", []),
+        "cause": evidence.get("cause"),
         "integration": await integration_alerts.integration_of(db, incident),
         "acknowledged": incident.status == "acknowledged",
         "id": incident.id,

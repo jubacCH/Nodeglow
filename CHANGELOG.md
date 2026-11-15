@@ -10,6 +10,22 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Evidence on incidents. Every incident now records how it is related to
+  what, in one sentence with the numbers: "Rule-based" for the rule that
+  fired, and "Confirmed" where a rule used a structural link — the topology
+  parent all hosts of a network outage share, the failed upstream device of
+  an upstream failure, the integration whose host is down. The shared object
+  is stored as the incident's cause. Both appear in `GET /api/v2/dashboard`
+  (`relations`, `cause` with its path from the topology root) and in the
+  incident detail. New table `incident_relations` (migration 054), included
+  in backups. Nothing about notifications changes.
+- Suspected relations on incidents. For an incident in its first 30 minutes,
+  the correlation run looks ten minutes around its onset for things with no
+  structural link to its hosts: another incident that opened then, or a host
+  logging at least three times its usual syslog volume for the hour. Each
+  becomes a "Suspected" hint with its numbers ("opened 3 min before",
+  "2520 messages/h, 4.2x its usual 600/h"), at most three per incident. They
+  are shown, never notified, and change nothing about the incident.
 - Latency and packet loss for any incident:
   `GET /api/v2/incidents/{id}/latency?hours=` returns the per-minute median
   and max latency and the share of failed checks of its hosts, with the
@@ -158,6 +174,24 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- New overview (design concept F, phase 2). It answers "what needs me" in one
+  sentence and shows every problem once: open incidents first, one line each;
+  opening one shows the path from the network edge to the parent its hosts
+  share, the evidence labelled Confirmed (topology) or Rule-based, the latency
+  of its hosts and the actions. Everything else that wants a look (silent
+  probes, failing integrations, hosts with issues outside every incident, disk
+  and certificate forecasts, new hosts) is one list on the right, folded and
+  capped at six rows, so the page keeps its size with 500 hosts. Figures carry
+  sparklines; hosts are shown per checker as proportion bars. The topology,
+  internet, syslog, availability and "since last visit" cards left the
+  overview; the topology has its own page.
+- Softer shapes and a labelled navigation rail (design concept F, phase 1).
+  Cards, dialogs and fields are rounder, buttons and segmented controls are
+  pills, and cards carry their edge as a light shadow instead of a border.
+  From 1100 px the rail shows section names next to the icons; **Collapse**
+  at its bottom brings back the slim icon rail and is remembered. The count
+  badges on the rail and the mobile tab bar are now a soft red with red text,
+  because white on red was hard to read.
 - CI runs the backend suite a second time with the clock thirty days ahead
   (`tests/clockshift.py`). Tests whose fixtures carry fixed dates fail there
   before they are merged, instead of on their own days later.
