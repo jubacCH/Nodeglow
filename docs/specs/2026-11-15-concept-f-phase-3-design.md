@@ -1,6 +1,6 @@
 # Concept F, phase 3: evidence on incidents, a chart per incident, sites
 
-Status: design · 2026-11-15 · owner decisions open (see "Owner decisions") · no code yet.
+Status: design · 2026-11-15 · owner decisions taken 2026-11-15 (all five as recommended, see "Owner decisions") · no code yet.
 Follows the overview of design concept F
 ([`docs/design/directions/concept-f.md`](../design/directions/concept-f.md)): phase 1 (shapes
 and rail, #60) and phase 2 (overview from existing data, #61) need no backend change. This
@@ -93,7 +93,7 @@ topology root on the server, so it no longer depends on the 12 parents in `topol
 
 Rules for "suspected":
 
-- Window: from 10 minutes before the incident's onset to 10 minutes after it (owner decision 2).
+- Window: from 10 minutes before the incident's onset to 10 minutes after it (owner decision 2: ±10 minutes).
 - Signals that count: a syslog spike or log anomaly (`syslog_spike`, `log_anomaly`,
   `content_anomaly`) on a host that is *not* structurally related; another open incident in the
   same site; an integration that started failing in the window.
@@ -167,13 +167,15 @@ multi-tenancy; the MSP parts stay in `ee/`.
 
 ## Owner decisions
 
-| # | Question | Recommendation |
+Taken by the owner on 2026-11-15, all five as recommended.
+
+| # | Question | Decision |
 |---|---|---|
-| 1 | Show "Suspected" relations at all? | Yes, UI only, never in notifications, clearly dashed. Without them the label set is incomplete and the honesty table of `SCENARIO.md` loses a row. |
-| 2 | Window and limit for "Suspected" | ±10 minutes around the onset, at most three per incident. |
-| 3 | Sites in core or `ee/`? | Core. |
-| 4 | Hosts inherit the site of their probe? | Yes, unless a site is set on the host. Most branches have exactly one probe. |
-| 5 | Charts for rules that are not about reachability | No chart in this piece. Last values only. |
+| 1 | Show "Suspected" relations at all? | **Yes**, in the UI only, never in notifications, clearly dashed. Without them the label set is incomplete and the honesty table of `SCENARIO.md` loses a row. |
+| 2 | Window and limit for "Suspected" | **±10 minutes** around the onset, **at most three** per incident. |
+| 3 | Sites in core or `ee/`? | **Core.** |
+| 4 | Hosts inherit the site of their probe? | **Yes**, unless a site is set on the host. Most branches have exactly one probe. |
+| 5 | Charts for rules that are not about reachability | **No chart** in this piece. Last values only. |
 
 ## Pull requests
 
