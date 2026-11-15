@@ -1,0 +1,1261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nodeglow · Concept F</title>
+<script>
+  // Theme before first paint: stored choice wins, otherwise follow the OS.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('ngf-theme'); } catch (e) { /* private mode */ }
+    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Cstyle%3E.s%7Bstroke:#191B21%7D.t%7Bfill:#191B21%7D.d%7Bfill:#5B4BE0%7D%40media (prefers-color-scheme:dark)%7B.s%7Bstroke:#ECEEF2%7D.t%7Bfill:#ECEEF2%7D.d%7Bfill:#7C6CFF%7D%7D%3C/style%3E%3Cpath d="M3.5 19H8.5V7L23 25V16.5" fill="none" class="s" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/%3E%3Ccircle cx="23" cy="8.5" r="3.5" class="d"/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Sora:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<!--
+  Concept F: soft shapes on the E3 colour tokens. Single file, simulated data
+  (48 hosts = ../SCENARIO.md, 480 hosts = enterprise scale test).
+  Nothing here is imported by the application.
+-->
+<style>
+:root {
+  /* Values from frontend/design-tokens/tokens.json (E3, Glow Violet).
+     Marked "proposal" = not in tokens.json yet, see directions/concept-f.md. */
+  --font-ui: "Inter Tight", system-ui, sans-serif;
+  --font-display: "Sora", "Inter Tight", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --bg: #F4F5F8;
+  --rail: #FFFFFF;
+  --surface: #FFFFFF;
+  --surface-2: #F2F3F6;
+  --surface-3: #E8EAEF;
+  --border: #E3E5EA;
+  --border-2: #D6D9E0;
+  --line: #C9CED7;
+  --hover: rgba(20, 24, 32, 0.035);
+  --grid: #EEF0F3;
+  --text: #191B21;
+  --text-2: #5A5E69;
+  --text-3: #666B76;
+
+  --accent: #5B4BE0;
+  --accent-text: #5242D6;
+  --accent-btn: #5B4BE0;
+  --accent-btn-hover: #4C3CD2;
+  --on-accent: #FFFFFF;
+  --focus: #5B4BE0;
+  --soft-pct: 10%;
+  --accent-glow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+
+  --tip-bg: #1D1F25;
+  --tip-text: #F2F3F5;
+  --tip-text-2: #A2A6B1;      /* proposal */
+  --tip-accent: #9488FF;      /* proposal: accent text on tip-bg */
+  --tip-down: #F46A70;        /* proposal: down text on tip-bg */
+
+  --st-ok: #1E9E57;       --st-ok-text: #167A43;
+  --st-degraded: #B98A00; --st-degraded-text: #806000;
+  --st-warning: #DD6B12;  --st-warning-text: #AE520B;
+  --st-down: #DC3540;     --st-down-text: #C42A35;
+  --st-maint: #6F7788;    --st-maint-text: #5A6170;
+  --st-unknown: #A4A8B0;
+  --hatch-2: #E3E5E9;
+
+  --shadow-sm: 0 1px 2px rgba(20, 24, 32, 0.06);
+  --shadow: 0 16px 48px rgba(20, 24, 32, 0.16), 0 1px 3px rgba(20, 24, 32, 0.06);
+  --glow-crit: 0 0 0 1px color-mix(in srgb, var(--st-down) 26%, transparent), 0 6px 16px -6px color-mix(in srgb, var(--st-down) 34%, transparent);
+  --wire-glow: none;
+  --breathe: none;
+  --mark-halo: 0.28;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #101217;
+  --rail: #0C0E12;
+  --surface: #181A20;
+  --surface-2: #1F222A;
+  --surface-3: #282B34;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-2: rgba(255, 255, 255, 0.11);
+  --line: #363A45;
+  --hover: rgba(255, 255, 255, 0.04);
+  --grid: rgba(255, 255, 255, 0.05);
+  --text: #ECEEF2;
+  --text-2: #A2A6B1;
+  --text-3: #8A8F9B;
+
+  --accent: #7C6CFF;
+  --accent-text: #9488FF;
+  --accent-btn: #6656F2;
+  --accent-btn-hover: #5A4AE6;
+  --focus: #9488FF;
+  --soft-pct: 16%;
+  --accent-glow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 18px 0 color-mix(in srgb, var(--accent) 36%, transparent);
+
+  --tip-bg: #262932;
+  --tip-text: #ECEEF2;
+
+  --st-ok: #3CC37A;       --st-ok-text: #3CC37A;
+  --st-degraded: #E7C04C; --st-degraded-text: #E7C04C;
+  --st-warning: #F2923C;  --st-warning-text: #F2923C;
+  --st-down: #F2545B;     --st-down-text: #F46A70;
+  --st-maint: #8F97A8;    --st-maint-text: #A3AABA;
+  --st-unknown: #565B66;
+  --hatch-2: #252830;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 16px 48px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --glow-crit: 0 0 0 1px color-mix(in srgb, var(--st-down) 34%, transparent), 0 0 24px 2px color-mix(in srgb, var(--st-down) 30%, transparent);
+  --wire-glow: drop-shadow(0 0 3px color-mix(in srgb, var(--st-down) 65%, transparent));
+  --breathe: ng-breathe 6s ease-in-out infinite;
+  --mark-halo: 0.55;
+  color-scheme: dark;
+}
+:root {
+  /* shared, derived exactly like tokens.json "shared" */
+  --accent-soft: color-mix(in srgb, var(--accent) var(--soft-pct), transparent);
+  --st-ok-soft: color-mix(in srgb, var(--st-ok) 13%, transparent);
+  --st-degraded-soft: color-mix(in srgb, var(--st-degraded) 13%, transparent);
+  --st-warning-soft: color-mix(in srgb, var(--st-warning) 13%, transparent);
+  --st-down-soft: color-mix(in srgb, var(--st-down) 13%, transparent);
+  --st-maint-soft: color-mix(in srgb, var(--st-maint) 15%, transparent);
+  --st-unknown-soft: color-mix(in srgb, var(--st-unknown) 20%, transparent);
+  --hatch: repeating-linear-gradient(135deg, var(--st-unknown) 0 2px, transparent 2px 5px);
+  --card-shadow: 0 0 0 1px var(--border), var(--shadow-sm);   /* proposal: soft card edge */
+  --r-card: 24px;
+  --r-tile: 18px;
+}
+@keyframes ng-breathe { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--st-down) 22%, transparent), 0 0 12px 0 color-mix(in srgb, var(--st-down) 18%, transparent); } }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 400 14px/1.45 var(--font-ui);
+  font-feature-settings: "tnum";
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; padding: 0; }
+button:disabled { cursor: default; }
+svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; box-shadow: 0 0 0 5px var(--surface); }
+.mono { font-family: var(--font-mono); font-size: .92em; }
+.sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ---------- shell ---------- */
+.app { display: grid; grid-template-columns: auto 1fr; min-height: 100vh; }
+.rail {
+  position: sticky; top: 12px; height: calc(100vh - 24px); margin: 12px 0 12px 12px;
+  width: 216px; background: var(--rail); border-radius: 28px; color: var(--text-2);
+  display: flex; flex-direction: column; padding: 14px 12px; transition: width .25s ease;
+  box-shadow: var(--card-shadow);
+}
+/* Brand: Puls-N mark + outlined wordmark, geometry from frontend/src/components/ui/NodeglowMark.tsx.
+   Line and wordmark in text colour, the status dot in the accent with a soft halo: the dot is the
+   only light in the lockup. No coloured tile behind it. */
+.brand { position: relative; padding: 0 0 16px; }
+.brand-btn { display: flex; align-items: center; height: 48px; padding: 0 10px; border-radius: 16px; color: var(--text); width: 100%; }
+.brand-btn:hover { background: var(--surface-2); }
+.brand-btn .lockup { height: 26px; width: auto; display: block; overflow: visible; }
+.brand-btn .mk { display: none; }
+.logo-mark { display: block; overflow: visible; color: var(--text); }
+.about { position: absolute; left: calc(100% + 14px); top: 0; width: 310px; background: var(--surface); border-radius: 20px; padding: 18px; box-shadow: var(--shadow), 0 0 0 1px var(--border); z-index: 30; color: var(--text); }
+.about[hidden] { display: none; }
+.about .lockup { height: 30px; width: auto; display: block; overflow: visible; }
+.about p { margin: 12px 0 0; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
+.about dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px 0 0; font-size: 12px; }
+.about dt { color: var(--text-3); }
+.about dd { margin: 0; font-family: var(--font-mono); }
+.m-mark { display: none; }
+.nav { display: flex; flex-direction: column; gap: 4px; }
+.nav button {
+  display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 13px; border-radius: 15px;
+  color: var(--text-2); white-space: nowrap; position: relative; text-align: left;
+}
+.nav button:hover { background: var(--surface-2); color: var(--text); }
+.nav button[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.nav .lbl { flex: 1; overflow: hidden; }
+.cnt { min-width: 20px; height: 20px; border-radius: 10px; font-size: 11px; font-weight: 600; display: grid; place-items: center; padding: 0 6px; background: var(--accent-soft); color: var(--accent-text); }
+.cnt.crit { background: var(--st-down-soft); color: var(--st-down-text); }
+.rail .spacer { flex: 1; }
+.rail .me { display: flex; align-items: center; gap: 10px; padding: 10px 6px 2px; border-top: 1px solid var(--border); margin-top: 8px; white-space: nowrap; overflow: hidden; }
+.avatar { width: 38px; height: 38px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-text); display: grid; place-items: center; font: 600 12px var(--font-display); flex: none; }
+.me small { display: block; color: var(--text-3); font-size: 12px; }
+.me b { color: var(--text); font-weight: 500; font-size: 13px; }
+.rail.collapsed { width: 72px; }
+.rail.collapsed .lbl, .rail.collapsed .me div { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.rail.collapsed .nav button { justify-content: center; padding: 0; }
+.rail.collapsed .nav .cnt { position: absolute; top: 3px; right: 4px; min-width: 17px; height: 17px; font-size: 10px; padding: 0 4px; }
+.rail.collapsed .brand-btn { justify-content: center; padding: 0; }
+.rail.collapsed .brand-btn .lockup { display: none; }
+.rail.collapsed .brand-btn .mk { display: block; }
+.rail.collapsed .me { justify-content: center; padding-inline: 0; }
+
+main { min-width: 0; padding: 12px 20px 40px 20px; }
+
+/* ---------- top bar ---------- */
+.top { display: flex; align-items: center; gap: 12px; height: 56px; margin-bottom: 10px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 16px; border-radius: 22px;
+  background: var(--surface); box-shadow: var(--card-shadow); white-space: nowrap;
+}
+.pill.btn:hover { background: var(--surface-2); }
+.tenant { padding-left: 5px; gap: 10px; cursor: default; }
+.tenant .avatar { width: 34px; height: 34px; background: var(--tip-bg); color: var(--tip-text); }
+.tenant b { display: block; font-weight: 500; font-size: 13px; line-height: 1.1; }
+.tenant small { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-2); }
+.planned { height: 20px; padding: 0 8px; border-radius: 10px; border: 1.5px dashed var(--text-3); color: var(--text-2); font-size: 10.5px; font-weight: 500; display: inline-flex; align-items: center; }
+.search { flex: 1; min-width: 0; max-width: 440px; margin: 0 auto; color: var(--text-3); cursor: text; }
+.search span:not(.kbd) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.kbd { font: 500 11px var(--font-mono); padding: 2px 6px; border-radius: 6px; background: var(--surface-2); color: var(--text-2); }
+.iconbtn { width: 44px; height: 44px; border-radius: 50%; background: var(--surface); box-shadow: var(--card-shadow); display: grid; place-items: center; position: relative; flex: none; }
+.iconbtn:hover { background: var(--surface-2); }
+.iconbtn .cnt { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; font-size: 10px; padding: 0 5px; box-shadow: 0 0 0 2px var(--surface); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 18px; border-radius: 22px; font-weight: 500; white-space: nowrap; }
+.btn.sm { height: 34px; padding: 0 14px; border-radius: 17px; font-size: 12.5px; }
+.btn-primary { background: var(--accent-btn); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-btn-hover); box-shadow: var(--accent-glow); }
+.btn-ink { background: var(--tip-bg); color: var(--tip-text); }
+.btn-ink:hover { background: color-mix(in srgb, var(--tip-bg) 88%, #fff); }
+.btn-quiet { background: var(--surface-3); color: var(--text); }
+.btn-quiet:hover { background: var(--border-2); }
+.btn:disabled { background: transparent; color: var(--st-ok-text); box-shadow: none; }
+
+/* ---------- hero ---------- */
+.hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px 20px; margin: 10px 0 20px; flex-wrap: wrap; }
+.hello { color: var(--text-2); font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.scalebox { display: inline-flex; align-items: center; gap: 8px; padding: 3px 4px 3px 12px; border: 1.5px dashed var(--text-3); border-radius: 18px; font-size: 12px; color: var(--text-2); }
+h1 { font: 500 clamp(28px, 3.1vw, 40px)/1.15 var(--font-display); letter-spacing: -.04em; margin: 0; }
+h1 .chip { display: inline-flex; align-items: center; height: 1.05em; padding: 0 .3em; border-radius: 999px; vertical-align: -.12em; margin: 0 .06em; background: var(--st-down-soft); color: var(--st-down-text); }
+h1 .chip svg { width: .58em; height: .58em; }
+.hero-sub { display: flex; align-items: center; gap: 14px; margin-top: 10px; flex-wrap: wrap; font-size: 13.5px; color: var(--text-2); }
+.hero-sub b { color: var(--text); font-weight: 600; }
+.hero-bar { display: flex; gap: 3px; width: 180px; height: 10px; }
+.hero-bar i { border-radius: 4px; min-width: 4px; }
+.hero-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ---------- grid ---------- */
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 18px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.card { background: var(--surface); border-radius: var(--r-card); box-shadow: var(--card-shadow); padding: 18px; min-width: 0; position: relative; }
+.card-h { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.card-h .ico { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border-2); display: grid; place-items: center; color: var(--text-2); flex: none; }
+.card-h h2 { font: 500 15px var(--font-ui); margin: 0; }
+.card-h p { margin: 0; color: var(--text-2); font-size: 12px; }
+.card-h .end { margin-left: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+.link { color: var(--accent-text); font-size: 12.5px; font-weight: 500; }
+.link:hover { text-decoration: underline; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 9px; height: 9px; border-radius: 50%; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 18px; padding: 3px; }
+.seg button { height: 30px; padding: 0 13px; border-radius: 15px; font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--card-shadow); font-weight: 500; }
+.scalebox .seg { padding: 2px; }
+.scalebox .seg button { height: 26px; padding: 0 10px; }
+
+/* status helpers */
+.sb { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; font: 600 10.5px var(--font-ui); white-space: nowrap; flex: none; }
+.sb.crit { background: color-mix(in srgb, var(--st-down) 13%, var(--surface)); color: var(--st-down-text); }
+.disc { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.disc svg { width: 16px; height: 16px; }
+.disc.crit, .disc.down { background: var(--st-down-soft); color: var(--st-down-text); box-shadow: var(--glow-crit); }
+.disc.warn { background: var(--st-warning-soft); color: var(--st-warning-text); }
+.disc.deg { background: var(--st-degraded-soft); color: var(--st-degraded-text); }
+.disc.maint { background: var(--st-maint-soft); color: var(--st-maint-text); }
+.disc.unknown { background: var(--hatch), var(--hatch-2); color: var(--text-2); }
+.disc.ok { background: var(--st-ok-soft); color: var(--st-ok-text); }
+.disc.info { background: var(--accent-soft); color: var(--accent-text); }
+@media (prefers-reduced-motion: no-preference) { .disc.crit:not(.acked) { animation: var(--breathe); } }
+.disc.acked { box-shadow: 0 0 0 1px color-mix(in srgb, var(--st-down) 20%, transparent); }
+
+/* ---------- incidents ---------- */
+.inc { border-radius: 20px; background: var(--surface-2); margin-bottom: 8px; }
+.inc:last-of-type { margin-bottom: 0; }
+.inc-h { display: flex; align-items: center; gap: 12px; padding: 12px; width: 100%; text-align: left; border-radius: 20px; }
+.inc-h .tx { flex: 1; min-width: 0; }
+.inc-h .tx b { display: block; font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inc-h .tx small { color: var(--text-2); font-size: 12.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+.inc-h .tx small .tag { height: 20px; font-size: 10.5px; padding: 0 8px; }
+.inc-h .age { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.inc-h .chev { color: var(--text-3); transition: transform .15s; }
+.inc-h[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.inc-b { padding: 0 14px 14px 58px; }
+/* mini path: the chain from the edge of the network to the cause, then the affected hosts */
+.path { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 0; margin: 2px 0 14px; }
+.path .pn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px 0 4px; border-radius: 16px; background: var(--surface); box-shadow: var(--card-shadow); font: 500 12px var(--font-mono); white-space: nowrap; }
+.path .pn .disc { width: 24px; height: 24px; box-shadow: none; }
+.path .pn .disc svg { width: 13px; height: 13px; }
+.path .pn.cause { box-shadow: 0 0 0 1.5px var(--st-degraded), var(--shadow-sm); }
+.path .pn.cause.warn { box-shadow: 0 0 0 1.5px var(--st-warning), var(--shadow-sm); }
+.path .wire { width: 22px; height: 3px; border-radius: 2px; background: var(--accent); flex: none; }
+.path .wire.bad { background: var(--st-down); }
+.path .fan { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.path .cnt-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 16px; font-size: 12.5px; font-weight: 600; }
+.path .cnt-chip.down { background: var(--st-down-soft); color: var(--st-down-text); }
+.path .cnt-chip.deg { background: var(--st-degraded-soft); color: var(--st-degraded-text); }
+.path .to-topo { margin-left: 10px; }
+.inc-b[hidden] { display: none; }
+.rels { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.rel { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; color: var(--text-2); }
+.rel .tag { flex: none; width: 92px; justify-content: center; }
+.tag { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 11px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.tag.conf { background: var(--tip-bg); color: var(--tip-text); }
+.tag.rule { background: var(--accent-btn); color: var(--on-accent); }
+.tag.susp { background: transparent; color: var(--text-2); border: 1.5px dashed var(--text-3); }
+.mini { position: relative; height: 150px; margin: 4px 0 10px; }
+.mini-h { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; font-size: 12px; color: var(--text-2); }
+.inc-act { display: flex; gap: 8px; flex-wrap: wrap; }
+.resolved { margin-top: 12px; font-size: 12.5px; color: var(--text-2); display: flex; gap: 8px; align-items: center; }
+.resolved svg { color: var(--st-ok-text); width: 16px; height: 16px; }
+.resolved b { color: var(--text); font-weight: 500; }
+
+/* ---------- KPI tiles + charts ---------- */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 980px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.spark { display: block; width: 100%; height: 26px; margin-top: 8px; }
+.spark rect { fill: var(--accent); opacity: .55; }
+.spark rect.last { opacity: 1; }
+.tile .note { font-size: 12px; color: var(--text-2); margin-top: 6px; }
+.tile { background: var(--surface-2); border-radius: var(--r-tile); padding: 12px 14px; text-align: left; min-height: 74px; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid transparent; }
+.tile small { font-size: 11.5px; color: var(--text-2); }
+.tile b { font: 500 22px var(--font-display); letter-spacing: -.03em; }
+.tile b em { font-style: normal; font-size: 13px; color: var(--text-2); letter-spacing: 0; margin-left: 3px; }
+button.tile:hover { background: var(--surface-3); }
+.tile[aria-pressed="true"] { background: var(--tip-bg); color: var(--tip-text); border-color: var(--accent); box-shadow: var(--accent-glow); }
+.tile[aria-pressed="true"] small, .tile[aria-pressed="true"] b em { color: var(--tip-text-2); }
+.tile .t-down { color: var(--st-down-text); }
+.tile[aria-pressed="true"] .t-down { color: var(--tip-down); }
+.tile .hatchbar { height: 6px; border-radius: 3px; margin-top: 4px; overflow: hidden; display: flex; }
+.tile .hatchbar i { display: block; height: 100%; background: var(--st-ok); }
+.tile .hatchbar u { display: block; height: 100%; flex: 1; background: var(--hatch), var(--hatch-2); }
+.chart { position: relative; height: 240px; }
+.chart svg, .mini svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.chart text, .mini text { font: 11px var(--font-ui); fill: var(--text-3); }
+svg .tl { font-weight: 500; }
+svg .bar { outline: none; cursor: default; }
+svg .bar:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
+.tip { position: absolute; pointer-events: none; background: var(--tip-bg); color: var(--tip-text); border-radius: 12px; padding: 8px 11px; font-size: 12px; white-space: nowrap; transform: translate(-50%, -110%); opacity: 0; transition: opacity .12s; box-shadow: var(--shadow); z-index: 3; }
+.tip b { font-weight: 600; }
+.tip span { color: var(--tip-text-2); }
+
+/* ---------- needs a look / coming up ---------- */
+.rows { display: flex; flex-direction: column; gap: 6px; }
+.row { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 16px; background: var(--surface-2); transition: opacity .3s; }
+.row .tx { flex: 1; min-width: 0; }
+.row .tx b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 500; font-size: 13.5px; line-height: 1.3; }
+.row .tx small { color: var(--text-2); font-size: 12px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.done { opacity: .55; }
+.row .when { color: var(--text-2); font-size: 12px; white-space: nowrap; text-align: right; }
+.row .when b { display: block; color: var(--text); font: 500 14px var(--font-display); }
+.bar5 { height: 5px; border-radius: 3px; background: var(--surface-3); margin-top: 6px; overflow: hidden; width: 70px; margin-left: auto; }
+.bar5 i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.more { display: block; margin: 10px auto 0; }
+
+/* ---------- hosts by site ---------- */
+.sites { display: flex; flex-direction: column; gap: 4px; }
+.site { display: grid; grid-template-columns: 170px minmax(0, 1fr) minmax(150px, auto); align-items: center; gap: 16px; padding: 10px 12px; border-radius: 16px; }
+.site:hover { background: var(--surface-2); }
+.site .sn b { display: block; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.site .sn small { color: var(--text-2); font-size: 11.5px; white-space: nowrap; }
+.sbar { display: flex; gap: 3px; height: 14px; min-width: 0; }
+.sbar i { border-radius: 4px; min-width: 5px; }
+.site .sv { font-size: 12px; color: var(--text-2); text-align: right; }
+.site .sv b { color: var(--text); font-weight: 600; }
+.site .sv .bad { color: var(--st-down-text); font-weight: 500; }
+
+/* ---------- topology ---------- */
+.canvas-wrap { overflow-x: auto; border-radius: 20px; }
+.canvas { position: relative; height: 420px; min-width: 700px; border-radius: 20px; background-color: var(--surface-2); background-image: radial-gradient(circle, var(--surface-3) 1.2px, transparent 1.3px); background-size: 18px 18px; }
+.canvas svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; }
+.node { position: absolute; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; transform: translate(-50%, -24px); border-radius: 14px; }
+.node.right { flex-direction: row; text-align: left; gap: 10px; transform: translate(-24px, -50%); }
+.node .nd { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; position: relative; background: var(--surface); border: 3px solid var(--surface); box-shadow: var(--card-shadow); transition: transform .15s; flex: none; }
+.node .nd svg { width: 19px; height: 19px; }
+.node:hover .nd { transform: scale(1.06); }
+.node.sel .nd { outline: 3px solid var(--text); outline-offset: 3px; }
+.node .lb { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 3px 8px 4px; border-radius: 10px; background: color-mix(in srgb, var(--surface-2) 88%, transparent); }
+.node:not(.right) .lb { align-items: center; }
+.node .nm { font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.node .sub { font-size: 11.5px; color: var(--text-2); white-space: nowrap; }
+.node .lb .tag { height: 20px; font-size: 10.5px; margin-top: 2px; }
+.node .nb { position: absolute; top: -9px; left: 30px; }
+.node.right .nb { left: -12px; }
+.n-ok .nd { background: var(--accent); color: var(--on-accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--surface)); }
+.n-neutral .nd { color: var(--text-2); }
+.n-crit .nd, .n-down .nd { background: var(--surface); color: var(--st-down-text); border-color: var(--st-down); box-shadow: var(--glow-crit); }
+.n-deg .nd { background: var(--surface); color: var(--st-degraded-text); border-color: var(--st-degraded); }
+.n-warn .nd { background: var(--surface); color: var(--st-warning-text); border-color: var(--st-warning); }
+.n-maint .nd { color: var(--st-maint-text); }
+.n-unknown .nd { background: var(--hatch), var(--hatch-2); color: var(--text-2); border: 2px dashed var(--st-unknown); box-shadow: none; }
+.node .nd.cl { border: 0; }
+.nd.cl .cn { position: absolute; inset: 6px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; font: 600 13px var(--font-display); color: var(--text); letter-spacing: -.02em; }
+.n-fold .nd.cl .cn { background: var(--surface-2); }
+.n-fold .nm { color: var(--accent-text); }
+.detail { display: flex; align-items: center; gap: 14px; margin-top: 12px; padding: 12px 14px; border-radius: 18px; background: var(--surface-2); flex-wrap: wrap; }
+.detail .tx { flex: 1; min-width: 200px; }
+.detail .tx b { font-weight: 600; }
+.detail .tx p { margin: 2px 0 0; color: var(--text-2); font-size: 12.5px; }
+.hint { color: var(--text-3); font-size: 12px; margin-top: 10px; }
+
+/* toast */
+.toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 30px); opacity: 0; background: var(--tip-bg); color: var(--tip-text); border-radius: 22px; padding: 11px 18px; display: flex; align-items: center; gap: 9px; font-size: 13px; box-shadow: var(--shadow); transition: .25s; z-index: 20; max-width: calc(100vw - 32px); pointer-events: none; }
+.toast svg { color: var(--tip-accent); }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+.tabbar { display: none; }
+
+@media (max-width: 1180px) {
+  .grid { grid-template-columns: 1fr; }
+  .aside { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+}
+@media (max-width: 980px) {
+  .search .kbd { display: none; }
+  .site { grid-template-columns: 140px minmax(0, 1fr) auto; }
+}
+@media (max-width: 760px) {
+  .inc-h .tx small .tag { display: none; }
+  .path .wire { width: 12px; }
+  .app { display: block; }
+  .rail { display: none; }
+  main { padding: 8px 16px 100px; }
+  .top { gap: 8px; }
+  .tenant div, .search, #themeBtn { display: none; }
+  .tenant { padding: 0 5px; }
+  #bell { margin-left: auto; }
+  .m-mark { display: grid; place-items: center; width: 44px; height: 44px; flex: none; }
+  .add-lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #addHost { width: 44px; padding: 0; }
+  .aside { grid-template-columns: 1fr; }
+  .card { padding: 14px; border-radius: 22px; }
+  .card-h { flex-wrap: wrap; }
+  .card-h .end { margin-left: 0; width: 100%; justify-content: space-between; }
+  .chart { height: 210px; }
+  .inc-h .age { display: none; }
+  .inc-b { padding: 0 10px 12px 10px; }
+  .rel { flex-direction: column; gap: 3px; }
+  .site { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 10px 6px; }
+  .site .sbar { grid-column: 1 / -1; grid-row: 2; }
+  .tabbar { display: flex; position: fixed; left: 12px; right: 12px; bottom: 12px; height: 62px; background: var(--rail); border-radius: 31px; padding: 7px; gap: 4px; z-index: 10; box-shadow: var(--shadow); }
+  .tabbar button { flex: 1; border-radius: 24px; color: var(--text-2); display: grid; place-items: center; position: relative; }
+  .tabbar button[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); }
+  .tabbar .cnt { position: absolute; top: 3px; right: calc(50% - 22px); min-width: 17px; height: 17px; font-size: 10px; padding: 0 4px; }
+  .toast { bottom: 90px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail" id="rail" aria-label="Main navigation">
+    <div class="brand">
+      <button class="brand-btn" id="brandBtn" aria-expanded="false" aria-controls="about"><span data-logo="lockup" data-h="26"></span><span class="mk" data-logo="mark" data-h="30"></span><span class="sr-only">About Nodeglow</span></button>
+      <div class="about" id="about" role="dialog" aria-label="About Nodeglow" hidden>
+        <span data-logo="lockup" data-h="30"></span>
+        <p>Infrastructure monitoring. Only what needs attention glows; no light means no data.</p>
+        <dl><dt>Version</dt><dd>2.0.0 · prototype F</dd><dt>Data</dt><dd>simulated</dd></dl>
+      </div>
+    </div>
+    <nav class="nav">
+      <button aria-current="page" data-nav="Overview"><i data-ic="home"></i><span class="lbl">Overview</span></button>
+      <button data-nav="Incidents"><i data-ic="alert"></i><span class="lbl">Incidents</span><span class="cnt crit" data-bind="incCount"></span></button>
+      <button data-nav="Hosts"><i data-ic="server"></i><span class="lbl">Hosts</span></button>
+      <button data-nav="Topology"><i data-ic="network"></i><span class="lbl">Topology</span></button>
+      <button data-nav="Logs"><i data-ic="logs"></i><span class="lbl">Logs</span></button>
+      <button data-nav="Discovery"><i data-ic="scan"></i><span class="lbl">Discovery</span><span class="cnt" data-bind="discCount"></span></button>
+      <button data-nav="Reports"><i data-ic="chart"></i><span class="lbl">Reports</span></button>
+    </nav>
+    <div class="spacer"></div>
+    <nav class="nav" aria-label="Administration">
+      <button data-nav="Settings"><i data-ic="sliders"></i><span class="lbl">Settings</span></button>
+      <button data-nav="Help"><i data-ic="help"></i><span class="lbl">Help</span></button>
+      <button id="collapse" aria-expanded="true" aria-controls="rail"><i data-ic="panel"></i><span class="lbl">Collapse</span></button>
+    </nav>
+    <div class="me"><div class="avatar" aria-hidden="true">JB</div><div><b>Julian B.</b><small>Admin</small></div></div>
+  </aside>
+
+  <main>
+    <header class="top">
+      <span class="m-mark" data-logo="mark" data-h="28" role="img" aria-label="Nodeglow"></span>
+      <div class="pill tenant" role="group" aria-label="Tenant switcher, planned, not built">
+        <span class="avatar" aria-hidden="true" data-bind="tenantAb"></span>
+        <div><b data-bind="tenantName"></b><small data-bind="tenantSub"></small></div>
+        <span class="planned" title="Multi-tenancy is planned, not built">Planned</span>
+      </div>
+      <button class="pill search" data-toast="Command palette (⌘K) exists today"><i data-ic="search"></i><span>Search hosts, incidents, logs…</span><span class="kbd">⌘K</span></button>
+      <button class="iconbtn" id="themeBtn" aria-label="Switch to dark mode"><i data-ic="moon"></i></button>
+      <button class="iconbtn" id="bell" data-toast="Opens notifications"><i data-ic="bell"></i><span class="cnt crit" data-bind="bellCount" aria-hidden="true"></span></button>
+      <button class="btn btn-primary" id="addHost" data-toast="Add host: opens the existing host dialog"><i data-ic="plus"></i><span class="add-lbl">Add host</span></button>
+    </header>
+
+    <div data-view="overview">
+    <section class="hero" aria-labelledby="heroTitle">
+      <div>
+        <div class="hello">
+          <span>Good afternoon, Julian · Friday 10.10.2026, 14:32</span>
+          <span class="scalebox">Simulated data
+            <span class="seg" role="group" aria-label="Scale test">
+              <button aria-pressed="true" data-scale="sme">48 hosts</button>
+              <button aria-pressed="false" data-scale="ent">480 hosts</button>
+            </span>
+          </span>
+        </div>
+        <h1 id="heroTitle"></h1>
+        <div class="hero-sub" id="heroSub"></div>
+      </div>
+      <div class="hero-actions">
+        <button class="pill btn" data-toast="9 changes since your last visit at 09:12"><i data-ic="history"></i>Since 09:12</button>
+      </div>
+    </section>
+
+    <div class="grid">
+      <div class="col">
+        <section class="card" aria-labelledby="incTitle">
+          <div class="card-h">
+            <span class="ico"><i data-ic="alert"></i></span>
+            <div><h2 id="incTitle">Open incidents</h2><p>Click one for evidence, cause path and actions</p></div>
+            <div class="end"><button class="link" data-toast="Opens Incidents">All incidents</button></div>
+          </div>
+          <div id="incidents"></div>
+          <div class="resolved" id="resolved"></div>
+        </section>
+
+        <section class="card" aria-labelledby="kpiTitle">
+          <div class="card-h">
+            <span class="ico"><i data-ic="activity"></i></span>
+            <div><h2 id="kpiTitle">At a glance</h2></div>
+            <div class="end"><button class="link" data-toast="Opens Reports">Reports</button></div>
+          </div>
+          <div class="tiles" id="tiles"></div>
+        </section>
+
+        <section class="card" aria-labelledby="hostTitle">
+          <div class="card-h">
+            <span class="ico"><i data-ic="server"></i></span>
+            <div><h2 id="hostTitle">Hosts by site</h2><p id="hostSub"></p></div>
+            <div class="end"><div class="legend" id="hostLeg"></div></div>
+          </div>
+          <div class="sites" id="sites"></div>
+        </section>
+
+      </div>
+
+      <div class="col aside">
+        <section class="card" aria-labelledby="needTitle">
+          <div class="card-h">
+            <span class="ico"><i data-ic="clock"></i></span>
+            <div><h2 id="needTitle">Needs a look</h2><p id="needCount"></p></div>
+          </div>
+          <div class="rows" id="needs"></div>
+        </section>
+        <section class="card" aria-labelledby="nextTitle">
+          <div class="card-h">
+            <span class="ico"><i data-ic="wrench"></i></span>
+            <div><h2 id="nextTitle">Coming up</h2><p>Windows and scheduled work</p></div>
+            <div class="end"><button class="link" data-toast="Opens the maintenance calendar">Calendar</button></div>
+          </div>
+          <div class="rows" id="coming"></div>
+        </section>
+      </div>
+    </div>
+    </div>
+
+    <div data-view="topology" hidden>
+      <div class="hello" style="margin:10px 0 14px"><button class="link" data-view-go="overview">← Overview</button></div>
+      <section class="card" aria-labelledby="topoTitle">
+          <div class="card-h">
+            <span class="ico"><i data-ic="network"></i></span>
+            <div><h2 id="topoTitle">Where it breaks</h2><p>Problem paths open, healthy branches folded into counts · click a node</p></div>
+            <div class="end">
+              <div class="legend">
+                <span class="tag conf">Confirmed</span>
+                <span class="tag rule">Rule-based</span>
+                <span class="tag susp">Suspected</span>
+              </div>
+            </div>
+          </div>
+          <div class="canvas-wrap" id="canvasWrap"><div class="canvas" id="canvas"></div></div>
+          <div class="detail" id="detail" aria-live="polite"></div>
+          <div class="hint">No light means no data: hosts behind a silent probe stay grey and hatched, never green.</div>
+        </section>
+    </div>
+  </main>
+</div>
+
+<nav class="tabbar" aria-label="Main navigation">
+  <button aria-current="page" data-nav="Overview" aria-label="Overview"><i data-ic="home"></i></button>
+  <button data-nav="Incidents" aria-label="Incidents"><i data-ic="alert"></i><span class="cnt crit" data-bind="incCount"></span></button>
+  <button data-nav="Hosts" aria-label="Hosts"><i data-ic="server"></i></button>
+  <button data-nav="Topology" aria-label="Topology"><i data-ic="network"></i></button>
+  <button id="themeBtnM" aria-label="Switch to dark mode"><i data-ic="moon"></i></button>
+</nav>
+
+<div class="toast" id="toast" role="status" aria-live="polite"><i data-ic="check"></i><span></span></div>
+
+<script>
+/* ---------- icons (lucide-style paths, inline so the file works offline) ---------- */
+const P = {
+  home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+  alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/>',
+  network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/>',
+  logs: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>',
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/>',
+  chart: '<path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3"/>',
+  sliders: '<path d="M20 7h-9M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  right: '<path d="M5 12h14M12 5l7 7-7 7"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+  drive: '<path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01M10 16h.01"/>',
+  radio: '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  switch: '<path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  printer: '<path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+};
+const ic = (n, cls = '') => `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" aria-hidden="true">${P[n] || ''}</svg>`;
+const paintIcons = (root = document) => root.querySelectorAll('i[data-ic]').forEach((el) => { el.outerHTML = ic(el.dataset.ic); });
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ESC[c]);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+};
+const $ = (id) => document.getElementById(id);
+
+/* Re-render helper: keeps keyboard focus on the element with the same data-fk. */
+function keepFocus(render) {
+  const key = document.activeElement?.dataset?.fk;
+  render();
+  if (key) document.querySelector(`[data-fk="${CSS.escape(key)}"]`)?.focus();
+}
+
+/* ---------- brand (geometry copied from frontend/src/components/ui/NodeglowMark.tsx) ---------- */
+const PULSE = 'M3.5 19H8.5V7L23 25V16.5';
+const WORDMARK = 'M79 0V-543H189V-310H179Q179.0 -392.5 200.75 -448.0Q222.5 -503.5 266.25 -531.75Q310 -560 374.5 -560.0H380.5Q478 -560 528.0 -497.25Q578.0 -434.5 578.0 -310.5V0H439V-323Q439 -373 410.25 -404.0Q381.5 -435.0 331.5 -435.0Q280.5 -435.0 249.25 -403.25Q218.0 -371.5 218 -319V0ZM962.5 19.0Q891.0 19 836.0 -4.0Q781.0 -27 743.0 -66.25Q705.0 -105.5 685.5 -155.5Q666.0 -205.5 666.0 -260V-281Q666.0 -336.5 686.25 -387.25Q706.5 -438.0 745.0 -477.25Q783.5 -516.5 838.5 -539.25Q893.5 -562.0 962.5 -562.0Q1032.0 -562 1086.75 -539.25Q1141.5 -516.5 1180.0 -477.25Q1218.5 -438.0 1238.75 -387.25Q1259.0 -336.5 1259.0 -281V-260Q1259.0 -205.5 1239.5 -155.5Q1220.0 -105.5 1182.0 -66.25Q1144.0 -27 1089.0 -4.0Q1034.0 19 962.5 19.0ZM962.5 -100.0Q1013.5 -100.0 1048.5 -122.25Q1083.5 -144.5 1101.75 -183.25Q1120.0 -222 1120.0 -270.5Q1120.0 -320.5 1101.25 -359.25Q1082.5 -398.0 1047.25 -420.5Q1012.0 -443 962.5 -443.0Q913.5 -443.0 878.0 -420.5Q842.5 -398.0 823.75 -359.25Q805.0 -320.5 805.0 -270.5Q805.0 -222 823.25 -183.25Q841.5 -144.5 876.75 -122.25Q912.0 -100 962.5 -100.0ZM1581.0 18Q1523.5 18.0 1475.75 -3.0Q1428.0 -24 1393.0 -61.75Q1358.0 -99.5 1339.0 -150.0Q1320.0 -200.5 1320.0 -259.5V-280.5Q1320.0 -339 1338.25 -389.75Q1356.5 -440.5 1390.25 -478.75Q1424.0 -517 1471.25 -538.5Q1518.5 -560.0 1576.5 -560.0Q1640.5 -560.0 1689.25 -532.5Q1738.0 -505 1766.75 -450.0Q1795.5 -395.0 1798.5 -312.0L1757.5 -359.5V-730.0H1896.5V0.0H1786.5V-230.5H1810.5Q1807.5 -148.0 1776.5 -92.5Q1745.5 -37.0 1695.0 -9.5Q1644.5 18.0 1581.0 18ZM1612.0 -99Q1653.0 -99 1686.75 -117.5Q1720.5 -136.0 1741.0 -171.25Q1761.5 -206.5 1761.5 -255.0V-295.0Q1761.5 -342.5 1740.5 -375.25Q1719.5 -408.0 1685.5 -425.5Q1651.5 -443.0 1611.5 -443.0Q1567.0 -443 1532.5 -421.25Q1498.0 -399.5 1478.5 -360.75Q1459.0 -322 1459.0 -270Q1459.0 -218 1478.75 -179.5Q1498.5 -141.0 1533.25 -120.0Q1568.0 -99 1612.0 -99ZM2273.0 19Q2203.0 19 2150.5 -5.0Q2098.0 -29 2063.5 -69.25Q2029.0 -109.5 2011.5 -159.5Q1994.0 -209.5 1994.0 -262V-281Q1994.0 -335 2011.5 -385.25Q2029.0 -435.5 2063.25 -475.25Q2097.5 -515.0 2148.75 -538.5Q2200.0 -562 2267.0 -562Q2355.0 -562 2414.25 -523.25Q2473.5 -484.5 2503.75 -422.25Q2534.0 -360 2534.0 -288V-237.5H2053.0V-322.5H2446.5L2404.0 -281Q2404.0 -333 2388.75 -370.0Q2373.5 -407.0 2343.25 -427.0Q2313.0 -447 2267.0 -447Q2220.5 -447.0 2188.5 -425.75Q2156.5 -404.5 2140.25 -365.25Q2124.0 -326 2124.0 -271Q2124.0 -219.5 2139.75 -180.0Q2155.5 -140.5 2188.5 -118.25Q2221.5 -96.0 2273.0 -96Q2323.5 -96.0 2355.5 -116.5Q2387.5 -137.0 2396.5 -166.5H2524.5Q2513.0 -111 2478.75 -69.0Q2444.5 -27.0 2392.25 -4.0Q2340.0 19 2273.0 19ZM2836.5 214.5Q2797.5 214.5 2757.0 211.5Q2716.5 208.5 2682.0 203.5V87Q2717.5 91.5 2758.75 95.0Q2800.0 98.5 2835.5 98.5Q2903.0 98.5 2944.5 82.25Q2986.0 66 3005.25 31.75Q3024.5 -2.5 3024.5 -56.0V-163.0L3054.5 -231.0Q3052.0 -155.5 3024.0 -103.0Q2996.0 -50.5 2948.0 -23.25Q2900.0 4 2837.0 4Q2781.0 4 2735.25 -16.75Q2689.5 -37.5 2657.0 -74.75Q2624.5 -112.0 2606.75 -161.75Q2589.0 -211.5 2589.0 -268.5V-289.5Q2589.0 -347 2607.5 -396.5Q2626.0 -446 2660.0 -482.75Q2694.0 -519.5 2741.0 -539.75Q2788.0 -560 2845.0 -560Q2911.5 -560.0 2961.0 -531.0Q3010.5 -502.0 3038.75 -446.75Q3067.0 -391.5 3069.5 -312.0L3045.5 -308.0V-543.0H3155.5V-64.0Q3155.5 35.0 3121.75 96.25Q3088.0 157.5 3017.5 186.0Q2947.0 214.5 2836.5 214.5ZM2876.5 -115.0Q2917.0 -115 2950.0 -133.0Q2983.0 -151 3002.75 -185.0Q3022.5 -219.0 3022.5 -266.5V-301.5Q3022.5 -348.0 3002.0 -380.0Q2981.5 -412.0 2948.5 -428.5Q2915.5 -445.0 2877.0 -445Q2833.0 -445 2799.25 -424.5Q2765.5 -404.0 2746.75 -366.75Q2728.0 -329.5 2728.0 -279Q2728.0 -228.5 2747.0 -191.5Q2766.0 -154.5 2799.5 -134.75Q2833.0 -115 2876.5 -115.0ZM3290.0 0V-730H3429.0V0ZM3222.0 -626V-730H3429.0V-626ZM3823.5 19.0Q3752.0 19 3697.0 -4.0Q3642.0 -27 3604.0 -66.25Q3566.0 -105.5 3546.5 -155.5Q3527.0 -205.5 3527.0 -260V-281Q3527.0 -336.5 3547.25 -387.25Q3567.5 -438.0 3606.0 -477.25Q3644.5 -516.5 3699.5 -539.25Q3754.5 -562.0 3823.5 -562.0Q3893.0 -562 3947.75 -539.25Q4002.5 -516.5 4041.0 -477.25Q4079.5 -438.0 4099.75 -387.25Q4120.0 -336.5 4120.0 -281V-260Q4120.0 -205.5 4100.5 -155.5Q4081.0 -105.5 4043.0 -66.25Q4005.0 -27 3950.0 -4.0Q3895.0 19 3823.5 19.0ZM3823.5 -100.0Q3874.5 -100.0 3909.5 -122.25Q3944.5 -144.5 3962.75 -183.25Q3981.0 -222 3981.0 -270.5Q3981.0 -320.5 3962.25 -359.25Q3943.5 -398.0 3908.25 -420.5Q3873.0 -443 3823.5 -443.0Q3774.5 -443.0 3739.0 -420.5Q3703.5 -398.0 3684.75 -359.25Q3666.0 -320.5 3666.0 -270.5Q3666.0 -222 3684.25 -183.25Q3702.5 -144.5 3737.75 -122.25Q3773.0 -100 3823.5 -100.0ZM4403.0 0 4506.0 -525H4666.0L4785.0 0H4675.0L4554.0 -522H4612.0L4504.5 0.0ZM4361.5 0.0 4361.0 -114H4471.5L4472.0 0ZM4306.0 0 4158.0 -543H4293.0L4433.5 0.0ZM4709.5 0.0 4710.0 -114H4820.5L4820.0 0ZM4754.0 0 4878.5 -543.0H5005.0L4873.5 0.0Z';
+let logoSeq = 0;
+function markShapes(gid) {
+  return `<defs><radialGradient id="ng-halo-${gid}" cx="23" cy="8.5" r="8.4" gradientUnits="userSpaceOnUse">
+      <stop offset="0" style="stop-color:var(--accent);stop-opacity:.9"/><stop offset=".45" style="stop-color:var(--accent);stop-opacity:.3"/><stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/></radialGradient></defs>
+    <circle cx="23" cy="8.5" r="8.4" style="fill:url(#ng-halo-${gid});opacity:var(--mark-halo)"/>
+    <path d="${PULSE}" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="23" cy="8.5" r="3.5" style="fill:var(--accent)"/>`;
+}
+function paintLogos() {
+  document.querySelectorAll('[data-logo]').forEach((el) => {
+    const gid = `l${++logoSeq}`, h = +el.dataset.h;
+    el.outerHTML = el.dataset.logo === 'mark'
+      ? `<svg class="logo-mark${el.classList.contains('mk') ? ' mk' : ''}" width="${h}" height="${h}" viewBox="0 0 32 32" aria-hidden="true" focusable="false">${markShapes(gid)}</svg>`
+      : `<svg class="lockup" style="height:${h}px" viewBox="1 3 154.5 29" role="img" aria-label="Nodeglow" focusable="false">${markShapes(gid)}<path transform="translate(30.552 25) scale(0.024658)" fill="currentColor" d="${WORDMARK}"/></svg>`;
+  });
+}
+
+/* ---------- status vocabulary ---------- */
+const ST = {
+  down:    { label: 'Down',        color: 'var(--st-down)' },
+  warn:    { label: 'Warning',     color: 'var(--st-warning)' },
+  deg:     { label: 'Degraded',    color: 'var(--st-degraded)' },
+  unknown: { label: 'No data',     color: 'var(--hatch), var(--hatch-2)' },
+  maint:   { label: 'Maintenance', color: 'var(--st-maint)' },
+  ok:      { label: 'Healthy',     color: 'var(--st-ok)' },
+};
+const ORDER = ['down', 'warn', 'deg', 'unknown', 'maint', 'ok'];
+const ISSUE = ['down', 'warn', 'deg'];
+const RANK = { down: 0, warn: 1, deg: 2, unknown: 3, maint: 4, ok: 5 };
+const count = (hosts) => hosts.reduce((c, h) => { c[h.st] = (c[h.st] || 0) + 1; return c; }, {});
+const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+const words = (c) => ORDER.filter((k) => c[k]).map((k) => `${c[k]} ${ST[k].label.toLowerCase()}`).join(', ');
+
+/* ---------- sites and hosts ----------
+   48: as SCENARIO.md, with one deliberate change: SW-ZH-CORE-02 counts as degraded
+   (its uplink flaps), so healthy is 28, not 29. */
+function mkSite(name, meta, n, prefix, spec = []) {
+  const hosts = [];
+  spec.forEach((g) => {
+    (g.names || Array.from({ length: g.count }, (_, i) => `${prefix}-${String(hosts.length + i + 1).padStart(3, '0')}`))
+      .forEach((nm) => hosts.push({ n: nm, st: g.st, cause: g.cause, why: g.why, inc: g.inc }));
+  });
+  for (let i = hosts.length; i < n; i++) hosts.push({ n: `${prefix}-${String(i + 1).padStart(3, '0')}`, st: 'ok' });
+  return { name, meta, hosts };
+}
+const BERN = { id: 'probe-bern-01', text: 'probe-bern-01 silent for 11 min' };
+
+/* ---------- the two scales ---------- */
+const SC = {
+  sme: {
+    tenant: { ab: 'MT', name: 'Muster Treuhand AG', sub: '48 hosts · 3 sites' },
+    discovered: 2,
+    sites: [
+      mkSite('Zürich HQ', 'monitored directly', 37, 'zh', [
+        { names: ['SRV-APP-01', 'PRN-ZH-02'], st: 'down', inc: '#1071' },
+        { names: ['SW-ZH-CORE-02'], st: 'deg', inc: '#1071' },
+        { names: ['SRV-DC-01', 'db-02', 'AP-ZH-OG1', 'AP-ZH-OG2', 'PRN-ZH-01'], st: 'deg', inc: '#1071' },
+        { names: ['SRV-BACKUP-01'], st: 'warn', inc: '#1072' },
+        { names: ['web-01'], st: 'warn', why: 'Port 443 check failed since 13:40' },
+        { names: ['NAS-ZH-01'], st: 'maint' },
+      ]),
+      mkSite('Bern branch', 'via probe-bern-01', 9, 'be', [{ count: 9, st: 'unknown', cause: BERN }]),
+      mkSite('Cloud', 'HTTP and TLS checks', 2, 'cloud'),
+    ],
+    incidents: [
+      { id: '#1071', sev: 'crit', title: 'Uplink flapping on SW-ZH-CORE-02', since: '14:07', age: '25 min', affected: '7 hosts · 2 down, 5 degraded', chart: 'lat', topo: 'core2',
+        path: [['fw-zh-01', 'ok', 'shield'], ['SW-ZH-CORE-02', 'deg', 'switch', true]], fan: [[2, 'down', 'down'], [5, 'deg', 'degraded']],
+        rels: [
+          ['conf', 'All 7 hosts share the parent SW-ZH-CORE-02 in the topology; their alerts are folded in here.'],
+          ['rule', 'Syslog burst on the parent: %LINK-3-UPDOWN on Te1/0/48, 38 events in 10 min (rule host_down_syslog).'],
+          ['susp', 'fw-zh-01 filterlog +420 % against the Friday 14:00 baseline. Overlaps in time only.'],
+        ] },
+      { id: '#1072', sev: 'warn', title: 'VeeamBackupSvc stopped on SRV-BACKUP-01', since: '14:26', age: '6 min', affected: '1 host', topo: 'c-zh',
+        path: [['SW-ZH-CORE-01', 'ok', 'switch'], ['SRV-BACKUP-01', 'warn', 'server', true]], fan: [],
+        rels: [['rule', 'Windows service stopped in 3 consecutive agent reports.']] },
+    ],
+    resolved: [['#1069', 'intranet returned 503', '13:48'], ['#1068', 'Latency spike AP-ZH-OG3', '11:09']],
+    extras: [
+      { id: 'cap', icon: 'drive', st: 'warn', title: 'D: on SRV-FILE-01 full in ~5 days', sub: '91 % now · linear projection over 14 days', act: 'Alert at 95 %', done: 'Rule draft created: D: above 95 %' },
+      { id: 'tls', icon: 'shield', st: 'warn', title: 'Certificate expires in 9 days', sub: 'portal.mustertreuhand.ch', act: 'Details', done: 'Opened certificate details' },
+      { id: 'disc', icon: 'scan', st: 'info', title: '2 new hosts found', sub: 'Subnet scan · awaiting review', act: 'Review', done: '2 hosts added to monitoring' },
+    ],
+    coming: [
+      { icon: 'wrench', st: 'maint', title: 'NAS firmware update', sub: 'NAS-ZH-01 · alerts paused', when: '15:00', prog: 53 },
+      { icon: 'chart', st: 'info', title: 'Weekly report', sub: 'Digest to 3 recipients', when: 'Mo 07:00' },
+    ],
+    tiles: { syslog: 46, avail: '99.94', k: 1 },
+    sel: 'core2',
+  },
+  ent: {
+    tenant: { ab: 'BL', name: 'Beispiel Logistik AG', sub: '480 hosts · 9 sites' },
+    discovered: 11,
+    sites: [
+      mkSite('DC Lupfig', 'data centre · direct', 140, 'lup', [
+        { count: 3, st: 'down', inc: '#2214' },
+        { names: ['SW-DC-AGG-03'], st: 'deg', inc: '#2214' },
+        { count: 18, st: 'deg', inc: '#2214' },
+        { names: ['lup-sql-07'], st: 'warn', inc: '#2219' },
+        { names: ['lup-esx-12'], st: 'warn', why: 'Memory ballooning for 3 h' },
+        { names: ['lup-k8s-w04'], st: 'warn', why: 'Disk pressure on /var' },
+        { names: ['lup-bkp-02'], st: 'warn', why: 'Backup job 6 h overdue' },
+        { count: 2, st: 'maint' },
+      ]),
+      mkSite('Zürich HQ', 'monitored directly', 96, 'zh', [
+        { names: ['zh-prn-14'], st: 'down', why: 'No response since 13:52 · no alert rule covers it' },
+        { names: ['zh-rds-03'], st: 'warn', why: 'Service TermService restarting' },
+        { names: ['zh-web-02'], st: 'warn', why: 'TLS handshake slow (1.8 s)' },
+        { count: 6, st: 'maint' },
+      ]),
+      mkSite('Bern', 'via probe-bern-01', 44, 'be', [{ count: 44, st: 'unknown', cause: BERN }]),
+      mkSite('Genève', 'via probe-ge-01', 58, 'ge', [{ names: ['ge-fs-01'], st: 'warn', why: 'Volume E: 92 %' }]),
+      mkSite('Basel', 'via probe-bs-01', 40, 'bs', [{ count: 3, st: 'deg', inc: '#2217' }]),
+      mkSite('Lugano', 'via probe-lu-01', 28, 'lu'),
+      mkSite('St. Gallen', 'via probe-sg-01', 26, 'sg'),
+      mkSite('Luzern', 'via probe-lz-01', 24, 'lz'),
+      mkSite('Cloud', 'HTTP and TLS checks', 24, 'cloud'),
+    ],
+    incidents: [
+      { id: '#2214', sev: 'crit', title: 'LACP member down on SW-DC-AGG-03', since: '13:58', age: '34 min', affected: '21 hosts · 3 down, 18 degraded', chart: 'loss', topo: 'agg03',
+        path: [['fw-dc-01', 'ok', 'shield'], ['SW-DC-CORE-01', 'ok', 'switch'], ['SW-DC-AGG-03', 'deg', 'switch', true]], fan: [[3, 'down', 'down'], [18, 'deg', 'degraded']],
+        rels: [
+          ['conf', '40 hosts share the parent SW-DC-AGG-03; the 21 affected ones are folded in here.'],
+          ['rule', 'Syslog %LACP-4-MEMBER_DOWN on Po3 at 13:58 (rule lacp_member_down).'],
+        ] },
+      { id: '#2217', sev: 'warn', title: 'WAN latency Basel ↔ DC 48 ms', since: '14:20', age: '12 min', affected: '3 hosts degraded', topo: 'e-bs',
+        path: [['SD-WAN', 'ok', 'network'], ['probe-bs-01', 'warn', 'radio', true]], fan: [[3, 'deg', 'degraded']],
+        rels: [['conf', 'All 3 report through probe-bs-01.'], ['rule', 'WAN latency above 30 ms for 10 min.']] },
+      { id: '#2219', sev: 'warn', title: 'Log volume 94 % on lup-sql-07', since: '13:31', age: '1 h', affected: '1 host', topo: 'e-agg',
+        path: [['SW-DC-AGG-01', 'ok', 'switch'], ['lup-sql-07', 'warn', 'server', true]], fan: [],
+        rels: [['rule', 'Volume above 90 % (rule disk_usage).']] },
+    ],
+    resolved: [['#2212', 'Proxy 502 burst', '13:40'], ['#2209', 'NTP drift lup-esx-03', '12:15'], ['#2207', 'Probe probe-lu-01 restart', '10:02']],
+    extras: [
+      { id: 'cap', icon: 'drive', st: 'warn', title: '12 volumes full within 14 days', sub: 'Earliest: L: on lup-sql-07 in ~3 days', act: 'Review', done: 'Opened capacity forecast' },
+      { id: 'tls', icon: 'shield', st: 'warn', title: '4 certificates expire within 30 days', sub: 'Earliest: shop.example.ch in 6 days', act: 'Details', done: 'Opened certificate list' },
+      { id: 'disc', icon: 'scan', st: 'info', title: '11 new hosts found', sub: 'Subnet scans in 3 sites', act: 'Review', done: 'Opened discovery inbox' },
+    ],
+    coming: [
+      { icon: 'wrench', st: 'maint', title: 'Firmware window DC Lupfig', sub: '2 hosts · alerts paused', when: '16:00', prog: 30 },
+      { icon: 'wrench', st: 'maint', title: 'Patch window Zürich HQ', sub: '6 hosts · alerts paused', when: '18:00', prog: 10 },
+      { icon: 'chart', st: 'info', title: 'Weekly report', sub: 'Digest to 9 recipients', when: 'Mo 07:00' },
+    ],
+    tiles: { syslog: 308, avail: '99.91', k: 6.7 },
+    sel: 'agg03',
+  },
+};
+let scale = 'sme';
+const acked = new Set(), doneNeeds = new Set(), openInc = new Set();
+let needsAll = false, sitesAll = false;
+
+/* ---------- pill bar chart (shared by trends and incident charts) ----------
+   Heights are exact: rounding is clipped, never added, so small values stay small. */
+function niceTicks(max) {
+  for (const step of [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500]) {
+    if (max / step <= 5) { const top = Math.max(step, Math.ceil(max / step) * step); return Array.from({ length: Math.round(top / step) + 1 }, (_, i) => +(i * step).toFixed(2)); }
+  }
+  return [0, max];
+}
+function drawPills(svg, tip, cfg) {
+  const box = svg.getBoundingClientRect();
+  const W = box.width, H = box.height;
+  if (!W) return;
+  const data = cfg.data;
+  const ticks = niceTicks(Math.max(...data.map((d) => d.total), cfg.line ? cfg.line.v * 1.15 : 0));
+  const top = ticks[ticks.length - 1];
+  const padL = 30, padB = 24, padT = 8, padR = 4;
+  const iw = W - padL - padR, ih = H - padT - padB, base = padT + ih;
+  const slot = iw / data.length;
+  const bw = Math.max(5, Math.min(slot * 0.58, 40));
+  const y = (v) => base - (v / top) * ih;
+  const acc = css('--accent'), ink = css('--text'), grid = css('--grid'), line = css('--border-2');
+  let s = '';
+  ticks.forEach((t) => {
+    s += `<line x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}" stroke="${grid}" ${t ? 'stroke-dasharray="2 4"' : ''}/>`;
+    s += `<text x="0" y="${y(t) + 4}" aria-hidden="true">${t}</text>`;
+  });
+  const every = Math.max(1, Math.ceil(data.length / Math.max(1, Math.floor(iw / 46))));
+  data.forEach((d, i) => {
+    const cx = padL + slot * i + slot / 2, x = cx - bw / 2, last = i === data.length - 1;
+    const dk = Math.min(d.dark, d.total);
+    const hDark = dk / top * ih, hAcc = (d.total - dk) / top * ih;
+    let g = `<rect x="${x}" y="${padT}" width="${bw}" height="${ih}" rx="${bw / 2}" fill="none" stroke="${last ? acc : line}" stroke-width="${last ? 1.6 : 1}" ${last ? '' : 'stroke-dasharray="2 3"'}/>`;
+    if (d.total <= 0) g += `<circle cx="${cx}" cy="${base - 3}" r="2.5" fill="none" stroke="${css('--text-3')}" stroke-width="1.2"/>`;
+    if (hAcc > 0) g += `<rect x="${x}" y="${base - hAcc}" width="${bw}" height="${hAcc}" rx="${Math.min(bw / 2, hAcc / 2)}" fill="${acc}"/>`;
+    if (hDark > 0) { const gap = hAcc > 0 ? 2 : 0; const hd = Math.max(0.5, hDark - gap); g += `<rect x="${x}" y="${base - hAcc - hDark}" width="${bw}" height="${hd}" rx="${Math.min(bw / 2, hd / 2)}" fill="${ink}"/>`; }
+    g += `<rect class="hit" x="${padL + slot * i + 1}" y="${padT}" width="${slot - 2}" height="${ih}" rx="6" fill="transparent"/>`;
+    s += `<g class="bar" tabindex="0" role="img" aria-label="${esc(d.l)}: ${esc(d.tip)}" data-i="${i}">${g}</g>`;
+    if (last || (i % every === 0 && data.length - 1 - i >= Math.max(2, every))) {
+      if (last) {
+        const tw = d.l.length * 6.4 + 14;
+        s += `<rect x="${cx - tw / 2}" y="${H - 19}" width="${tw}" height="18" rx="9" fill="${css('--tip-bg')}" aria-hidden="true"/><text x="${cx}" y="${H - 6}" text-anchor="middle" class="tl" style="fill:${css('--tip-text')}" aria-hidden="true">${esc(d.l)}</text>`;
+      } else s += `<text x="${cx}" y="${H - 6}" text-anchor="middle" aria-hidden="true">${esc(d.l)}</text>`;
+    }
+  });
+  if (cfg.line) {
+    const ly = y(cfg.line.v);
+    s += `<line x1="${padL}" x2="${W - padR}" y1="${ly}" y2="${ly}" stroke="${css('--st-down')}" stroke-width="1.3" stroke-dasharray="4 4"/>`;
+    s += `<text x="${padL + 6}" y="${ly - 6}" text-anchor="start" class="tl" style="fill:${css('--st-down-text')}">${esc(cfg.line.label)}</text>`;
+  }
+  svg.innerHTML = s;
+  svg.setAttribute('aria-label', cfg.label);
+  const show = (g) => {
+    const i = +g.dataset.i, d = data[i];
+    tip.innerHTML = `<b>${esc(d.l)}</b> <span>${esc(d.tip)}</span>`;
+    tip.style.opacity = 1;
+    const hw = tip.offsetWidth / 2, cx = padL + slot * i + slot / 2;
+    tip.style.left = Math.min(Math.max(cx, hw), W - hw) + 'px';
+    tip.style.top = Math.max(18, y(d.total)) + 'px';
+  };
+  const hide = () => { tip.style.opacity = 0; };
+  svg.querySelectorAll('.bar').forEach((g) => {
+    g.addEventListener('pointerenter', () => show(g));
+    g.addEventListener('pointerdown', () => show(g));
+    g.addEventListener('focus', () => show(g));
+    g.addEventListener('pointerleave', hide);
+    g.addEventListener('blur', hide);
+  });
+}
+
+/* ---------- simulated series ---------- */
+const DAYS = ['Sa 27', 'Su 28', 'Mo 29', 'Tu 30', 'We 1', 'Th 2', 'Fr 3', 'Sa 4', 'Su 5', 'Mo 6', 'Tu 7', 'We 8', 'Th 9', 'Fr 10'];
+const INC = { sme: { t: [2, 1, 0, 3, 1, 1, 0, 2, 4, 1, 0, 1, 2, 4], c: [1, 0, 0, 1, 0, 0, 0, 1, 2, 0, 0, 0, 1, 1] },
+              ent: { t: [6, 4, 3, 7, 5, 3, 2, 5, 9, 4, 3, 4, 6, 8], c: [1, 0, 0, 2, 1, 0, 0, 1, 2, 0, 0, 1, 1, 1] } };
+const hrs = Array.from({ length: 24 }, (_, i) => String((15 + i) % 24).padStart(2, '0') + ':00');
+const SYS_H = [9, 8, 10, 11, 9, 8, 8, 9, 10, 12, 13, 14, 12, 11, 10, 9, 8, 9, 11, 13, 12, 14, 13, 46];
+const SYS_H_NET = [3, 3, 4, 4, 3, 3, 3, 3, 4, 4, 5, 5, 4, 4, 3, 3, 3, 3, 4, 5, 4, 5, 5, 33];
+const q15 = Array.from({ length: 24 }, (_, i) => { const m = 8 * 60 + 45 + i * 15; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; });
+const SYS_Q = [10, 9, 11, 12, 10, 9, 11, 12, 13, 12, 11, 10, 12, 13, 14, 12, 11, 12, 13, 12, 14, 13, 46, 46];
+const SYS_Q_NET = [4, 3, 4, 4, 4, 3, 4, 4, 5, 4, 4, 3, 4, 5, 5, 4, 4, 4, 5, 4, 5, 5, 34, 33];
+const l5 = Array.from({ length: 24 }, (_, i) => { const m = 12 * 60 + 35 + i * 5; return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`; });
+const LAT_AVG = [.3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, .3, 6, 14, 22, 17, 24, 18];
+const LAT_PK = [.5, .4, .5, .6, .4, .5, .5, .4, .6, .5, .4, .5, .5, .6, .5, .4, .5, .5, 19, 31, 40, 28, 38, 33];
+const LOSS_AVG = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2.1, 3.4, 4.2, 3.1, 4.8, 3.9, 4.1];
+const LOSS_PK = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5.2, 7.9, 9.1, 6.4, 8.8, 7.2, 8.0];
+
+function incCfg(chart) {
+  if (chart === 'lat') return { label: 'Latency of the 7 affected hosts, last 2 hours', line: { v: 10, label: 'Alert at 10 ms' },
+    data: l5.map((l, i) => ({ l, total: LAT_PK[i], dark: +(LAT_PK[i] - LAT_AVG[i]).toFixed(1), tip: `avg ${LAT_AVG[i]} ms, peak ${LAT_PK[i]} ms` })) };
+  return { label: 'Packet loss of the 21 affected hosts, last 2 hours', line: { v: 2, label: 'Alert at 2 %' },
+    data: l5.map((l, i) => ({ l, total: LOSS_PK[i], dark: +(LOSS_PK[i] - LOSS_AVG[i]).toFixed(1), tip: `avg ${LOSS_AVG[i]} %, peak ${LOSS_PK[i]} %` })) };
+}
+
+/* ---------- hero, tenant, counters ---------- */
+const allHosts = () => SC[scale].sites.flatMap((s) => s.hosts.map((h) => ({ ...h, site: s.name })));
+function renderHero() {
+  const S = SC[scale], c = count(allHosts()), total = sum(c);
+  const issues = ISSUE.reduce((n, k) => n + (c[k] || 0), 0);
+  const n = S.incidents.length;
+  $('heroTitle').innerHTML = `${n} <span class="chip" aria-hidden="true">${ic('alert')}</span> ${n === 1 ? 'incident needs' : 'incidents need'} you`;
+  $('heroSub').innerHTML = `<span class="hero-bar" aria-hidden="true">${ORDER.filter((k) => c[k]).map((k) => `<i style="flex:${c[k]};background:${ST[k].color}"></i>`).join('')}</span>
+    <span><b>${c.ok || 0}</b> of ${total} hosts healthy · <b>${issues}</b> with issues · <b>${c.unknown || 0}</b> without data · <b>${c.maint || 0}</b> in maintenance</span>`;
+  document.querySelectorAll('[data-bind="tenantAb"]').forEach((e) => { e.textContent = S.tenant.ab; });
+  document.querySelectorAll('[data-bind="tenantName"]').forEach((e) => { e.textContent = S.tenant.name; });
+  document.querySelectorAll('[data-bind="tenantSub"]').forEach((e) => { e.textContent = S.tenant.sub; });
+  document.querySelectorAll('[data-bind="incCount"]').forEach((e) => { e.textContent = n; e.setAttribute('aria-label', `${n} open`); });
+  document.querySelectorAll('[data-bind="discCount"]').forEach((e) => { e.textContent = S.discovered; e.setAttribute('aria-label', `${S.discovered} new`); });
+  const bell = n + needItems().filter((x) => !doneNeeds.has(x.key)).length;
+  document.querySelectorAll('[data-bind="bellCount"]').forEach((e) => { e.textContent = bell; });
+  $('bell').setAttribute('aria-label', `Notifications, ${bell} unread`);
+}
+
+/* ---------- open incidents ---------- */
+const TAGNAME = { conf: 'Confirmed', rule: 'Rule-based', susp: 'Suspected' };
+function pathHtml(x) {
+  const nodes = x.path.map(([nm, st, icon, cause], i) => `${i ? `<span class="wire${cause && x.sev === 'crit' ? ' bad' : ''}" aria-hidden="true"></span>` : ''}<span class="pn${cause ? ' cause' + (st === 'warn' ? ' warn' : '') : ''}"><span class="disc ${st === 'ok' ? 'info' : st}">${ic(icon)}</span>${esc(nm)}</span>`).join('');
+  const fan = x.fan.length ? `<span class="wire bad" aria-hidden="true"></span><span class="fan">${x.fan.map(([n, st, w]) => `<span class="cnt-chip ${st}">${n} ${w}</span>`).join('')}</span>` : '';
+  const label = `Path: ${x.path.map((p) => p[0]).join(' to ')}${x.fan.length ? ', then ' + x.fan.map(([n, , w]) => `${n} ${w}`).join(' and ') : ''}`;
+  return `<div class="path" role="group" aria-label="${esc(label)}">${nodes}${fan}<button class="link to-topo" data-topo="${x.topo}">Show in topology</button></div>`;
+}
+function renderIncidents() {
+  const S = SC[scale];
+  $('incidents').innerHTML = S.incidents.map((x) => {
+    const open = openInc.has(x.id), a = acked.has(x.id), bid = `ib-${x.id.slice(1)}`;
+    const kinds = [...new Set(x.rels.map((r) => r[0]))];
+    return `<div class="inc">
+      <button class="inc-h" data-inc="${esc(x.id)}" data-fk="inc-${esc(x.id)}" aria-expanded="${open}" aria-controls="${bid}">
+        <span class="disc ${x.sev}${a ? ' acked' : ''}">${ic('alert')}</span>
+        <span class="tx"><b>${esc(x.id)} ${esc(x.title)}</b><small>${x.sev === 'crit' ? 'Critical' : 'Warning'} · ${esc(x.affected)}${a ? ' · acknowledged' : ''}${kinds.map((k) => `<span class="tag ${k}">${TAGNAME[k]}</span>`).join('')}</small></span>
+        <span class="age">${esc(x.age)}</span>${ic('chevron', 'chev')}
+      </button>
+      <div class="inc-b" id="${bid}" ${open ? '' : 'hidden'}>
+        ${pathHtml(x)}
+        <div class="rels">${x.rels.map(([t, txt]) => `<div class="rel"><span class="tag ${t}">${TAGNAME[t]}</span><span>${esc(txt)}</span></div>`).join('')}</div>
+        ${x.chart ? `<div class="mini-h"><span>${esc(incCfg(x.chart).label)}</span><span class="legend"><span><i style="background:var(--text)"></i>Peak</span><span><i style="background:var(--accent)"></i>Average</span></span></div>
+          <div class="mini" data-chart="${x.chart}"><svg role="group"></svg><div class="tip" aria-hidden="true"></div></div>` : ''}
+        <div class="inc-act">
+          <button class="btn sm btn-primary" data-toast="Opens incident ${esc(x.id)}">Open incident${ic('right')}</button>
+          <button class="btn sm btn-quiet" data-ack="${esc(x.id)}" data-fk="ack-${esc(x.id)}" ${a ? 'disabled' : ''}>${a ? ic('check') + 'Acknowledged' : 'Acknowledge'}</button>
+        </div>
+      </div></div>`;
+  }).join('');
+  const r = S.resolved;
+  $('resolved').innerHTML = `${ic('check')}<span>Resolved today: ${r.slice(0, 2).map(([id, t, at]) => `<b>${esc(id)}</b> ${esc(t)} (${esc(at)})`).join(' · ')}${r.length > 2 ? ` · +${r.length - 2} more` : ''}</span>`;
+  drawIncCharts();
+}
+function drawIncCharts() {
+  document.querySelectorAll('#incidents .mini').forEach((m) => {
+    if (m.closest('.inc-b').hidden) return;
+    drawPills(m.querySelector('svg'), m.querySelector('.tip'), incCfg(m.dataset.chart));
+  });
+}
+
+/* ---------- trends ---------- */
+function spark(vals, label) {
+  const max = Math.max(...vals, 1), w = 4;
+  return `<svg class="spark" viewBox="0 0 ${vals.length * w} 26" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">${vals.map((v, i) => {
+    const h = v / max * 26;
+    return `<rect${i === vals.length - 1 ? ' class="last"' : ''} x="${i * w + 0.5}" y="${26 - h}" width="${w - 1}" height="${h}" rx="1"/>`;
+  }).join('')}</svg>`;
+}
+function renderTiles() {
+  const S = SC[scale], c = count(allHosts()), total = sum(c), reporting = total - (c.unknown || 0), k = S.tiles.k;
+  const crit = S.incidents.filter((x) => x.sev === 'crit').length, inc = INC[scale].t, sys = SYS_H.map((v) => Math.round(v * k));
+  $('tiles').innerHTML = `
+    <div class="tile"><small>Open incidents</small><b><span class="t-down">${S.incidents.length}</span><em>${crit} critical</em></b>${spark(inc, `Incidents opened per day, last 14 days: ${inc.join(', ')}`)}</div>
+    <div class="tile"><small>Syslog now</small><b>${S.tiles.syslog}<em>/min · baseline ${Math.round(14 * k)}</em></b>${spark(sys, `Syslog messages per minute, last 24 hours, hourly: ${sys.join(', ')}`)}</div>
+    <div class="tile"><small>Availability · 30 days</small><b>${S.tiles.avail}<em>%</em></b><div class="note">Target 99.90 %</div></div>
+    <div class="tile"><small>Reporting</small><b>${reporting}<em>/ ${total} · ${c.unknown || 0} no data</em></b><div class="hatchbar" aria-hidden="true"><i style="width:${(reporting / total * 100).toFixed(1)}%"></i><u></u></div></div>`;
+}
+
+/* ---------- hosts by site ---------- */
+const SITE_CAP = 6;
+function renderSites() {
+  const S = SC[scale], all = allHosts(), tot = count(all);
+  $('hostSub').textContent = `${all.length} monitored at ${S.sites.length} sites · problem hosts are listed in their incident or under Needs a look`;
+  $('hostLeg').innerHTML = ORDER.filter((k) => tot[k]).map((k) => `<span><i style="background:${ST[k].color};border-radius:3px"></i>${ST[k].label} ${tot[k]}</span>`).join('');
+  const ranked = S.sites.map((s) => {
+    const c = count(s.hosts);
+    return { s, c, score: (c.unknown === s.hosts.length ? 1000 : 0) + (c.down || 0) * 100 + (c.warn || 0) * 10 + (c.deg || 0) };
+  }).sort((a, b) => b.score - a.score);
+  const shown = sitesAll ? ranked : ranked.slice(0, SITE_CAP);
+  $('sites').innerHTML = shown.map(({ s, c }) => {
+    const issues = ISSUE.reduce((n, k) => n + (c[k] || 0), 0);
+    const sv = c.unknown === s.hosts.length ? '<span class="bad">no data · probe silent</span>'
+      : `<b>${c.ok || 0}</b> healthy${issues ? ` · <span class="bad">${issues} ${issues === 1 ? 'issue' : 'issues'}</span>` : ''}${c.maint ? ` · ${c.maint} maint.` : ''}`;
+    return `<div class="site" role="group" aria-label="${esc(s.name)}, ${s.hosts.length} hosts: ${esc(words(c))}">
+      <div class="sn" aria-hidden="true"><b>${esc(s.name)}</b><small>${s.hosts.length} hosts · ${esc(s.meta)}</small></div>
+      <div class="sbar" aria-hidden="true">${ORDER.filter((k) => c[k]).map((k) => `<i title="${esc(s.name)} · ${ST[k].label} ${c[k]}" style="flex:${c[k]};background:${ST[k].color}"></i>`).join('')}</div>
+      <div class="sv" aria-hidden="true">${sv}</div></div>`;
+  }).join('') + (ranked.length > SITE_CAP ? `<button class="link more" data-more="sites" data-fk="more-sites">${sitesAll ? 'Show fewer sites' : `Show all ${ranked.length} sites`}</button>` : '');
+}
+
+/* ---------- needs a look: everything that is not already an open incident ---------- */
+const NEED_CAP = 6;
+function needItems() {
+  const S = SC[scale], items = [], groups = new Map();
+  allHosts().filter((h) => !h.inc && (ISSUE.includes(h.st) || (h.st === 'unknown' && h.cause))).forEach((h) => {
+    if (h.cause) {
+      const key = `${h.site}|${h.cause.id}`;
+      if (!groups.has(key)) groups.set(key, { h, n: 0 });
+      groups.get(key).n++;
+    } else {
+      items.push({ key: `h-${h.n}`, rank: RANK[h.st], icon: 'server', st: h.st, title: h.n, mono: true, sub: `${h.why} · ${h.site}`, act: 'Open', done: `Opened host ${h.n}` });
+    }
+  });
+  groups.forEach(({ h, n }, key) => items.push({ key: `g-${key}`, rank: -0.5, icon: 'radio', st: 'unknown', title: h.cause.text, sub: `${n} hosts in ${h.site} without data · unknown, not up`, act: 'Check', done: `Probe check started for ${h.cause.id}` }));
+  S.extras.forEach((x, i) => items.push({ key: `x-${x.id}`, rank: 0.5 + i * 0.01, icon: x.icon, st: x.st, title: x.title, sub: x.sub, act: x.act, done: x.done }));
+  return items.sort((a, b) => a.rank - b.rank);
+}
+function renderNeeds() {
+  const items = needItems();
+  const open = items.filter((x) => !doneNeeds.has(x.key)).length;
+  $('needCount').textContent = open ? `${open} ${open === 1 ? 'thing' : 'things'} besides the open incidents` : 'All clear besides the open incidents';
+  const shown = needsAll ? items : items.slice(0, NEED_CAP);
+  $('needs').innerHTML = shown.map((x) => {
+    const d = doneNeeds.has(x.key);
+    return `<div class="row${d ? ' done' : ''}"><span class="disc ${x.st}">${ic(x.icon)}</span>
+      <div class="tx"><b${x.mono ? ' class="mono"' : ''}>${esc(x.title)}</b><small>${esc(x.sub)}</small></div>
+      <button class="btn sm btn-ink" data-need="${esc(x.key)}" data-fk="need-${esc(x.key)}" ${d ? 'disabled aria-label="Done"' : ''}>${d ? ic('check') + 'Done' : esc(x.act)}</button></div>`;
+  }).join('') + (items.length > NEED_CAP ? `<button class="link more" data-more="needs" data-fk="more-needs">${needsAll ? 'Show fewer' : `Show all ${items.length}`}</button>` : '');
+}
+function renderComing() {
+  $('coming').innerHTML = SC[scale].coming.map((x) => `<div class="row"><span class="disc ${x.st}">${ic(x.icon)}</span>
+    <div class="tx"><b>${esc(x.title)}</b><small>${esc(x.sub)}</small></div>
+    <div class="when"><b>${esc(x.when)}</b>${x.prog != null ? `<div class="bar5" role="progressbar" aria-label="Window progress" aria-valuenow="${x.prog}" aria-valuemin="0" aria-valuemax="100"><i style="width:${x.prog}%"></i></div>` : ''}</div></div>`).join('');
+}
+
+/* ---------- topology ----------
+   Rules: the path to a problem stays open down to its cause; healthy branches fold into
+   one count node with a status ring; more than 2 hosts in the same state under one parent
+   fold into a count node; a parent shows at most 3 children open, the rest sit behind "+N". */
+const TOPO = {
+  sme: { id: 'inet', nm: 'Internet', sub: '942 / 98 Mbit/s', st: 'neutral', icon: 'globe', info: 'Speedtest 942 / 98 Mbit/s, 6 ms. Upstream healthy.', kids: [
+    { id: 'fw', nm: 'fw-zh-01', sub: 'pfSense', st: 'ok', icon: 'shield', tag: ['susp', 'Suspected · filterlog +420 %'], info: 'Healthy. Filterlog volume +420 % against the Friday 14:00 baseline. It overlaps #1071 in time only, so the link is suspected, not confirmed.', kids: [
+      { id: 'core1', nm: 'SW-ZH-CORE-01', sub: 'core switch', st: 'ok', icon: 'switch', info: 'Healthy. 27 hosts behind it.', kids: [
+        { id: 'c-zh', nm: '27 hosts', sub: '2 warnings · 1 maintenance', counts: { warn: 2, maint: 1, ok: 24 }, info: 'SRV-BACKUP-01 (#1072) and web-01 warn, NAS-ZH-01 is in maintenance until 15:00. None has a topology cause, so they stay folded here.' },
+      ] },
+      { id: 'core2', nm: 'SW-ZH-CORE-02', sub: 'Te1/0/48 flapping', st: 'deg', icon: 'switch', bdg: '#1071', tag: ['rule', 'Rule-based · syslog burst'], info: '%LINK-3-UPDOWN on uplink Te1/0/48, 38 events in 10 min. The switch still answers (degraded); the 7 hosts behind it are folded into #1071.', kids: [
+        { id: 'app', nm: 'SRV-APP-01', sub: 'down since 14:07', st: 'down', icon: 'server', info: 'No response since 14:07. Confirmed downstream of SW-ZH-CORE-02.' },
+        { id: 'prn', nm: 'PRN-ZH-02', sub: 'down since 14:07', st: 'down', icon: 'printer', info: 'No response since 14:07. Confirmed downstream of SW-ZH-CORE-02.' },
+        { id: 'c-deg', nm: '5 hosts', sub: 'degraded · 3–40 ms', counts: { deg: 5 }, tag: ['conf', 'Confirmed · shared parent'], info: 'SRV-DC-01, db-02, AP-ZH-OG1, AP-ZH-OG2, PRN-ZH-01. Latency 3–40 ms instead of ~0.3 ms since 14:05.' },
+      ] },
+      { id: 'probe', nm: 'probe-bern-01', sub: 'silent 11 min', st: 'unknown', icon: 'radio', info: 'Last heartbeat 14:21 (threshold 3 min). Its 9 hosts are unknown, not up.', kids: [
+        { id: 'c-be', nm: '9 hosts', sub: 'Bern · no data', counts: { unknown: 9 }, info: 'All 9 Bern hosts report through probe-bern-01. No light means no data.' },
+      ] },
+    ] },
+    { id: 'c-cloud', nm: '2 checks', sub: 'Cloud · HTTP and TLS', counts: { ok: 2 }, info: 'portal.mustertreuhand.ch and intranet, both healthy. The portal certificate expires in 9 days.' },
+  ] },
+  ent: { id: 'inet', nm: 'Internet', sub: '2 uplinks · 10 Gbit/s', st: 'neutral', icon: 'globe', info: 'Both uplinks healthy.', kids: [
+    { id: 'fwdc', nm: 'fw-dc-01', sub: 'HA pair', st: 'ok', icon: 'shield', info: 'Healthy, active/passive.', kids: [
+      { id: 'dccore', nm: 'SW-DC-CORE-01', sub: 'DC Lupfig core', st: 'ok', icon: 'switch', info: 'Healthy. 140 hosts in DC Lupfig behind it.', kids: [
+        { id: 'agg03', nm: 'SW-DC-AGG-03', sub: 'LACP member Po3 down', st: 'deg', icon: 'switch', bdg: '#2214', tag: ['rule', 'Rule-based · LACP syslog'], info: 'Port-channel Po3 lost one member at 13:58. The switch still answers (degraded). 40 hosts share this parent; 21 are affected and folded into #2214.', kids: [
+          { id: 'e-down', nm: '3 hosts', sub: 'down since 13:58', counts: { down: 3 }, tag: ['conf', 'Confirmed · shared parent'], info: 'No response since 13:58. Confirmed downstream of SW-DC-AGG-03.' },
+          { id: 'e-deg', nm: '18 hosts', sub: 'degraded · packet loss 2–9 %', counts: { deg: 18 }, tag: ['conf', 'Confirmed · shared parent'], info: '18 hosts with packet loss since 13:58.' },
+          { id: 'e-ok3', nm: '19 hosts', sub: 'healthy', counts: { ok: 19 }, info: 'Still healthy behind the remaining LACP member.' },
+        ] },
+        { id: 'e-agg', nm: '98 hosts', sub: 'via AGG-01, -02, -04', counts: { warn: 4, maint: 2, ok: 92 }, info: '3 aggregation switches and 95 hosts. 4 warnings without a topology cause (lup-sql-07 is in #2219), 2 in a firmware window.' },
+      ] },
+      { id: 'wan', nm: 'SD-WAN', sub: '7 branch sites', st: 'neutral', icon: 'network', info: 'Branch overlay. Each site reports through its own probe.', kids: [
+        { id: 'e-be', nm: '44 hosts', sub: 'Bern · probe silent 11 min', counts: { unknown: 44 }, info: 'probe-bern-01 last heartbeat 14:21. 44 hosts unknown, not up.' },
+        { id: 'e-bs', nm: '40 hosts', sub: 'Basel · WAN latency 48 ms', counts: { deg: 3, ok: 37 }, bdg: '#2217', tag: ['conf', 'Confirmed · same probe'], info: 'Latency Basel ↔ DC 48 ms instead of 9 ms. 3 latency-sensitive hosts degraded, all behind probe-bs-01.' },
+        { id: 'e-zh', nm: '96 hosts', sub: 'Zürich HQ', counts: { down: 1, warn: 2, maint: 6, ok: 87 }, info: 'zh-prn-14 down without an alert rule, 2 warnings, 6 in a patch window.' },
+      ], more: [
+        { id: 'e-ge', nm: '58 hosts', sub: 'Genève', counts: { warn: 1, ok: 57 }, info: 'ge-fs-01 volume E: 92 %.' },
+        { id: 'e-lu', nm: '28 hosts', sub: 'Lugano', counts: { ok: 28 }, info: 'All healthy.' },
+        { id: 'e-sg', nm: '26 hosts', sub: 'St. Gallen', counts: { ok: 26 }, info: 'All healthy.' },
+        { id: 'e-lz', nm: '24 hosts', sub: 'Luzern', counts: { ok: 24 }, info: 'All healthy.' },
+      ] },
+    ] },
+    { id: 'e-cloud', nm: '24 checks', sub: 'Cloud · HTTP and TLS', counts: { ok: 24 }, info: 'All healthy. 4 certificates expire within 30 days (see Needs a look).' },
+  ] },
+};
+const RING = { down: '--st-down', warn: '--st-warning', deg: '--st-degraded', unknown: '--st-unknown', maint: '--st-maint', ok: '--st-ok' };
+const EDGE = { crit: '--st-down', down: '--st-down', warn: '--st-warning', deg: '--st-degraded', unknown: '--st-unknown', maint: '--st-maint', ok: '--accent', neutral: '--accent' };
+const expanded = new Set();
+let topoSel = null, topoNodes = [];
+
+const worst = (n) => (n.counts ? ORDER.find((k) => n.counts[k] && k !== 'ok') || 'ok' : n.st);
+function visibleKids(n) {
+  if (n.fold) return [];
+  const kids = n.kids || [];
+  if (!n.more) return kids;
+  if (expanded.has(n.id)) return [...kids, ...n.more, { id: `${n.id}-less`, fold: 'less', of: n.id, nm: `Fold ${n.more.length} sites`, sub: 'back into one node', counts: { ok: 1 }, info: '' }];
+  const c = {};
+  n.more.forEach((m) => Object.entries(m.counts).forEach(([k, v]) => { c[k] = (c[k] || 0) + v; }));
+  return [...kids, { id: `${n.id}-more`, fold: 'more', of: n.id, nm: `+${n.more.length} sites`, sub: `${sum(c)} hosts · ${n.more.map((m) => m.sub).join(', ')}`, counts: c, info: 'Folded because the parent already shows its 3 most urgent children. Click to unfold.' }];
+}
+function ring(c) {
+  const total = sum(c);
+  let a = 0;
+  return 'conic-gradient(' + ORDER.filter((k) => c[k]).map((k) => { const s0 = a / total * 360; a += c[k]; return `var(${RING[k]}) ${s0}deg ${a / total * 360}deg`; }).join(', ') + ')';
+}
+function renderTopo() {
+  const nodes = [], edges = [];
+  let leaf = 0, maxD = 0;
+  (function walk(n, d, parent) {
+    maxD = Math.max(maxD, d);
+    const kids = visibleKids(n);
+    kids.forEach((k) => walk(k, d + 1, n));
+    n._d = d;
+    n._y = kids.length ? (kids[0]._y + kids[kids.length - 1]._y) / 2 : leaf++;
+    nodes.push(n);
+    if (parent) edges.push([parent, n]);
+  })(TOPO[scale], 0, null);
+  const ROW = 76, PAD = 46, H = Math.max(300, PAD * 2 + (leaf - 1) * ROW);
+  const xOf = (n) => 9 + n._d * (62 / maxD), yOf = (n) => PAD + n._y * ROW;
+  const canvas = $('canvas');
+  canvas.style.height = H + 'px';
+  const paths = edges.map(([a, b]) => {
+    const k = b.fold ? 'neutral' : worst(b);
+    const x1 = xOf(a) * 10, y1 = yOf(a), x2 = xOf(b) * 10, y2 = yOf(b), mx = (x1 + x2) / 2;
+    const dash = k === 'unknown' ? 'stroke-dasharray="6 6"' : k === 'maint' || b.fold ? 'stroke-dasharray="2 5"' : '';
+    const glow = k === 'down' ? 'style="filter:var(--wire-glow)"' : '';
+    return `<path d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" fill="none" stroke="${css(EDGE[k])}" stroke-width="3" stroke-linecap="round" vector-effect="non-scaling-stroke" ${dash} ${glow}/>`;
+  }).join('');
+  nodes.sort((a, b) => a._d - b._d);  // parents first, so deeper nodes paint on top
+  const html = nodes.map((n) => {
+    const w = worst(n);
+    const cls = n.fold ? 'n-fold' : n.counts ? `n-${w === 'ok' ? 'neutral' : w}` : `n-${n.st}`;
+    const nb = n.bdg ? `<span class="sb crit nb">${esc(n.bdg)}</span>` : '';
+    const disc = n.counts
+      ? `<span class="nd cl" style="background:${n.fold ? 'var(--border-2)' : ring(n.counts)}"><span class="cn">${n.fold === 'more' ? '+' : n.fold === 'less' ? '−' : sum(n.counts)}</span>${nb}</span>`
+      : `<span class="nd">${ic(n.icon)}${nb}</span>`;
+    const tag = n.tag ? `<span class="tag ${n.tag[0]}">${esc(n.tag[1])}</span>` : '';
+    const side = visibleKids(n).length ? '' : 'right ';
+    const label = `${n.nm}, ${n.sub}${n.counts && !n.fold ? `: ${words(n.counts)}` : ''}${n.bdg ? `, incident ${n.bdg}` : ''}${n.tag ? `, ${n.tag[1]}` : ''}`;
+    return `<button class="node ${side}${cls}${topoSel === n.id ? ' sel' : ''}" data-id="${n.id}" data-fk="node-${n.id}" style="left:${xOf(n)}%;top:${yOf(n)}px" aria-label="${esc(label)}"><span aria-hidden="true">${disc}</span><span class="lb" aria-hidden="true"><span class="nm">${esc(n.nm)}</span><span class="sub">${esc(n.sub)}</span>${tag}</span></button>`;
+  }).join('');
+  canvas.innerHTML = `<svg class="edges" viewBox="0 0 1000 ${H}" preserveAspectRatio="none" aria-hidden="true">${paths}</svg>${html}`;
+  topoNodes = nodes;
+}
+function selectNode(id, scroll) {
+  const n = topoNodes.find((x) => x.id === id);
+  if (!n) return;
+  topoSel = id;
+  document.querySelectorAll('#canvas .node').forEach((el) => el.classList.toggle('sel', el.dataset.id === id));
+  const k = worst(n);
+  const extra = n.counts ? ' · ' + words(n.counts) : '';
+  $('detail').innerHTML = `<span class="disc ${k === 'neutral' ? 'info' : k}">${ic(n.icon || 'layers')}</span><div class="tx"><b>${esc(n.nm)}</b> <span style="color:var(--text-2)">· ${esc(n.sub)}${esc(extra)}</span><p>${esc(n.info)}</p></div><button class="btn sm btn-primary" data-toast="Opens ${esc(n.nm)} on the topology page">Open${ic('right')}</button>`;
+  if (scroll) {  // narrow screens: bring the selected node into view inside the canvas
+    const wrap = $('canvasWrap'), el = document.querySelector(`#canvas .node[data-id="${id}"]`);
+    if (wrap.scrollWidth > wrap.clientWidth && el) wrap.scrollLeft = Math.max(0, el.offsetLeft - wrap.clientWidth / 3);
+  }
+}
+
+/* ---------- theme ---------- */
+const root = document.documentElement;
+function paintThemeButtons() {
+  const dark = root.dataset.theme === 'dark';
+  document.querySelectorAll('#themeBtn, #themeBtnM').forEach((b) => { b.innerHTML = ic(dark ? 'sun' : 'moon'); b.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode'); });
+}
+function redrawGraphics() { drawIncCharts(); renderTopo(); if (topoSel) selectNode(topoSel); }
+function setTheme(t, persist) {
+  root.dataset.theme = t;
+  if (persist) store.set('ngf-theme', t);
+  paintThemeButtons();
+  redrawGraphics();
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => { if (!store.get('ngf-theme')) setTheme(e.matches ? 'dark' : 'light', false); });
+
+/* ---------- toast ---------- */
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.querySelector('span').textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+/* ---------- render all ---------- */
+function renderAll() {
+  renderHero(); renderIncidents(); renderTiles(); renderSites(); renderNeeds(); renderComing();
+  renderTopo();
+  selectNode(topoSel && topoNodes.some((n) => n.id === topoSel) ? topoSel : SC[scale].sel, true);
+}
+function setScale(s) {
+  scale = s; needsAll = sitesAll = false; expanded.clear(); topoSel = null;
+  document.querySelectorAll('[data-scale]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scale === s)));
+  renderAll();
+}
+
+/* ---------- events (one delegated listener) ---------- */
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  const sc = t.closest('[data-scale]');
+  if (sc) { setScale(sc.dataset.scale); return; }
+  const tp = t.closest('[data-topo]');
+  if (tp) { setView('topology'); selectNode(tp.dataset.topo, true); document.querySelector(`[data-fk="node-${tp.dataset.topo}"]`)?.focus(); return; }
+  const vg = t.closest('[data-view-go]');
+  if (vg) { setView(vg.dataset.viewGo); return; }
+  const ih = t.closest('[data-inc]');
+  if (ih) { const id = ih.dataset.inc; if (openInc.has(id)) openInc.delete(id); else openInc.add(id); keepFocus(renderIncidents); return; }
+  const ack = t.closest('[data-ack]');
+  if (ack) { acked.add(ack.dataset.ack); toast(`Acknowledged ${ack.dataset.ack}`); keepFocus(renderIncidents); return; }
+  const nd = t.closest('[data-need]');
+  if (nd) {
+    const item = needItems().find((x) => x.key === nd.dataset.need);
+    doneNeeds.add(item.key); toast(item.done); keepFocus(() => { renderNeeds(); renderHero(); }); return;
+  }
+  const more = t.closest('[data-more]');
+  if (more) {
+    if (more.dataset.more === 'sites') { sitesAll = !sitesAll; keepFocus(renderSites); } else { needsAll = !needsAll; keepFocus(renderNeeds); }
+    return;
+  }
+  const node = t.closest('#canvas .node');
+  if (node) {
+    const n = topoNodes.find((x) => x.id === node.dataset.id);
+    if (n.fold === 'more') { expanded.add(n.of); renderTopo(); selectNode(n.of); document.querySelector(`[data-fk="node-${n.of}"]`)?.focus(); return; }
+    if (n.fold === 'less') { expanded.delete(n.of); renderTopo(); selectNode(n.of); document.querySelector(`[data-fk="node-${n.of}"]`)?.focus(); return; }
+    selectNode(n.id); return;
+  }
+  const tEl = t.closest('[data-toast]');
+  if (tEl) { toast(tEl.dataset.toast); return; }
+  const nav = t.closest('[data-nav]');
+  if (nav) {
+    if (nav.dataset.nav === 'Overview' || nav.dataset.nav === 'Topology') setView(nav.dataset.nav.toLowerCase());
+    else toast(`${nav.dataset.nav}: only overview and topology are prototyped`);
+  }
+});
+function setAbout(open) {
+  $('about').hidden = !open;
+  $('brandBtn').setAttribute('aria-expanded', String(open));
+}
+$('brandBtn').addEventListener('click', (e) => { e.stopPropagation(); setAbout($('about').hidden); });
+document.addEventListener('click', (e) => { if (!$('about').hidden && !e.target.closest('#about')) setAbout(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('about').hidden) { setAbout(false); $('brandBtn').focus(); } });
+$('collapse').addEventListener('click', () => {
+  const r = $('rail');
+  const collapsed = r.classList.toggle('collapsed');
+  $('collapse').setAttribute('aria-expanded', String(!collapsed));
+  $('collapse').querySelector('.lbl').textContent = collapsed ? 'Expand navigation' : 'Collapse';
+  store.set('ngf-rail', collapsed ? '1' : '0');
+  setTimeout(redrawGraphics, 260);
+});
+document.querySelectorAll('#themeBtn, #themeBtnM').forEach((b) => b.addEventListener('click', () => setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark', true)));
+let rz;
+addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(drawIncCharts, 120); });
+function setView(v) {
+  document.querySelectorAll('[data-view]').forEach((el) => { el.hidden = el.dataset.view !== v; });
+  document.querySelectorAll('[data-nav]').forEach((b) => {
+    if (b.dataset.nav.toLowerCase() === v) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
+  scrollTo(0, 0);
+  if (v === 'topology') { renderTopo(); selectNode(topoSel || SC[scale].sel, true); } else drawIncCharts();
+}
+
+/* ---------- start ---------- */
+paintIcons();
+paintLogos();
+if (store.get('ngf-rail') === '1') { $('rail').classList.add('collapsed'); $('collapse').setAttribute('aria-expanded', 'false'); $('collapse').querySelector('.lbl').textContent = 'Expand navigation'; }
+paintThemeButtons();
+renderAll();
+if (document.fonts) document.fonts.ready.then(redrawGraphics);
+</script>
+</body>
+</html>

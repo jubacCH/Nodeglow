@@ -76,7 +76,7 @@ function ConnectionStatus() {
         type="button"
         onClick={() => connect(qc)}
         title="Live updates are paused; data is polled. Click to reconnect."
-        className="inline-flex h-[28px] items-center gap-1.5 whitespace-nowrap rounded-[14px] border border-degraded/45 bg-degraded/10 px-2.5 text-meta font-medium text-degraded"
+        className="inline-flex h-[28px] items-center gap-1.5 whitespace-nowrap rounded-pill border border-degraded/45 bg-degraded/10 px-2.5 text-meta font-medium text-degraded"
       >
         <span aria-hidden="true" className="h-[6px] w-[6px] rounded-full bg-current" />
         <span className="max-[420px]:hidden">Live paused{since ? ` since ${since}` : ''} · polling</span>

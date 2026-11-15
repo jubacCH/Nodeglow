@@ -40,7 +40,7 @@ export function ToastContainer() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
               transition={{ duration: 0.15 }}
-              className="pointer-events-auto flex max-w-[min(560px,100%)] items-center gap-3 rounded-[9px] bg-tip px-3.5 py-2.5 text-ui text-tip-fg shadow-overlay"
+              className="pointer-events-auto flex max-w-[min(560px,100%)] items-center gap-3 rounded-card bg-tip px-4 py-2.5 text-ui text-tip-fg shadow-overlay"
             >
               <Icon size={16} className={iconTone[t.type]} aria-hidden="true" />
               <span className="min-w-0 flex-1">{t.message}</span>
