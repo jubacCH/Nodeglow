@@ -120,7 +120,9 @@ def serialize(r: IncidentRelation, *, now: datetime, names: dict[tuple[str, int]
         "subject": subject,
         "first_seen_at": _iso(r.first_seen_at),
         "last_seen_at": _iso(r.last_seen_at),
-        "stale": bool(open_incident and age > STALE_AFTER_SECONDS),
+        # Suspected relations describe a fixed window around the onset; they
+        # are written while the incident is young and never go stale.
+        "stale": bool(open_incident and r.kind != "suspected" and age > STALE_AFTER_SECONDS),
     }
 
 

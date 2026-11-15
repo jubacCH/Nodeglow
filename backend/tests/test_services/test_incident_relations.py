@@ -166,16 +166,16 @@ async def test_describe_names_subjects_builds_the_path_and_marks_stale(db):
     await relations.record(db, inc, kind="rule", source="rule", summary="Rule multi_host_down: x", now=now)
     await relations.record(db, inc, kind="confirmed", source="topology", subject_kind="host",
                            subject_id=sw.id, summary="All 3 hosts share the parent SW-ZH-CORE-02.", now=now)
-    await relations.record(db, inc, kind="suspected", source="syslog", subject_kind="host", subject_id=fw.id,
-                           summary="fw-zh-01 filterlog +420 %.", now=now - timedelta(minutes=10))
+    await relations.record(db, inc, kind="confirmed", source="probe", subject_kind="host", subject_id=fw.id,
+                           summary="Not refreshed for ten minutes.", now=now - timedelta(minutes=10))
     await db.commit()
 
     states = {sw.id: SimpleNamespace(state="degraded"), fw.id: SimpleNamespace(state="up")}
     out = (await relations.describe(db, [inc], topology={sw.id: fw.id, fw.id: None},
                                     states=states, now=now))[inc.id]
-    assert [r["kind"] for r in out["relations"]] == ["confirmed", "rule", "suspected"]
+    assert [r["kind"] for r in out["relations"]] == ["confirmed", "confirmed", "rule"]
     assert out["relations"][0]["subject"] == {"kind": "host", "id": sw.id, "name": "SW-ZH-CORE-02"}
-    assert [r["stale"] for r in out["relations"]] == [False, False, True]
+    assert [r["stale"] for r in out["relations"]] == [False, True, False]
     assert out["cause"] == {
         "kind": "host", "id": sw.id, "name": "SW-ZH-CORE-02", "state": "degraded",
         "path": [{"id": fw.id, "name": "fw-zh-01", "state": "up"},
