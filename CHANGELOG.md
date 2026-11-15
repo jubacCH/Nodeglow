@@ -16,6 +16,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   dialog and a site per probe on the Agents page. A host takes the site of
   the probe that checks it unless it has its own. Shown only once there is
   more than one site. API under `/api/v1/sites`; no database migration.
+- Sites on the overview and the topology: with two or more sites the
+  overview shows "Sites" (hosts by site, its probes, a silent probe's hosts
+  as no data) instead of the groups by checker, each row linked to the host
+  list for that site. The topology page filters by site (`?site=`) and keeps
+  uplinks from other sites as context. New dashboard section `sites`;
+  topology nodes carry `site_id`.
 - Silent agents are an incident. An agent or probe that has not reported
   for ten minutes opens "Agent silent: <name>" (rule `agent_silent`,
   warning) with the time of its last report, linked to its host, and

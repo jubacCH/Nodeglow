@@ -2239,6 +2239,7 @@ async def get_topology(
     _key: ApiKey = Depends(require_api_key),
 ):
     from services import host_state as hs
+    from services import sites as site_svc
     from services.topology import build_topology
 
     provenance: dict[int, str] = {}
@@ -2257,6 +2258,7 @@ async def get_topology(
     statuses = await statuses_for(db, hosts, now.timestamp())
     windows = await maint_svc.load_windows(db)
     states = await hs.host_states(db, hosts, now, windows=windows, topology=topo)
+    site_ctx = await site_svc.load_context(db)
 
     nodes = []
     edges = []
@@ -2270,6 +2272,7 @@ async def get_topology(
             "check_type": h.check_type,
             "source": h.source,
             "maintenance": maint_svc.is_in_maintenance(h, now, windows),
+            "site_id": site_ctx.effective(h.site_id, h.probe_id),
         })
         parent = topo.get(h.id)
         if parent is not None:

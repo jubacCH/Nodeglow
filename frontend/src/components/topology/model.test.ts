@@ -57,4 +57,16 @@ describe('topology model', () => {
     expect(s.orphans.map((o) => o.name)).toEqual(['lonely']);
     expect(matcher('all', '  ')).toBeNull();
   });
+
+  it('filters by site and keeps uplinks from other sites as the path', () => {
+    const sited = nodes.map((n) => ({ ...n, site_id: [3, 4, 5, 6].includes(n.id) ? 2 : 1 }));
+    const { trees, orphans } = buildTrees(sited, edges);
+    const f = applyFilter(trees, orphans, matcher('all', '', 2));
+    expect(f.trees.map((t) => t.node.name)).toEqual(['fw', 'probe']);
+    expect(f.trees[0].children[0].children.map((c) => c.node.name)).toEqual(['srv-a', 'srv-b']);
+    expect(f.orphans).toEqual([]);
+    const both = applyFilter(trees, orphans, matcher('problems', '', 2));
+    expect(both.trees[0].children[0].children.map((c) => c.node.name)).toEqual(['srv-a']);
+    expect(matcher('all', '', null)).toBeNull();
+  });
 });

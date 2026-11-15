@@ -642,6 +642,48 @@ def section_groups(base: Base, probes: list[dict]) -> list[dict]:
     return groups
 
 
+async def section_sites(db, base: Base, probes: list[dict]) -> list[dict]:
+    """Hosts by effective site (B-14, concept F phase 3, PR 5).
+
+    Empty while the tenant has a single site: the overview then keeps
+    "Hosts by checker". A host's site is its own, else its probe's, else the
+    default (``services/sites.py``). A probe belongs to its own site, the
+    default when none is chosen. A silent probe's hosts stay in their site and
+    show as no data through their state.
+    """
+    from services import sites as site_svc
+
+    ctx = await site_svc.load_context(db)
+    if len(ctx.sites) < 2:
+        return []
+    members: dict[int, list] = {sid: [] for sid in ctx.sites}
+    for h in base.hosts:
+        sid = ctx.effective(h.site_id, h.probe_id)
+        if sid in members:
+            members[sid].append(h)
+    probe_by_id = {p["id"]: p for p in probes}
+    probes_in: dict[int, list[dict]] = {sid: [] for sid in ctx.sites}
+    for a in base.probes:
+        sid = ctx.explicit(a.site_id) or ctx.default_id
+        row = probe_by_id.get(a.id)
+        if sid in probes_in and row is not None:
+            probes_in[sid].append({"id": a.id, "name": row["name"], "fresh": not row["stale"],
+                                   "host_count": row["host_count"]})
+    out = []
+    for sid, name in ctx.sites.items():
+        hosts = members[sid]
+        states = [base.states[h.id] for h in hosts if h.id in base.states]
+        out.append({
+            "id": sid, "name": name, "is_default": sid == ctx.default_id,
+            "host_count": len(hosts),
+            "by_state": {k: v for k, v in hs.counts(states).items() if v},
+            "worst": hs.worst([st.state for st in states]) if states else None,
+            "probes": sorted(probes_in[sid], key=lambda r: r["name"].lower()),
+        })
+    out.sort(key=lambda r: (not r["is_default"], r["name"].lower()))
+    return out
+
+
 async def section_upcoming(db, base: Base) -> dict:
     items = []
     horizon = base.now + timedelta(hours=UPCOMING_HOURS)
@@ -957,6 +999,9 @@ async def build_dashboard(db, *, user_id: int | None, is_admin: bool,
     async def _groups():
         return section_groups(base, probes)
 
+    async def _sites():
+        return await section_sites(db, base, probes)
+
     async def _upcoming():
         return await section_upcoming(db, base)
 
@@ -976,7 +1021,7 @@ async def build_dashboard(db, *, user_id: int | None, is_admin: bool,
 
     for name, fn in (("summary", _summary), ("health", _health), ("internet", _internet),
                      ("incidents", _incidents), ("topology", _topology), ("groups", _groups),
-                     ("upcoming", _upcoming), ("latency", _latency), ("syslog", _syslog),
+                     ("sites", _sites), ("upcoming", _upcoming), ("latency", _latency), ("syslog", _syslog),
                      ("availability", _availability), ("since_last_visit", _since)):
         await run(name, fn)
 

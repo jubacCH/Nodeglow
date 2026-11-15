@@ -143,7 +143,13 @@ export default function DashboardPage() {
           loading={loading}
           error={err('topology')}
         />
-        <GroupsCard className={AREA.groups} groups={data?.groups} loading={loading} error={err('groups')} />
+        <GroupsCard
+          className={AREA.groups}
+          groups={data?.groups}
+          sites={data?.sites}
+          loading={loading}
+          error={err('groups') ?? err('sites')}
+        />
         <UpcomingCard className={AREA.upc} upcoming={data?.upcoming} loading={loading} error={err('upcoming')} generatedAt={data?.generated_at} />
         <LatencyCard className={AREA.lat} latency={data?.latency} loading={loading} error={err('latency')} />
         <SyslogCard className={AREA.sys} syslog={data?.syslog} loading={loading} error={err('syslog')} />

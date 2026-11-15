@@ -1,12 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatusPill } from '@/components/ui/StatusPill';
-import { Tag } from '@/components/ui/Tag';
 import { STATE_FILL, describeSegments } from '@/lib/status';
 import { describeStates, groupFreshness, stateSegments } from '@/lib/dashboard';
 import { cn } from '@/lib/utils';
-import type { HostGroup, SectionError } from '@/types/dashboard';
+import type { HostGroup, SectionError, SiteGroup } from '@/types/dashboard';
 import { DashboardCard, useDashboardCtx } from './DashboardCard';
 
 /** Thin state bar (E3 `.sbar`); unknown is hatched, never a colour. */
@@ -22,11 +22,89 @@ export function StateBar({ byState, label, className }: { byState: HostGroup['by
 }
 
 /**
- * Hosts grouped by who checks them: "Direct" (this instance) and one group
- * per probe. These are not sites — Nodeglow has no site model yet — and the
- * card says so. A silent probe's group is "no data", never green.
+ * Hosts by site once there are two or more sites (B-14), else grouped by who
+ * checks them: "Direct" (this instance) and one group per probe. A silent
+ * probe's hosts are "no data", never green, in either view.
  */
-export function GroupsCard({ groups, loading, error, className }: {
+export function GroupsCard({ groups, sites, loading, error, className }: {
+  groups: HostGroup[] | null | undefined;
+  sites?: SiteGroup[] | null;
+  loading: boolean;
+  error: SectionError | null;
+  className?: string;
+}) {
+  if (sites && sites.length >= 2) {
+    return <SitesView sites={sites} loading={loading} error={error} className={className} />;
+  }
+  return <CheckerView groups={groups} loading={loading} error={error} className={className} />;
+}
+
+/** "Hosts by site": one row per site, linked to the host list filtered to it. */
+function SitesView({ sites, loading, error, className }: {
+  sites: SiteGroup[];
+  loading: boolean;
+  error: SectionError | null;
+  className?: string;
+}) {
+  const total = sites.reduce((a, s) => a + s.host_count, 0);
+  const empty = sites.filter((s) => s.host_count === 0 && s.probes.length === 0).length;
+  const visible = sites.filter((s) => s.host_count > 0 || s.probes.length > 0);
+  return (
+    <DashboardCard
+      id="dash-groups"
+      title="Sites"
+      meta="hosts by site"
+      loading={loading}
+      error={error}
+      className={className}
+      actions={<span className="num">{total} host{total === 1 ? '' : 's'}</span>}
+    >
+      {visible.length === 0 ? (
+        <EmptyState compact title="No hosts yet" />
+      ) : (
+        <>
+          <ul>
+            {visible.map((s) => {
+              const silent = s.probes.filter((p) => !p.fresh);
+              const probeText = s.probes.length === 0
+                ? (s.is_default ? 'default site' : 'no probe')
+                : s.probes.length === 1 ? `via ${s.probes[0].name}` : `${s.probes.length} probes`;
+              return (
+                <li key={s.id} className="border-b border-border py-3 first:pt-0 last:border-b-0 last:pb-0">
+                  <Link href={`/hosts?site=${s.id}`} className="block w-full rounded-ctl hover:bg-hover">
+                    <span className="mb-2 flex items-baseline justify-between gap-2">
+                      <span className="min-w-0 truncate">
+                        <b className="font-medium text-fg">{s.name}</b>{' '}
+                        <span className="text-meta text-fg-2">{probeText}</span>
+                      </span>
+                      <span className="num font-display text-[1.4286rem] font-medium leading-[1.1] tracking-[-0.04em] text-fg">{s.host_count}</span>
+                    </span>
+                    <StateBar byState={s.by_state} label={`${s.name}: ${describeSegments(stateSegments(s.by_state))}`} />
+                    <span className="mt-[7px] flex flex-wrap items-center gap-2 text-meta text-fg-2">
+                      {silent.length > 0 && (
+                        <StatusPill status="unknown" size="sm">
+                          {silent.length === 1 ? `${silent[0].name} silent` : `${silent.length} probes silent`}
+                        </StatusPill>
+                      )}
+                      <span>{describeStates(s.by_state)}</span>
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-auto pt-3.5 text-meta text-fg-3">
+            A host is in the site of its probe unless it has its own.
+            {empty > 0 && ` ${empty} empty site${empty === 1 ? '' : 's'} hidden.`}{' '}
+            <Link href="/sites" className="text-accent hover:text-accent-hover">Manage sites</Link>
+          </p>
+        </>
+      )}
+    </DashboardCard>
+  );
+}
+
+function CheckerView({ groups, loading, error, className }: {
   groups: HostGroup[] | null | undefined;
   loading: boolean;
   error: SectionError | null;
@@ -79,10 +157,10 @@ export function GroupsCard({ groups, loading, error, className }: {
               );
             })}
           </ul>
-          <p className="mt-auto flex flex-wrap items-center gap-2 pt-3.5 text-meta text-fg-3">
-            <Tag planned>Sites · Planned</Tag>
-            Grouped by who checks the hosts, not by location.
-            {unusedProbes > 0 && ` ${unusedProbes} probe${unusedProbes === 1 ? '' : 's'} without hosts hidden.`}
+          <p className="mt-auto pt-3.5 text-meta text-fg-3">
+            Grouped by who checks the hosts.
+            {unusedProbes > 0 && ` ${unusedProbes} probe${unusedProbes === 1 ? '' : 's'} without hosts hidden.`}{' '}
+            <Link href="/sites" className="text-accent hover:text-accent-hover">Group by site</Link>
           </p>
         </>
       ) : null}

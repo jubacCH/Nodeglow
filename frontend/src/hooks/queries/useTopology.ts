@@ -14,6 +14,8 @@ interface TopologyNode {
   check_type: string;
   source: string;
   maintenance: boolean;
+  /** Effective site (B-14). */
+  site_id?: number | null;
 }
 
 interface TopologyEdge {
