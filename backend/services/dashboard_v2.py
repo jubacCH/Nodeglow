@@ -461,7 +461,12 @@ def _unifi_ts(value) -> str | None:
 async def section_incidents(db, base: Base, tz_name: str) -> dict:
     from models.incident import Incident
 
+    from services import incident_relations as relations
+
     summaries = await _latest_summaries(db, [i.id for i in base.open_incidents])
+    # Evidence and cause (concept F, phase 3): at most four relations per item.
+    evidence = await relations.describe(db, list(base.open_incidents), topology=base.topology,
+                                        states=base.states, now=base.now, limit=4)
     items = []
     for inc in sorted(base.open_incidents,
                       key=lambda i: (iv.SEVERITY_RANK.get(i.severity, 9), i.status == "acknowledged",
@@ -476,6 +481,8 @@ async def section_incidents(db, base: Base, tz_name: str) -> dict:
             "host_count": len(ids) if ids is not None else None,
             "host_ids": ids[:iv.MAX_HOSTS_PER_ITEM] if ids is not None else None,
             "summary": summaries.get(inc.id),
+            "relations": evidence.get(inc.id, {}).get("relations", []),
+            "cause": evidence.get(inc.id, {}).get("cause"),
         })
 
     day_start_utc = _local_day_start_utc(base.now, tz_name)

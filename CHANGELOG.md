@@ -10,6 +10,15 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Evidence on incidents. Every incident now records how it is related to
+  what, in one sentence with the numbers: "Rule-based" for the rule that
+  fired, and "Confirmed" where a rule used a structural link — the topology
+  parent all hosts of a network outage share, the failed upstream device of
+  an upstream failure, the integration whose host is down. The shared object
+  is stored as the incident's cause. Both appear in `GET /api/v2/dashboard`
+  (`relations`, `cause` with its path from the topology root) and in the
+  incident detail. New table `incident_relations` (migration 054), included
+  in backups. Nothing about notifications changes.
 - Silent agents are an incident. An agent or probe that has not reported
   for ten minutes opens "Agent silent: <name>" (rule `agent_silent`,
   warning) with the time of its last report, linked to its host, and
