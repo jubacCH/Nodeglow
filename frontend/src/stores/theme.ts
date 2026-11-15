@@ -7,6 +7,7 @@ interface ThemeState {
   colorMode: ColorMode;
   density: 'comfortable' | 'compact';
   fontSize: number;
+  /** Rail shows icons only (concept F rail is wide with labels by default). */
   sidebarCollapsed: boolean;
   setColorMode: (m: ColorMode) => void;
   /** Switch between dark and light (leaves "system"). */

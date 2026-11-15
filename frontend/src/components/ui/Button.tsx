@@ -17,15 +17,15 @@ const variants: Record<ButtonVariant, string> = {
 };
 
 const sizes: Record<ButtonSize, string> = {
-  sm: 'h-[28px] px-[10px] text-meta gap-1.5 rounded-ng-sm',
-  md: 'h-[36px] px-[14px] text-ui gap-2 rounded-ctl',
-  lg: 'h-[40px] px-[16px] text-body gap-2 rounded-ctl',
+  sm: 'h-[28px] px-[12px] text-meta gap-1.5 rounded-pill',
+  md: 'h-[36px] px-[16px] text-ui gap-2 rounded-pill',
+  lg: 'h-[40px] px-[18px] text-body gap-2 rounded-pill',
 };
 
 const iconSizes: Record<ButtonSize, string> = {
-  sm: 'h-[28px] w-[28px] rounded-ng-sm',
-  md: 'h-[36px] w-[36px] rounded-ctl',
-  lg: 'h-[40px] w-[40px] rounded-ctl',
+  sm: 'h-[28px] w-[28px] rounded-pill',
+  md: 'h-[36px] w-[36px] rounded-pill',
+  lg: 'h-[40px] w-[40px] rounded-pill',
 };
 
 /** Class string for elements that should look like a button (e.g. <Link>). */

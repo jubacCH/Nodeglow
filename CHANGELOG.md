@@ -167,6 +167,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- Softer shapes and a labelled navigation rail (design concept F, phase 1).
+  Cards, dialogs and fields are rounder, buttons and segmented controls are
+  pills, and cards carry their edge as a light shadow instead of a border.
+  From 1100 px the rail shows section names next to the icons; **Collapse**
+  at its bottom brings back the slim icon rail and is remembered. The count
+  badges on the rail and the mobile tab bar are now a soft red with red text,
+  because white on red was hard to read.
 - CI runs the backend suite a second time with the clock thirty days ahead
   (`tests/clockshift.py`). Tests whose fixtures carry fixed dates fail there
   before they are merged, instead of on their own days later.
