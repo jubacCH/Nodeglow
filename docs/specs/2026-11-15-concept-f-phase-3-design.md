@@ -57,7 +57,7 @@ and readable at that size.
 
 ## Part A: relations on incidents
 
-### Data model (migration 054)
+### Data model (next migration; 054 on main at the time of writing)
 
 ```
 incident_relations
@@ -177,7 +177,7 @@ multi-tenancy; the MSP parts stay in `ee/`.
 
 ## Pull requests
 
-1. **Relations, data model and writers for rule and confirmed** (migration 054, `cause_*`,
+1. **Relations, data model and writers for rule and confirmed** (new migration, `cause_*`,
    `incident_relations`, writers in `correlation.py`, API fields). Tests: one per writing rule,
    tenant isolation of the new table, the dashboard shape.
 2. **Suspected pass** in `run_correlation`, with tests that build a baseline and check window,
