@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { get, getCsrfToken } from '@/lib/api';
+import { ApiError, get, getCsrfToken } from '@/lib/api';
 import { DASHBOARD_REFETCH_MS, DASHBOARD_V2_KEY, SUMMARY_V2_KEY } from '@/lib/dashboard';
 import type {
-  ChangeType, ChangesResponse, DashboardSummary, DashboardV2, HostPreview, IncidentPreview,
+  ChangeType, ChangesResponse, DashboardSummary, DashboardV2, HostPreview, IncidentPreview, LatencySection,
 } from '@/types/dashboard';
 
 /**
@@ -81,6 +81,29 @@ export function useIncidentPreview(id: number | null) {
     queryFn: () => get<IncidentPreview>(`/api/v1/incidents/${id}`),
     enabled: id !== null,
     staleTime: 15_000,
+  });
+}
+
+/**
+ * Latency and loss of one incident's hosts (GET /api/v2/incidents/{id}/latency),
+ * loaded when the incident is opened on the overview. `null` = no chart: not a
+ * reachability rule, no hosts recorded (204), or a backend without the endpoint (404).
+ */
+export function useIncidentLatency(id: number | null) {
+  return useQuery({
+    queryKey: ['incident-latency', id],
+    queryFn: async (): Promise<LatencySection | null> => {
+      try {
+        const res = await get<LatencySection | string>(`/api/v2/incidents/${id}/latency`);
+        return res && typeof res === 'object' ? res : null;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: id !== null,
+    staleTime: 30_000,
+    refetchInterval: DASHBOARD_REFETCH_MS,
   });
 }
 

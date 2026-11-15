@@ -341,6 +341,37 @@ Jeder Zustand hat **Farbe und Form und Text**. Status nie nur über Farbe.
 
 ---
 
+### 7.1 Übersicht (Konzept F, Phase 2)
+
+`app/(app)/page.tsx`, Bausteine in `components/overview/*`, Logik in `lib/overview.ts`
+(getestet in `overview.test.ts`). **Jedes Problem steht genau einmal auf der Seite**, Listen
+sind gedeckelt, damit die Seite bei 50 wie bei 500 Hosts gleich gross bleibt.
+
+1. **Kopf** (`OverviewHero`): „N incidents need you“, darunter Zustandsbalken und Satz („28 of 48
+   hosts healthy · 10 with issues · 9 without data · 1 in maintenance“, ohne deaktivierte Hosts).
+   Rechts „Since … · N changes“ → `/changes`.
+2. **Open incidents** (`OpenIncidents`), eine Zeile pro Incident, aufklappbar:
+   - Pfad zum Verursacher (`incidentCause`: der Parent, unter dem die meisten Hosts des Incidents
+     hängen, mit Vorfahren aus `topology.parents`/`roots`).
+   - Belege mit Label, Latenzverlauf (nur für den Incident, den `latency` beschreibt).
+   - Aktionen „Open incident“, „Acknowledge“, „Affected hosts“ (Seitenpanel).
+   - **Labels:** „Confirmed“ nur, wenn der Pfad aus Topologie-Links folgt, „Rule-based“ für die
+     Regel, die gefeuert hat. „Suspected“ braucht Backend (Phase 3) und erscheint noch nicht.
+3. **Needs a look** (`needItems`), rechts:
+   - Stille Probes (eine Zeile pro Probe), fehlerhafte Integrationen.
+   - Hosts mit Problemen ausserhalb jedes Incidents. Nur wenn alle Incidents ihre Hosts kennen,
+     sonst wird nicht geraten.
+   - Disk- und Zertifikats-Prognosen, ab zwei Funden zusammengefasst; neue Hosts aus Discovery.
+   - Schlimmstes zuerst, höchstens 6 Zeilen.
+4. **Coming up:** Wartungsfenster jetzt und in den nächsten 24 h.
+5. **At a glance:** vier Kennzahlen, Sparklines für Incidents pro Tag (14 Tage) und Syslog pro Stunde (24 h).
+6. **Hosts by checker:** pro Gruppe (Direct oder Probe) ein Anteilsbalken mit Zahlen als Text,
+   schlimmste zuerst, höchstens 6. Keine Standorte, solange es kein Standort-Modell gibt (B-14).
+
+Die Topologie hat keine Karte mehr auf der Übersicht (eigene Seite `/topology`), ebenso entfallen
+die Karten Internet, Syslog, Availability und „Since last visit“. Unter 1180 px eine Spalte in der
+Reihenfolge Incidents, Needs a look, Coming up, Kennzahlen, Hosts.
+
 ## 8. Seite migrieren — Checkliste für Phase F
 
 1. **Kopf**: `PageHeader` (Titel, eine Zeile Beschreibung mit Frische, max. eine Primäraktion). Keine eigene Tab-Leiste für Bereichsnavigation — die Shell zeigt die Sub-Navigation.
