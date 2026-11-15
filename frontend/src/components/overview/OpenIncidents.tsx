@@ -9,6 +9,7 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { SeverityIcon } from '@/components/dashboard/IncidentsCard';
 import { DashboardCard, useDashboardCtx } from '@/components/dashboard/DashboardCard';
 import { useIncidentAction } from '@/hooks/queries/useAlerts';
+import { useIncidentLatency } from '@/hooks/queries/useDashboard';
 import { describeStates, formatClock, formatDuration, hostState, incidentHostsLabel, severityLabel } from '@/lib/dashboard';
 import { incidentCause, type IncidentCause } from '@/lib/overview';
 import { cn } from '@/lib/utils';
@@ -87,7 +88,11 @@ function IncidentItem({ inc, topology, latency, defaultOpen }: {
   const { open: openPanel } = useDashboardCtx();
   const act = useIncidentAction();
   const cause = incidentCause(inc, topology);
-  const chart = latency && latency.incident_id === inc.id ? latency : null;
+  // The dashboard brings the chart of the worst incident; any other one is
+  // loaded when it is opened.
+  const own = latency && latency.incident_id === inc.id ? latency : null;
+  const fetched = useIncidentLatency(open && !own ? inc.id : null);
+  const chart = own ?? fetched.data ?? null;
   const acked = inc.acknowledged || (act.isSuccess && act.variables?.action === 'acknowledge');
 
   return (

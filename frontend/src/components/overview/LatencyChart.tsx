@@ -29,7 +29,8 @@ export function LatencyChart({ latency, height = 170 }: { latency: LatencySectio
           const p = pts[idx];
           if (!p) return '';
           const total = p.ok + p.failed;
-          return `<b>${formatClock(p.t)}</b><br/>Median ${fmt(p.median_ms)}<br/>Max ${fmt(p.max_ms)}<br/>Answering ${p.ok} of ${total} checks`;
+          const loss = p.loss_pct !== undefined && p.loss_pct !== null ? `<br/>Loss ${p.loss_pct} %` : '';
+          return `<b>${formatClock(p.t)}</b><br/>Median ${fmt(p.median_ms)}<br/>Max ${fmt(p.max_ms)}<br/>Answering ${p.ok} of ${total} checks${loss}`;
         },
       },
       xAxis: { type: 'time' as const, axisLabel: { hideOverlap: true, formatter: '{HH}:{mm}' } },
