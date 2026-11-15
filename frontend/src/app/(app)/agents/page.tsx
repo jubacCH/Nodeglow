@@ -11,12 +11,14 @@ import { StatusPill } from '@/components/ui/StatusPill';
 import { Badge } from '@/components/ui/Badge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { Switch } from '@/components/ui/Field';
+import { Select, Switch } from '@/components/ui/Field';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { QueryState, formatAsOf } from '@/components/ui/QueryState';
 import { TableContainer, Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
 import { useAgents } from '@/hooks/queries/useAgents';
 import { useHostsV1 } from '@/hooks/queries/useHosts';
+import { hasSeveralSites, useSites } from '@/hooks/queries/useSites';
+import { useAuthStore } from '@/stores/auth';
 import { get, del, patch, apiErrorMessage } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -37,6 +39,23 @@ export default function AgentsPage() {
   const qc = useQueryClient();
   const { confirm, ConfirmDialogElement } = useConfirm();
   const [togglingProbe, setTogglingProbe] = useState<number | null>(null);
+  const { data: sites } = useSites();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const showSites = hasSeveralSites(sites) && isAdmin;
+
+  /** Moving a probe moves the hosts it checks (unless they have a site of their own). Admin only. */
+  async function handleSite(agent: Agent, value: string) {
+    try {
+      await patch(`/api/v1/agents/${agent.id}`, { site_id: value ? Number(value) : null });
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      qc.invalidateQueries({ queryKey: ['sites'] });
+      qc.invalidateQueries({ queryKey: ['hosts-v1'] });
+      const name = (sites ?? []).find((s) => String(s.id) === value)?.name;
+      toast(name ? `${agent.name} and its hosts are now in ${name}` : `${agent.name} is back in the default site`, 'success');
+    } catch (e) {
+      toast(apiErrorMessage(e, 'Could not change the site'), 'error');
+    }
+  }
 
   // Number of hosts each probe is currently responsible for.
   const hostCountByProbe = new Map<number, number>();
@@ -186,6 +205,17 @@ export default function AgentsPage() {
                               disabled={togglingProbe === agent.id}
                               aria-label={`Probe mode for ${agent.name}`}
                             />
+                            {agent.is_probe && showSites && (
+                              <Select
+                                aria-label={`Site of ${agent.name}`}
+                                className="h-[28px] w-auto text-meta"
+                                value={agent.site_id != null && !(sites ?? []).find((s) => s.id === agent.site_id)?.is_default ? String(agent.site_id) : ''}
+                                onChange={(e) => handleSite(agent, e.target.value)}
+                              >
+                                <option value="">Default site</option>
+                                {(sites ?? []).filter((s) => !s.is_default).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                              </Select>
+                            )}
                             {agent.is_probe && (
                               st.status === 'ok' ? (
                                 <span className="inline-flex items-center gap-1 whitespace-nowrap text-meta text-fg-2">

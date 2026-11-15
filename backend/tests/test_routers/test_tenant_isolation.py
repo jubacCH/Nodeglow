@@ -335,6 +335,7 @@ PARAM_TABLE = {
     "grant_id": "support_grants",
     "provider_id": "identity_providers",
     "flow_id": "sso_flows",
+    "site_id": "sites",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",
 }

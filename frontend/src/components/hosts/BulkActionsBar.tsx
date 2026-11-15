@@ -2,12 +2,13 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Pencil, Power, PowerOff, Radar, Trash2, Wrench, X } from 'lucide-react';
+import { MapPin, Pencil, Power, PowerOff, Radar, Trash2, Wrench, X } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Field, Input, Select } from '@/components/ui/Field';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useAgents } from '@/hooks/queries/useAgents';
+import { hasSeveralSites, useSites } from '@/hooks/queries/useSites';
 import { ApiError, apiErrorMessage, del, patch } from '@/lib/api';
 import { useToastStore } from '@/stores/toast';
 import {
@@ -33,6 +34,8 @@ export function BulkActionsBar({ ids, names, onClear, onReport }: BulkActionsBar
   const { confirm, ConfirmDialogElement } = useConfirm();
   const [busy, setBusy] = useState(false);
   const [probeOpen, setProbeOpen] = useState(false);
+  const [siteOpen, setSiteOpen] = useState(false);
+  const { data: sites } = useSites();
   const [editOpen, setEditOpen] = useState(false);
   const n = ids.length;
 
@@ -41,6 +44,7 @@ export function BulkActionsBar({ ids, names, onClear, onReport }: BulkActionsBar
     onReport(report);
     qc.invalidateQueries({ queryKey: ['hosts-v1'] });
     qc.invalidateQueries({ queryKey: ['hosts'] });
+    qc.invalidateQueries({ queryKey: ['sites'] });
     if (report.tone !== 'error') onClear();
   }
 
@@ -126,6 +130,11 @@ export function BulkActionsBar({ ids, names, onClear, onReport }: BulkActionsBar
       <Button size="sm" variant="secondary" disabled={busy} onClick={() => setProbeOpen(true)}>
         <Radar size={13} aria-hidden="true" /> Assign probe
       </Button>
+      {hasSeveralSites(sites) && (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => setSiteOpen(true)}>
+          <MapPin size={13} aria-hidden="true" /> Move to site
+        </Button>
+      )}
       <Button size="sm" variant="secondary" disabled={busy} onClick={() => run({ kind: 'enabled', on: true })}>
         <Power size={13} aria-hidden="true" /> Enable
       </Button>
@@ -144,6 +153,9 @@ export function BulkActionsBar({ ids, names, onClear, onReport }: BulkActionsBar
 
       <ProbeModal open={probeOpen} count={n} onClose={() => setProbeOpen(false)} onApply={async (probeId, probeName) => {
         if (await run({ kind: 'probe', probeId, probeName })) setProbeOpen(false);
+      }} busy={busy} />
+      <SiteModal open={siteOpen} count={n} onClose={() => setSiteOpen(false)} onApply={async (siteId, siteName) => {
+        if (await run({ kind: 'site', siteId, siteName })) setSiteOpen(false);
       }} busy={busy} />
       <BulkEditModal open={editOpen} count={n} onClose={() => setEditOpen(false)} onApply={async (updates) => {
         if (await run({ kind: 'edit', updates })) setEditOpen(false);
@@ -186,6 +198,37 @@ function ProbeModal({ open, count, onClose, onApply, busy }: {
           This probe is silent. Its hosts will show as “No data” until it reports again.
         </p>
       )}
+    </Modal>
+  );
+}
+
+function SiteModal({ open, count, onClose, onApply, busy }: {
+  open: boolean; count: number; busy: boolean;
+  onClose: () => void;
+  onApply: (siteId: number | null, siteName?: string) => void;
+}) {
+  const { data: sites } = useSites();
+  const [value, setValue] = useState('');
+  const chosen = (sites ?? []).find((s) => String(s.id) === value);
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Move ${count} host${count === 1 ? '' : 's'} to a site`}
+      description="Automatic: each host takes the site of the probe that checks it, else the default site."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button loading={busy} onClick={() => onApply(value ? Number(value) : null, chosen?.name)}>Move</Button>
+        </>
+      }
+    >
+      <Field label="Site">
+        <Select value={value} onChange={(e) => setValue(e.target.value)}>
+          <option value="">Automatic</option>
+          {(sites ?? []).filter((s) => !s.is_default).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </Select>
+      </Field>
     </Modal>
   );
 }

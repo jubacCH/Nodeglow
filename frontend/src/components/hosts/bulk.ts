@@ -5,6 +5,7 @@ export interface BulkUpdates {
   maintenance_hours?: number;
   enabled?: boolean;
   probe_id?: number | null;
+  site_id?: number | null;
   check_type?: string;
   latency_threshold_ms?: number | null;
 }
@@ -22,6 +23,8 @@ export type BulkAction =
   | { kind: 'maintenance'; on: boolean; hours?: number }
   | { kind: 'enabled'; on: boolean }
   | { kind: 'probe'; probeId: number | null; probeName?: string }
+  /** siteId null = automatic (the probe's site, else the default). */
+  | { kind: 'site'; siteId: number | null; siteName?: string }
   | { kind: 'edit'; updates: BulkUpdates }
   | { kind: 'delete' };
 
@@ -33,6 +36,7 @@ export function bulkUpdatesFor(action: Exclude<BulkAction, { kind: 'delete' }>):
         : { maintenance: action.on };
     case 'enabled': return { enabled: action.on };
     case 'probe': return { probe_id: action.probeId };
+    case 'site': return { site_id: action.siteId };
     case 'edit': return action.updates;
   }
 }
@@ -44,6 +48,7 @@ function verb(action: BulkAction): string {
     case 'maintenance': return action.on ? 'Maintenance started for' : 'Maintenance ended for';
     case 'enabled': return action.on ? 'Monitoring enabled for' : 'Monitoring disabled for';
     case 'probe': return action.probeId == null ? 'Core now checks' : `${action.probeName ?? 'Probe'} now checks`;
+    case 'site': return action.siteId == null ? 'Site set to automatic for' : `Moved to ${action.siteName ?? 'the site'}:`;
     case 'edit': return 'Updated';
     case 'delete': return 'Deleted';
   }

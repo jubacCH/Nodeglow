@@ -10,7 +10,7 @@
  */
 import {
   Activity, ArrowUpDown, BarChart3, Bell, BookOpen, Bot, Building2, ClipboardList, FileText, History,
-  KeyRound, LayoutDashboard, LayoutList, Network, Plug, Radio, Scan, ScrollText,
+  KeyRound, LayoutDashboard, LayoutList, MapPin, Network, Plug, Radio, Scan, ScrollText,
   Server, Settings, Shield, ShieldCheck, TriangleAlert, UserCog, Users, Wrench, Archive,
   type LucideIcon,
 } from 'lucide-react';
@@ -89,6 +89,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { id: 'hosts', label: 'Hosts', href: '/hosts', icon: Server, shortcut: 'h' },
       { id: 'topology', label: 'Topology', href: '/topology', icon: Network, shortcut: 'o', keywords: 'map' },
+      { id: 'sites', label: 'Sites', href: '/sites', icon: MapPin, keywords: 'locations branches offices' },
       { id: 'agents', label: 'Agents & Probes', href: '/agents', icon: Bot, keywords: 'agent probe' },
       { id: 'integrations', label: 'Integrations', href: '/integration/store', icon: Plug, match: ['/integration'], keywords: 'catalog store proxmox unifi' },
       { id: 'snmp', label: 'SNMP', href: '/snmp', icon: Radio, keywords: 'mib oid' },

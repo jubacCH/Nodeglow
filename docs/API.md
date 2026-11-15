@@ -100,12 +100,12 @@ Base path `/api/v1`. Unless noted, reading needs any role and changing needs
 
 | Method | Path | |
 |---|---|---|
-| GET | `/hosts` | All hosts with [state](#host-state), latency, last check, uptime (`h24`, `d7`, `d30`), maintenance fields, `probe_id`. Filters: `state` (comma list), `status` (legacy), `source` (`manual`, `proxmox`, `agent`, `phpipam`), `enabled` |
+| GET | `/hosts` | All hosts with [state](#host-state), latency, last check, uptime (`h24`, `d7`, `d30`), maintenance fields, `probe_id`, `site_id` (effective site) and `site_set` (the host's own site, `null` = automatic). Filters: `state` (comma list), `status` (legacy), `source` (`manual`, `proxmox`, `agent`, `phpipam`), `enabled`, `site` (effective site id) |
 | GET | `/hosts/{id}` | Detail with latest metrics (agent metrics for agent hosts, matching integration data) |
 | GET | `/hosts/{id}/history` | Ping history |
 | GET | `/hosts/{id}/timeline` | Merged timeline: incidents, changes, syslog — each source gets a fair share of the limit |
 | POST | `/hosts` | Create. `name`, `hostname` required; `check_type` (`icmp`, `tcp`, `http`, `https`), `port`, `latency_threshold_ms`, `enabled`, `http_options`. The hostname goes through the same SSRF validation as the UI |
-| PATCH | `/hosts/{id}` | Update any of `name`, `hostname`, `check_type`, `port`, `latency_threshold_ms`, `enabled`, `maintenance`, `maintenance_until`, `http_options`, `probe_id` (`null` = checked by the server). Changed fields are audited |
+| PATCH | `/hosts/{id}` | Update any of `name`, `hostname`, `check_type`, `port`, `latency_threshold_ms`, `enabled`, `maintenance`, `maintenance_until`, `http_options`, `probe_id` (`null` = checked by the server), `site_id` (`null` = automatic, see [Sites](#sites)). Changed fields are audited |
 | PATCH | `/hosts/bulk` | Bulk update, see below |
 | DELETE | `/hosts/{id}` | Delete |
 | POST | `/hosts/{id}/maintenance` | Per-host maintenance flag: `action` `toggle` (default, with optional `duration`), `schedule` (with `until`, ISO-8601) or `off` |
@@ -121,7 +121,7 @@ keyword, redirect handling. Invalid options are a `400`; see
 ```
 
 Allowed fields: `check_type`, `enabled`, `latency_threshold_ms`,
-`maintenance`, `probe_id`; others are ignored and listed. At most 5000 ids.
+`maintenance`, `probe_id`, `site_id`; others are ignored and listed. At most 5000 ids.
 Response:
 
 ```json
@@ -247,12 +247,31 @@ one of its incidents.
 |---|---|---|
 | GET | `/agents` | All agents |
 | GET | `/agents/{id}` | Detail with latest metrics |
-| PATCH | `/agents/{id}` | `log_levels`, `log_channels`, `log_file_paths`, `agent_log_level`, `enabled`, and probe mode: `is_probe`, `probe_interval_seconds`; probe syslog relay (admin, probes only): `syslog_relay_enabled`, `syslog_relay_port` (1–65535, `null` = 514). Agent responses carry `syslog_relay` (`enabled`, `port`, `status` with the probe's last reported counters; `null` for non-probes) |
+| PATCH | `/agents/{id}` | `log_levels`, `log_channels`, `log_file_paths`, `agent_log_level`, `enabled`, and probe mode: `is_probe`, `probe_interval_seconds`; probe syslog relay (admin, probes only): `syslog_relay_enabled`, `syslog_relay_port` (1–65535, `null` = 514); `site_id` (admin, `null` = default site). Agent responses carry `syslog_relay` (`enabled`, `port`, `status` with the probe's last reported counters; `null` for non-probes) |
 | DELETE | `/agents/{id}` | Delete / decommission |
 | POST | `/agents/{id}/uninstall` | Queue a remote uninstall |
 | GET / PUT | `/agents/{id}/services` | Watched services. PUT body `{"services": [...]}`; GET also returns the last reported states |
 
 Install tokens for new agents: `POST /api/agents/install-tokens` (admin).
+
+### Sites
+
+Sites group hosts and probes by location inside a tenant. They filter and
+group; they are not an isolation boundary. Every installation has a default
+site. A host's **effective site** is its own site, else the site of the probe
+that checks it, else the default site. The default site counts as "not set",
+so moving a probe to a site moves the hosts it checks unless they have a site
+of their own.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/sites` | All sites: `id`, `name`, `is_default`, `host_count` and `probe_count` (by effective site), `created_at` |
+| POST | `/sites` | Create (admin). `name`, 1–128 characters, unique ignoring case (`409` otherwise) |
+| PATCH | `/sites/{id}` | Rename (admin) |
+| DELETE | `/sites/{id}` | Delete (admin). Hosts, probes, install tokens and scan schedules move to the default site. The default site cannot be deleted (`409`). Response `{ "ok": true, "moved_to": 1, "moved": {...} }` |
+
+Changes are audited (`site.create`, `site.rename`, `site.delete`). An unknown
+`site_id` in a host or agent update is a `400`.
 
 ### Integrations, logs, topology
 

@@ -28,6 +28,10 @@ export interface HostListItem {
   enabled: boolean;
   /** Agent responsible for checking this host, or null when the core checks it. */
   probe_id: number | null;
+  /** Effective site: the host's own, else its probe's, else the default (B-14). */
+  site_id?: number | null;
+  /** The site set on the host itself; null = follows its probe / the default. */
+  site_set?: number | null;
   /** Unified state (services/host_state.py): up, degraded, warning, down, unknown, maintenance, disabled. */
   state?: string;
   /** Short sentence explaining the state, for tooltips. */

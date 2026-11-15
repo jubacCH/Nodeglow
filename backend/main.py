@@ -37,6 +37,7 @@ from routers import (
     backups as backups_router,
     maintenance as maintenance_router,
     events as events_router,
+    sites as sites_router,
 )
 
 
@@ -621,6 +622,7 @@ app.include_router(digest_router.router)
 app.include_router(bandwidth_router.router)
 app.include_router(backups_router.router)
 app.include_router(maintenance_router.router)
+app.include_router(sites_router.router)
 
 # ── Plugins (enterprise features under ee/, when present) ─────────────────────
 # The loader is the only core module that knows ee/ exists; without it (or with

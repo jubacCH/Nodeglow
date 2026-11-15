@@ -350,8 +350,10 @@ async def list_hosts(
                                           "up, degraded, warning, down, unknown, maintenance, disabled"),
     source: str = Query(None, description="Filter by source: manual, proxmox, agent, phpipam"),
     enabled: bool = Query(None, description="Filter by enabled status"),
+    site: int = Query(None, description="Filter by effective site id (own site, else the probe's, else the default)"),
 ):
     from services import host_state as hs
+    from services import sites as site_svc
 
     wanted_states = _csv_filter(state, hs.STATES, "state")
     q = select(PingHost).order_by(PingHost.name)
@@ -369,9 +371,13 @@ async def list_hosts(
     # One probe-aware rule for every list: a host behind a silent probe is
     # "unknown", not its last value (it used to stay "online" here forever).
     states = await hs.host_states(db, hosts, now, latest=latest_map, windows=windows)
+    site_ctx = await site_svc.load_context(db)
 
     out = []
     for h in hosts:
+        effective_site = site_ctx.effective(h.site_id, h.probe_id)
+        if site is not None and effective_site != site:
+            continue
         lr = latest_map.get(h.id)
         st = states[h.id]
         host_status = hs.legacy_status(st.state)
@@ -389,6 +395,8 @@ async def list_hosts(
             "status": host_status,
             **st.fields(),
             "probe_id": h.probe_id,
+            "site_id": effective_site,
+            "site_set": site_ctx.explicit(h.site_id),
             "check_type": h.check_type or "icmp",
             "port": h.port,
             "source": h.source or "manual",
@@ -540,6 +548,10 @@ async def get_host(
         health_score = round(min(_hs, 1.0), 3)
     health_pct = round((1 - health_score) * 100)
 
+    from services import sites as site_svc
+    _ctx = await site_svc.load_context(db)
+    _site = {"site_id": _ctx.effective(host.site_id, host.probe_id), "site_set": _ctx.explicit(host.site_id)}
+
     return {
         "id": host.id,
         "name": host.name,
@@ -550,6 +562,7 @@ async def get_host(
         "status": hs.legacy_status(_state.state),
         **_state.fields(),
         "probe_id": host.probe_id,
+        **_site,
         **_maint,
         "maintenance_until": iso(host.maintenance_until),
         "source": host.source or "manual",
@@ -948,7 +961,7 @@ def _audit_value(value):
 # "{host_id}" matches the literal "bulk", so declared after it this route was
 # unreachable — every bulk edit answered 422 from the single-host route.
 _BULK_FIELDS = {"check_type", "enabled", "latency_threshold_ms", "maintenance",
-                "maintenance_hours", "probe_id"}
+                "maintenance_hours", "probe_id", "site_id"}
 _BULK_MAINTENANCE_MAX_HOURS = 24 * 30
 _BULK_MAX_IDS = 5000
 
@@ -1002,6 +1015,10 @@ async def bulk_update_hosts(
         probe = await db.get(Agent, values["probe_id"])
         if not probe or not probe.is_probe:
             raise HTTPException(400, "probe_id does not refer to a probe agent")
+
+    if "site_id" in values:
+        from services import sites as site_svc
+        values["site_id"] = await site_svc.resolve(db, values["site_id"])
 
     existing = [hid for (hid,) in (await db.execute(
         select(PingHost.id).where(PingHost.id.in_(host_ids))
@@ -1057,12 +1074,16 @@ async def update_host(
         probe = await db.get(Agent, body["probe_id"])
         if not probe or not probe.is_probe:
             raise HTTPException(400, "probe_id does not refer to a probe agent")
+    if "site_id" in body:
+        from services import sites as site_svc
+        body["site_id"] = await site_svc.resolve(db, body["site_id"])
     # Record what actually changed, so the host timeline can show the edit
     # rather than just the fact that an edit happened. Fields present in the
     # body but unchanged are left out — they are noise, not history.
     changes: dict[str, dict] = {}
     for field in ("name", "hostname", "check_type", "port", "latency_threshold_ms",
-                  "enabled", "maintenance", "maintenance_until", "http_options", "probe_id"):
+                  "enabled", "maintenance", "maintenance_until", "http_options", "probe_id",
+                  "site_id"):
         if field in body:
             val = body[field]
             if field == "maintenance_until" and isinstance(val, str):
@@ -1117,6 +1138,7 @@ def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) ->
         "is_probe": bool(agent.is_probe),
         "probe_interval_seconds": agent.probe_interval_seconds,
         "syslog_relay": relay_view(agent),
+        "site_id": agent.site_id,
     }
     if agent.is_probe:
         st = ProbeState(
@@ -1307,12 +1329,18 @@ async def patch_agent(
                                      or not 1 <= port <= 65535):
                 raise HTTPException(400, "syslog_relay_port must be 1..65535 or null")
             updates["syslog_relay_port"] = port
+    if "site_id" in body:
+        # Moving an agent moves the hosts its probe checks: admin-only, audited.
+        if _key.role != "admin":
+            raise HTTPException(403, "Admin role required to change the site.")
+        from services import sites as site_svc
+        updates["site_id"] = await site_svc.resolve(db, body["site_id"])
     if updates.get("is_probe") is False:
         # A plain agent never relays: switching the role off switches it off.
         updates["syslog_relay_enabled"] = False
 
     for field in ("is_probe", "probe_interval_seconds", "syslog_relay_enabled",
-                  "syslog_relay_port"):
+                  "syslog_relay_port", "site_id"):
         if field in updates and getattr(agent, field) != updates[field]:
             probe_changes[field] = {"from": getattr(agent, field), "to": updates[field]}
 
