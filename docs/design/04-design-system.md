@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Stand** | 10.10.2026 |
+| **Stand** | 15.11.2026 (Konzept F, Phase 1: Formen und Leiste) |
 | **Grundlage** | Konzept E3 „Nodeglow“ ([`directions/concept-e3.md`](directions/concept-e3.md), Prototyp [`prototypes/concept-e3/index.html`](prototypes/concept-e3/index.html)), IA aus [`02-information-architecture.md`](02-information-architecture.md) |
 | **Akzent** | nur **Glow Violet** (`#7C6CFF` dunkel / `#5B4BE0` hell), als Token umgesetzt; der Akzent-Umschalter des Prototyps entfällt |
 | **Code** | `frontend/design-tokens/tokens.json` → `src/styles/tokens.gen.{css,ts}`, `src/app/globals.css` (Tailwind-4-`@theme`), `src/components/ui/*`, `src/components/layout/*`, `src/lib/{theme,status,navigation,chart-theme}.ts` |
@@ -72,7 +72,9 @@ design-tokens/tokens.json ──(npm run build:tokens, läuft auch in dev/build)
 | `grid` | `rgba(255,255,255,.05)` | `#EEF0F3` | `bg-grid` | Chart-Raster |
 | `scrim` | `rgba(4,5,8,.6)` | `rgba(20,22,28,.28)` | `bg-scrim` | Overlay hinter Dialog/Panel |
 | `tip-bg` / `tip-text` | `#262932` / `#ECEEF2` | `#1D1F25` / `#F2F3F5` | `bg-tip`, `text-tip-fg` | Tooltip, Toast (immer dunkel) |
+| `tip-text-2` / `tip-accent` / `tip-down` | `#A2A6B1` / `#9488FF` / `#F46A70` | gleich | `text-tip-fg-2`, `text-tip-accent`, `text-tip-down` | Sekundärtext, Akzent- und Down-Text auf der immer dunklen `tip-bg`-Fläche (Konzept F) |
 | `shadow`, `shadow-sm` | tief | weich | `shadow-overlay`, `shadow-ng-sm` | nur schwebende Flächen (Popover, Panel, Dialog) |
+| `card-shadow` | `border` als 1-px-Ring + `shadow-sm` | gleich | `shadow-card` | Kartenrand (Konzept F: Rand als Schatten statt `border`) |
 
 Abweichungen vom Prototyp (wegen WCAG AA, siehe 2.5): `text-3` dunkel `#6E7380 → #8A8F9B`, hell `#868B96 → #666B76`; `accent-btn-hover` dunkel `#7363FA → #5A4AE6` (Hover wird dunkler statt heller, der Akzent-Glow liefert das Feedback); neue `st-*-text`-Tokens.
 
@@ -120,13 +122,13 @@ Zahlen: `.num` bzw. `tabular-nums` (Tabellenziffern; der `body` hat `tnum` berei
 
 | Token | Wert | Tailwind | Einsatz |
 |---|---|---|---|
-| `radius` | 10 px | `rounded-card` | Karten |
-| `radius-lg` | 12 px | `rounded-ng-lg` | Dialog, Command Palette |
-| `radius-ctl` | 8 px | `rounded-ctl` | Buttons, Felder |
-| `radius-sm` | 7 px | `rounded-ng-sm` | kleine Buttons, Menüzeilen |
-| `radius-chip` | 5 px | `rounded-chip` | Badge, Tag, Kbd |
-| `radius-pill` | 9999 px | `rounded-pill` | Pills |
-| `rail-w` / `topbar-h` / `tabbar-h` | 60 / 60 / 58 px | `w-rail`, `h-topbar`, `h-tabbar`, `pl-rail` | Shell |
+| `radius` | 20 px | `rounded-card` | Karten, Toast |
+| `radius-lg` | 24 px | `rounded-ng-lg` | Dialog, Command Palette |
+| `radius-ctl` | 12 px | `rounded-ctl` | Felder, Einträge der Leiste, Icon-Flächen |
+| `radius-sm` | 10 px | `rounded-ng-sm` | Menüzeilen, Tooltip |
+| `radius-chip` | 8 px | `rounded-chip` | Badge, Tag, Kbd |
+| `radius-pill` | 9999 px | `rounded-pill` | **Buttons** (alle Grössen, auch Icon-Buttons), Segmented Control, Pills, Zähler |
+| `rail-w` / `rail-w-wide` / `topbar-h` / `tabbar-h` | 60 / 228 / 60 / 58 px | `w-rail`, `h-topbar`, `h-tabbar`, `pl-rail` | Shell; `--ng-rail-w` wird ab 1100 px auf `rail-w-wide` umgestellt, ausser `data-rail="narrow"` auf `<html>` |
 | `content-max` | 1760 px | `max-w-content` | Inhaltsbreite |
 | `gutter` / `gutter-sm` / `gap` | 24 / 16 / 16 px | `px-gutter` | Seitenrand, Kartenabstand |
 | `z-*` | topbar 20, rail 30, scrim 60, popover 65, panel 70, palette 75, tooltip 80, toast 90 | `z-topbar` … | Ebenen |
@@ -145,6 +147,7 @@ Geprüft durch `src/styles/tokens.test.ts` (schlägt bei Unterschreitung fehl). 
 | `accent-text` auf `accent-soft` | 4.5 | 4.93 | 5.85 |
 | `on-accent` auf `accent-btn` / `accent-btn-hover` | 4.5 | 5.03 / 5.90 | 5.95 / 7.28 |
 | `tip-text` auf `tip-bg` | 4.5 | 12.51 | 14.84 |
+| `tip-text-2` / `tip-accent` / `tip-down` auf `tip-bg` | 4.5 | 5.97 / 5.00 / 4.94 | 6.77 / 5.67 / 5.60 |
 | `st-ok-text` auf `surface` / `st-ok-soft` | 4.5 | 7.68 / 6.15 | 5.39 / 4.66 |
 | `st-degraded-text` auf `surface` / Soft | 4.5 | 9.97 / 7.60 | 5.85 / 5.13 |
 | `st-warning-text` auf `surface` / Soft | 4.5 | 7.41 / 5.97 | 5.23 / 4.52 |
@@ -154,7 +157,7 @@ Geprüft durch `src/styles/tokens.test.ts` (schlägt bei Unterschreitung fehl). 
 | Statusfarben (Grafik) auf `surface`: ok / degraded / warning / down / maint | 3 | 7.68 / 9.97 / 7.41 / 5.13 / 5.93 | 3.45 / 3.14 / 3.39 / 4.54 / 4.50 |
 | `focus` auf `bg` / `surface` | 3 | 6.45 / 5.98 | 5.46 / 5.95 |
 
-Bewusste Ausnahmen: `st-unknown` als Grafik liegt unter 3:1 („kein Licht = keine Daten“); Unbekannt wird deshalb immer zusätzlich über Form (hohl, schraffiert, gestrichelt) und Text vermittelt. Der Zähler-Badge an der Leiste (weiss auf `st-down`, 10 px) folgt E3 und ist `aria-hidden`; die Zahl steht im zugänglichen Namen des Links.
+Bewusste Ausnahmen: `st-unknown` als Grafik liegt unter 3:1 („kein Licht = keine Daten“); Unbekannt wird deshalb immer zusätzlich über Form (hohl, schraffiert, gestrichelt) und Text vermittelt. Der Zähler-Badge an Leiste und Tab-Bar ist seit Konzept F `st-down-soft` mit `st-down-text` (Weiss auf `st-down` lag unter 4.5:1), behält den Glow und ist `aria-hidden`; die Zahl steht im zugänglichen Namen des Links.
 
 ---
 
@@ -249,7 +252,7 @@ Die Migration ist abgeschlossen (Stand 10.10.2026); die Tabelle bleibt als Refer
 | Komponente | Datei | Zweck und Regeln |
 |---|---|---|
 | `Button`, `IconButton`, `buttonClasses()` | `Button.tsx` | Varianten `primary` (eine pro Ansicht, einziger Akzent-Glow), `secondary`, `ghost` (Toolbars), `danger` (getönt, kein roter Block). Grössen `sm` 28 / `md` 36 / `lg` 40 px, `loading` (Spinner, `aria-busy`, deaktiviert). `IconButton` verlangt `aria-label`. `buttonClasses()` für `<Link>`. |
-| `Card`, `CardHeader` | `Card.tsx` | Flache Fläche, 1 px Rand, 10 px Radius, Padding 20 (mobil 16). `glow="crit"|"warn"` nur für Objekte mit Handlungsbedarf, `acknowledged` halbiert den Halo und stoppt das Atmen. `CardHeader` = Titel 14 px + `meta` + `actions`, `titleId` für `aria-labelledby`. |
+| `Card`, `CardHeader` | `Card.tsx` | Flache Fläche, Rand als `shadow-card`, 20 px Radius, Padding 20 (mobil 16). `glow="crit"|"warn"` nur für Objekte mit Handlungsbedarf, `acknowledged` halbiert den Halo und stoppt das Atmen. `CardHeader` = Titel 14 px + `meta` + `actions`, `titleId` für `aria-labelledby`. |
 | `StatusDot` | `StatusDot.tsx` | 6/8/10 px. Zustände `ok degraded warning down maint unknown` (+ alte Namen `online offline error maintenance disabled`). Unknown = hohler Ring. Down/Warning glühen (abschaltbar), `breathe` nur für kritisch + unquittiert. Hat einen zugänglichen Namen (`label`, `""` wenn Text daneben steht). |
 | `StatusPill` | `StatusPill.tsx` | Getönte Pill mit Punkt und AA-Text, Default-Label aus dem Vokabular. Für Zusammenfassungen („1 critical“, „9 no data“) und Statusspalten. Pills glühen nie. |
 | `Badge` | `Badge.tsx` | Kleines Rechteck für Zähler/Typen; `tone` (`neutral accent ok …`) oder `variant="severity"`. Integrationsfarben entfallen. |
@@ -268,7 +271,7 @@ Die Migration ist abgeschlossen (Stand 10.10.2026); die Tabelle bleibt als Refer
 | `Kbd` | `Kbd.tsx` | Tastenkappe. |
 | `BigNumber` | `BigNumber.tsx` | Kennzahl in Sora mit Tabellenziffern, `unit`, `label`, `state` (nur wenn die Zahl der Zustand ist), `stale`. `null` → „—“ in Grau, nie 0. |
 | `HealthRing`, `HealthLegend` | `HealthRing.tsx` | Donut für Objektzustände (feste Reihenfolge ok → unknown), Unbekannt schraffiert, Mitte (`center`) mit innerem Schein nach Gesamtlage (kritisch Rot-Orange, Warnung Orange, sonst nichts), atmet nur dunkel. `aria-label` automatisch („48 hosts: 29 ok, …“). |
-| `NodeglowMark`, `Wordmark`, `Lockup` | `NodeglowMark.tsx` | Zeichen aus E3 (Knoten, Halo, Orbit, Satellit), `mono` für einfarbig, Wortmarke mit leuchtendem „o“. |
+| `NodeglowMark`, `Lockup` | `NodeglowMark.tsx` | Zeichen „Puls-N“ (Linie in `currentColor`, Statuspunkt im Akzent mit Halo `mark-halo`), `mono` für einfarbig; Lockup = Zeichen + Wortmarke „nodeglow“ (Sora 600 als Pfad, einfarbig) in einem SVG. Der Punkt ist das einzige Licht im Lockup. |
 | `CommandPalette` / `CommandPaletteHost` | | Ctrl/Cmd+K oder Suchknopf in der Kopfzeile (`useUiStore().setPaletteOpen`). Seiten aus der Navigations-Registry, Hosts, Integrationen, Aktionen. |
 | `KeyboardShortcuts` | | `g` + Taste aus der Registry (`g d` Overview, `g n`/`g a` Incidents, `g r` Regeln, `g h` Hosts, `g o` Topologie, `g l`/`g s` Logs, `g i` Settings, `g t` Systemstatus), `?` Hilfe. |
 
@@ -312,7 +315,11 @@ Jeder Zustand hat **Farbe und Form und Text**. Status nie nur über Farbe.
 
 ## 7. App-Shell, Layout, Raster
 
-- **Leiste** (≥ 760 px): 60 px, Zeichen oben (About-Popover), Bereichs-Icons mit Tooltip, aktiv = `accent-soft`, Incident-Zähler mit Glow, Administration unten.
+- **Leiste** (≥ 760 px), Konzept F:
+  - **Ab 1100 px breit (228 px) mit Text:** Lockup oben (About-Popover), Bereiche mit Icon und Name, Zähler als Pill rechts, Administration unten, darunter „Collapse“.
+  - **Eingeklappt** (`useThemeStore().sidebarCollapsed`, gespeichert) **oder unter 1100 px:** 60 px, Zeichen oben, Icons mit Tooltip, Zähler als Pill an der Ecke.
+  - `THEME_INIT_SCRIPT` setzt `data-rail` vor dem ersten Paint, `ThemeController` hält es synchron, der Inhalt folgt über `pl-rail`.
+  - Aktiv = `accent-soft` + `text-accent`.
 - **Kopfzeile**: 60 px, sticky. Tenant-Umschalter (`TenantSwitcher`, nur bei mehr als einem Tenant: Popover mit den Tenants des Benutzers, Rolle und Zugriffsart, z. B. Tag *Support access*; Wechsel = `POST /api/auth/tenant`, Query-Cache wird geleert, Live-Socket neu verbunden; Operatoren mit ee zusätzlich „Manage tenants“), Suche (Ctrl K; unter 900 px nur Icon), Live-Status, Glow (nur bei aktiver KI), Theme-Umschalter, Konto (Theme dunkel/hell/System, Tastenkürzel, Abmelden).
 - **Sub-Navigation**: `NavTabs` oben im Inhalt, aus `lib/navigation.ts`, nur bei Bereichen mit ≥ 2 Seiten; Zähler (Incidents rot, Discovery neutral).
 - **Mobil (< 760 px)**: Tab-Bar unten (58 px) mit 5 Bereichen + „More“ (SidePanel mit allen Seiten). Inhalt `px-4`, unten 90 px Platz.

@@ -167,7 +167,7 @@ export function SegmentedControl<K extends string>({
     onChange(options[n].value);
   };
   return (
-    <div role="radiogroup" aria-label={label} className={cn('inline-flex gap-0.5 rounded-[9px] border border-border bg-surface p-[3px]', className)}>
+    <div role="radiogroup" aria-label={label} className={cn('inline-flex gap-0.5 rounded-pill bg-surface-2 p-[3px]', className)}>
       {options.map((o, i) => {
         const checked = o.value === value;
         return (
@@ -182,9 +182,9 @@ export function SegmentedControl<K extends string>({
             onClick={() => onChange(o.value)}
             onKeyDown={(e) => onKey(e, i)}
             className={cn(
-              'inline-flex items-center gap-1.5 whitespace-nowrap rounded-[6px] font-medium transition-colors',
+              'inline-flex items-center gap-1.5 whitespace-nowrap rounded-pill font-medium transition-colors',
               size === 'md' ? 'h-[28px] px-2.5 text-meta' : 'h-[24px] px-2 text-micro',
-              checked ? 'bg-surface-3 text-fg' : 'text-fg-2 hover:bg-surface-2 hover:text-fg',
+              checked ? 'bg-surface text-fg shadow-card' : 'text-fg-2 hover:text-fg',
             )}
           >
             {o.label}

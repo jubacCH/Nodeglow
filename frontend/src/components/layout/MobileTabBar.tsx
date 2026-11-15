@@ -9,7 +9,7 @@ import { useNavBadges, useShellNav } from './useShellNav';
 
 const tabClass = (active: boolean) =>
   cn(
-    'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[9px] py-1 text-[10px] font-medium leading-none',
+    'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-ctl py-1 text-[10px] font-medium leading-none',
     active ? 'text-accent' : 'text-fg-3',
   );
 
@@ -43,10 +43,10 @@ export function MobileTabBar() {
               aria-label={count ? `${s.label}, ${count} open` : s.label}
               className={tabClass(isActive)}
             >
-              <span className={cn('relative grid h-[28px] w-[40px] place-items-center rounded-[8px]', isActive && 'bg-accent-soft')}>
+              <span className={cn('relative grid h-[28px] w-[40px] place-items-center rounded-pill', isActive && 'bg-accent-soft')}>
                 <s.icon size={20} strokeWidth={1.7} aria-hidden="true" />
                 {!!count && (
-                  <span aria-hidden="true" className="num absolute -right-0.5 -top-1 h-[15px] min-w-[15px] rounded-[8px] bg-down px-1 text-center text-[10px] font-semibold leading-[15px] text-on-accent shadow-glow-dot-crit">
+                  <span aria-hidden="true" className="num absolute -right-0.5 -top-1 h-[15px] min-w-[15px] rounded-pill bg-down-soft px-1 text-center text-[10px] font-semibold leading-[15px] text-down shadow-glow-dot-crit">
                     {count > 99 ? '99+' : count}
                   </span>
                 )}
@@ -62,7 +62,7 @@ export function MobileTabBar() {
           aria-expanded={moreOpen}
           className={tabClass(moreActive)}
         >
-          <span className={cn('grid h-[28px] w-[40px] place-items-center rounded-[8px]', moreActive && 'bg-accent-soft')}>
+          <span className={cn('grid h-[28px] w-[40px] place-items-center rounded-pill', moreActive && 'bg-accent-soft')}>
             <MoreHorizontal size={20} aria-hidden="true" />
           </span>
           <span>More</span>

@@ -28,7 +28,7 @@ export const Card = forwardRef<HTMLElement, CardProps>(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ref={ref as any}
       className={cn(
-        'min-w-0 rounded-card border border-border bg-surface',
+        'min-w-0 rounded-card bg-surface shadow-card',
         pad[padding],
         interactive && 'transition-colors duration-150 hover:border-border-2',
         glow === 'crit' && 'ng-glow-crit',

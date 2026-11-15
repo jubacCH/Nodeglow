@@ -66,7 +66,7 @@ export function Tooltip({ content, children, side = 'top', asLabel, className }:
         role="tooltip"
         data-theme="dark"
         className={cn(
-          'pointer-events-none absolute z-tooltip whitespace-nowrap rounded-[6px] bg-tip px-[9px] py-[5px] text-meta font-medium text-tip-fg shadow-overlay transition-opacity duration-100',
+          'pointer-events-none absolute z-tooltip whitespace-nowrap rounded-ng-sm bg-tip px-[9px] py-[5px] text-meta font-medium text-tip-fg shadow-overlay transition-opacity duration-100',
           position[side],
           open ? 'opacity-100' : 'opacity-0',
           // Hidden tooltips stay in the DOM for aria-describedby but not visible.
