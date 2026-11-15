@@ -460,3 +460,49 @@ async def test_query_count_does_not_grow_with_hosts_or_incidents():
     small = await run(5)
     large = await run(120)
     assert large == small, (small, large)
+
+
+async def test_incidents_carry_their_evidence_and_cause():
+    """Concept F, phase 3: relations (at most four) and the cause with its path."""
+    from models.incident import Incident
+    from models.ping import PingHost
+    from services import incident_relations as relations
+
+    async with make_client() as (client, sf):
+        async with sf() as db:
+            fw = PingHost(name="fw-zh-01", hostname="10.0.0.1")
+            db.add(fw)
+            await db.flush()
+            sw = PingHost(name="SW-ZH-CORE-02", hostname="10.0.0.2", parent_id=fw.id)
+            db.add(sw)
+            await db.flush()
+            leaf = PingHost(name="SRV-APP-01", hostname="10.0.0.20", parent_id=sw.id)
+            db.add(leaf)
+            await db.flush()
+            inc = Incident(rule="multi_host_down", title="Network issue", severity="critical", status="open",
+                           host_ids=json.dumps([leaf.id]), cause_kind="host", cause_id=sw.id)
+            db.add(inc)
+            await db.flush()
+            await relations.record(db, inc, kind="rule", source="rule", summary="Rule multi_host_down: 3 hosts offline")
+            await relations.record(db, inc, kind="confirmed", source="topology", subject_kind="host",
+                                   subject_id=sw.id, summary="All 3 hosts share the parent SW-ZH-CORE-02 in the topology.")
+            for n in range(3):
+                await relations.record(db, inc, kind="suspected", source="syslog", subject_kind="host",
+                                       subject_id=fw.id + 100 + n, summary=f"signal {n}")
+            await db.commit()
+            ids = {"fw": fw.id, "sw": sw.id, "inc": inc.id}
+
+        with fake_clickhouse():
+            data = (await client.get("/api/v2/dashboard")).json()
+            detail = (await client.get(f"/api/v1/incidents/{ids['inc']}")).json()
+
+    assert data["errors"] == [], data["errors"]
+    (item,) = data["incidents"]["items"]
+    assert [r["kind"] for r in item["relations"]] == ["confirmed", "rule", "suspected", "suspected"]
+    assert item["relations"][0]["subject"] == {"kind": "host", "id": ids["sw"], "name": "SW-ZH-CORE-02"}
+    assert item["relations"][0]["stale"] is False
+    assert item["cause"]["name"] == "SW-ZH-CORE-02"
+    assert [n["name"] for n in item["cause"]["path"]] == ["fw-zh-01", "SW-ZH-CORE-02"]
+
+    assert len(detail["relations"]) == 5, "the detail is not capped"
+    assert detail["cause"]["id"] == ids["sw"]

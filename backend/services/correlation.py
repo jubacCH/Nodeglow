@@ -24,6 +24,7 @@ from sqlalchemy import delete, func, select
 from models.base import AsyncSessionLocal
 from models.ping import PingHost
 from services import clickhouse_client as _ch
+from services import incident_relations as relations
 from services import integration_alerts
 from services.clickhouse_client import query as ch_query
 from services.clickhouse_client import query_scalar as ch_scalar
@@ -153,6 +154,8 @@ async def _find_or_create_incident(
     host_ids: list[int], event_type: str, summary: str, detail: str = None,
     key_hash: str | None = None, send_notification: bool = True,
     affected_host_ids: list[int] | None = None,
+    confirmed: list[dict] | None = None,
+    cause: tuple[str, int] | None = None,
 ) -> Incident:
     """Find existing open incident for this rule+hosts combo, or create new one.
 
@@ -164,6 +167,12 @@ async def _find_or_create_incident(
     ``affected_host_ids`` when given, else ``host_ids`` — except for a custom
     ``key_hash``, whose ``host_ids`` are not host ids, so nothing is recorded
     unless the caller names the hosts.
+
+    Evidence (concept F, phase 3): every incident gets a ``rule`` relation from
+    the rule and its summary. ``confirmed`` lists structural links the rule
+    used (each a dict for ``incident_relations.record``), ``cause`` the object
+    the hosts share as ``(kind, id)``. Both are refreshed on every call, so a
+    cause that moves is followed.
     """
     h = key_hash or _host_ids_hash(host_ids)
     if affected_host_ids is not None:
@@ -207,6 +216,7 @@ async def _find_or_create_incident(
                 summary=summary,
                 detail=detail,
             ))
+        await _record_evidence(db, existing, rule, summary, confirmed, cause)
         return existing
 
     # Create new incident
@@ -226,6 +236,7 @@ async def _find_or_create_incident(
         summary=summary,
         detail=detail,
     ))
+    await _record_evidence(db, incident, rule, summary, confirmed, cause)
 
     if not send_notification:
         return incident
@@ -243,6 +254,33 @@ async def _find_or_create_incident(
         log.warning("Failed to send incident notification: %s", exc)
 
     return incident
+
+
+async def _record_evidence(db, incident: Incident, rule: str, summary: str,
+                           confirmed: list[dict] | None, cause: tuple[str, int] | None) -> None:
+    """Rule and confirmed relations of an incident, and its cause.
+
+    Evidence is never allowed to cost the incident itself: a failure here is
+    logged as an error (the job smoke test fails on it) and the incident stays.
+    """
+    try:
+        await relations.record(db, incident, kind="rule", source="rule",
+                               summary=f"Rule {rule}: {summary}", detail={"rule": rule})
+        for c in confirmed or []:
+            await relations.record(db, incident, kind="confirmed", **c)
+        if cause is not None:
+            relations.set_cause(incident, *cause)
+        # Flush now, inside the tenant that loaded the rows: jobs walk the
+        # tenants with one session, and an update left pending until the next
+        # tenant's autoflush is filtered by that tenant and matches no row.
+        await db.flush()
+    except Exception:
+        log.error("Could not record the evidence of incident %s", incident.id, exc_info=True)
+
+
+async def _host_name(db, host_id: int) -> str:
+    host = await db.get(PingHost, host_id)
+    return host.name if host else f"host {host_id}"
 
 
 async def _get_offline_hosts(db, min_failures: int = 3) -> list[PingHost]:
@@ -404,6 +442,8 @@ async def _rule_host_down(
         cascade_hosts = [h for h in offline_hosts if h.id in cascaded_ids]
         parent_names = set()
         parent_ids: set[int] = set()
+        behind: dict[int, int] = {}   # failed parent id -> hosts behind it
+        parent_name_of: dict[int, str] = {}
         for hid in cascaded_ids:
             from services.topology import get_ancestors
             ancestors = get_ancestors(topology, hid)
@@ -413,6 +453,8 @@ async def _rule_host_down(
                     if ph:
                         parent_names.add(ph.name)
                         parent_ids.add(ph.id)
+                        parent_name_of[ph.id] = ph.name
+                        behind[ph.id] = behind.get(ph.id, 0) + 1
                     break
 
         names = ", ".join(h.name for h in cascade_hosts[:5])
@@ -436,6 +478,14 @@ async def _rule_host_down(
             summary=f"{len(cascaded_ids)} hosts offline due to upstream failure ({upstream_label}): {names}",
             key_hash=key,
             affected_host_ids=list(cascaded_ids),
+            confirmed=[
+                {"source": "topology", "subject_kind": "host", "subject_id": pid,
+                 "summary": f"{n} of the {len(cascaded_ids)} hosts are behind {parent_name_of[pid]} "
+                            f"in the topology, and {parent_name_of[pid]} is offline.",
+                 "detail": {"parent_id": pid, "behind": n, "affected": len(cascaded_ids)}}
+                for pid, n in sorted(behind.items())
+            ],
+            cause=("host", next(iter(parent_ids))) if len(parent_ids) == 1 else None,
         )
         incident.title = title
 
@@ -474,6 +524,16 @@ async def _rule_multi_host_down(
             title = f"Multiple hosts down ({len(hosts)} across subnets)"
             severity = "warning"
             summary = f"{len(hosts)} hosts offline across multiple subnets: {names}"
+        parent = relations.shared_parent(topology, host_ids)
+        confirmed, cause = None, None
+        if parent is not None:
+            parent_name = await _host_name(db, parent)
+            confirmed = [{
+                "source": "topology", "subject_kind": "host", "subject_id": parent,
+                "summary": f"All {len(hosts)} hosts share the parent {parent_name} in the topology.",
+                "detail": {"parent_id": parent, "hosts": len(hosts)},
+            }]
+            cause = ("host", parent)
         incident = await _find_or_create_incident(
             db,
             rule="multi_host_down",
@@ -484,6 +544,8 @@ async def _rule_multi_host_down(
             summary=summary,
             key_hash=key,
             affected_host_ids=host_ids,
+            confirmed=confirmed,
+            cause=cause,
         )
         # The same outage with one host more or less: keep the count current.
         incident.title = title
@@ -537,6 +599,13 @@ async def _rule_integration_host(
                 host_ids=[ping_host.id],
                 event_type="integration_error",
                 summary=f"Integration '{cfg.name}' ({cfg.type}) is unreachable and its host {ping_host.name} ({cfg_host}) is also offline",
+                confirmed=[{
+                    "source": "integration", "subject_kind": "integration", "subject_id": cfg.id,
+                    "summary": f"Integration {cfg.name} ({cfg.type}) is configured for {cfg_host}, "
+                               f"the address of {ping_host.name}, which is offline.",
+                    "detail": {"integration_id": cfg.id, "host_id": ping_host.id},
+                }],
+                cause=("integration", cfg.id),
             )
 
 

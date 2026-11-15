@@ -66,7 +66,7 @@ Verwendet in:
 - Jeder Eintrag zusätzlich: `acknowledged`, `host_ids`, `host_count`, `hosts` (bis 20 kompakte
   Einträge `{id, name, hostname, state, state_reason}`).
 
-`GET /api/v1/incidents/{id}`: zusätzlich `host_ids`, `host_count`, `hosts` (alle, mit aktuellem
+`GET /api/v1/incidents/{id}`: zusätzlich `relations` (alle, ungekürzt), `cause` (Pfad ohne Zustände), `host_ids`, `host_count`, `hosts` (alle, mit aktuellem
 Zustand), `acknowledged`.
 
 **Betroffene Hosts gespeichert** (Migration `037`, Spalte `incidents.host_ids`, sortierte JSON-Liste):
@@ -95,7 +95,7 @@ Parameter: `since` (optional, ISO) überschreibt „seit dem letzten Besuch“.
 | `health.failing_integrations` | bis 10 `{id, type, name, error}` | neuester Snapshot | ja |
 | `internet` | `source` (`speedtest`/`unifi`), `latest {download_mbps, upload_mbps, latency_ms, at, server}`, `history` (letzte 24 Ergebnisse, älteste zuerst), `wan {status, latency_ms, source}`, `gateway {id, name, state}` | Speedtest-Snapshots; Fallback UniFi-Snapshot (`speedtest`, `wan`) | Speedtest ja. **WAN-Status nur mit UniFi** (`wan.status` „ok“ → `up`), sonst `null`. Ganzer Abschnitt `null` ohne Speedtest/UniFi |
 | `incidents.counts` | `open` (= offen + quittiert), `acknowledged`, `unacknowledged`, `critical`, `warning`, `info` | | ja |
-| `incidents.items` | offen/quittiert, sortiert nach Schwere, unquittiert vor quittiert: `id, title, severity, rule, status, acknowledged, acknowledged_by, opened_at, age_seconds, host_count, host_ids, summary` | | ja; `host_count` `null`, wo nicht erfasst |
+| `incidents.items` | offen/quittiert, sortiert nach Schwere, unquittiert vor quittiert: `id, title, severity, rule, status, acknowledged, acknowledged_by, opened_at, age_seconds, host_count, host_ids, summary`, `relations` (höchstens 4: `kind` confirmed/rule/suspected, `source`, `summary`, `subject {kind, id, name}`, `first_seen_at`, `last_seen_at`, `stale`; Reihenfolge confirmed, rule, suspected) und `cause` (`{kind, id, name, state, path: [{id, name, state}]}` von der Topologie-Wurzel bis zur Ursache, oder `null`) | `incident_relations`, `incidents.cause_kind/cause_id` (Migration 054) | ja; `cause` `null`, wo die Regel keine gemeinsame Ursache kennt |
 | `incidents.per_day` | 14 Tage (lokale Tage), `count` + je Schwere | `created_at` | ja |
 | `incidents.resolved_today` | `id, title, severity, opened_at, resolved_at, duration_seconds` | `resolved_at` ≥ lokaler Tagesbeginn | ja |
 | `topology.roots` | oberste Eltern (Gateway zuerst) | `services/topology.py` | ja |
@@ -179,7 +179,10 @@ Aufrufe sowie falsche Keys abgewiesen werden.
 
 ## 8. Offen / bewusst nicht gemacht
 
-- Standorte (B-14), Zuständigkeit/Notizen am Incident (B-11), Beziehungslabels am Incident.
+- Standorte (B-14), Zuständigkeit/Notizen am Incident (B-11).
+- Beziehungslabels: „rule“ und „confirmed“ seit Migration 054 (`services/incident_relations.py`,
+  geschrieben von `upstream_failure`, `multi_host_down`, `integration_host` und für jede Regel als „rule“).
+  „suspected“ folgt mit Phase 3, PR 2 (`docs/specs/2026-11-15-concept-f-phase-3-design.md`).
 - Backfill von `incidents.host_ids` (Hash nicht umkehrbar).
 - Live-Push der neuen Zähler (B-16); das Frontend fragt ab.
 - `alembic check` gegen PostgreSQL lief lokal nicht (kein Postgres); die CI prüft es.

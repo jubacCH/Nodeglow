@@ -25,7 +25,7 @@ from models.settings import (
 from models.ping import PingHost
 from models.integration import IntegrationConfig, Snapshot
 from models.syslog import SyslogView
-from models.incident import Incident, IncidentEvent
+from models.incident import Incident, IncidentEvent, IncidentRelation
 from models.log_template import LogTemplate, HostBaseline, PrecursorPattern
 from models.agent import Agent
 from models.agent_install_token import AgentInstallToken
@@ -93,7 +93,7 @@ __all__ = [
     "PingHost",
     "IntegrationConfig", "Snapshot",
     "SyslogView",
-    "Incident", "IncidentEvent",
+    "Incident", "IncidentEvent", "IncidentRelation",
     "LogTemplate", "HostBaseline", "PrecursorPattern",
     "Agent", "AgentInstallToken",
     "SubnetScanSchedule", "SubnetScanLog",
