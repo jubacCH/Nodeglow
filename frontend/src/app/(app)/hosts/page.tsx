@@ -9,11 +9,12 @@ import { Button, IconButton } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ExportButton } from '@/components/ui/ExportButton';
-import { Checkbox, Input } from '@/components/ui/Field';
+import { Checkbox, Input, Select } from '@/components/ui/Field';
 import { Pagination } from '@/components/ui/Pagination';
 import { QueryState, formatAsOf } from '@/components/ui/QueryState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useAgents } from '@/hooks/queries/useAgents';
+import { hasSeveralSites, useSites } from '@/hooks/queries/useSites';
 import { useHostsV1, useHostsV1ByState, type HostListItem } from '@/hooks/queries/useHosts';
 import { cn } from '@/lib/utils';
 import { BulkActionsBar } from '@/components/hosts/BulkActionsBar';
@@ -71,6 +72,11 @@ function HostsPageInner() {
   const all = useHostsV1();
   const listQuery = useHostsV1ByState(stateFilter ? [stateFilter] : []);
   const { data: agents } = useAgents();
+  const { data: sites } = useSites();
+  const [siteFilter, setSiteFilter] = useState<number | null>(() => {
+    const v = Number(searchParams.get('site'));
+    return Number.isInteger(v) && v > 0 ? v : null;
+  });
 
   const probeNames = useMemo(() => {
     const m = new Map<number, { name: string; silent: boolean }>();
@@ -87,12 +93,23 @@ function HostsPageInner() {
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = (listQuery.data ?? []).filter((h) => !q || matches(h, q)).map((h) => toRow(h, probeNames));
+    const list = (listQuery.data ?? [])
+      .filter((h) => !q || matches(h, q))
+      .filter((h) => siteFilter === null || h.site_id === siteFilter)
+      .map((h) => toRow(h, probeNames));
     const mult = sortDir === 'asc' ? 1 : -1;
     return list.sort((a, b) => mult * compare(a, b, sortKey));
-  }, [listQuery.data, search, sortKey, sortDir, probeNames]);
+  }, [listQuery.data, search, sortKey, sortDir, probeNames, siteFilter]);
 
-  useEffect(() => { setPage(0); }, [search, stateFilter, sortKey, sortDir]);
+  useEffect(() => { setPage(0); }, [search, stateFilter, sortKey, sortDir, siteFilter]);
+
+  const changeSite = useCallback((id: number | null) => {
+    setSiteFilter(id);
+    const p = new URLSearchParams(searchParams.toString());
+    if (id) p.set('site', String(id)); else p.delete('site');
+    const qs = p.toString();
+    router.replace(qs ? `/hosts?${qs}` : '/hosts', { scroll: false });
+  }, [router, searchParams]);
   const paged = useMemo(() => rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [rows, page]);
 
   // Keep the filter in the URL so it can be shared and survives reloads.
@@ -132,7 +149,7 @@ function HostsPageInner() {
 
   const asOf = formatAsOf(listQuery.dataUpdatedAt);
   const total = all.data?.length;
-  const filtered = !!stateFilter || !!search.trim();
+  const filtered = !!stateFilter || !!search.trim() || siteFilter !== null;
 
   return (
     <div>
@@ -187,6 +204,20 @@ function HostsPageInner() {
           )}
         </div>
         <StateFilterChips value={stateFilter} onChange={changeFilter} counts={counts} total={total} />
+        {hasSeveralSites(sites) && (
+          <label className="flex items-center gap-2 text-meta text-fg-2">
+            <span>Site</span>
+            <Select
+              aria-label="Filter by site"
+              value={siteFilter ?? ''}
+              onChange={(e) => changeSite(e.target.value ? Number(e.target.value) : null)}
+              className="h-[32px] w-auto"
+            >
+              <option value="">All sites</option>
+              {(sites ?? []).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.host_count})</option>)}
+            </Select>
+          </label>
+        )}
       </div>
 
       {selectedIds.length > 0 && (

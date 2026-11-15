@@ -76,6 +76,14 @@ describe('bulk results', () => {
   it('builds the update payload', () => {
     expect(bulkUpdatesFor({ kind: 'maintenance', on: false })).toEqual({ maintenance: false });
     expect(bulkUpdatesFor({ kind: 'probe', probeId: null })).toEqual({ probe_id: null });
+    expect(bulkUpdatesFor({ kind: 'site', siteId: 4, siteName: 'Bern' })).toEqual({ site_id: 4 });
+    expect(bulkUpdatesFor({ kind: 'site', siteId: null })).toEqual({ site_id: null });
+  });
+
+  it('names the site a move went to', () => {
+    const res = { updated: 3, ids: [1, 2, 3], missing: [], ignored_fields: [] };
+    expect(describeBulkResult({ kind: 'site', siteId: 4, siteName: 'Bern' }, res).message).toBe('Moved to Bern: 3 hosts.');
+    expect(describeBulkResult({ kind: 'site', siteId: null }, res).message).toBe('Site set to automatic for 3 hosts.');
   });
 
   it('reports missing hosts and ignored fields', () => {

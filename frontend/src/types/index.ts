@@ -88,6 +88,9 @@ export interface PingHost {
   created_at: string;
   /** Agent responsible for checking this host, or null when the core checks it directly. */
   probe_id?: number | null;
+  /** Effective site (B-14) and the site set on the host itself (null = automatic). */
+  site_id?: number | null;
+  site_set?: number | null;
 }
 
 export interface HostStatus {
@@ -158,6 +161,8 @@ export interface Agent {
   is_probe?: boolean;
   /** How often the probe re-checks its assigned hosts, in seconds; null uses the default. */
   probe_interval_seconds?: number | null;
+  /** Site of the agent; the hosts its probe checks follow it unless they have their own. */
+  site_id?: number | null;
 }
 
 /** Last reported state of one watched service on an agent. */

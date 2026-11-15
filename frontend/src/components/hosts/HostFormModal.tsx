@@ -5,6 +5,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Checkbox, Field, Input, Select } from '@/components/ui/Field';
 import { useAgents } from '@/hooks/queries/useAgents';
+import { hasSeveralSites, useSites } from '@/hooks/queries/useSites';
 import { apiErrorMessage, patch, post } from '@/lib/api';
 import {
   DEFAULT_HTTP_FORM, hasHttpCheck, httpFormFromOptions, httpOptionsPayload, validateHttpForm,
@@ -26,6 +27,8 @@ export interface EditableHost {
   latency_threshold_ms: number | null;
   enabled: boolean;
   probe_id?: number | null;
+  /** The site set on the host itself; null = automatic. */
+  site_set?: number | null;
   http_options?: Partial<HttpOptions> | null;
 }
 
@@ -42,6 +45,8 @@ interface HostFormModalProps {
 export function HostFormModal({ open, onClose, mode, host, onSaved }: HostFormModalProps) {
   const { data: agents } = useAgents();
   const probes = ((agents ?? []) as ProbeAgent[]).filter((a) => a.is_probe);
+  const { data: sites } = useSites();
+  const showSites = hasSeveralSites(sites);
   const [form, setForm] = useState<HostFormValues>(EMPTY_HOST_FORM);
   const [httpForm, setHttpForm] = useState(DEFAULT_HTTP_FORM);
   const [errors, setErrors] = useState<HostFormErrors>({});
@@ -68,6 +73,7 @@ export function HostFormModal({ open, onClose, mode, host, onSaved }: HostFormMo
         latency_threshold_ms: host.latency_threshold_ms ? String(host.latency_threshold_ms) : '',
         enabled: host.enabled !== false,
         probe_id: host.probe_id != null ? String(host.probe_id) : '',
+        site_id: host.site_set != null ? String(host.site_set) : '',
       });
       setHttpForm(httpFormFromOptions(host.http_options));
     } else {
@@ -108,6 +114,7 @@ export function HostFormModal({ open, onClose, mode, host, onSaved }: HostFormMo
           latency_threshold_ms: form.latency_threshold_ms.trim() ? Number(form.latency_threshold_ms) : null,
           enabled: form.enabled,
           probe_id: form.probe_id ? Number(form.probe_id) : null,
+          ...(showSites ? { site_id: form.site_id ? Number(form.site_id) : null } : {}),
           ...(isHttp ? { http_options: httpOptionsPayload(httpForm) } : {}),
         });
         onSaved(host.id);
@@ -182,6 +189,14 @@ export function HostFormModal({ open, onClose, mode, host, onSaved }: HostFormMo
                   {probes.map((p) => <option key={p.id} value={p.id}>{probeOptionLabel(p)}</option>)}
                 </Select>
               </Field>
+              {showSites && (
+                <Field label="Site" hint="Automatic: the site of the probe that checks it, else the default site.">
+                  <Select value={form.site_id} onChange={(e) => set('site_id', e.target.value)}>
+                    <option value="">Automatic</option>
+                    {(sites ?? []).filter((s) => !s.is_default).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </Select>
+                </Field>
+              )}
               <Checkbox
                 className="sm:col-span-2"
                 label="Monitoring enabled"

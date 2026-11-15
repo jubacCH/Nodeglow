@@ -17,6 +17,8 @@ export interface HostFormValues {
   enabled: boolean;
   /** '' = the core checks the host. */
   probe_id: string;
+  /** '' = automatic: the probe's site, else the default (B-14). */
+  site_id: string;
 }
 
 export const EMPTY_HOST_FORM: HostFormValues = {
@@ -27,6 +29,7 @@ export const EMPTY_HOST_FORM: HostFormValues = {
   latency_threshold_ms: '',
   enabled: true,
   probe_id: '',
+  site_id: '',
 };
 
 export type HostFormErrors = Partial<Record<keyof HostFormValues, string>>;
