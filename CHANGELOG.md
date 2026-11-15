@@ -19,6 +19,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   (`relations`, `cause` with its path from the topology root) and in the
   incident detail. New table `incident_relations` (migration 054), included
   in backups. Nothing about notifications changes.
+- Suspected relations on incidents. For an incident in its first 30 minutes,
+  the correlation run looks ten minutes around its onset for things with no
+  structural link to its hosts: another incident that opened then, or a host
+  logging at least three times its usual syslog volume for the hour. Each
+  becomes a "Suspected" hint with its numbers ("opened 3 min before",
+  "2520 messages/h, 4.2x its usual 600/h"), at most three per incident. They
+  are shown, never notified, and change nothing about the incident.
 - Silent agents are an incident. An agent or probe that has not reported
   for ten minutes opens "Agent silent: <name>" (rule `agent_silent`,
   warning) with the time of its last report, linked to its host, and

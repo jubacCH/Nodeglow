@@ -182,7 +182,11 @@ Aufrufe sowie falsche Keys abgewiesen werden.
 - Standorte (B-14), Zuständigkeit/Notizen am Incident (B-11).
 - Beziehungslabels: „rule“ und „confirmed“ seit Migration 054 (`services/incident_relations.py`,
   geschrieben von `upstream_failure`, `multi_host_down`, `integration_host` und für jede Regel als „rule“).
-  „suspected“ folgt mit Phase 3, PR 2 (`docs/specs/2026-11-15-concept-f-phase-3-design.md`).
+  „suspected“ seit Phase 3, PR 2 (`services/suspected_relations.py`, letzter Schritt jedes
+  Korrelationslaufs): nur für Incidents der letzten 30 Minuten mit erfassten Hosts, Fenster ±10 Minuten
+  um den Beginn, höchstens 3 gespeichert. Signale: ein anderer Incident im Fenster ohne gemeinsamen Host
+  oder Topologie-Ast, oder ein nicht verbundener Host mit Syslog-Volumen ≥ 3× seiner Baseline und
+  mindestens 20 Nachrichten. Nie veraltet (`stale` immer false), nie in Benachrichtigungen.
 - Backfill von `incidents.host_ids` (Hash nicht umkehrbar).
 - Live-Push der neuen Zähler (B-16); das Frontend fragt ab.
 - `alembic check` gegen PostgreSQL lief lokal nicht (kein Postgres); die CI prüft es.

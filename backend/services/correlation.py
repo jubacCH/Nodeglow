@@ -1257,6 +1257,13 @@ async def _run_rule(name: str, fn) -> bool:
             return False
 
 
+async def _suspected_relations(db) -> None:
+    """Hints for recent incidents (UI only; see services/suspected_relations.py)."""
+    from services import suspected_relations
+
+    await suspected_relations.run(db, await _get_topology(db))
+
+
 async def run_correlation():
     """Run all correlation rules. Called every 60s by scheduler."""
     try:
@@ -1297,6 +1304,8 @@ async def run_correlation():
         ("content_anomaly", lambda db: _rule_content_anomaly(db, min_cycles), False),
         ("precursor_observed", lambda db: _rule_precursor_observed(
             db, min_cycles=min_cycles), False),
+        # Last: looks at the incidents the rules above just opened.
+        ("suspected_relations", _suspected_relations, False),
     ]
 
     all_ok = offline_hosts is not None
