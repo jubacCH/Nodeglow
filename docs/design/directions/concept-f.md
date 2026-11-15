@@ -53,10 +53,27 @@ eigene Karte, doppelte Listen, grosser Trend-Chart mit Zeitraum-Umschalter, Topo
 | Charts | Linien/Flächen | Sparklines in Kennzahlen, Pill-Balken im Incident (Höhe exakt, Rundung abgeschnitten statt aufgeschlagen) |
 | Topologie | Baum | eigene Ansicht: Canvas, Problempfade offen, gesunde Äste als Zähl-Knoten mit Statusring |
 
+## Marke
+
+Übernommen aus dem Produkt, nicht neu erfunden. Die Geometrie stammt 1:1 aus
+`frontend/src/components/ui/NodeglowMark.tsx`, das Favicon ist `frontend/public/favicon.svg`.
+
+- **Zeichen „Puls-N“:** eine Pulslinie, die flach einläuft, ein N zeichnet und in einem Statuspunkt
+  endet. Die Linie steht in Textfarbe, der Punkt im Akzent mit weichem Halo (`mark-halo` 0.28 hell,
+  0.55 dunkel).
+- **Wortmarke** „nodeglow“: klein geschrieben, einfarbig, Sora 600 als Pfad. Mit dem Zeichen bildet
+  sie einen Lockup in einem SVG. **Der Punkt ist das einzige Licht im Lockup.** Keine farbige Kachel
+  dahinter, kein Akzent-Glow auf dem Zeichen.
+- **Einsatz:**
+  - Leiste offen: Lockup. Leiste eingeklappt: nur das Zeichen.
+  - Ein Klick öffnet „About“ mit Lockup und dem Claim „Only what needs attention glows; no light
+    means no data.“, wie in `Rail.tsx`.
+  - Auf dem Handy steht das Zeichen links in der Kopfzeile.
+
 ## Farbrollen
 
 - **Akzent:** Flächen mit Text immer auf `accent-btn` (Weiss darauf hält AA in beiden Themes).
-  `accent` nur für Grafik: Chart-Reihe, gesunde Leitungen und Knoten, Logo.
+  `accent` nur für Grafik: Chart-Reihe, gesunde Leitungen und Knoten, Statuspunkt im Logo.
   Aktive Navigation = `accent-soft` + `accent-text` wie in 04-design-system.
 - **Status-Badges und Zähler:** Soft-Hintergrund (`st-*-soft`) mit `st-*-text`, nie Weiss auf
   Statusfarbe. Weiss auf Degraded oder Warning fällt durch (1.7 bis 3.4:1).
