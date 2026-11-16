@@ -856,17 +856,68 @@ async def create_install_token(request: Request):
         await db.commit()
         await db.refresh(token_row)
 
-    server_url = await resolve_server_url(request)
+    return _install_token_response(token_row, raw, await resolve_server_url(request))
 
+
+def _install_token_response(row: AgentInstallToken, raw: str, server_url: str) -> dict:
+    """What the admin gets once for a freshly issued token: the token and the
+    finished install commands."""
     return {
         "ok": True,
-        "id": token_row.id,
+        "id": row.id,
         "token": raw,
-        "prefix": token_row.prefix,
-        "expires_at": iso(token_row.expires_at),
+        "prefix": row.prefix,
+        "expires_at": iso(row.expires_at),
         "install_linux": f"curl -sSL '{server_url}/install/linux?token={raw}' | sudo bash",
         "install_windows": f"irm '{server_url}/install/windows?token={raw}' | iex",
     }
+
+
+@router.post("/api/agents/{agent_id}/reinstall")
+@rate_limit(max_requests=10, window_seconds=60)
+async def reinstall_agent(agent_id: int, request: Request):
+    """Issue a reinstall command for an existing agent. Admin only.
+
+    The token is bound to this agent: the installer run with it on the
+    agent's own host re-enrols the agent under its existing id, once.
+    """
+    if err := _require_access_admin(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        ttl_hours = int(body.get("ttl_hours") or 1)
+    except (TypeError, ValueError, AttributeError):
+        ttl_hours = 1
+    ttl_hours = max(1, min(ttl_hours, 24))
+
+    async with AsyncSessionLocal() as db:
+        agent = await db.get(Agent, agent_id)
+        if agent is None:
+            return JSONResponse({"error": "Agent not found"}, status_code=404)
+        raw = f"nt_{secrets.token_hex(24)}"
+        user = getattr(request.state, "current_user", None)
+        token_row = AgentInstallToken(
+            token_hash=_hash_install_token(raw),
+            prefix=raw[:8],
+            note=f"reinstall {agent.name}"[:256],
+            expires_at=datetime.utcnow() + timedelta(hours=ttl_hours),
+            created_by=user.username if user else None,
+            site_id=agent.site_id,
+            agent_id=agent.id,
+        )
+        db.add(token_row)
+        await db.flush()
+        await log_action(db, request, "install_token.create", "install_token", token_row.id,
+                         token_row.prefix,
+                         {"ttl_hours": ttl_hours, "reinstall": True, "agent_id": agent.id})
+        await db.commit()
+        await db.refresh(token_row)
+
+    return {**_install_token_response(token_row, raw, await resolve_server_url(request)),
+            "agent_id": agent_id}
 
 
 @router.get("/api/agents/install-tokens")
@@ -879,6 +930,10 @@ async def list_install_tokens(request: Request):
         rows = (await db.execute(
             select(AgentInstallToken).order_by(AgentInstallToken.created_at.desc())
         )).scalars().all()
+        bound_ids = {r.agent_id for r in rows if r.agent_id is not None}
+        names = dict((await db.execute(
+            select(Agent.id, Agent.name).where(Agent.id.in_(bound_ids))
+        )).all()) if bound_ids else {}
     return [
         {
             "id": r.id,
@@ -892,6 +947,8 @@ async def list_install_tokens(request: Request):
             "last_used_at": iso(r.last_used_at),
             "created_at": iso(r.created_at),
             "created_by": r.created_by,
+            "agent_id": r.agent_id,
+            "agent_name": names.get(r.agent_id),
         }
         for r in rows
     ]
