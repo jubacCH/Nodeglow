@@ -253,6 +253,19 @@ one of its incidents.
 | GET / PUT | `/agents/{id}/services` | Watched services. PUT body `{"services": [...]}`; GET also returns the last reported states |
 
 Install tokens for new agents: `POST /api/agents/install-tokens` (admin).
+`GET /api/agents/install-tokens` lists them; a reinstall token carries
+`agent_id` and `agent_name`.
+
+Reinstall an existing agent: `POST /api/agents/{id}/reinstall` (admin, body
+`{"ttl_hours": 1..24}`, default 1). Returns the same fields as
+`POST /api/agents/install-tokens` plus `agent_id`. The token is bound to the
+agent: the installer run with it on the agent's own hostname re-enrols the
+agent under its existing id (new agent token, history and settings kept), and
+it works once. An install token that is not bound to the agent still gets
+`409 agent_exists` for a hostname that is already enrolled.
+
+The incident detail (`GET /incidents/{id}`) carries `agent_id` for rule
+`agent_silent` (else `null`).
 
 ### Sites
 
