@@ -4,6 +4,10 @@ Replaces the legacy shared `agent_enrollment_key` global setting. Each token
 is created by an admin, has an expiry, and can optionally be scoped to a
 hostname pattern. Multi-use by design (one token per rollout batch); the
 admin can revoke or set a short expiry for tighter control.
+
+A token with ``agent_id`` set is a reinstall token: it re-enrols exactly that
+existing agent (keeping its id, history and settings), only on the agent's own
+hostname, and only once.
 """
 from datetime import datetime
 
@@ -37,7 +41,10 @@ class AgentInstallToken(TenantScoped, Base):
     created_by = Column(String(255), nullable=True)
     # The site an agent enrolled with this token lands in.
     site_id = Column(Integer, nullable=True)
+    # Set for a reinstall token: the existing agent it re-enrols.
+    agent_id = Column(Integer, nullable=True, index=True)
 
     __table_args__ = (
         tenant_fk("site_id", "sites", name="fk_agent_install_tokens_site"),
+        tenant_fk("agent_id", "agents", name="fk_agent_install_tokens_agent", ondelete="CASCADE"),
     )
