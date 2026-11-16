@@ -337,12 +337,18 @@ async def test_bound_token_cannot_reach_another_tenants_agent(auth_client):
     stale binding) enrols nothing and leaves that agent untouched."""
     from models.agent import Agent
     from services.tenancy import system_scope
+    from sqlalchemy.exc import IntegrityError
     client, sf = auth_client
     await _first_agent(client, sf)
     b_id, b_token = await _seed_tenant_b_agent(sf)
-    await _seed_token(sf, RAW_BOUND, agent_id=b_id)
-
-    assert (await _enroll(client, RAW_BOUND)).status_code == 403
+    try:
+        await _seed_token(sf, RAW_BOUND, agent_id=b_id)
+    except IntegrityError:
+        # PostgreSQL: the composite tenant FK refuses the binding outright.
+        pass
+    else:
+        # SQLite enforces no FKs here: the enrolment check must refuse it.
+        assert (await _enroll(client, RAW_BOUND)).status_code == 403
     async with sf() as db:
         with system_scope("test: read tenant 2"):
             assert (await db.get(Agent, b_id)).token == b_token

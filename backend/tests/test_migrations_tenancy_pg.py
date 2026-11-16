@@ -839,6 +839,9 @@ ROUTER_TESTS_ON_PG = [
     "tests/test_routers/test_tenancy_review_fixes.py",
     "tests/test_routers/test_api_v1.py",
     "tests/test_routers/test_dashboard_v2.py",
+    # Agent reinstall (055): a bound token spends itself with a conditional
+    # update and never reaches another tenant's agent, under RLS too.
+    "tests/test_routers/test_agent_reinstall.py",
     # The phase-8 isolation walk (every route, session / API key / header,
     # reference check, licensed ee walk) as nodeglow_app with RLS on.
     "tests/test_routers/test_tenant_isolation.py",
