@@ -57,7 +57,8 @@ def silent_condition(agent: Agent, now: datetime, host_ids: list[int] | None = N
         f"{kind} silent: {agent.name}", "warning",
         f"{kind} {agent.name} last reported {_ago(quiet)} ago "
         f"({agent.last_seen:%Y-%m-%d %H:%M} UTC). {what} "
-        "Check that the agent service is running on the host and can reach this server.",
+        "Check that the agent service is running on the host and can reach this server, "
+        "or reinstall it from the agent's page.",
         host_ids=host_ids or [],
     )
 

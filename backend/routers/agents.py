@@ -170,6 +170,19 @@ async def _consume_install_token(
         pat = row.hostname_pattern.strip().lower()
         if pat and not fnmatch.fnmatchcase(hostname.lower(), pat):
             return False, "hostname_mismatch", None
+    if row.agent_id is not None:
+        # A reinstall token: single use, and only for its own agent's host.
+        # Checked before it is counted, so a wrong host does not spend it.
+        if (row.used_count or 0) >= 1:
+            return False, "spent", None
+        with tenant_scope(row.tenant_id):
+            agent = (await db.execute(
+                select(Agent).where(Agent.id == row.agent_id, Agent.tenant_id == row.tenant_id)
+            )).scalar_one_or_none()
+        if agent is None:
+            return False, "bound_agent_missing", None
+        if (agent.hostname or "").lower() != hostname.lower():
+            return False, "bound_hostname_mismatch", None
     row.used_count = (row.used_count or 0) + 1
     row.last_used_at = datetime.utcnow()
     return True, "ok", row
@@ -231,9 +244,11 @@ async def agent_enroll(request: Request):
         token_ok, token_err, token_row = await _consume_install_token(
             token_db, enroll_key, hostname,
         )
+        bound_agent_id = None
         if token_ok:
             # The token decides where the agent lands — never the request body.
             tenant_id, site_id = token_row.tenant_id, token_row.site_id
+            bound_agent_id = token_row.agent_id
             with tenant_scope(tenant_id):
                 await token_db.commit()
         else:
@@ -278,12 +293,13 @@ async def agent_enroll(request: Request):
     client_ip = request.client.host if request.client else None
 
     with tenant_scope(tenant_id):
-        return await _enroll_in_tenant(request, body, hostname, plat, arch, client_ip, site_id)
+        return await _enroll_in_tenant(request, body, hostname, plat, arch, client_ip, site_id,
+                                       bound_agent_id=bound_agent_id)
 
 
 async def _enroll_in_tenant(
     request: Request, body: dict, hostname: str, plat: str, arch: str,
-    client_ip: str | None, site_id: int | None,
+    client_ip: str | None, site_id: int | None, bound_agent_id: int | None = None,
 ):
     """Create or re-enrol the agent inside the token's tenant (and site).
 
@@ -295,6 +311,22 @@ async def _enroll_in_tenant(
     async with AsyncSessionLocal() as db:
         # Check if agent with this hostname already exists → return existing token (case-insensitive)
         from sqlalchemy import func as sa_func
+        if bound_agent_id is not None:
+            # A reinstall token names the agent and was checked against its
+            # hostname; it is the proof the 409 below asks for.
+            existing = await db.get(Agent, bound_agent_id)
+            if existing is None:
+                return JSONResponse({"error": "Invalid enrollment credential"}, status_code=403)
+            raw_token = secrets.token_hex(24)
+            existing.token = _hash_agent_token(raw_token)
+            existing.platform = plat or existing.platform
+            existing.arch = arch or existing.arch
+            existing.last_seen = datetime.utcnow()
+            await log_action(db, request, "agent.reinstalled", "agent", existing.id, existing.name,
+                             {"via": "bound_install_token", "ip": client_ip_log})
+            await db.commit()
+            logger.info("Agent reinstalled: hostname=%s, id=%d", hostname, existing.id)
+            return {"ok": True, "token": raw_token, "agent_id": existing.id}
         result = await db.execute(select(Agent).where(sa_func.lower(Agent.hostname) == hostname.lower()))
         existing = result.scalars().first()
         if existing:
@@ -314,9 +346,9 @@ async def _enroll_in_tenant(
                 )
                 return JSONResponse({
                     "error": (
-                        "An agent with this hostname is already enrolled. Re-run the "
-                        "installer on that host with its existing config, or delete "
-                        "the agent in Nodeglow first."
+                        "An agent with this hostname is already enrolled. Use 'Reinstall "
+                        "agent' on its page in Nodeglow, or re-run the installer with the "
+                        "existing config."
                     ),
                     "code": "agent_exists",
                 }, status_code=409)
