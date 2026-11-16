@@ -17,6 +17,8 @@ export interface InstallToken {
   expires_at: string | null;
   install_linux: string;
   install_windows: string;
+  /** Reinstall only: when the server issued it (its clock, not the browser's). */
+  issued_at?: string | null;
 }
 
 const VALIDITY = [
@@ -50,6 +52,12 @@ export function issueRequest(target: ReinstallTarget | undefined, ttlHours: numb
 
 export function initialPlatform(target: ReinstallTarget | undefined): Platform {
   return target?.platform?.toLowerCase() === 'windows' ? 'windows' : 'linux';
+}
+
+/** When the command was issued, by the server's clock where it says so. */
+export function issueMoment(token: Pick<InstallToken, 'issued_at'>, browserNow: number): number {
+  const server = token.issued_at ? Date.parse(token.issued_at) : NaN;
+  return Number.isNaN(server) ? browserNow : server;
 }
 
 /** Has the reinstalled agent reported since the command was issued? */
@@ -93,20 +101,29 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
       setIssued(null);
       setError(null);
       setBusy(false);
-    } else {
-      setPlatform(initialPlatform(agent));
-      setTtlHours(validityFor(agent)[0].hours);
     }
-  }, [open, agent]);
+  }, [open]);
+
+  // Defaults follow the agent, not every poll of it: a refetch hands in a new
+  // object and must not undo what the admin picked.
+  const agentId = agent?.id;
+  const agentPlatform = agent?.platform;
+  useEffect(() => {
+    if (!open) return;
+    const target = agentId === undefined ? undefined : { platform: agentPlatform ?? null } as ReinstallTarget;
+    setPlatform(initialPlatform(target));
+    setTtlHours(validityFor(target)[0].hours);
+  }, [open, agentId, agentPlatform]);
 
   async function issue() {
     setBusy(true);
     setError(null);
     try {
       knownIds.current = new Set((agents ?? []).map((a) => a.id));
-      issuedAt.current = Date.now();
       const { url, body } = issueRequest(agent, ttlHours);
-      setIssued(await post<InstallToken>(url, body));
+      const token = await post<InstallToken>(url, body);
+      issuedAt.current = issueMoment(token, Date.now());
+      setIssued(token);
     } catch (e) {
       setError(apiErrorMessage(e, 'Could not create the install command'));
     } finally {

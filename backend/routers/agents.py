@@ -183,6 +183,19 @@ async def _consume_install_token(
             return False, "bound_agent_missing", None
         if (agent.hostname or "").lower() != hostname.lower():
             return False, "bound_hostname_mismatch", None
+        # Spend it in the database, not from what this session read: of two
+        # installers racing with the same token only one gets the row.
+        from sqlalchemy import update
+        with system_scope("agent enrolment: spend a reinstall token"):
+            spent = await db.execute(
+                update(AgentInstallToken)
+                .where(AgentInstallToken.id == row.id, AgentInstallToken.used_count == 0)
+                .values(used_count=1, last_used_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            )
+        if spent.rowcount != 1:
+            return False, "spent", None
+        return True, "ok", row
     row.used_count = (row.used_count or 0) + 1
     row.last_used_at = datetime.utcnow()
     return True, "ok", row
@@ -245,10 +258,12 @@ async def agent_enroll(request: Request):
             token_db, enroll_key, hostname,
         )
         bound_agent_id = None
+        bound_prefix = None
         if token_ok:
             # The token decides where the agent lands — never the request body.
             tenant_id, site_id = token_row.tenant_id, token_row.site_id
             bound_agent_id = token_row.agent_id
+            bound_prefix = token_row.prefix
             with tenant_scope(tenant_id):
                 await token_db.commit()
         else:
@@ -294,12 +309,13 @@ async def agent_enroll(request: Request):
 
     with tenant_scope(tenant_id):
         return await _enroll_in_tenant(request, body, hostname, plat, arch, client_ip, site_id,
-                                       bound_agent_id=bound_agent_id)
+                                       bound_agent_id=bound_agent_id, bound_prefix=bound_prefix)
 
 
 async def _enroll_in_tenant(
     request: Request, body: dict, hostname: str, plat: str, arch: str,
     client_ip: str | None, site_id: int | None, bound_agent_id: int | None = None,
+    bound_prefix: str | None = None,
 ):
     """Create or re-enrol the agent inside the token's tenant (and site).
 
@@ -321,9 +337,10 @@ async def _enroll_in_tenant(
             existing.token = _hash_agent_token(raw_token)
             existing.platform = plat or existing.platform
             existing.arch = arch or existing.arch
-            existing.last_seen = datetime.utcnow()
+            # last_seen is left to the first report: enrolling is not running.
             await log_action(db, request, "agent.reinstalled", "agent", existing.id, existing.name,
-                             {"via": "bound_install_token", "ip": client_ip_log})
+                             {"via": "bound_install_token", "token_prefix": bound_prefix,
+                              "ip": client_ip_log})
             await db.commit()
             logger.info("Agent reinstalled: hostname=%s, id=%d", hostname, existing.id)
             return {"ok": True, "token": raw_token, "agent_id": existing.id}
@@ -897,6 +914,10 @@ async def reinstall_agent(agent_id: int, request: Request):
         agent = await db.get(Agent, agent_id)
         if agent is None:
             return JSONResponse({"error": "Agent not found"}, status_code=404)
+        if not agent.enabled:
+            # Its token would be refused on every report: enable it first.
+            return JSONResponse({"error": "The agent is disabled. Enable it before reinstalling.",
+                                 "code": "agent_disabled"}, status_code=409)
         raw = f"nt_{secrets.token_hex(24)}"
         user = getattr(request.state, "current_user", None)
         token_row = AgentInstallToken(
@@ -916,8 +937,10 @@ async def reinstall_agent(agent_id: int, request: Request):
         await db.commit()
         await db.refresh(token_row)
 
+    # issued_at is the server's clock, so the UI can compare it with the
+    # agent's last_seen without trusting the browser's.
     return {**_install_token_response(token_row, raw, await resolve_server_url(request)),
-            "agent_id": agent_id}
+            "agent_id": agent_id, "issued_at": iso(token_row.created_at)}
 
 
 @router.get("/api/agents/install-tokens")

@@ -241,3 +241,157 @@ async def test_incident_detail_agent_id_for_agent_silent(admin_pair):
         ids = silent.id, other.id
     assert (await client.get(f"/api/v1/incidents/{ids[0]}")).json()["agent_id"] == 7
     assert (await client.get(f"/api/v1/incidents/{ids[1]}")).json()["agent_id"] is None
+
+
+# ── Review fixes ─────────────────────────────────────────────────────────────
+
+async def test_bound_token_spent_by_a_concurrent_enrolment_is_refused(auth_client):
+    """Two installers racing with one bound token: the second must lose even
+    if it read the token before the first one committed."""
+    from models.agent_install_token import AgentInstallToken
+    from routers.agents import _consume_install_token, _hash_install_token
+    client, sf = auth_client
+    first = await _first_agent(client, sf)
+    await _seed_token(sf, RAW_BOUND, agent_id=first["agent_id"])
+
+    async with sf() as racer:
+        stale = (await racer.execute(select(AgentInstallToken).where(
+            AgentInstallToken.token_hash == _hash_install_token(RAW_BOUND)))).scalar_one()
+        assert stale.used_count == 0
+        async with sf() as winner:
+            ok, _reason, _row = await _consume_install_token(winner, RAW_BOUND, "web01")
+            assert ok
+            await winner.commit()
+        ok, reason, _row = await _consume_install_token(racer, RAW_BOUND, "web01")
+    assert not ok and reason == "spent"
+
+
+async def test_bound_enrolment_leaves_last_seen_to_the_first_report(auth_client):
+    from models.agent import Agent
+    client, sf = auth_client
+    first = await _first_agent(client, sf)
+    async with sf() as db:
+        agent = await db.get(Agent, first["agent_id"])
+        agent.last_seen = datetime(2026, 3, 29, 18, 51)
+        await db.commit()
+    await _seed_token(sf, RAW_BOUND, agent_id=first["agent_id"])
+    assert (await _enroll(client, RAW_BOUND)).status_code == 200
+    async with sf() as db:
+        assert (await db.get(Agent, first["agent_id"])).last_seen == datetime(2026, 3, 29, 18, 51)
+
+
+async def test_bound_token_audit_names_the_token(auth_client):
+    import json
+    from models.audit import AuditLog
+    client, sf = auth_client
+    first = await _first_agent(client, sf)
+    await _seed_token(sf, RAW_BOUND, agent_id=first["agent_id"])
+    assert (await _enroll(client, RAW_BOUND)).status_code == 200
+    async with sf() as db:
+        row = (await db.execute(
+            select(AuditLog).where(AuditLog.action == "agent.reinstalled"))).scalar_one()
+    assert json.loads(row.details)["token_prefix"] == RAW_BOUND[:8]
+
+
+async def test_reinstall_route_returns_server_issue_time(admin_pair):
+    client, sf = admin_pair
+    agent_id = await _seed_agent(sf)
+    body = (await client.post(f"/api/agents/{agent_id}/reinstall", json={})).json()
+    issued = datetime.fromisoformat(body["issued_at"].replace("Z", "+00:00")).replace(tzinfo=None)
+    assert abs((datetime.utcnow() - issued).total_seconds()) < 60
+
+
+async def test_reinstall_route_refuses_a_disabled_agent(admin_pair):
+    from models.agent import Agent
+    client, sf = admin_pair
+    agent_id = await _seed_agent(sf)
+    async with sf() as db:
+        (await db.get(Agent, agent_id)).enabled = False
+        await db.commit()
+    resp = await client.post(f"/api/agents/{agent_id}/reinstall", json={})
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "agent_disabled"
+
+
+# ── Tenant isolation and support access ─────────────────────────────────────
+
+async def _seed_tenant_b_agent(sf, hostname="web01"):
+    """Tenant 2 with an agent of the same hostname; returns (id, token hash)."""
+    from models.agent import Agent
+    from models.tenant import Site, Tenant
+    from services.tenancy import system_scope
+    async with sf() as db:
+        with system_scope("test: second tenant"):
+            db.add(Tenant(id=2, provider_id=1, name="B", slug="b", status="active"))
+            await db.flush()
+            db.add(Site(id=2, tenant_id=2, name="B"))
+            await db.flush()
+            agent = Agent(tenant_id=2, site_id=2, name=hostname, hostname=hostname, token="b" * 64)
+            db.add(agent)
+            await db.commit()
+            return agent.id, agent.token
+
+
+async def test_bound_token_cannot_reach_another_tenants_agent(auth_client):
+    """A token of tenant 1 whose agent_id names tenant 2's agent (a forged or
+    stale binding) enrols nothing and leaves that agent untouched."""
+    from models.agent import Agent
+    from services.tenancy import system_scope
+    client, sf = auth_client
+    await _first_agent(client, sf)
+    b_id, b_token = await _seed_tenant_b_agent(sf)
+    await _seed_token(sf, RAW_BOUND, agent_id=b_id)
+
+    assert (await _enroll(client, RAW_BOUND)).status_code == 403
+    async with sf() as db:
+        with system_scope("test: read tenant 2"):
+            assert (await db.get(Agent, b_id)).token == b_token
+
+
+async def test_bound_token_reinstalls_its_own_tenants_agent_only(auth_client):
+    from models.agent import Agent
+    from services.tenancy import system_scope
+    client, sf = auth_client
+    first = await _first_agent(client, sf)
+    b_id, b_token = await _seed_tenant_b_agent(sf)
+    await _seed_token(sf, RAW_BOUND, agent_id=first["agent_id"])
+
+    resp = await _enroll(client, RAW_BOUND)
+    assert resp.status_code == 200 and resp.json()["agent_id"] == first["agent_id"]
+    async with sf() as db:
+        with system_scope("test: read tenant 2"):
+            assert (await db.get(Agent, b_id)).token == b_token
+
+
+async def test_reinstall_route_404_for_another_tenants_agent(admin_pair):
+    client, sf = admin_pair
+    b_id, _ = await _seed_tenant_b_agent(sf)
+    assert (await client.post(f"/api/agents/{b_id}/reinstall", json={})).status_code == 404
+
+
+async def test_reinstall_route_refused_through_support_access(admin_pair, monkeypatch):
+    from services import tenancy
+    client, sf = admin_pair
+    agent_id = await _seed_agent(sf)
+    monkeypatch.setattr(tenancy, "request_via_support", lambda request: True)
+    resp = await client.post(f"/api/agents/{agent_id}/reinstall", json={})
+    assert resp.status_code == 403 and resp.json()["code"] == "support_access"
+
+
+async def test_silent_condition_clears_once_the_reinstalled_agent_reports(auth_client):
+    from models.agent import Agent
+    from services import agent_silence as silence
+    client, sf = auth_client
+    first = await _first_agent(client, sf)
+    async with sf() as db:
+        (await db.get(Agent, first["agent_id"])).last_seen = datetime.utcnow() - timedelta(days=200)
+        await db.commit()
+        assert f"ag:{first['agent_id']}" in await silence.silent_conditions(db, datetime.utcnow())
+
+    await _seed_token(sf, RAW_BOUND, agent_id=first["agent_id"])
+    new = (await _enroll(client, RAW_BOUND)).json()
+    report = await client.post("/api/agent/report", json={"hostname": "web01"},
+                               headers={"Authorization": f"Bearer {new['token']}"})
+    assert report.status_code == 200, report.text
+    async with sf() as db:
+        assert f"ag:{first['agent_id']}" not in await silence.silent_conditions(db, datetime.utcnow())
