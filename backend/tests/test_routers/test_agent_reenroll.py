@@ -60,6 +60,7 @@ async def test_reenroll_without_current_token_is_refused(auth_client):
     resp = await _enroll(client, hostname="WEB01")  # case-insensitive match
     assert resp.status_code == 409
     assert resp.json()["code"] == "agent_exists"
+    assert "Reinstall agent" in resp.json()["error"]
     assert "token" not in resp.json()
     assert await _agent_hash(sf, first["agent_id"]) == before  # not rotated
 

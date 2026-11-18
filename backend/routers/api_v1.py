@@ -1766,6 +1766,17 @@ async def _analyze_incident_logs(
     }
 
 
+def _silent_agent_id(incident) -> int | None:
+    """The agent an ``agent_silent`` incident is about (dedup key ``ag:<id>``)."""
+    key = incident.host_ids_hash or ""
+    if incident.rule != "agent_silent" or not key.startswith("ag:"):
+        return None
+    try:
+        return int(key[3:])
+    except ValueError:
+        return None
+
+
 @router.get("/incidents/{incident_id}", summary="Incident detail with events timeline")
 async def get_incident(
     incident_id: int,
@@ -1843,6 +1854,7 @@ async def get_incident(
         "acknowledged": incident.status == "acknowledged",
         "id": incident.id,
         "rule": incident.rule,
+        "agent_id": _silent_agent_id(incident),
         "title": incident.title,
         "severity": incident.severity,
         "status": incident.status,

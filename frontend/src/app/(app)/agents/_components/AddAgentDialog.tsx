@@ -17,6 +17,8 @@ export interface InstallToken {
   expires_at: string | null;
   install_linux: string;
   install_windows: string;
+  /** Reinstall only: when the server issued it (its clock, not the browser's). */
+  issued_at?: string | null;
 }
 
 const VALIDITY = [
@@ -24,6 +26,45 @@ const VALIDITY = [
   { hours: 24 * 7, label: '7 days' },
   { hours: 24 * 30, label: '30 days' },
 ] as const;
+
+/** A reinstall command works once, so it need not live long. */
+const REINSTALL_VALIDITY = [
+  { hours: 1, label: '1 hour' },
+  { hours: 24, label: '24 hours' },
+] as const;
+
+/** The agent a reinstall command is for. */
+export type ReinstallTarget = Pick<Agent, 'id' | 'name' | 'platform' | 'last_seen'>;
+
+type Platform = 'linux' | 'windows';
+
+export function validityFor(target: ReinstallTarget | undefined): ReadonlyArray<{ hours: number; label: string }> {
+  return target ? REINSTALL_VALIDITY : VALIDITY;
+}
+
+/** Where to ask for the command: a bound token for a reinstall, a plain one otherwise. */
+export function issueRequest(target: ReinstallTarget | undefined, ttlHours: number) {
+  return {
+    url: target ? `/api/agents/${target.id}/reinstall` : '/api/agents/install-tokens',
+    body: { ttl_hours: ttlHours },
+  };
+}
+
+export function initialPlatform(target: ReinstallTarget | undefined): Platform {
+  return target?.platform?.toLowerCase() === 'windows' ? 'windows' : 'linux';
+}
+
+/** When the command was issued, by the server's clock where it says so. */
+export function issueMoment(token: Pick<InstallToken, 'issued_at'>, browserNow: number): number {
+  const server = token.issued_at ? Date.parse(token.issued_at) : NaN;
+  return Number.isNaN(server) ? browserNow : server;
+}
+
+/** Has the reinstalled agent reported since the command was issued? */
+export function reconnectedSince(target: ReinstallTarget | undefined, issuedAt: number): boolean {
+  if (!target?.last_seen) return false;
+  return Date.parse(target.last_seen) > issuedAt;
+}
 
 /** Agents that enrolled after the command was issued. */
 export function newAgentsSince(agents: Agent[] | undefined, knownIds: ReadonlySet<number>): Agent[] {
@@ -35,6 +76,8 @@ interface AddAgentDialogProps {
   onClose: () => void;
   /** The live agent list, so the dialog can say when the new agent reports in. */
   agents: Agent[] | undefined;
+  /** Set to reinstall this existing agent instead of adding a new one. */
+  agent?: ReinstallTarget;
 }
 
 /**
@@ -42,13 +85,15 @@ interface AddAgentDialogProps {
  * server never hands out a shared enrollment secret, so there is nothing to
  * show before the token exists.
  */
-export function AddAgentDialog({ open, onClose, agents }: AddAgentDialogProps) {
-  const [platform, setPlatform] = useState<'linux' | 'windows'>('linux');
-  const [ttlHours, setTtlHours] = useState<number>(VALIDITY[0].hours);
+export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogProps) {
+  const validity = validityFor(agent);
+  const [platform, setPlatform] = useState<Platform>(initialPlatform(agent));
+  const [ttlHours, setTtlHours] = useState<number>(validity[0].hours);
   const [issued, setIssued] = useState<InstallToken | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const knownIds = useRef<Set<number>>(new Set());
+  const issuedAt = useRef<number>(0);
 
   // A closed dialog forgets its token: it cannot be shown again anyway.
   useEffect(() => {
@@ -59,12 +104,26 @@ export function AddAgentDialog({ open, onClose, agents }: AddAgentDialogProps) {
     }
   }, [open]);
 
+  // Defaults follow the agent, not every poll of it: a refetch hands in a new
+  // object and must not undo what the admin picked.
+  const agentId = agent?.id;
+  const agentPlatform = agent?.platform;
+  useEffect(() => {
+    if (!open) return;
+    const target = agentId === undefined ? undefined : { platform: agentPlatform ?? null } as ReinstallTarget;
+    setPlatform(initialPlatform(target));
+    setTtlHours(validityFor(target)[0].hours);
+  }, [open, agentId, agentPlatform]);
+
   async function issue() {
     setBusy(true);
     setError(null);
     try {
       knownIds.current = new Set((agents ?? []).map((a) => a.id));
-      setIssued(await post<InstallToken>('/api/agents/install-tokens', { ttl_hours: ttlHours }));
+      const { url, body } = issueRequest(agent, ttlHours);
+      const token = await post<InstallToken>(url, body);
+      issuedAt.current = issueMoment(token, Date.now());
+      setIssued(token);
     } catch (e) {
       setError(apiErrorMessage(e, 'Could not create the install command'));
     } finally {
@@ -73,25 +132,34 @@ export function AddAgentDialog({ open, onClose, agents }: AddAgentDialogProps) {
   }
 
   const command = issued ? (platform === 'linux' ? issued.install_linux : issued.install_windows) : '';
-  const connected = issued ? newAgentsSince(agents, knownIds.current) : [];
+  const live = agent ? (agents?.find((a) => a.id === agent.id) ?? agent) : undefined;
+  const connected = !issued
+    ? []
+    : agent
+      ? (reconnectedSince(live, issuedAt.current) ? [live as Agent] : [])
+      : newAgentsSince(agents, knownIds.current);
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       size="lg"
-      title="Add agent"
-      description="Create an install command and run it on the machine you want to monitor. The agent installs itself and reports to this server."
+      title={agent ? 'Reinstall agent' : 'Add agent'}
+      description={agent
+        ? `A new install command for ${agent.name}. Run it on that machine: the agent keeps its history and settings. The command works once and only on this host.`
+        : 'Create an install command and run it on the machine you want to monitor. The agent installs itself and reports to this server.'}
       footer={<Button variant="secondary" onClick={onClose}>{issued ? 'Done' : 'Cancel'}</Button>}
     >
       {!issued ? (
         <div className="space-y-4">
           <Field
             label="Command valid for"
-            hint="The command can be used on several machines until it expires."
+            hint={agent
+              ? 'The command can be used once, on this agent\'s machine.'
+              : 'The command can be used on several machines until it expires.'}
           >
             <Select value={String(ttlHours)} onChange={(e) => setTtlHours(Number(e.target.value))}>
-              {VALIDITY.map((v) => (
+              {validity.map((v) => (
                 <option key={v.hours} value={v.hours}>{v.label}</option>
               ))}
             </Select>

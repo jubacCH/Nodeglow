@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUpRight, CheckCircle2, ChevronDown, ChevronRight, Eye, RefreshCw, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, ChevronDown, ChevronRight, Eye, RefreshCw, RotateCcw, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { AffectedHostsCard } from '@/components/incidents/AffectedHostsCard';
@@ -23,11 +23,13 @@ import { enterpriseNote, hasFeature, lacksFeature, useFeatures } from '@/hooks/q
 import { useIncidentAction } from '@/hooks/queries/useAlerts';
 import { apiErrorMessage, get, post } from '@/lib/api';
 import {
-  SEVERITY_LABEL, formatDateTime, formatDuration, incidentDurationMs, incidentNeedsGlow, parseServerDate, ruleLabel,
+  SEVERITY_LABEL, reinstallableAgentId, formatDateTime, formatDuration, incidentDurationMs, incidentNeedsGlow, parseServerDate, ruleLabel,
   severityState, type IncidentItem,
 } from '@/lib/incidents';
 import { cn } from '@/lib/utils';
-import { useAuthStore, useIsEditor } from '@/stores/auth';
+import type { Agent } from '@/types';
+import { useAuthStore, useIsAdmin, useIsEditor } from '@/stores/auth';
+import { AddAgentDialog } from '../../agents/_components/AddAgentDialog';
 import { useToastStore } from '@/stores/toast';
 
 const SYSLOG_SEVERITY: Record<number, { label: string; tone: 'down' | 'warning' }> = {
@@ -101,6 +103,8 @@ interface IncidentDetail extends IncidentItem {
   log_analysis?: LogAnalysis | null;
   postmortem?: string | null;
   postmortem_generated_at?: string | null;
+  /** Set for rule ``agent_silent``: the agent that stopped reporting. */
+  agent_id?: number | null;
 }
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
@@ -127,6 +131,8 @@ export default function IncidentDetailPage() {
   const incidentId = Number(id);
   const toast = useToastStore((s) => s.show);
   const canEdit = useIsEditor();
+  const isAdmin = useIsAdmin();
+  const [reinstallOpen, setReinstallOpen] = useState(false);
   const { data: features } = useFeatures();
   // AI postmortems are an enterprise feature; unknown flags (still loading)
   // count as installed so the first poll is not lost.
@@ -148,6 +154,14 @@ export default function IncidentDetailPage() {
     },
   });
   const data = query.data;
+  const silentAgentId = data && isAdmin ? reinstallableAgentId(data) : null;
+  // Polled while the dialog is open, so it can say when the agent is back.
+  const { data: silentAgent } = useQuery({
+    queryKey: ['agent', silentAgentId],
+    queryFn: () => get<Agent>(`/api/v1/agents/${silentAgentId}`),
+    enabled: silentAgentId !== null,
+    refetchInterval: reinstallOpen ? 10_000 : false,
+  });
 
   useEffect(() => {
     document.title = `${data?.title ?? `Incident #${incidentId}`} | Nodeglow`;
@@ -206,6 +220,11 @@ export default function IncidentDetailPage() {
                 <ArrowUpRight size={15} aria-hidden="true" /> {jumpTarget.label}
               </Link>
             )}
+            {isAdmin && silentAgent && (
+              <Button variant="secondary" onClick={() => setReinstallOpen(true)}>
+                <RotateCcw size={15} aria-hidden="true" /> Reinstall agent
+              </Button>
+            )}
             {canEdit && data.status === 'open' && (
               <Button variant="secondary" disabled={pending} onClick={() => action.mutate({ id: incidentId, action: 'acknowledge' })}>
                 <Eye size={15} aria-hidden="true" /> Acknowledge
@@ -219,6 +238,15 @@ export default function IncidentDetailPage() {
           </>
         ) : undefined}
       />
+
+      {silentAgent && (
+        <AddAgentDialog
+          open={reinstallOpen}
+          onClose={() => setReinstallOpen(false)}
+          agents={[silentAgent]}
+          agent={silentAgent}
+        />
+      )}
 
       <QueryState<IncidentDetail>
         query={query}

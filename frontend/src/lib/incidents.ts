@@ -255,3 +255,14 @@ export function ruleLabel(rule: string): string {
   const s = rule.replace(/_/g, ' ').trim();
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : rule;
 }
+
+/**
+ * The agent a silent-agent incident can be fixed by reinstalling, or null.
+ * ``agent_id`` is sent by the incident detail for rule ``agent_silent`` only.
+ */
+export function reinstallableAgentId(
+  incident: { rule: string; status: string; agent_id?: number | null },
+): number | null {
+  if (incident.rule !== 'agent_silent' || incident.status === 'resolved') return null;
+  return incident.agent_id ?? null;
+}

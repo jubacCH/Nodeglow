@@ -10,6 +10,15 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Reinstall an agent. "Reinstall agent" on an agent's page (and on a
+  silent-agent incident) issues an install command bound to that agent: run
+  on the agent's machine, it re-enrols the agent under its existing id, with
+  its history, watched services and site, and the silent-agent incident
+  resolves by itself. Before, a host that had lost its agent installation
+  could only come back after the agent was deleted, as a new agent. The
+  command works once, only on that host, and expires after 1 hour (up to
+  24). New route `POST /api/agents/{id}/reinstall` (admin, audited); install
+  tokens have a new column `agent_id` (migration 055).
 - Evidence on incidents. Every incident now records how it is related to
   what, in one sentence with the numbers: "Rule-based" for the rule that
   fired, and "Confirmed" where a rule used a structural link — the topology
@@ -186,13 +195,16 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
--- Certificates that Nginx Proxy Manager renews itself (Let's Encrypt) warn
+- The refusal to enrol an already enrolled hostname (`409 agent_exists`) now
+  points to "Reinstall agent", and the silent-agent incident names it as the
+  way to bring an agent back.
+- Certificates that Nginx Proxy Manager renews itself (Let's Encrypt) warn
   from 21 days instead of 30. NPM renews them hourly once fewer than 30 days
   are left, so 30 to 21 days is a renewal in progress, shown as "Renewing";
   below 21 the certificate page says "Renewal overdue" and the overview lists
   it. Uploaded certificates still warn at 30 days. The NPM snapshot carries
   `auto_renew` per certificate, `/api/ssl` adds `auto_renew` and `warn_days`.
- One typeface for the whole web UI: Figtree replaces Inter Tight (text),
+- One typeface for the whole web UI: Figtree replaces Inter Tight (text),
   Sora (titles and big numbers) and JetBrains Mono (addresses, rule names,
   logs). No monospace web font is shipped any more; figures still line up in
   columns through tabular numerals. Install commands, API keys and the 2FA

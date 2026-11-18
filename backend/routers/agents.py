@@ -170,6 +170,32 @@ async def _consume_install_token(
         pat = row.hostname_pattern.strip().lower()
         if pat and not fnmatch.fnmatchcase(hostname.lower(), pat):
             return False, "hostname_mismatch", None
+    if row.agent_id is not None:
+        # A reinstall token: single use, and only for its own agent's host.
+        # Checked before it is counted, so a wrong host does not spend it.
+        if (row.used_count or 0) >= 1:
+            return False, "spent", None
+        with tenant_scope(row.tenant_id):
+            agent = (await db.execute(
+                select(Agent).where(Agent.id == row.agent_id, Agent.tenant_id == row.tenant_id)
+            )).scalar_one_or_none()
+        if agent is None:
+            return False, "bound_agent_missing", None
+        if (agent.hostname or "").lower() != hostname.lower():
+            return False, "bound_hostname_mismatch", None
+        # Spend it in the database, not from what this session read: of two
+        # installers racing with the same token only one gets the row.
+        from sqlalchemy import update
+        with system_scope("agent enrolment: spend a reinstall token"):
+            spent = await db.execute(
+                update(AgentInstallToken)
+                .where(AgentInstallToken.id == row.id, AgentInstallToken.used_count == 0)
+                .values(used_count=1, last_used_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            )
+        if spent.rowcount != 1:
+            return False, "spent", None
+        return True, "ok", row
     row.used_count = (row.used_count or 0) + 1
     row.last_used_at = datetime.utcnow()
     return True, "ok", row
@@ -231,9 +257,13 @@ async def agent_enroll(request: Request):
         token_ok, token_err, token_row = await _consume_install_token(
             token_db, enroll_key, hostname,
         )
+        bound_agent_id = None
+        bound_prefix = None
         if token_ok:
             # The token decides where the agent lands — never the request body.
             tenant_id, site_id = token_row.tenant_id, token_row.site_id
+            bound_agent_id = token_row.agent_id
+            bound_prefix = token_row.prefix
             with tenant_scope(tenant_id):
                 await token_db.commit()
         else:
@@ -278,12 +308,14 @@ async def agent_enroll(request: Request):
     client_ip = request.client.host if request.client else None
 
     with tenant_scope(tenant_id):
-        return await _enroll_in_tenant(request, body, hostname, plat, arch, client_ip, site_id)
+        return await _enroll_in_tenant(request, body, hostname, plat, arch, client_ip, site_id,
+                                       bound_agent_id=bound_agent_id, bound_prefix=bound_prefix)
 
 
 async def _enroll_in_tenant(
     request: Request, body: dict, hostname: str, plat: str, arch: str,
-    client_ip: str | None, site_id: int | None,
+    client_ip: str | None, site_id: int | None, bound_agent_id: int | None = None,
+    bound_prefix: str | None = None,
 ):
     """Create or re-enrol the agent inside the token's tenant (and site).
 
@@ -295,6 +327,23 @@ async def _enroll_in_tenant(
     async with AsyncSessionLocal() as db:
         # Check if agent with this hostname already exists → return existing token (case-insensitive)
         from sqlalchemy import func as sa_func
+        if bound_agent_id is not None:
+            # A reinstall token names the agent and was checked against its
+            # hostname; it is the proof the 409 below asks for.
+            existing = await db.get(Agent, bound_agent_id)
+            if existing is None:
+                return JSONResponse({"error": "Invalid enrollment credential"}, status_code=403)
+            raw_token = secrets.token_hex(24)
+            existing.token = _hash_agent_token(raw_token)
+            existing.platform = plat or existing.platform
+            existing.arch = arch or existing.arch
+            # last_seen is left to the first report: enrolling is not running.
+            await log_action(db, request, "agent.reinstalled", "agent", existing.id, existing.name,
+                             {"via": "bound_install_token", "token_prefix": bound_prefix,
+                              "ip": client_ip_log})
+            await db.commit()
+            logger.info("Agent reinstalled: hostname=%s, id=%d", hostname, existing.id)
+            return {"ok": True, "token": raw_token, "agent_id": existing.id}
         result = await db.execute(select(Agent).where(sa_func.lower(Agent.hostname) == hostname.lower()))
         existing = result.scalars().first()
         if existing:
@@ -314,9 +363,9 @@ async def _enroll_in_tenant(
                 )
                 return JSONResponse({
                     "error": (
-                        "An agent with this hostname is already enrolled. Re-run the "
-                        "installer on that host with its existing config, or delete "
-                        "the agent in Nodeglow first."
+                        "An agent with this hostname is already enrolled. Use 'Reinstall "
+                        "agent' on its page in Nodeglow, or re-run the installer with the "
+                        "existing config."
                     ),
                     "code": "agent_exists",
                 }, status_code=409)
@@ -824,17 +873,74 @@ async def create_install_token(request: Request):
         await db.commit()
         await db.refresh(token_row)
 
-    server_url = await resolve_server_url(request)
+    return _install_token_response(token_row, raw, await resolve_server_url(request))
 
+
+def _install_token_response(row: AgentInstallToken, raw: str, server_url: str) -> dict:
+    """What the admin gets once for a freshly issued token: the token and the
+    finished install commands."""
     return {
         "ok": True,
-        "id": token_row.id,
+        "id": row.id,
         "token": raw,
-        "prefix": token_row.prefix,
-        "expires_at": iso(token_row.expires_at),
+        "prefix": row.prefix,
+        "expires_at": iso(row.expires_at),
         "install_linux": f"curl -sSL '{server_url}/install/linux?token={raw}' | sudo bash",
         "install_windows": f"irm '{server_url}/install/windows?token={raw}' | iex",
     }
+
+
+@router.post("/api/agents/{agent_id}/reinstall")
+@rate_limit(max_requests=10, window_seconds=60)
+async def reinstall_agent(agent_id: int, request: Request):
+    """Issue a reinstall command for an existing agent. Admin only.
+
+    The token is bound to this agent: the installer run with it on the
+    agent's own host re-enrols the agent under its existing id, once.
+    """
+    if err := _require_access_admin(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        ttl_hours = int(body.get("ttl_hours") or 1)
+    except (TypeError, ValueError, AttributeError):
+        ttl_hours = 1
+    ttl_hours = max(1, min(ttl_hours, 24))
+
+    async with AsyncSessionLocal() as db:
+        agent = await db.get(Agent, agent_id)
+        if agent is None:
+            return JSONResponse({"error": "Agent not found"}, status_code=404)
+        if not agent.enabled:
+            # Its token would be refused on every report: enable it first.
+            return JSONResponse({"error": "The agent is disabled. Enable it before reinstalling.",
+                                 "code": "agent_disabled"}, status_code=409)
+        raw = f"nt_{secrets.token_hex(24)}"
+        user = getattr(request.state, "current_user", None)
+        token_row = AgentInstallToken(
+            token_hash=_hash_install_token(raw),
+            prefix=raw[:8],
+            note=f"reinstall {agent.name}"[:256],
+            expires_at=datetime.utcnow() + timedelta(hours=ttl_hours),
+            created_by=user.username if user else None,
+            site_id=agent.site_id,
+            agent_id=agent.id,
+        )
+        db.add(token_row)
+        await db.flush()
+        await log_action(db, request, "install_token.create", "install_token", token_row.id,
+                         token_row.prefix,
+                         {"ttl_hours": ttl_hours, "reinstall": True, "agent_id": agent.id})
+        await db.commit()
+        await db.refresh(token_row)
+
+    # issued_at is the server's clock, so the UI can compare it with the
+    # agent's last_seen without trusting the browser's.
+    return {**_install_token_response(token_row, raw, await resolve_server_url(request)),
+            "agent_id": agent_id, "issued_at": iso(token_row.created_at)}
 
 
 @router.get("/api/agents/install-tokens")
@@ -847,6 +953,10 @@ async def list_install_tokens(request: Request):
         rows = (await db.execute(
             select(AgentInstallToken).order_by(AgentInstallToken.created_at.desc())
         )).scalars().all()
+        bound_ids = {r.agent_id for r in rows if r.agent_id is not None}
+        names = dict((await db.execute(
+            select(Agent.id, Agent.name).where(Agent.id.in_(bound_ids))
+        )).all()) if bound_ids else {}
     return [
         {
             "id": r.id,
@@ -860,6 +970,8 @@ async def list_install_tokens(request: Request):
             "last_used_at": iso(r.last_used_at),
             "created_at": iso(r.created_at),
             "created_by": r.created_by,
+            "agent_id": r.agent_id,
+            "agent_name": names.get(r.agent_id),
         }
         for r in rows
     ]
