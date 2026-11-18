@@ -836,6 +836,36 @@ async def _handle_logs(request: Request, agent: Agent, body: dict):
 
 # ── Install-token CRUD (admin) ────────────────────────────────────────────────
 
+def _username(request: Request) -> str | None:
+    user = getattr(request.state, "current_user", None)
+    return user.username if user else None
+
+
+async def issue_install_token(
+    db, *, note: str | None, ttl_hours: int, created_by: str | None,
+    site_id: int | None = None, agent_id: int | None = None,
+    hostname_pattern: str | None = None,
+) -> tuple[AgentInstallToken, str]:
+    """Add a new install token to ``db`` (flushed, not committed) and return
+    it with its plaintext, which exists only in the caller's hands from here
+    on: the row keeps an HMAC hash and the prefix. With ``agent_id`` the token
+    is bound to that agent (reinstall, single use)."""
+    raw = f"nt_{secrets.token_hex(24)}"
+    row = AgentInstallToken(
+        token_hash=_hash_install_token(raw),
+        prefix=raw[:8],
+        note=(note or "")[:256] or None,
+        hostname_pattern=hostname_pattern,
+        expires_at=datetime.utcnow() + timedelta(hours=ttl_hours),
+        created_by=created_by,
+        site_id=site_id,
+        agent_id=agent_id,
+    )
+    db.add(row)
+    await db.flush()
+    return row, raw
+
+
 @router.post("/api/agents/install-tokens")
 @rate_limit(max_requests=10, window_seconds=60)
 async def create_install_token(request: Request):
@@ -855,19 +885,10 @@ async def create_install_token(request: Request):
         ttl_hours = 24
     ttl_hours = max(1, min(ttl_hours, 24 * 30))  # clamp 1h..30d
 
-    raw = f"nt_{secrets.token_hex(24)}"
-    token_row = AgentInstallToken(
-        token_hash=_hash_install_token(raw),
-        prefix=raw[:8],
-        note=note or None,
-        hostname_pattern=hostname_pattern,
-        expires_at=datetime.utcnow() + timedelta(hours=ttl_hours),
-        created_by=(getattr(request.state, "current_user", None).username
-                    if getattr(request.state, "current_user", None) else None),
-    )
     async with AsyncSessionLocal() as db:
-        db.add(token_row)
-        await db.flush()
+        token_row, raw = await issue_install_token(
+            db, note=note or None, ttl_hours=ttl_hours, created_by=_username(request),
+            hostname_pattern=hostname_pattern)
         await log_action(db, request, "install_token.create", "install_token", token_row.id,
                          token_row.prefix, {"ttl_hours": ttl_hours, "note": note or None})
         await db.commit()
@@ -918,19 +939,9 @@ async def reinstall_agent(agent_id: int, request: Request):
             # Its token would be refused on every report: enable it first.
             return JSONResponse({"error": "The agent is disabled. Enable it before reinstalling.",
                                  "code": "agent_disabled"}, status_code=409)
-        raw = f"nt_{secrets.token_hex(24)}"
-        user = getattr(request.state, "current_user", None)
-        token_row = AgentInstallToken(
-            token_hash=_hash_install_token(raw),
-            prefix=raw[:8],
-            note=f"reinstall {agent.name}"[:256],
-            expires_at=datetime.utcnow() + timedelta(hours=ttl_hours),
-            created_by=user.username if user else None,
-            site_id=agent.site_id,
-            agent_id=agent.id,
-        )
-        db.add(token_row)
-        await db.flush()
+        token_row, raw = await issue_install_token(
+            db, note=f"reinstall {agent.name}", ttl_hours=ttl_hours,
+            created_by=_username(request), site_id=agent.site_id, agent_id=agent.id)
         await log_action(db, request, "install_token.create", "install_token", token_row.id,
                          token_row.prefix,
                          {"ttl_hours": ttl_hours, "reinstall": True, "agent_id": agent.id})
@@ -1049,20 +1060,10 @@ def _install_update_trust_line() -> str:
     return f'"update_public_key": "{agent_signing.public_key_hex()}"'
 
 
-@router.get("/install/linux")
-async def install_linux(request: Request):
-    """Universal Linux installer. Usage:
-        curl -sSL '<url>/install/linux?token=<INSTALL_TOKEN>' | sudo bash
-    Requires a valid per-install token generated via
-    POST /api/agents/install-tokens (admin)."""
-    ok, install_token = await _authorize_install_request(request)
-    if not ok:
-        return JSONResponse({"error": "Valid install token required"}, status_code=401)
-    server_url = await resolve_server_url(request)
-    # Script needs a value for the shell variable. For admin-session access
-    # without a token query-param we emit a placeholder that will visibly
-    # fail at enrollment time instead of silently using something valid.
-    enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
+def render_linux_installer(server_url: str, enrollment_key: str) -> str:
+    """The Linux installer script for ``server_url`` with ``enrollment_key``
+    (an install token). Served by ``/install/linux`` and written to stdin by
+    the SSH deploy, so both run the same bytes."""
     update_trust = _install_update_trust_line()
 
     script = f'''#!/bin/bash
@@ -1195,6 +1196,25 @@ echo "  Logs:    journalctl -u ${{SERVICE_NAME}} -f"
 echo "  Remove:  systemctl disable ${{SERVICE_NAME}} && rm /etc/systemd/system/${{SERVICE_NAME}}.service && rm -rf $INSTALL_DIR"
 echo ""
 '''
+
+    return script
+
+
+@router.get("/install/linux")
+async def install_linux(request: Request):
+    """Universal Linux installer. Usage:
+        curl -sSL '<url>/install/linux?token=<INSTALL_TOKEN>' | sudo bash
+    Requires a valid per-install token generated via
+    POST /api/agents/install-tokens (admin)."""
+    ok, install_token = await _authorize_install_request(request)
+    if not ok:
+        return JSONResponse({"error": "Valid install token required"}, status_code=401)
+    server_url = await resolve_server_url(request)
+    # Script needs a value for the shell variable. For admin-session access
+    # without a token query-param we emit a placeholder that will visibly
+    # fail at enrollment time instead of silently using something valid.
+    enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
+    script = render_linux_installer(server_url, enrollment_key)
 
     from fastapi.responses import Response
     return Response(content=script, media_type="text/plain")
