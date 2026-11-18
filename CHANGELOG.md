@@ -10,6 +10,23 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Install an agent over SSH. "Add agent" and "Reinstall agent" offer
+  "Install over SSH": enter the host and a login (or pick an SSH credential
+  from the store) and Nodeglow logs in and runs the Linux installer as root
+  (directly, with `sudo -n`, or with a sudo password that only sudo sees).
+  The installer goes over stdin with its own install token, so no secret
+  ends up in a command line, and credentials entered once are not stored.
+  The first connection to a host shows its host key fingerprint to confirm;
+  after that only that key is accepted (the Credentials page lists the
+  confirmed keys and can remove one after a host was rebuilt). Progress per
+  target is shown live. SSH credentials in the store have a new optional
+  field for the key passphrase.
+  New routes `POST /api/agent-deploy`, `GET /api/agent-deploy/{run_id}`,
+  `GET`/`DELETE /api/ssh-host-keys` (admin, audited), new tables
+  `ssh_host_keys` and `agent_deploy_jobs` (migration 056), new dependency
+  `asyncssh`. Switched by `NODEGLOW_SSH_DEPLOY` (`auto`/`on`/`off`); `auto`
+  is off in a multi-tenant (enterprise) build, so such an installation sets
+  `on` to use it.
 - Reinstall an agent. "Reinstall agent" on an agent's page (and on a
   silent-agent incident) issues an install command bound to that agent: run
   on the agent's machine, it re-enrols the agent under its existing id, with
@@ -276,6 +293,15 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Proxmox "Install agent on all LXCs" never worked: it ran `/install/linux`
+  without an install token (always refused) through an `ssh` binary the
+  backend image does not contain. It now uses the SSH deploy above (one
+  connection to the node, `pct exec` per container, a token per container,
+  the node's host key confirmed first) and shows each container's result.
+  Containers on other nodes of a cluster are listed as skipped instead of
+  failing; without an SSH key it returns a script with a fresh install
+  token. The
+  integration has a new optional field "SSH Port (for deploy)".
 - "Rising error trend" kept firing for errors that had stopped. The trend was
   fitted to the hours a template occurred in, laid side by side, so the quiet
   hours between and after did not count: six scattered failures of a backup

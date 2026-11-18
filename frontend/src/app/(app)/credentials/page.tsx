@@ -17,6 +17,7 @@ import { get, post, api, del } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toast';
 import { useConfirm } from '@/hooks/useConfirm';
+import { SshHostKeysCard } from '@/components/agents/SshHostKeysCard';
 
 /* ---------- Types ---------- */
 
@@ -78,6 +79,7 @@ const FIELDS: Record<CredentialType, FieldDef[]> = {
     { key: 'username', label: 'Username', type: 'text' },
     { key: 'password', label: 'Password', type: 'password', placeholder: 'Leave blank if using key' },
     { key: 'private_key', label: 'Private Key', type: 'textarea', placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
+    { key: 'passphrase', label: 'Key Passphrase', type: 'password', placeholder: 'Only for an encrypted key' },
   ],
 };
 
@@ -309,6 +311,8 @@ export default function CredentialsPage() {
           )}
         </QueryState>
       </Card>
+
+      <SshHostKeysCard />
 
       {/* ----- Add / Edit Modal ----- */}
       <Modal

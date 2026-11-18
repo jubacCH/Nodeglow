@@ -500,6 +500,8 @@ class ProxmoxIntegration(BaseIntegration):
                     field_type="checkbox", required=False, default=True),
         ConfigField(key="ssh_user", label="SSH User (for deploy)",
                     placeholder="root", required=False, default="root"),
+        ConfigField(key="ssh_port", label="SSH Port (for deploy)", field_type="number",
+                    placeholder="22", required=False, default=22),
         ConfigField(key="ssh_private_key", label="SSH Private Key",
                     field_type="password", encrypted=True, required=False,
                     placeholder="Paste private key for pct exec on Proxmox node"),

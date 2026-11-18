@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
 import type { Agent } from '@/types';
 import {
-  AddAgentDialog, initialPlatform, issueRequest, newAgentsSince, reconnectedSince, validityFor,
+  AddAgentDialog, canDeployOverSsh, initialPlatform, issueRequest, newAgentsSince, reconnectedSince, validityFor,
 } from './AddAgentDialog';
+
+/** The dialog asks the server whether SSH deploy is on. */
+const withQuery = (el: ReactElement) => (
+  <QueryClientProvider client={new QueryClient()}>{el}</QueryClientProvider>
+);
 
 const agent = (id: number, name: string) => ({ id, name, hostname: name }) as Agent;
 
@@ -11,8 +18,8 @@ describe('AddAgentDialog', () => {
   it('renders before any token exists', () => {
     // The dialog used to read an enrollment key the server no longer sends
     // and crashed the whole page on open.
-    expect(() => renderToStaticMarkup(<AddAgentDialog open onClose={() => {}} agents={undefined} />)).not.toThrow();
-    expect(() => renderToStaticMarkup(<AddAgentDialog open onClose={() => {}} agents={[agent(1, 'a')]} />)).not.toThrow();
+    expect(() => renderToStaticMarkup(withQuery(<AddAgentDialog open onClose={() => {}} agents={undefined} />))).not.toThrow();
+    expect(() => renderToStaticMarkup(withQuery(<AddAgentDialog open onClose={() => {}} agents={[agent(1, 'a')]} />))).not.toThrow();
   });
 
   it('reports only agents that enrolled after the command was issued', () => {
@@ -52,8 +59,24 @@ describe('AddAgentDialog in reinstall mode', () => {
   });
 
   it('renders in reinstall mode', () => {
-    expect(() => renderToStaticMarkup(
+    expect(() => renderToStaticMarkup(withQuery(
       <AddAgentDialog open onClose={() => {}} agents={[agent(7, 'web01')]} agent={target} />,
-    )).not.toThrow();
+    ))).not.toThrow();
+  });
+});
+
+describe('canDeployOverSsh', () => {
+  const linux = { id: 1, name: 'web01', platform: 'Linux', last_seen: null };
+  const windows = { ...linux, platform: 'Windows' };
+
+  it('offers SSH only when the server allows it', () => {
+    expect(canDeployOverSsh(true, undefined)).toBe(true);
+    expect(canDeployOverSsh(false, undefined)).toBe(false);
+    expect(canDeployOverSsh(undefined, undefined)).toBe(false);
+  });
+
+  it('offers SSH for Linux agents only', () => {
+    expect(canDeployOverSsh(true, linux)).toBe(true);
+    expect(canDeployOverSsh(true, windows)).toBe(false);
   });
 });
