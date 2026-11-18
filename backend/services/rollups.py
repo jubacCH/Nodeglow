@@ -455,3 +455,181 @@ async def _maintain(c, now: datetime, ch, clickhouse_rebuild) -> dict[str, str]:
         await _write_marker(c, source, cutoff, True)
         out[source] = "backfilled"
     return out
+
+
+# ── Readers: raw or rollup resolution by range ───────────────────────────────
+
+RAW = "raw"
+# Raw retention per source in hours: beyond it only a rollup has data.
+RAW_TTL_HOURS = {"ping_checks": 720, "agent_metrics": 168, "bandwidth_metrics": 168}
+
+
+def pick_level(hours: int) -> str:
+    """The resolution a range of ``hours`` is read at."""
+    if hours <= 48:
+        return RAW
+    if hours <= 720:
+        return "5m"
+    if hours <= 9600:
+        return "1h"
+    return "1d"
+
+
+async def effective_level(source: str, hours: int) -> str:
+    """``pick_level``, but raw while the source's rollups are not ready.
+
+    A longer range than raw holds then shows data only as far back as raw
+    reaches (``RAW_TTL_HOURS``); that is the price of not being backfilled yet.
+    """
+    picked = pick_level(hours)
+    if picked == RAW or not await ready(source):
+        return RAW
+    return picked
+
+
+@dataclass
+class SeriesResult:
+    level: str
+    bucket_seconds: int
+    points: list[dict]
+
+
+def _clean(value):
+    """NULL and nan (an empty t-digest) read as None."""
+    if value is None or (isinstance(value, float) and value != value):
+        return None
+    return value
+
+
+def _since() -> str:
+    """Lower bound on ``bucket`` that keeps the partial first bucket."""
+    return (
+        "bucket >= toStartOfInterval(now() - toIntervalHour({h:UInt32}), "
+        "toIntervalSecond({b:UInt32}), 'UTC')"
+    )
+
+
+async def _series(source: str, hours: int, key_cond: str, key_params: dict,
+                  raw_select, roll_select) -> tuple[str, int, list[dict]]:
+    """Run the raw or rollup query of one source; the selects are callables
+    taking the table name and returning the SELECT list."""
+    from services import clickhouse_client as ch
+
+    hours = int(hours)
+    lvl = await effective_level(source, hours)
+    params: dict = {"h": hours, **key_params}
+    if lvl == RAW:
+        secs = ch.bandwidth_bucket_seconds(hours)
+        params["b"] = secs
+        where = " AND ".join([
+            ch.tenant_clause(params), key_cond, "timestamp >= now() - toIntervalHour({h:UInt32})"])
+        sql = (
+            f"SELECT {raw_select()} FROM {source} WHERE {where} "
+            "GROUP BY bucket ORDER BY bucket ASC"
+        )
+    else:
+        secs = level(lvl).seconds
+        params["b"] = secs
+        where = " AND ".join([ch.tenant_clause(params), key_cond, _since()])
+        sql = (
+            f"SELECT {roll_select()} FROM {rollup_table(source, lvl)} WHERE {where} "
+            "GROUP BY bucket ORDER BY bucket ASC"
+        )
+    rows = await ch.query(sql, params)
+    if lvl != RAW:
+        # Rollup aliases carry an r_ prefix: an alias equal to a column name
+        # (sum(checks) AS checks) would make ClickHouse resolve it as nested.
+        rows = [{(k[2:] if k.startswith("r_") else k): v for k, v in r.items()} for r in rows]
+    return lvl, secs, rows
+
+
+_RAW_BUCKET = "toStartOfInterval(timestamp, toIntervalSecond({b:UInt32}), 'UTC') AS bucket"
+
+
+async def ping_series(host_id: int, hours: int) -> SeriesResult:
+    lat_ok = _LAT_OK
+    lvl, secs, rows = await _series(
+        "ping_checks", hours, "host_id = {k:UInt32}", {"k": int(host_id)},
+        lambda: (
+            f"{_RAW_BUCKET}, count() AS checks, countIf(success = 1) AS ok, "
+            f"countIf({lat_ok}) AS lat_n, "
+            f"sumIf(latency_ms, {lat_ok}) / nullIf(countIf({lat_ok}), 0) AS latency_avg, "
+            "minIf(latency_ms, success = 1) AS latency_min, "
+            "maxIf(latency_ms, success = 1) AS latency_max, "
+            "quantileTDigestIf(0.95)(latency_ms, success = 1) AS latency_p95"
+        ),
+        lambda: (
+            "bucket, sum(checks) AS r_checks, sum(ok) AS r_ok, "
+            "sum(lat_n) AS r_lat_n, sum(lat_sum) / nullIf(sum(lat_n), 0) AS r_latency_avg, "
+            "min(lat_min) AS r_latency_min, max(lat_max) AS r_latency_max, "
+            "quantileTDigestMerge(0.95)(lat_p95) AS r_latency_p95"
+        ),
+    )
+    points = []
+    for r in rows:
+        n = int(r.get("lat_n") or 0)
+        p = {"timestamp": r["bucket"], "checks": int(r["checks"]), "ok": int(r["ok"])}
+        for k in ("latency_avg", "latency_min", "latency_max", "latency_p95"):
+            p[k] = _clean(r.get(k)) if n else None
+        points.append(p)
+    return SeriesResult(lvl, secs, points)
+
+
+async def agent_series(agent_id: int, hours: int) -> SeriesResult:
+    def raw_sel():
+        cols = [_RAW_BUCKET]
+        for m in _AGENT_METRICS:
+            cols += [
+                f"countIf({m} IS NOT NULL) AS {m}_n",
+                f"sum({m}) / nullIf(countIf({m} IS NOT NULL), 0) AS {m}_avg",
+                f"min({m}) AS {m}_min", f"max({m}) AS {m}_max",
+                f"quantileTDigestIf(0.95)(assumeNotNull({m}), isNotNull({m})) AS {m}_p95",
+            ]
+        return ", ".join(cols)
+
+    def roll_sel():
+        cols = ["bucket"]
+        for m in _AGENT_METRICS:
+            cols += [
+                f"sum({m}_n) AS r_{m}_n",
+                f"sum({m}_sum) / nullIf(sum({m}_n), 0) AS r_{m}_avg",
+                f"min({m}_min) AS r_{m}_min", f"max({m}_max) AS r_{m}_max",
+                f"quantileTDigestMerge(0.95)({m}_p95) AS r_{m}_p95",
+            ]
+        return ", ".join(cols)
+
+    lvl, secs, rows = await _series(
+        "agent_metrics", hours, "agent_id = {k:UInt32}", {"k": int(agent_id)}, raw_sel, roll_sel)
+    points = []
+    for r in rows:
+        p = {"timestamp": r["bucket"]}
+        for m in _AGENT_METRICS:
+            n = int(r.get(f"{m}_n") or 0)
+            for suffix in ("avg", "min", "max", "p95"):
+                p[f"{m}_{suffix}"] = _clean(r.get(f"{m}_{suffix}")) if n else None
+        points.append(p)
+    return SeriesResult(lvl, secs, points)
+
+
+async def bandwidth_series(source_type: str, source_id: str, interface_name: str,
+                           hours: int) -> SeriesResult:
+    cond = ("source_type = {st:String} AND source_id = {sid:String} "
+            "AND interface_name = {iface:String}")
+    lvl, secs, rows = await _series(
+        "bandwidth_metrics", hours, cond,
+        {"st": source_type, "sid": source_id, "iface": interface_name},
+        lambda: (
+            f"{_RAW_BUCKET}, avg(rx_rate_bps) AS rx_rate_avg, "
+            "avg(tx_rate_bps) AS tx_rate_avg, max(rx_rate_bps) AS rx_rate_max, "
+            "max(tx_rate_bps) AS tx_rate_max"
+        ),
+        lambda: (
+            "bucket, "
+            "sum(rx_rate_sum) / nullIf(sum(rate_n), 0) AS r_rx_rate_avg, "
+            "sum(tx_rate_sum) / nullIf(sum(rate_n), 0) AS r_tx_rate_avg, "
+            "max(rx_rate_max) AS r_rx_rate_max, max(tx_rate_max) AS r_tx_rate_max"
+        ),
+    )
+    keys = ("rx_rate_avg", "tx_rate_avg", "rx_rate_max", "tx_rate_max")
+    points = [{"timestamp": r["bucket"], **{k: _clean(r.get(k)) for k in keys}} for r in rows]
+    return SeriesResult(lvl, secs, points)

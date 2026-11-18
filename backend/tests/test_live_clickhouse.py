@@ -709,3 +709,53 @@ async def test_rollup_matches_raw_aggregates(ch, rollups_clean):
         rank = sum(v <= r["p95"] + 1e-4 for v in vals) / len(vals)
         assert 0.90 <= rank <= 0.99, (r["bucket"], r["p95"], rank)
         assert r["p95"] == pytest.approx(w["p95"], abs=6.0)
+
+
+async def test_series_readers_over_rolled_up_ranges(ch, rollups_clean):
+    from services import rollups
+
+    client = rollups_clean
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cut = rollups._next_midnight(now)
+    tid, host = _tid(), random.randint(10**8, 2 * 10**8)
+    # Old enough for the 5m range (> 48 h), before the cutoff: backfilled rows.
+    base = (now - timedelta(hours=60)).replace(minute=0, second=0)
+    rows = [{"tenant_id": tid, "timestamp": base + timedelta(minutes=i), "host_id": host,
+             "success": i % 10 != 0, "latency_ms": None if i % 10 == 0 else float(i % 7 + 1)}
+            for i in range(120)]
+    # One bucket of failed pings only: no latency, must read as None.
+    rows += [{"tenant_id": tid, "timestamp": base + timedelta(hours=3, minutes=i), "host_id": host,
+              "success": False, "latency_ms": None} for i in range(3)]
+    await ch.insert_ping_checks(rows)
+    await ch.insert_agent_metrics([{"tenant_id": tid, "timestamp": base + timedelta(minutes=i),
+                                    "agent_id": host, "agent_name": "a",
+                                    "cpu_pct": float(i % 50)} for i in range(60)])
+    await ch.insert_bandwidth_metrics([{"tenant_id": tid, "timestamp": base + timedelta(minutes=i),
+                                        "source_type": "agent", "source_id": str(host),
+                                        "interface_name": "total", "rx_rate_bps": 100 + i,
+                                        "tx_rate_bps": 10} for i in range(60)])
+    assert set((await rollups.maintain(client, now=now)).values()) == {"created"}
+    assert set((await rollups.maintain(client, now=cut + timedelta(minutes=11))).values()) == {"backfilled"}
+    rollups._ready_cache.clear()
+
+    with tenant_scope(tid):
+        res = await rollups.ping_series(host, hours=24 * 7)
+        assert res.level == "5m" and res.bucket_seconds == 300
+        assert sum(p["checks"] for p in res.points) == 123
+        assert sum(p["ok"] for p in res.points) == 108
+        full = [p for p in res.points if p["latency_avg"] is not None]
+        assert full and all(1 <= p["latency_min"] <= p["latency_p95"] <= p["latency_max"] <= 7
+                            for p in full)
+        empty = [p for p in res.points if p["ok"] == 0]
+        assert empty and all(p["latency_avg"] is None and p["latency_p95"] is None for p in empty)
+        res_1h = await rollups.ping_series(host, hours=24 * 60)
+        assert res_1h.level == "1h" and sum(p["checks"] for p in res_1h.points) == 123
+        ag = await rollups.agent_series(host, hours=24 * 7)
+        assert ag.level == "5m" and ag.points
+        assert all(p["mem_pct_avg"] is None and p["mem_pct_p95"] is None for p in ag.points)
+        assert max(p["cpu_pct_max"] for p in ag.points) == 49.0
+        bw = await rollups.bandwidth_series("agent", str(host), "total", hours=24 * 7)
+        assert bw.level == "5m" and max(p["rx_rate_max"] for p in bw.points) == 159
+        assert all(p["tx_rate_avg"] == 10 for p in bw.points)
+        total = await ch.get_bandwidth_total_history_ch(hours=24 * 7)
+        assert any(r["agents_n"] == 1 for r in total)

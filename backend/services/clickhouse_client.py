@@ -1396,9 +1396,34 @@ async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
     summed after: interfaces report at different moments, and adding up raw
     samples would count an interface once per sample it happened to send.
     """
+    from services import rollups
+
     params: dict = {"h": int(hours), "b": bandwidth_bucket_seconds(int(hours))}
-    where = " AND ".join(
-        [tenant_clause(params), "timestamp >= now() - toIntervalHour({h:UInt32})"])
+    lvl = await rollups.effective_level("bandwidth_metrics", int(hours))
+    if lvl == rollups.RAW:
+        inner = f"""
+            SELECT toStartOfInterval(timestamp, toIntervalSecond({{b:UInt32}})) AS bucket,
+                   source_type, source_id, interface_name,
+                   avg(rx_rate_bps) AS rx, avg(tx_rate_bps) AS tx
+            FROM bandwidth_metrics
+            WHERE {{where}}
+            GROUP BY bucket, source_type, source_id, interface_name"""
+        where = " AND ".join(
+            [tenant_clause(params), "timestamp >= now() - toIntervalHour({h:UInt32})"])
+    else:
+        params["b"] = rollups.level(lvl).seconds
+        inner = f"""
+            SELECT bucket, source_type, source_id, interface_name,
+                   sum(rx_rate_sum) / nullIf(sum(rate_n), 0) AS rx,
+                   sum(tx_rate_sum) / nullIf(sum(rate_n), 0) AS tx
+            FROM {rollups.rollup_table("bandwidth_metrics", lvl)}
+            WHERE {{where}}
+            GROUP BY bucket, source_type, source_id, interface_name"""
+        where = " AND ".join([
+            tenant_clause(params),
+            "bucket >= toStartOfInterval(now() - toIntervalHour({h:UInt32}), "
+            "toIntervalSecond({b:UInt32}), 'UTC')"])
+    inner = inner.replace("{where}", where)
     sums = ",\n               ".join(
         f"toUInt64(sumIf(rx, {pred})) AS {name}_rx, toUInt64(sumIf(tx, {pred})) AS {name}_tx, "
         f"countIf({pred}) AS {name}_n"
@@ -1406,13 +1431,7 @@ async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
     sql = f"""
         SELECT bucket AS timestamp,
                {sums}
-        FROM (
-            SELECT toStartOfInterval(timestamp, toIntervalSecond({{b:UInt32}})) AS bucket,
-                   source_type, source_id, interface_name,
-                   avg(rx_rate_bps) AS rx, avg(tx_rate_bps) AS tx
-            FROM bandwidth_metrics
-            WHERE {where}
-            GROUP BY bucket, source_type, source_id, interface_name
+        FROM ({inner}
         )
         GROUP BY bucket
         ORDER BY bucket ASC
