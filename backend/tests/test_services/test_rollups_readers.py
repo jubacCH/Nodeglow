@@ -85,10 +85,25 @@ async def test_bandwidth_total_stays_raw_up_to_raw_retention(fake_query, ready_a
 async def test_bandwidth_total_uses_rollup_beyond_raw_retention(fake_query, ready_all):
     await ch.get_bandwidth_total_history_ch(hours=169)
     sql, params = fake_query.calls[0]
-    assert "FROM bandwidth_metrics_5m" in sql and params["b"] == 300
+    assert "FROM bandwidth_metrics_5m" in sql
     await ch.get_bandwidth_total_history_ch(hours=24 * 90)
     sql, params = fake_query.calls[1]
     assert "FROM bandwidth_metrics_1h" in sql and params["b"] == 3600
+
+
+@pytest.mark.parametrize("hours,table,width", [
+    (169, "bandwidth_metrics_5m", 3600),      # 5 m level is re-bucketed to hours
+    (24 * 90, "bandwidth_metrics_1h", 3600),
+    (20000, "bandwidth_metrics_1d", 86400),
+])
+async def test_bandwidth_total_rollup_points_are_at_least_hourly(fake_query, ready_all, hours, table, width):
+    await ch.get_bandwidth_total_history_ch(hours=hours)
+    sql, params = fake_query.calls[0]
+    assert f"FROM {table}" in sql and params["b"] == width
+    # re-bucketed, with sums and counts added before dividing
+    assert "toStartOfInterval(bucket, toIntervalSecond({b:UInt32}), 'UTC') AS bkt" in sql
+    assert "sum(rx_rate_sum) AS rxs" in sql and "sum(rate_n) AS n" in sql
+    assert "rxs / nullIf(n, 0) AS rx" in sql
 
 
 async def test_bandwidth_total_stays_raw_when_not_ready(fake_query, ready_none):

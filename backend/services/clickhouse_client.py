@@ -1417,14 +1417,21 @@ async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
         where = " AND ".join(
             [tenant_clause(params), "timestamp >= now() - toIntervalHour({h:UInt32})"])
     else:
-        params["b"] = rollups.level(lvl).seconds
+        # Hourly points at the finest: the 5 m level would give 2000+ points
+        # and a sawtooth when interfaces poll slower than every 5 minutes.
+        # Sums and counts are added per (coarse bucket, interface) before
+        # dividing, so the averages stay exact.
+        params["b"] = max(rollups.level(lvl).seconds, 3600)
         inner = f"""
-            SELECT bucket, source_type, source_id, interface_name,
-                   sum(rx_rate_sum) / nullIf(sum(rate_n), 0) AS rx,
-                   sum(tx_rate_sum) / nullIf(sum(rate_n), 0) AS tx
-            FROM {rollups.rollup_table("bandwidth_metrics", lvl)}
-            WHERE {{where}}
-            GROUP BY bucket, source_type, source_id, interface_name"""
+            SELECT bkt AS bucket, source_type, source_id, interface_name,
+                   rxs / nullIf(n, 0) AS rx, txs / nullIf(n, 0) AS tx
+            FROM (
+                SELECT toStartOfInterval(bucket, toIntervalSecond({{b:UInt32}}), 'UTC') AS bkt,
+                       source_type, source_id, interface_name,
+                       sum(rx_rate_sum) AS rxs, sum(tx_rate_sum) AS txs, sum(rate_n) AS n
+                FROM {rollups.rollup_table("bandwidth_metrics", lvl)}
+                WHERE {{where}}
+                GROUP BY bkt, source_type, source_id, interface_name)"""
         where = " AND ".join([
             tenant_clause(params),
             "bucket >= toStartOfInterval(now() - toIntervalHour({h:UInt32}), "

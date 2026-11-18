@@ -567,7 +567,7 @@ async def test_series_unknown_entity_is_404(client):
     assert (await client.get("/api/v1/agents/99999/series")).status_code == 404
 
 
-async def test_series_hours_bounds(client, monkeypatch):
+async def test_series_hours_bounds(client):
     host_id = (await client.post("/api/v1/hosts", json={
         "name": "bounds-host", "hostname": "10.0.0.52", "check_type": "icmp"})).json()["id"]
     for hours in (0, 43801):
@@ -585,3 +585,21 @@ async def test_bandwidth_history_accepts_long_ranges(client, monkeypatch):
     assert (await client.get("/api/bandwidth/history?hours=2160")).status_code == 200
     assert (await client.get("/api/bandwidth/history?hours=43800")).status_code == 200
     assert (await client.get("/api/bandwidth/history?hours=43801")).status_code == 422
+
+
+async def test_filtered_bandwidth_history_is_limited_to_raw_retention(client, monkeypatch):
+    from services import bandwidth as bw
+
+    seen = []
+
+    async def fake_history(**kw):
+        seen.append(kw)
+        return []
+
+    monkeypatch.setattr(bw, "get_bandwidth_history", fake_history)
+    for q in ("source_type=proxmox", "source_id=x", "interface=eth0"):
+        assert (await client.get(f"/api/bandwidth/history?{q}&hours=169")).status_code == 422
+        assert (await client.get(f"/api/bandwidth/history?{q}&hours=168")).status_code == 200
+    resp = await client.get("/api/bandwidth/history?source_type=agent&hours=2160")
+    assert resp.status_code == 422 and "168" in resp.json()["detail"]
+    assert len(seen) == 3  # only the 168 h calls got through
