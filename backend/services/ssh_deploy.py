@@ -78,12 +78,12 @@ async def fetch_host_key(host: str, port: int = 22, timeout: float = CONNECT_TIM
     try:
         key = await asyncio.wait_for(
             asyncssh.get_server_host_key(host, port, config=None), timeout)
-    except asyncio.TimeoutError as exc:
-        raise SshTimeout(f"No answer from {host}:{port} within {timeout:.0f} s") from exc
-    except (OSError, asyncssh.Error) as exc:
-        raise SshDeployError(f"Cannot reach {host}:{port}: {exc}") from exc
+    except (asyncio.TimeoutError, OSError, asyncssh.Error) as exc:
+        # One message for refused, timed out and not-SSH: the request must
+        # not tell apart what listens on an address (a port-scan oracle).
+        raise SshDeployError(f"No SSH server answered on {host}:{port}.") from exc
     if key is None:
-        raise SshDeployError(f"{host}:{port} presented no host key")
+        raise SshDeployError(f"No SSH server answered on {host}:{port}.")
     return _host_key(key)
 
 
@@ -116,7 +116,7 @@ async def connect(
     except asyncssh.HostKeyNotVerifiable as exc:
         raise HostKeyMismatch(
             f"The host key of {host}:{port} changed. Check the host, then remove the stored "
-            "key under Settings to trust the new one.") from exc
+            "key on the Credentials page (SSH host keys) to trust the new one.") from exc
     except asyncssh.PermissionDenied as exc:
         raise SshAuthFailed(f"Login as {creds.username} on {host}:{port} was refused") from exc
     except (OSError, asyncssh.Error) as exc:
@@ -162,7 +162,15 @@ async def run_installer(conn, script: str, creds: SshCredentials,
     q = shlex.quote(path)
     command = (f"sudo -S -p '' bash -c 'exec bash \"$0\" </dev/null' {q}; "
                f"rc=$?; rm -f {q}; exit $rc")
-    return await _run(conn, command, creds.sudo_password + "\n", timeout)
+    try:
+        return await _run(conn, command, creds.sudo_password + "\n", timeout)
+    except SshDeployError:
+        # The command never reached its own rm: the file holds the token.
+        try:
+            await _run(conn, f"rm -f {q}", "", 10.0)
+        except SshDeployError:
+            pass
+        raise
 
 
 def lxc_command(vmid, username: str) -> str:

@@ -278,10 +278,12 @@ by `NODEGLOW_SSH_DEPLOY`, `403 ssh_deploy_disabled` when off;
 | GET | `/api/ssh-host-keys` | Confirmed host keys `{keys: [{id, host, port, key_type, fingerprint, created_at, created_by}]}` |
 | DELETE | `/api/ssh-host-keys/{id}` | Forget a host key; the next deploy asks again |
 
-`POST /api/v1/integrations/proxmox/{id}/deploy-agent` (body
-`{host_key_fingerprint?}`): with an SSH key in the integration, `202 {mode:
-"ssh", run_id, jobs}` (same host-key flow); otherwise `200 {mode: "script",
-manual_script}` with a fresh install token valid for two hours.
+`POST /api/v1/integrations/proxmox/{id}/deploy-agent` (admin session, not an
+API key; body `{host_key_fingerprint?}`): with an SSH key in the integration,
+`202 {mode: "ssh", run_id, jobs}` (same host-key flow); otherwise `200 {mode:
+"script", manual_script}` with a fresh install token valid for two hours.
+Only the containers of the node that answers the API are included; the
+others are listed in `skipped_other_nodes`.
 
 ### Sites
 

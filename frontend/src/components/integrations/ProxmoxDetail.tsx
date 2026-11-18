@@ -82,6 +82,8 @@ interface DeployResult {
   results?: { vmid: number; name: string }[];
   manual_script?: string | null;
   skipped_self?: string | null;
+  /** Containers on other cluster nodes: pct exec reaches this node only. */
+  skipped_other_nodes?: string[];
   message?: string;
 }
 
@@ -320,6 +322,12 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
 
           {deployResult && (
             <div className="space-y-3" aria-live="polite">
+              {(deployResult.skipped_other_nodes?.length ?? 0) > 0 && (
+                <p className="text-meta text-fg-3">
+                  Not included, they run on another node: {deployResult.skipped_other_nodes!.join(', ')}. Add that
+                  node as its own Proxmox integration to install there.
+                </p>
+              )}
               {/* SSH mode: follow the run */}
               {deployResult.mode === 'ssh' && deployResult.run_id && (
                 <>

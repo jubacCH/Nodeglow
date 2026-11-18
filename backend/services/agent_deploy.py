@@ -22,10 +22,14 @@ log = logging.getLogger(__name__)
 
 CONCURRENCY = 4
 TARGET_TIMEOUT = 180.0
-STALE_AFTER = timedelta(minutes=15)
+# A run without a live task in this process (server restarted) is reported
+# as interrupted once it is older than this: long enough for the request
+# that created it to have started its task.
+ORPHAN_AFTER = timedelta(minutes=2)
 ACTIVE = ("queued", "running")
 
 _tasks: set[asyncio.Task] = set()
+_live_runs: set[str] = set()
 
 
 def deploy_enabled() -> bool:
@@ -51,6 +55,7 @@ class RunTarget:
 
 @dataclass
 class Run:
+    run_id: str
     tenant_id: int
     host: str
     port: int
@@ -61,12 +66,17 @@ class Run:
     finished: set[int] = field(default_factory=set)
 
 
-def job_view(job, now: datetime | None = None) -> dict:
-    """A job as the API shows it. A job still queued or running after
-    ``STALE_AFTER`` lost its task (server restart) and reads as failed."""
+def is_live(run_id: str) -> bool:
+    return run_id in _live_runs
+
+
+def job_view(job, now: datetime | None = None, *, live: bool = True) -> dict:
+    """A job as the API shows it. A job still queued or running whose run has
+    no task in this process any more (server restart) reads as failed."""
     now = now or datetime.utcnow()
     status, detail = job.status, job.detail
-    if status in ACTIVE and job.created_at and now - job.created_at > STALE_AFTER:
+    if (status in ACTIVE and not live and job.created_at
+            and now - job.created_at > ORPHAN_AFTER):
         status, detail = "failed", "interrupted (the server restarted during the deploy)"
     return {
         "id": job.id,
@@ -83,9 +93,15 @@ def job_view(job, now: datetime | None = None) -> dict:
 
 
 def start(run: Run) -> asyncio.Task:
+    _live_runs.add(run.run_id)
     task = asyncio.create_task(_execute(run))
     _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+
+    def _done(t: asyncio.Task) -> None:
+        _tasks.discard(t)
+        _live_runs.discard(run.run_id)
+
+    task.add_done_callback(_done)
     return task
 
 
@@ -134,6 +150,10 @@ async def _run_target(run: Run, conn, target: RunTarget, gate: asyncio.Semaphore
         except ssh_deploy.SshDeployError as exc:
             await _finish(run, target, False, str(exc))
             return
+        except Exception:  # noqa: BLE001 — one target's crash stays its own
+            log.exception("Agent deploy target %s crashed", target.job_id)
+            await _finish(run, target, False, "internal error, see the server log")
+            return
         if rc != 0:
             out = f"{out.rstrip()}\n(exit code {rc})".lstrip()
         await _finish(run, target, rc == 0, out)
@@ -146,7 +166,8 @@ async def _execute(run: Run) -> None:
         async with ssh_deploy.connect(run.host, run.port, run.creds,
                                       run.pinned_public_key) as conn:
             gate = asyncio.Semaphore(CONCURRENCY)
-            await asyncio.gather(*(_run_target(run, conn, t, gate) for t in run.targets))
+            await asyncio.gather(*(_run_target(run, conn, t, gate) for t in run.targets),
+                                 return_exceptions=True)
     except ssh_deploy.SshDeployError as exc:
         await _fail_open(run, str(exc))
     except Exception:  # noqa: BLE001 — a crash must not leave jobs "running"

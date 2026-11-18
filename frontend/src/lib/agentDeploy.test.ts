@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api';
 import {
-  EMPTY_SSH_FORM, deployBody, formProblem, runOutcome, unknownHostKey, type DeployRun, type SshForm,
+  EMPTY_SSH_FORM, deployBody, formProblem, hostKeyFile, runOutcome, unknownHostKey, type DeployRun, type SshForm,
 } from './agentDeploy';
 
 const form = (patch: Partial<SshForm> = {}): SshForm => ({
@@ -76,5 +76,15 @@ describe('runOutcome', () => {
     expect(runOutcome(run('ok', 'ok'))).toBe('ok');
     expect(runOutcome(run('failed'))).toBe('failed');
     expect(runOutcome(run('ok', 'failed'))).toBe('partial');
+  });
+});
+
+describe('hostKeyFile', () => {
+  it('names the public key file that matches the key type', () => {
+    expect(hostKeyFile('ssh-ed25519')).toBe('/etc/ssh/ssh_host_ed25519_key.pub');
+    expect(hostKeyFile('ecdsa-sha2-nistp256')).toBe('/etc/ssh/ssh_host_ecdsa_key.pub');
+    expect(hostKeyFile('rsa-sha2-512')).toBe('/etc/ssh/ssh_host_rsa_key.pub');
+    expect(hostKeyFile('ssh-rsa')).toBe('/etc/ssh/ssh_host_rsa_key.pub');
+    expect(hostKeyFile('something-else')).toBe('/etc/ssh/ssh_host_*_key.pub');
   });
 });

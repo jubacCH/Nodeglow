@@ -504,15 +504,16 @@ async def deploy_agent_to_lxcs(
     from models.agent_deploy import AgentDeployJob
     from models.integration import IntegrationConfig
     from routers import agent_deploy as deploy_routes
-    from routers.agents import _username, issue_install_token, resolve_server_url
+    from routers.agents import (
+        _require_access_admin, _username, issue_install_token, resolve_server_url,
+    )
     from services import agent_deploy, ssh_deploy, tenancy
     from services.audit import log_action
 
-    # Admin (session or API key) via the dependency; never through support
-    # access, which could leave tokens and running deploys behind its grant.
-    if tenancy.request_via_support(request):
-        return JSONResponse({"error": tenancy.SUPPORT_IAM_REFUSED, "code": "support_access"},
-                            status_code=403)
+    # Like issuing install tokens: an admin in a session, never an API key
+    # and never through support access (tokens and runs outlive both).
+    if err := _require_access_admin(request):
+        return err
     try:
         body = await request.json()
     except Exception:
@@ -541,6 +542,13 @@ async def deploy_agent_to_lxcs(
         verify_ssl=config_dict.get("verify_ssl", True),
     )
     resources = await api.cluster_resources()
+    # pct exec reaches the containers of the node behind the connection only:
+    # the node that answers the API (``local``) at config.host.
+    try:
+        local_node = next((n.get("name") for n in await api.cluster_status()
+                           if n.get("type") == "node" and n.get("local")), None)
+    except Exception:  # noqa: BLE001 — unknown: do not filter
+        local_node = None
 
     server_url = await resolve_server_url(request)
     # Leave out the container Nodeglow itself runs in.
@@ -552,9 +560,12 @@ async def deploy_agent_to_lxcs(
             self_names.add(socket.getfqdn(server_host).lower().split(".")[0])
         except OSError:
             pass
-    lxcs, skipped_self = [], None
+    lxcs, skipped_self, other_nodes = [], None, []
     for r in resources:
         if r.get("type") != "lxc" or r.get("status") != "running":
+            continue
+        if local_node and r.get("node") and r["node"] != local_node:
+            other_nodes.append(f"{r.get('vmid')} {r.get('name') or '?'} ({r['node']})")
             continue
         name = (r.get("name") or "").lower()
         if name and name.split(".")[0] in self_names:
@@ -563,7 +574,8 @@ async def deploy_agent_to_lxcs(
         lxcs.append(r)
     if not lxcs:
         return JSONResponse({"ok": True, "mode": "none", "results": [], "jobs": [],
-                             "message": "No running containers found",
+                             "skipped_other_nodes": other_nodes,
+                             "message": "No running containers found on this node",
                              "manual_script": None, "nodeglow_url": server_url,
                              "skipped_self": skipped_self})
 
@@ -599,13 +611,14 @@ async def deploy_agent_to_lxcs(
         })
         await db.commit()
         agent_deploy.start(agent_deploy.Run(
-            tenant_id=tenancy.current_tenant_id(), host=node, port=ssh_port,
+            run_id=run_id, tenant_id=tenancy.current_tenant_id(), host=node, port=ssh_port,
             pinned_public_key=pinned,
             creds=ssh_deploy.SshCredentials(username=ssh_user, private_key=ssh_key),
             server_url=server_url, targets=targets,
         ))
         return JSONResponse({"ok": True, "mode": "ssh", "run_id": run_id, "jobs": views,
-                             "nodeglow_url": server_url, "skipped_self": skipped_self},
+                             "nodeglow_url": server_url, "skipped_self": skipped_self,
+                             "skipped_other_nodes": other_nodes},
                             status_code=202)
 
     # No key (or SSH deploy switched off): a script for the node's shell. One
@@ -630,5 +643,5 @@ async def deploy_agent_to_lxcs(
         "ok": True, "mode": "script", "deployed": 0, "failed": 0,
         "results": [{"vmid": lxc.get("vmid"), "name": lxc.get("name")} for lxc in lxcs],
         "manual_script": manual_script, "nodeglow_url": server_url,
-        "skipped_self": skipped_self,
+        "skipped_self": skipped_self, "skipped_other_nodes": other_nodes,
     })

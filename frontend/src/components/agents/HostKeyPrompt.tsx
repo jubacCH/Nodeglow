@@ -2,7 +2,7 @@
 
 import { ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import type { HostKeyQuestion } from '@/lib/agentDeploy';
+import { hostKeyFile, type HostKeyQuestion } from '@/lib/agentDeploy';
 
 /**
  * Asks the admin to confirm a host key before Nodeglow logs in for the first
@@ -30,7 +30,7 @@ export function HostKeyPrompt({
         {question.fingerprint}
       </pre>
       <p className="text-micro text-fg-3">
-        On the host: <span className="font-code">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</span>
+        On the host: <span className="font-code">ssh-keygen -lf {hostKeyFile(question.keyType)}</span>
       </p>
       <div className="flex flex-wrap gap-2">
         <Button variant="primary" size="sm" onClick={onTrust} disabled={busy}>

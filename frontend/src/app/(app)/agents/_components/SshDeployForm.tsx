@@ -60,6 +60,8 @@ export function SshDeployForm({
       const res = await post<{ run_id: string; jobs?: { created_at: string | null }[] }>(
         '/api/agent-deploy', deployBody(form, { agentId, fingerprint }));
       setQuestion(null);
+      // Started: the secrets are not needed in this browser any more.
+      setForm((f) => ({ ...f, password: '', privateKey: '', passphrase: '', sudoPassword: '' }));
       setRunId(res.run_id);
       onStarted(res.jobs?.[0]?.created_at ?? null);
     } catch (e) {

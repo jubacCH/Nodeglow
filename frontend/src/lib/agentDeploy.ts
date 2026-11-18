@@ -99,3 +99,10 @@ export function runOutcome(run: DeployRun): RunOutcome {
   if (failed === 0) return 'ok';
   return failed === run.jobs.length ? 'failed' : 'partial';
 }
+
+/** The host's public key file for a key type, for comparing fingerprints. */
+export function hostKeyFile(keyType: string): string {
+  const t = keyType.toLowerCase();
+  const kind = t.includes('ed25519') ? 'ed25519' : t.startsWith('ecdsa') ? 'ecdsa' : t.includes('rsa') ? 'rsa' : '*';
+  return `/etc/ssh/ssh_host_${kind}_key.pub`;
+}

@@ -21,6 +21,7 @@ class _Recorder:
         self.commands: list[str] = []
         self.stdin: dict[str, str] = {}
         self.hang = False
+        self.hang_on: str | None = None
 
 
 class _Server(asyncssh.SSHServer):
@@ -49,7 +50,7 @@ async def _handle(rec, process):
     rec.commands.append(cmd)
     data = await process.stdin.read()
     rec.stdin[cmd] = data
-    if rec.hang:
+    if rec.hang or (rec.hang_on and rec.hang_on in cmd):
         await asyncio.sleep(30)
     if cmd.startswith("f=$(mktemp)"):
         process.stdout.write("/tmp/tmp.AbC123")
@@ -187,3 +188,12 @@ def test_credentials_repr_hides_secrets():
     creds = _creds(password="pw-x", private_key="KEY-x", passphrase="pp-x", sudo_password="sp-x")
     text = repr(creds)
     assert all(s not in text for s in ("pw-x", "KEY-x", "pp-x", "sp-x"))
+
+
+async def test_the_temp_file_is_removed_when_sudo_times_out(ssh_server):
+    ssh_server["rec"].hang_on = "sudo -S"
+    creds = _creds(username="deploy", sudo_password="sudo-secret")
+    async with sd.connect("127.0.0.1", ssh_server["port"], creds, ssh_server["pub"]) as conn:
+        with pytest.raises(sd.SshTimeout):
+            await sd.run_installer(conn, SCRIPT, creds, timeout=0.5)
+    assert ssh_server["rec"].commands[-1] == "rm -f /tmp/tmp.AbC123"

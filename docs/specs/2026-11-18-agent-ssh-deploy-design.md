@@ -78,9 +78,11 @@ a stored key answers `409 host_key_unknown` with the fingerprint, fetched
 without authenticating. The admin confirms it in the UI and repeats the
 request with `host_key_fingerprint`; the server connects only if the key it
 sees has that fingerprint, then stores it. With a stored key, the connection
-accepts that key only; a different key fails the target with
-`host key changed`. An admin can delete a stored key (audited). No
-authentication is attempted before the key is checked.
+accepts that key only; a different key fails the target (in the job, not as
+a response code) with `host key changed`. An admin can delete a stored key
+(audited) on the Credentials page. No authentication is attempted before the
+key is checked. Unreachable hosts get one message for refused, timed out and
+not-SSH, so the route does not tell apart what listens on an address.
 
 ### Jobs
 
@@ -90,8 +92,10 @@ authentication is attempted before the key is checked.
 `created_by`. The request validates, creates the rows and returns `202` with
 the `run_id`; an in-process task works through the targets, at most 4 at a
 time, 180 s per target. Credentials live only in that task's memory. A job
-left `queued` or `running` for more than 15 minutes (server restart) reads
-as `failed` / `interrupted`.
+still `queued` or `running` whose run has no task in this process any more
+(server restart) reads as `failed` / `interrupted` once it is older than
+2 minutes; a live run is never cut short, however long it takes. One
+target's crash fails that target only.
 
 ### API
 
@@ -104,10 +108,14 @@ as `failed` / `interrupted`.
 - `POST /api/v1/integrations/proxmox/{id}/deploy-agent` keeps its path; with
   an SSH key in the integration it starts a run (same jobs, `proxmox_lxc`)
   and returns `202 {run_id, …}` (host-key flow as above, `host_key_fingerprint`
-  in the body); without, it returns the manual script, now with a token.
+  in the body); without, it returns the manual script, now with a token
+  (one unbound token, two hours, in the script's URL: the admin copies and
+  runs it, like the install command in the UI). `pct exec` reaches the
+  containers of one node only: the node that answers the API; containers on
+  other cluster nodes are listed as skipped.
 
-All of it: admin only, not through support access, rate limited (10/min),
-audited (`agent.deploy` with target, credential id, agent id; never secrets).
+All of it: an admin in a session (no API key, like issuing install tokens),
+not through support access, rate limited (10/min), audited (`agent.deploy` with target, credential id, agent id; never secrets).
 
 ### Gate
 

@@ -17,7 +17,10 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   The installer goes over stdin with its own install token, so no secret
   ends up in a command line, and credentials entered once are not stored.
   The first connection to a host shows its host key fingerprint to confirm;
-  after that only that key is accepted. Progress per target is shown live.
+  after that only that key is accepted (the Credentials page lists the
+  confirmed keys and can remove one after a host was rebuilt). Progress per
+  target is shown live. SSH credentials in the store have a new optional
+  field for the key passphrase.
   New routes `POST /api/agent-deploy`, `GET /api/agent-deploy/{run_id}`,
   `GET`/`DELETE /api/ssh-host-keys` (admin, audited), new tables
   `ssh_host_keys` and `agent_deploy_jobs` (migration 056), new dependency
@@ -294,7 +297,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   without an install token (always refused) through an `ssh` binary the
   backend image does not contain. It now uses the SSH deploy above (one
   connection to the node, `pct exec` per container, a token per container,
-  the node's host key confirmed first) and shows each container's result;
+  the node's host key confirmed first) and shows each container's result.
+  Containers on other nodes of a cluster are listed as skipped instead of
+  failing;
   without an SSH key it returns a script with a fresh install token. The
   integration has a new optional field "SSH Port (for deploy)".
 -- Ping checks could stop for good. A ping child process the event loop never

@@ -325,10 +325,16 @@ async def test_host_keys_can_be_listed_and_forgotten(admin_pair, ssh_server):
 # ── Proxmox: deploy into every running container ─────────────────────────────
 
 PVE_RESOURCES = [
-    {"type": "lxc", "status": "running", "vmid": 105, "name": "web"},
-    {"type": "lxc", "status": "stopped", "vmid": 106, "name": "off"},
-    {"type": "qemu", "status": "running", "vmid": 200, "name": "vm"},
-    {"type": "lxc", "status": "running", "vmid": 107, "name": "db"},
+    {"type": "lxc", "status": "running", "vmid": 105, "name": "web", "node": "pve1"},
+    {"type": "lxc", "status": "stopped", "vmid": 106, "name": "off", "node": "pve1"},
+    {"type": "qemu", "status": "running", "vmid": 200, "name": "vm", "node": "pve1"},
+    {"type": "lxc", "status": "running", "vmid": 107, "name": "db", "node": "pve1"},
+    {"type": "lxc", "status": "running", "vmid": 300, "name": "far", "node": "pve2"},
+]
+PVE_STATUS = [
+    {"type": "cluster", "name": "lab"},
+    {"type": "node", "name": "pve1", "local": 1},
+    {"type": "node", "name": "pve2", "local": 0},
 ]
 
 
@@ -339,7 +345,11 @@ async def _seed_pve(sf, monkeypatch, port, key_pem=""):
     async def resources(self):
         return PVE_RESOURCES
 
+    async def status(self):
+        return PVE_STATUS
+
     monkeypatch.setattr(ProxmoxAPI, "cluster_resources", resources)
+    monkeypatch.setattr(ProxmoxAPI, "cluster_status", status)
     async with sf() as db:
         cfg = await int_svc.create_config(db, "proxmox", "pve", {
             "host": "https://127.0.0.1:8006", "token_id": "root@pam!ng", "token_secret": "s",
@@ -369,6 +379,8 @@ async def test_proxmox_deploys_every_running_container(admin_pair, ssh_server, m
     resp = await client.post(url, json={"host_key_fingerprint": ssh_server["fingerprint"]})
     assert resp.status_code == 202, resp.text
     assert resp.json()["mode"] == "ssh"
+    # pct exec reaches only the node behind the connection.
+    assert resp.json()["skipped_other_nodes"] == ["300 far (pve2)"]
     await _drain()
 
     rec = ssh_server["rec"]
@@ -396,7 +408,7 @@ async def test_proxmox_without_a_key_returns_a_script_with_a_token(admin_pair, m
     assert body["mode"] == "script"
     (token,) = await _rows(sf, AgentInstallToken)
     assert "/install/linux?token=" in body["manual_script"] and token.prefix in body["manual_script"]
-    assert "105 107" in body["manual_script"]
+    assert "105 107" in body["manual_script"] and "300" not in body["manual_script"]
     assert await _rows(sf, AgentDeployJob) == []
 
 
@@ -407,3 +419,70 @@ async def test_proxmox_with_the_gate_closed_returns_the_script(admin_pair, ssh_s
     resp = await client.post(f"/api/v1/integrations/proxmox/{cfg_id}/deploy-agent", json={})
     assert resp.status_code == 200 and resp.json()["mode"] == "script"
     assert ssh_server["rec"].commands == []
+
+
+async def test_proxmox_deploy_needs_a_session_admin(auth_client, ssh_server, monkeypatch):
+    """An API key cannot start a deploy (or mint the script's token): like
+    install tokens, this is for an admin in a session."""
+    from tests.test_routers.test_inbound_events import _api_key
+    client, sf = auth_client
+    cfg_id = await _seed_pve(sf, monkeypatch, ssh_server["port"], _pem(ssh_server))
+    key = await _api_key(sf, "admin")
+    resp = await client.post(f"/api/v1/integrations/proxmox/{cfg_id}/deploy-agent", json={},
+                             headers={"X-API-Key": key})
+    assert resp.status_code == 403
+
+
+async def test_one_failing_target_does_not_take_the_others(admin_pair, ssh_server, monkeypatch):
+    from services import ssh_deploy
+    client, sf = admin_pair
+    cfg_id = await _seed_pve(sf, monkeypatch, ssh_server["port"], _pem(ssh_server))
+    real = ssh_deploy.run_in_lxc
+
+    async def flaky(conn, vmid, script, creds, timeout=180.0):
+        if int(vmid) == 105:
+            raise RuntimeError("boom")
+        return await real(conn, vmid, script, creds, timeout=timeout)
+
+    monkeypatch.setattr(ssh_deploy, "run_in_lxc", flaky)
+    resp = await client.post(f"/api/v1/integrations/proxmox/{cfg_id}/deploy-agent",
+                             json={"host_key_fingerprint": ssh_server["fingerprint"]})
+    await _drain()
+    view = (await client.get(f"/api/agent-deploy/{resp.json()['run_id']}")).json()
+    by_target = {j["target"]: (j["status"], j["detail"]) for j in view["jobs"]}
+    assert by_target["107 db"][0] == "ok"
+    assert by_target["105 web"] == ("failed", "internal error, see the server log")
+
+
+async def test_a_long_run_still_reads_as_running(admin_pair):
+    from models.agent_deploy import AgentDeployJob
+    from services import agent_deploy
+    client, sf = admin_pair
+    async with sf() as db:
+        db.add(AgentDeployJob(run_id="live", kind="proxmox_lxc", target="1 a", status="queued",
+                              created_at=datetime.utcnow() - timedelta(minutes=40)))
+        await db.commit()
+    agent_deploy._live_runs.add("live")
+    try:
+        view = (await client.get("/api/agent-deploy/live")).json()
+    finally:
+        agent_deploy._live_runs.discard("live")
+    assert view["done"] is False and view["jobs"][0]["status"] == "queued"
+
+
+async def test_unreachable_hosts_get_one_message(admin_pair):
+    import socket
+    client, _sf = admin_pair
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    resp = await client.post("/api/agent-deploy", json={
+        "host": "127.0.0.1", "port": port, "username": "root", "password": "pw"})
+    assert resp.status_code == 502
+    assert resp.json()["error"] == f"No SSH server answered on 127.0.0.1:{port}."
+
+
+def test_stored_ssh_credentials_have_a_passphrase():
+    from routers.credentials import CREDENTIAL_TYPES
+    names = [f["name"] for f in CREDENTIAL_TYPES["ssh"]["fields"]]
+    assert "passphrase" in names

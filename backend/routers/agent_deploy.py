@@ -180,7 +180,7 @@ async def start_deploy(request: Request):
         view = agent_deploy.job_view(job)
 
     agent_deploy.start(agent_deploy.Run(
-        tenant_id=tenancy.current_tenant_id(), host=host, port=port, pinned_public_key=pinned,
+        run_id=run_id, tenant_id=tenancy.current_tenant_id(), host=host, port=port, pinned_public_key=pinned,
         creds=creds, server_url=await resolve_server_url(request),
         targets=[agent_deploy.RunTarget(job_id=view["id"], token=raw)],
     ))
@@ -199,7 +199,8 @@ async def get_deploy(run_id: str, request: Request):
     if not jobs:
         return _refuse("Deploy run not found", 404)
     now = datetime.utcnow()
-    views = [agent_deploy.job_view(j, now) for j in jobs]
+    live = agent_deploy.is_live(run_id)
+    views = [agent_deploy.job_view(j, now, live=live) for j in jobs]
     return {"run_id": run_id, "done": all(v["status"] not in agent_deploy.ACTIVE for v in views),
             "jobs": views}
 
