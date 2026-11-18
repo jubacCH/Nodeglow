@@ -17,6 +17,18 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 
+# Days left below which a certificate is worth a look. NPM starts renewing its
+# own Let's Encrypt certificates at 30 days, so one sitting between 30 and 21
+# is a renewal still in progress; below 21 the renewal has failed for over a
+# week. Certificates nobody renews automatically warn at 30.
+CERT_WARN_DAYS = 30
+AUTO_RENEW_WARN_DAYS = 21
+
+
+def cert_warn_days(cert: dict) -> int:
+    return AUTO_RENEW_WARN_DAYS if cert.get("auto_renew") else CERT_WARN_DAYS
+
+
 async def _get_integration_certs(db: AsyncSession) -> list[dict]:
     """Pull SSL certificates from integration snapshots (NPM, Cloudflare, etc.)."""
     certs: list[dict] = []
@@ -59,7 +71,10 @@ async def _get_integration_certs(db: AsyncSession) -> list[dict]:
                     "source": "npm",
                     "source_label": "Nginx Proxy Manager",
                     "provider": cert.get("provider", ""),
+                    # Older snapshots lack the flag; the provider says the same.
+                    "auto_renew": bool(cert.get("auto_renew", cert.get("provider") == "letsencrypt")),
                 })
+                certs[-1]["warn_days"] = cert_warn_days(certs[-1])
 
         elif snap.entity_type == "cloudflare":
             for zone in data.get("zones", []):
@@ -221,7 +236,10 @@ async def ssl_certs_json(db: AsyncSession = Depends(get_db)):
         log.warning("Failed to fetch integration certs: %s", exc)
 
     certs.sort(key=lambda c: c["days"] if c["days"] is not None else 9999)
-    expiring_soon = sum(1 for c in certs if c["days"] is not None and c["days"] <= 30)
+    expiring_soon = sum(
+        1 for c in certs
+        if c["days"] is not None and c["days"] <= c.get("warn_days", CERT_WARN_DAYS)
+    )
     return JSONResponse({"certs": certs, "expiring_soon": expiring_soon})
 
 

@@ -726,13 +726,16 @@ async def section_upcoming(db, base: Base) -> dict:
                           "days": days, "title": "Certificate expires", "estimated_due": True,
                           "object": {"kind": "host", "id": h.id, "name": h.name}, "source": "host check"})
     try:
-        from routers.ssl_monitor import _get_integration_certs
+        from routers.ssl_monitor import _get_integration_certs, cert_warn_days
 
         for c in await _get_integration_certs(db):
             days = c.get("days")
-            if days is not None and days <= UPCOMING_DAYS:
+            # An auto-renewing certificate between 30 and 21 days is being
+            # renewed right now; only one past that is worth a look.
+            if days is not None and days <= min(UPCOMING_DAYS, cert_warn_days(c)):
+                title = "Certificate renewal overdue" if c.get("auto_renew") else "Certificate expires"
                 items.append({"kind": "certificate", "due_at": hs.iso(base.now + timedelta(days=days)),
-                              "days": days, "title": "Certificate expires", "estimated_due": True,
+                              "days": days, "title": title, "estimated_due": True,
                               "object": {"kind": "certificate", "id": None, "name": c.get("name")},
                               "source": c.get("source_label") or c.get("source")})
     except Exception as exc:  # noqa: BLE001
