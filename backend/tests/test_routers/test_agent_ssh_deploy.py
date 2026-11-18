@@ -320,3 +320,90 @@ async def test_host_keys_can_be_listed_and_forgotten(admin_pair, ssh_server):
     assert (await client.get("/api/ssh-host-keys")).json()["keys"] == []
     assert any(r.action == "ssh_host_key.delete" for r in await _rows(sf, AuditLog))
     assert (await client.delete(f"/api/ssh-host-keys/{key['id']}")).status_code == 404
+
+
+# ── Proxmox: deploy into every running container ─────────────────────────────
+
+PVE_RESOURCES = [
+    {"type": "lxc", "status": "running", "vmid": 105, "name": "web"},
+    {"type": "lxc", "status": "stopped", "vmid": 106, "name": "off"},
+    {"type": "qemu", "status": "running", "vmid": 200, "name": "vm"},
+    {"type": "lxc", "status": "running", "vmid": 107, "name": "db"},
+]
+
+
+async def _seed_pve(sf, monkeypatch, port, key_pem=""):
+    from integrations.proxmox import ProxmoxAPI
+    from services import integration as int_svc
+
+    async def resources(self):
+        return PVE_RESOURCES
+
+    monkeypatch.setattr(ProxmoxAPI, "cluster_resources", resources)
+    async with sf() as db:
+        cfg = await int_svc.create_config(db, "proxmox", "pve", {
+            "host": "https://127.0.0.1:8006", "token_id": "root@pam!ng", "token_secret": "s",
+            "verify_ssl": False, "ssh_user": "root", "ssh_private_key": key_pem,
+            "ssh_port": str(port),
+        })
+        return cfg.id
+
+
+def _pem(srv):
+    return srv["client_key"].export_private_key().decode()
+
+
+async def test_proxmox_asks_to_confirm_the_node_key(admin_pair, ssh_server, monkeypatch):
+    client, sf = admin_pair
+    cfg_id = await _seed_pve(sf, monkeypatch, ssh_server["port"], _pem(ssh_server))
+    resp = await client.post(f"/api/v1/integrations/proxmox/{cfg_id}/deploy-agent", json={})
+    assert resp.status_code == 409 and resp.json()["code"] == "host_key_unknown"
+    assert resp.json()["fingerprint"] == ssh_server["fingerprint"]
+
+
+async def test_proxmox_deploys_every_running_container(admin_pair, ssh_server, monkeypatch):
+    from models.agent_install_token import AgentInstallToken
+    client, sf = admin_pair
+    cfg_id = await _seed_pve(sf, monkeypatch, ssh_server["port"], _pem(ssh_server))
+    url = f"/api/v1/integrations/proxmox/{cfg_id}/deploy-agent"
+    resp = await client.post(url, json={"host_key_fingerprint": ssh_server["fingerprint"]})
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["mode"] == "ssh"
+    await _drain()
+
+    rec = ssh_server["rec"]
+    assert sorted(rec.commands) == ["pct exec 105 -- bash -s", "pct exec 107 -- bash -s"]
+    raws = {rec.stdin[c].split('ENROLLMENT_KEY="', 1)[1].split('"', 1)[0] for c in rec.commands}
+    assert len(raws) == 2
+    notes = sorted(t.note for t in await _rows(sf, AgentInstallToken))
+    assert notes == ["proxmox deploy db", "proxmox deploy web"]
+
+    view = (await client.get(f"/api/agent-deploy/{resp.json()['run_id']}")).json()
+    assert view["done"] is True
+    assert sorted((j["target"], j["kind"], j["status"]) for j in view["jobs"]) == [
+        ("105 web", "proxmox_lxc", "ok"), ("107 db", "proxmox_lxc", "ok")]
+    assert all(raw not in j["detail"] for j in view["jobs"] for raw in raws)
+
+
+async def test_proxmox_without_a_key_returns_a_script_with_a_token(admin_pair, monkeypatch):
+    from models.agent_deploy import AgentDeployJob
+    from models.agent_install_token import AgentInstallToken
+    client, sf = admin_pair
+    cfg_id = await _seed_pve(sf, monkeypatch, 22)
+    resp = await client.post(f"/api/v1/integrations/proxmox/{cfg_id}/deploy-agent", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "script"
+    (token,) = await _rows(sf, AgentInstallToken)
+    assert "/install/linux?token=" in body["manual_script"] and token.prefix in body["manual_script"]
+    assert "105 107" in body["manual_script"]
+    assert await _rows(sf, AgentDeployJob) == []
+
+
+async def test_proxmox_with_the_gate_closed_returns_the_script(admin_pair, ssh_server, monkeypatch):
+    client, sf = admin_pair
+    cfg_id = await _seed_pve(sf, monkeypatch, ssh_server["port"], _pem(ssh_server))
+    monkeypatch.setenv("NODEGLOW_SSH_DEPLOY", "off")
+    resp = await client.post(f"/api/v1/integrations/proxmox/{cfg_id}/deploy-agent", json={})
+    assert resp.status_code == 200 and resp.json()["mode"] == "script"
+    assert ssh_server["rec"].commands == []
