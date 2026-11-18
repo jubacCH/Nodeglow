@@ -198,6 +198,23 @@ describe('upcomingView', () => {
     expect(v.progressPct).toBe(91);
     expect(v.href).toBe('/agents/4');
   });
+
+  it('links an integration disk forecast to the integration, not the host list', () => {
+    const v = upcomingView({
+      kind: 'disk', due_at: '2026-10-15T14:32:00Z', days: 10, title: 'UniFi NAS Instance · Pool 1 90.7 %', estimated_due: true,
+      method: 'linear trend over 14 days', object: { kind: 'integration', id: 12, name: 'UniFi NAS Instance', type: 'unas' },
+      current_pct: 90.7, trend_pct_per_day: 0.97, confidence: 0.8, source: 'UniFi NAS: UniFi NAS Instance',
+    }, NOW);
+    expect(v.href).toBe('/integration/unas/12');
+  });
+
+  it('has no link for an integration whose type is unknown', () => {
+    const v = upcomingView({
+      kind: 'disk', due_at: null, days: 10, title: 'x', estimated_due: true, method: 'm',
+      object: { kind: 'integration', id: 12, name: 'x' }, current_pct: 90, trend_pct_per_day: 1, confidence: 0.8, source: null,
+    }, NOW);
+    expect(v.href).toBeNull();
+  });
 });
 
 describe('syslogLevel', () => {

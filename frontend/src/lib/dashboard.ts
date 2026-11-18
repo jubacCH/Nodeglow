@@ -396,10 +396,11 @@ export interface UpcomingView {
   href: string | null;
 }
 
-function objectHref(o: { kind: string; id: number | null }): string | null {
+function objectHref(o: { kind: string; id: number | null; type?: string | null }): string | null {
   if (o.id === null || o.id === undefined) return o.kind === 'maintenance_window' ? '/alerts?tab=maintenance' : null;
   if (o.kind === 'host') return `/hosts/${o.id}`;
   if (o.kind === 'agent') return `/agents/${o.id}`;
+  if (o.kind === 'integration') return o.type ? `/integration/${encodeURIComponent(o.type)}/${o.id}` : null;
   if (o.kind === 'maintenance_window') return '/alerts?tab=maintenance';
   return null;
 }
