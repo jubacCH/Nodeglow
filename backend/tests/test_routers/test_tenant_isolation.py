@@ -342,6 +342,8 @@ PARAM_TABLE = {
     "provider_id": "identity_providers",
     "flow_id": "sso_flows",
     "site_id": "sites",
+    "run_id": "agent_deploy_jobs",
+    "host_key_id": "ssh_host_keys",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",
 }
@@ -542,6 +544,7 @@ def _ids_of(tid: int) -> dict[str, Any]:
     ids = {t: b for t in PARAM_TABLE.values()}
     ids["snmp_host_configs"] = b
     ids["log_templates"] = _tpl_hash(tid)
+    ids["agent_deploy_jobs"] = f"run-{TAG[tid]}"  # run_id is a string key
     ids["tenants"] = tid
     return ids
 
@@ -551,6 +554,7 @@ def _missing_ids() -> dict[str, Any]:
     ids = {t: 999_999 for t in PARAM_TABLE.values()}
     ids["snmp_host_configs"] = 999_999
     ids["log_templates"] = "f" * 16
+    ids["agent_deploy_jobs"] = "run-missing"
     return ids
 
 

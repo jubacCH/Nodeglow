@@ -20,7 +20,7 @@ from ratelimit import rate_limit
 from models.agent import Agent
 from models.agent_install_token import AgentInstallToken
 from models.tenant import DEFAULT_TENANT_ID
-from services import agent_release, agent_signing
+from services import agent_deploy, agent_release, agent_signing
 from services import tenancy
 from services.tenancy import system_scope, tenant_scope
 from services.agent_services import watched_list
@@ -1019,6 +1019,7 @@ async def enrollment_info(request: Request):
         "install_linux_template": f"curl -sSL '{server_url}/install/linux?token=<INSTALL_TOKEN>' | sudo bash",
         "install_windows_template": f"irm '{server_url}/install/windows?token=<INSTALL_TOKEN>' | iex",
         "shared_enrollment_enabled": _shared_enrollment_allowed(),
+        "ssh_deploy": agent_deploy.deploy_enabled(),
     }
 
 
