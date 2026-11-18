@@ -540,7 +540,7 @@ async def test_severity_trends_aggregate_in_clickhouse_first(db):
         ]
 
     with patch("services.clickhouse_client.query", new=fake_query):
-        await li.compute_severity_trends(db)
+        await li.compute_severity_trends(db, now=base + timedelta(hours=3, minutes=20))
 
     rows = {t.template_hash: t for t in (await db.execute(select(LogTemplate))).scalars()}
     for t in rows.values():
@@ -639,3 +639,50 @@ async def test_log_anomaly_rule_needs_more_than_double_a_tight_baseline(db):
         await db.commit()
 
     assert (await db.execute(select(Incident))).scalars().all() == []
+
+
+def test_hourly_series_counts_quiet_hours_as_zero():
+    base = datetime(2026, 11, 18, 5, 0)
+    points = [(base + timedelta(hours=6), 2, 3.0), (base, 1, 3.0), (base + timedelta(hours=2), 4, 3.0)]
+    assert li.hourly_series(points, base + timedelta(hours=7, minutes=30)) == [1, 0, 4, 0, 0, 0, 2, 0]
+    assert li.hourly_series([], base) == []
+
+
+async def test_a_failure_that_stopped_is_not_rising(db):
+    """ndbrain-backup on 2026-11-18: scattered failures, the last hour busiest,
+    then none for five hours. The active hours alone read as +27 %/h."""
+    db.add(LogTemplate(template_hash="stopped000000001", template="Failed to start x",
+                       count=40, severity_mode=3))
+    await db.commit()
+
+    base = datetime(2026, 11, 16, 21, 0)
+    hours = {0: 1, 8: 1, 14: 1, 26: 2, 27: 1, 35: 4}  # last at 2026-11-18 08:00
+    points = [(base + timedelta(hours=h), c, 3.0) for h, c in hours.items()]
+    assert li.trend_from_counts([1, 1, 1, 2, 1, 4])[0] == "rising"  # the old reading
+
+    async def fake_query(sql, params=None):
+        return [{"template_hash": "stopped000000001", "points": points}]
+
+    with patch("services.clickhouse_client.query", new=fake_query):
+        await li.compute_severity_trends(db, now=datetime(2026, 11, 18, 13, 27))
+
+    row = (await db.execute(select(LogTemplate))).scalars().one()
+    await db.refresh(row)
+    assert row.trend_direction != "rising"
+
+
+async def test_a_template_that_just_started_steadily_is_not_rising(db):
+    db.add(LogTemplate(template_hash="steady0000000001", template="e", count=60, severity_mode=3))
+    await db.commit()
+    base = datetime(2026, 11, 18, 8, 0)
+    points = [(base + timedelta(hours=i), 10, 3.0) for i in range(6)]
+
+    async def fake_query(sql, params=None):
+        return [{"template_hash": "steady0000000001", "points": points}]
+
+    with patch("services.clickhouse_client.query", new=fake_query):
+        await li.compute_severity_trends(db, now=base + timedelta(hours=5, minutes=50))
+
+    row = (await db.execute(select(LogTemplate))).scalars().one()
+    await db.refresh(row)
+    assert row.trend_direction == "stable"
