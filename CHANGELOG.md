@@ -293,6 +293,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- A disabled host still raised incidents through integrations and agents.
+  An integration alert about a device whose ping host is disabled (a UniFi
+  bridge reported "Device disconnected" every working day) and a silent agent
+  whose hosts are all disabled now open nothing, like a host in maintenance;
+  an open integration alert for such a host is resolved on the next snapshot
+  and a silent-agent incident on the next run.
 - Proxmox "Install agent on all LXCs" never worked: it ran `/install/linux`
   without an install token (always refused) through an `ssh` binary the
   backend image does not contain. It now uses the SSH deploy above (one

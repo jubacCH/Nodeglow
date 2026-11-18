@@ -282,6 +282,29 @@ async def test_an_open_incident_still_resolves_during_maintenance(db):
     assert inc.status == "resolved"
 
 
+async def test_a_disabled_device_opens_nothing(db):
+    node = await _host(db, "bridge", "bridge.example.com")
+    node.enabled = False
+    await db.commit()
+    cfg = await _cfg(db)
+    for _ in range(3):
+        await _ok(db, cfg, {"title": "Device disconnected", "entity": "device: bridge", "host": "bridge.example.com"})
+    assert await _incidents(db) == []
+
+
+async def test_disabling_the_device_resolves_its_open_incident(db):
+    node = await _host(db, "bridge", "bridge.example.com")
+    cfg = await _cfg(db)
+    alert = {"title": "Device disconnected", "entity": "device: bridge", "host": "bridge.example.com"}
+    for _ in range(2):
+        await _ok(db, cfg, alert)
+    node.enabled = False
+    await db.commit()
+    await _ok(db, cfg, alert)  # the integration still reports it
+    [inc] = await _incidents(db)
+    assert inc.status == "resolved"
+
+
 async def test_nothing_is_announced_before_the_commit(db, _quiet):
     cfg = await _cfg(db)
     for _ in range(2):
