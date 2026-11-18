@@ -29,6 +29,10 @@ interface SslCert {
   source?: string;
   source_label?: string;
   provider?: string;
+  /** The source renews it itself (NPM with Let's Encrypt). */
+  auto_renew?: boolean;
+  /** Days left at which it turns into a warning: 30, or 21 when auto-renewing. */
+  warn_days?: number;
 }
 
 interface SslData {
@@ -56,13 +60,23 @@ interface SslDetail {
   port?: number;
 }
 
-/** Expiry thresholds: ≤ 7 days (or expired) is down, ≤ 30 days a warning. */
-function expiryState(c: Pick<SslCert, 'days' | 'enabled'>): { status: HealthState | 'disabled'; label: string } {
+/**
+ * Expiry thresholds: ≤ 7 days (or expired) is down, ≤ warn_days (30) a warning.
+ * An auto-renewing certificate warns from 21 days: between 30 and 21 its
+ * renewal is still running, below that it has failed for a week.
+ */
+function expiryState(
+  c: Pick<SslCert, 'days' | 'enabled' | 'auto_renew' | 'warn_days'>,
+): { status: HealthState | 'disabled'; label: string } {
   if (c.enabled === false) return { status: 'disabled', label: 'Paused' };
   if (c.days === null || c.days === undefined) return { status: 'unknown', label: 'No data' };
   if (c.days < 0) return { status: 'down', label: 'Expired' };
   if (c.days <= 7) return { status: 'down', label: '≤ 7 days' };
-  if (c.days <= 30) return { status: 'warning', label: '≤ 30 days' };
+  const warnDays = c.warn_days ?? 30;
+  if (c.days <= warnDays) {
+    return { status: 'warning', label: c.auto_renew ? 'Renewal overdue' : `≤ ${warnDays} days` };
+  }
+  if (c.auto_renew && c.days <= 30) return { status: 'ok', label: 'Renewing' };
   return { status: 'ok', label: 'Valid' };
 }
 
@@ -156,10 +170,10 @@ export default function SslPage() {
           <BigNumber size="sm" value={data ? counts.critical : undefined} state={counts.critical ? 'down' : undefined} label="Expired or ≤ 7 days" />
         </Card>
         <Card padding="sm">
-          <BigNumber size="sm" value={data ? counts.warning : undefined} state={counts.warning ? 'warning' : undefined} label="Expiring ≤ 30 days" />
+          <BigNumber size="sm" value={data ? counts.warning : undefined} state={counts.warning ? 'warning' : undefined} label="Expiring soon" />
         </Card>
         <Card padding="sm">
-          <BigNumber size="sm" value={data ? counts.ok : undefined} label="Valid > 30 days" />
+          <BigNumber size="sm" value={data ? counts.ok : undefined} label="Valid" />
         </Card>
         <Card padding="sm">
           <BigNumber size="sm" value={data ? counts.unknown : undefined} label="No data or paused" />
@@ -224,7 +238,12 @@ export default function SslPage() {
                           ) : (
                             <div className="flex items-center gap-1.5">
                               <Tag>{c.source_label || c.source || 'Integration'}</Tag>
-                              {c.provider && <span className="text-meta text-fg-3">{c.provider}</span>}
+                              {c.provider && (
+                                <span className="text-meta text-fg-3">
+                                  {c.provider}
+                                  {c.auto_renew ? ' · auto-renews' : ''}
+                                </span>
+                              )}
                             </div>
                           )}
                         </Td>

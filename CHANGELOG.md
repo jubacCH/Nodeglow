@@ -198,6 +198,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - The refusal to enrol an already enrolled hostname (`409 agent_exists`) now
   points to "Reinstall agent", and the silent-agent incident names it as the
   way to bring an agent back.
+- Certificates that Nginx Proxy Manager renews itself (Let's Encrypt) warn
+  from 21 days instead of 30. NPM renews them hourly once fewer than 30 days
+  are left, so 30 to 21 days is a renewal in progress, shown as "Renewing";
+  below 21 the certificate page says "Renewal overdue" and the overview lists
+  it. Uploaded certificates still warn at 30 days. The NPM snapshot carries
+  `auto_renew` per certificate, `/api/ssl` adds `auto_renew` and `warn_days`.
 - One typeface for the whole web UI: Figtree replaces Inter Tight (text),
   Sora (titles and big numbers) and JetBrains Mono (addresses, rule names,
   logs). No monospace web font is shipped any more; figures still line up in
@@ -270,6 +276,26 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+-- Ping checks could stop for good. A ping child process the event loop never
+  reaped kept `run_ping_checks` waiting forever, and with one instance
+  allowed every later run was skipped: no host got a result until the
+  backend restarted (2026-10-29 for 2.5 days, again on 2026-11-18). A ping
+  process now gets its reply timeout plus three seconds; after that it is
+  killed, reaped and counted as a failed check, with a warning in the log.
+- "Log volume anomaly" fired on ordinary bursts. The rule took ten minutes of
+  syslog, multiplied by six and compared that with the learned hourly mean,
+  so cron.daily, apt or an SSH session became a sixfold hourly rate. It now
+  counts the last hour, and needs at least 2.5x the mean even where the
+  learned spread is tiny. Replayed on one instance's last three days, 25 of
+  30 incidents would not have opened.
+ First-run setup page: it works without internet access and matches the
+  current design. The page loaded Tailwind from a CDN at runtime and used
+  classes that were defined nowhere, so on an offline or air-gapped install
+  the first screen was unstyled; it also still showed the old logo and
+  colours. It is now one self-contained page (inline CSS, the Puls-N mark,
+  dark and light, system fonts) that requests nothing from the network. The
+  form is unchanged. The backend's Content-Security-Policy no longer allows
+  `https://cdn.tailwindcss.com` as a script source.
 - Traffic: the total no longer adds up every interface. A download passes
   the gateway, several switch ports and the host, and the page showed the
   sum of all of them (5 Gbit/s for a 2 Gbit/s backup). The total is now the

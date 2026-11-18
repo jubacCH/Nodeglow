@@ -703,6 +703,10 @@ async def _rule_syslog_spike(db, min_cycles: int = 2):
 
 # ── Rule 5: Log Anomaly ────────────────────────────────────────────────
 
+# Measured over a full hour, like the baselines (see _rule_log_anomaly).
+LOG_ANOMALY_WINDOW_MIN = 60
+
+
 async def _rule_log_anomaly(db, min_cycles: int = 2):
     """Detect per-host log volume anomalies vs. learned baselines.
 
@@ -710,6 +714,13 @@ async def _rule_log_anomaly(db, min_cycles: int = 2):
     has enough samples, the hour-of-day slot until then. Current volume is
     counted for all candidates in one grouped query per key type, not one
     query per baseline row.
+
+    The volume is the count over the last hour, the same unit the baselines
+    are learned in. It used to be ten minutes times six, which turned every
+    short burst (cron.daily, apt, a backup, an SSH session) into a sixfold
+    hourly rate and compared it with an hourly mean: 25 of 30 incidents on
+    the author's instance between 2026-11-15 and 2026-11-18 were that and
+    nothing else. A real change in volume still shows within the hour.
     """
     from services.log_intelligence import load_effective_baselines
 
@@ -721,10 +732,10 @@ async def _rule_log_anomaly(db, min_cycles: int = 2):
     if not baselines:
         return
 
-    window_10m = now - timedelta(minutes=10)
+    window = now - timedelta(minutes=LOG_ANOMALY_WINDOW_MIN)
 
     counts = await _ch.count_syslog_received_by_key(
-        window_10m, [bl.host_key for bl in baselines],
+        window, [bl.host_key for bl in baselines],
     )
 
     by_host_id: dict[int, HostBaseline] = {}
@@ -746,8 +757,11 @@ async def _rule_log_anomaly(db, min_cycles: int = 2):
         )).scalars().all()}
 
     for bl, count, host_id in candidates:
-        current_rate = count * 6  # extrapolate 10min → 1hr
-        threshold = bl.avg_rate + 3 * max(bl.std_rate or 0.0, bl.avg_rate * 0.3)
+        current_rate = count * 60 // LOG_ANOMALY_WINDOW_MIN
+        # The floor on the spread keeps a slot learned from a few quiet,
+        # near-identical hours (std of 3 against a mean of 27) from calling
+        # every ordinary busier hour an anomaly: at least 2.5x the mean.
+        threshold = bl.avg_rate + 3 * max(bl.std_rate or 0.0, bl.avg_rate * 0.5)
         if not (current_rate > threshold and count >= 20):
             continue
 
@@ -769,7 +783,8 @@ async def _rule_log_anomaly(db, min_cycles: int = 2):
             host_ids=host_ids,
             event_type="syslog_error",
             summary=f"{host_label}: {current_rate}/hr (baseline: {int(bl.avg_rate)}/hr ± {int(bl.std_rate or 0)})",
-            detail=f"{count} messages in last 10min, expected ~{int(bl.avg_rate / 6)}",
+            detail=(f"{count} messages in the last {LOG_ANOMALY_WINDOW_MIN} min, "
+                    f"expected ~{int(bl.avg_rate * LOG_ANOMALY_WINDOW_MIN / 60)}"),
         )
 
 
