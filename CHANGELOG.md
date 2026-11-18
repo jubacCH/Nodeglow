@@ -10,6 +10,19 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Metric rollups. Ping, agent and bandwidth metrics are kept at 5-minute
+  (90 days), hourly (400 days) and daily (5 years) resolution in nine new
+  ClickHouse tables, filled by materialized views and a one-time backfill of
+  the existing raw data. The job `rollup_maintenance` (every 10 minutes)
+  creates them once the tenant rebuild of a raw table is done and reports a
+  failed or broken setup as a self-check incident; `/api/system/status` shows
+  the state per source. Retention plans do not cap the rollups. New routes
+  `GET /api/v1/hosts/{id}/series` and `GET /api/v1/agents/{id}/series`
+  (up to 5 years) pick raw or rollup resolution by range and fall back to raw
+  data until the rollups are ready. The traffic total accepts ranges up to
+  5 years; filtered bandwidth history beyond 7 days returns 422. Operators
+  who manage ClickHouse access themselves must grant the new tables, see
+  [docs/OPERATIONS.md](docs/OPERATIONS.md).
 - Evidence on incidents. Every incident now records how it is related to
   what, in one sentence with the numbers: "Rule-based" for the rule that
   fired, and "Confirmed" where a rule used a structural link — the topology
