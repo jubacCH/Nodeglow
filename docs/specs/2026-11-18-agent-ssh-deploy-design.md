@@ -95,11 +95,11 @@ as `failed` / `interrupted`.
 
 ### API
 
-- `POST /api/agents/deploy` — `{host, port=22, credential_id | username +
+- `POST /api/agent-deploy` — `{host, port=22, credential_id | username +
   password/private_key[/passphrase], sudo_password?, agent_id?,
   host_key_fingerprint?}` → `202 {run_id, jobs}` | `409 host_key_unknown
   {fingerprint, key_type}` | `409 host_key_mismatch`.
-- `GET /api/agents/deploy/{run_id}` → jobs with status and detail.
+- `GET /api/agent-deploy/{run_id}` → jobs with status and detail.
 - `GET /api/ssh-host-keys`, `DELETE /api/ssh-host-keys/{id}`.
 - `POST /api/v1/integrations/proxmox/{id}/deploy-agent` keeps its path; with
   an SSH key in the integration it starts a run (same jobs, `proxmox_lxc`)
