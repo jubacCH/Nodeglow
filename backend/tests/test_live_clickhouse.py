@@ -204,7 +204,10 @@ async def test_step_a_on_an_old_schema_table(ch):
 
 async def _seed_two_tenants(ch):
     host_a, host_b = random.randint(10**8, 2 * 10**8), random.randint(2 * 10**8, 3 * 10**8)
-    now = datetime.utcnow()
+    # Aware UTC: clickhouse-connect sends a naive datetime as local time, which
+    # on a non-UTC machine moves the rows an hour or more back, out of the
+    # one-hour window of get_latest_bandwidth_per_iface (flaky outside CI).
+    now = datetime.now(timezone.utc)
     await ch.insert_ping_checks([
         {"tenant_id": A, "timestamp": now - timedelta(minutes=2), "host_id": host_a, "success": True, "latency_ms": 1.0},
         {"tenant_id": A, "timestamp": now - timedelta(minutes=1), "host_id": host_a, "success": False},
