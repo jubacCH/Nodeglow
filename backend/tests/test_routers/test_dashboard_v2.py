@@ -403,6 +403,45 @@ async def test_upcoming_lists_disk_predictions_from_the_cache():
     assert [d["title"] for d in disks] == ["SRV-FILE-01 · D: 91.0 %"]
     assert disks[0]["days"] == 5 and disks[0]["estimated_due"] is True
     assert up["agent_disk_predictions_ready"] is True
+    assert disks[0]["object"] == {"kind": "agent", "id": 3, "name": "SRV-FILE-01"}
+
+
+async def test_an_integration_disk_prediction_names_its_integration():
+    """An integration pool forecast carries the integration's type, so the
+    overview can open /integration/{type}/{id} rather than the host list."""
+    from services import predictions
+
+    predictions.store_predictions("integration", {
+        "12:Pool 1": {"config_id": 12, "config_type": "unas", "config_name": "UniFi NAS Instance",
+                      "pool_name": "Pool 1", "current_pct": 90.7, "trend_pct_per_day": 0.97,
+                      "days_until_full": 10, "confidence": 0.9, "source": "UniFi NAS: UniFi NAS Instance"},
+    }, tenant_id=1)
+    async with make_client() as (client, _sf):
+        with fake_clickhouse():
+            up = (await client.get("/api/v2/dashboard")).json()["upcoming"]
+    disks = [i for i in up["items"] if i["kind"] == "disk"]
+    assert [d["title"] for d in disks] == ["UniFi NAS Instance · Pool 1 90.7 %"]
+    assert disks[0]["object"] == {"kind": "integration", "id": 12, "name": "UniFi NAS Instance",
+                                  "type": "unas"}
+
+
+async def test_predict_disk_full_records_the_integration_type():
+    from models.integration import IntegrationConfig, Snapshot
+    from services import predictions
+
+    async with make_client() as (_client, sf):
+        async with sf() as db:
+            cfg = IntegrationConfig(type="unas", name="UniFi NAS Instance", config_json="{}")
+            db.add(cfg)
+            await db.flush()
+            now = datetime.utcnow()
+            for d, pct in ((6, 85.0), (4, 87.0), (2, 89.0), (0, 91.0)):
+                db.add(Snapshot(entity_type="unas", entity_id=cfg.id, ok=True, timestamp=now - timedelta(days=d),
+                                data_json=json.dumps({"storage_pools": [{"name": "Pool 1", "pct": pct}]})))
+            await db.commit()
+            preds = await predictions.predict_disk_full(db)
+    p = preds[f"{cfg.id}:Pool 1"]
+    assert (p["config_id"], p["config_type"], p["config_name"]) == (cfg.id, "unas", "UniFi NAS Instance")
 
 
 async def test_prediction_refresh_job_fills_both_caches():

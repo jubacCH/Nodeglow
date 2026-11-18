@@ -114,6 +114,52 @@ describe('needItems', () => {
     expect(items[0].title).toBe('2 volumes full within 5 days');
     expect(items[0].detail).toBe('Earliest: L: on sql-07 in ~3 days');
   });
+
+  describe('link targets', () => {
+    const disk = (days: number, object: { kind: string; id: number | null; name: string; type?: string }) => ({
+      kind: 'disk' as const, due_at: null, days, title: `${object.name} · Pool 1 90.7 %`, estimated_due: true as const,
+      method: 'linear trend over 14 days', object, current_pct: 90.7, trend_pct_per_day: 0.97, confidence: 0.9, source: null,
+    });
+    const nas = { kind: 'integration', id: 12, name: 'UniFi NAS Instance', type: 'unas' };
+    const up = (items: ReturnType<typeof disk>[]) => ({ agent_disk_predictions_ready: true, items });
+    const hrefOf = (d: Parameters<typeof needItems>[0], key: string) => needItems(d, undefined, NOW).find((i) => i.key === key)?.href;
+
+    it('opens the integration of an integration pool forecast', () => {
+      expect(hrefOf(dash({ upcoming: up([disk(10, nas)]) }), 'disk')).toBe('/integration/unas/12');
+    });
+
+    it('opens the agent of an agent disk forecast', () => {
+      expect(hrefOf(dash({ upcoming: up([disk(5, { kind: 'agent', id: 3, name: 'SRV-FILE-01' })]) }), 'disk')).toBe('/agents/3');
+    });
+
+    it('opens the earliest object when several volumes fill up', () => {
+      const d = dash({ upcoming: up([disk(20, { kind: 'agent', id: 3, name: 'SRV-FILE-01' }), disk(10, nas)]) });
+      expect(hrefOf(d, 'disk')).toBe('/integration/unas/12');
+    });
+
+    it('opens the failing integration itself, not its type list', () => {
+      const health = {
+        counts: { up: 0, degraded: 0, warning: 0, down: 0, unknown: 0, maintenance: 0, disabled: 0 }, reasons: {}, worst: null,
+        totals: { hosts: 0, disabled: 0, with_current_data: 0, agents: 0, agents_reporting: 0, integrations: 1, integrations_error: 1, probes: 0, probes_stale: 0 },
+        failing_integrations: [{ id: 5, type: 'proxmox', name: 'pve', error: 'timeout', since_check: null }],
+      };
+      expect(hrefOf(dash({ health } as Parameters<typeof dash>[0]), 'integration-5')).toBe('/integration/proxmox/5');
+    });
+
+    it('opens the silent probe, or the agent list when the probe is gone', () => {
+      expect(hrefOf(dash({ groups: [probe({})] }), 'probe-7')).toBe('/agents/7');
+      expect(hrefOf(dash({ groups: [probe({ id: null })] }), 'probe-null')).toBe('/agents');
+    });
+
+    it('opens the host of a host certificate and the certificate list otherwise', () => {
+      const cert = (object: { kind: string; id: number | null; name: string }) => ({
+        kind: 'certificate' as const, due_at: null, days: 9, title: 'Certificate expires', estimated_due: true as const, object, source: 'x',
+      });
+      const certs = (items: ReturnType<typeof cert>[]) => dash({ upcoming: { agent_disk_predictions_ready: true, items } });
+      expect(hrefOf(certs([cert({ kind: 'host', id: 4, name: 'portal' })]), 'cert')).toBe('/hosts/4');
+      expect(hrefOf(certs([cert({ kind: 'certificate', id: null, name: 'npm' })]), 'cert')).toBe('/ssl');
+    });
+  });
 });
 
 describe('rankGroups / groupSummary', () => {

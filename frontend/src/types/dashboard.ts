@@ -205,6 +205,8 @@ interface UpcomingObject {
   kind: string;
   id: number | null;
   name: string | null;
+  /** Integration type, set when kind is 'integration' (part of its URL). */
+  type?: string | null;
 }
 
 export interface MaintenanceUpcoming {
