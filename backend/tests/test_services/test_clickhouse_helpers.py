@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from services import clickhouse_client as ch
+from services import rollups
 from services.tenancy import TenantContextError, system_scope, tenant_scope
 
 # The tenant every helper test runs for (see the autouse fixture below).
@@ -541,3 +542,58 @@ async def test_count_syslog_received_by_key(fake_query):
     # An explicitly empty filter means "nobody", not "everybody".
     assert await ch.count_syslog_received_by_key(since, []) == {}
     assert len(fake_query.calls) == 1
+
+
+def test_guard_rejects_rollup_read_without_tenant():
+    with pytest.raises(TenantContextError):
+        ch._check_tenant_predicates("SELECT * FROM ping_checks_5m WHERE host_id = 1")
+
+
+def test_guard_accepts_rollup_read_with_tenant():
+    ch._check_tenant_predicates(f"SELECT * FROM agent_metrics_1d WHERE {ch.TENANT_FILTER}")
+
+
+def test_row_policies_cover_rollup_tables():
+    stmts = " ".join(ch.row_policy_statements("u", None, "db", tables=ch.TENANT_READ_TABLES))
+    for t in rollups.ROLLUP_TABLES:
+        assert f"ON `db`.`{t}` FOR SELECT" in stmts
+
+
+def test_rebuild_still_iterates_raw_tables_only():
+    assert ch.TENANT_TABLES == ("syslog_messages", "ping_checks", "agent_metrics", "bandwidth_metrics")
+
+
+async def test_provisioning_skips_missing_rollups(monkeypatch):
+    async def only_5m(client):
+        return ("ping_checks_5m",)
+
+    monkeypatch.setattr(rollups, "existing_rollup_tables", only_5m)
+
+    class Result:
+        result_rows: list = []
+
+    class Client:
+        def __init__(self):
+            self.commands: list[str] = []
+
+        async def query(self, sql, parameters=None, **kw):
+            return Result()
+
+        async def command(self, sql, parameters=None, **kw):
+            self.commands.append(sql)
+
+    client = Client()
+    await ch.provision_tenant_user(client, "http://u:pw@h:8123/db")
+    joined = " ".join(client.commands)
+    assert "`ping_checks_5m`" in joined
+    assert "agent_metrics_5m" not in joined
+
+
+async def test_existing_rollup_tables_filters_system_tables():
+    class Result:
+        result_rows = [("agent_metrics_1h",), ("ping_checks_5m",)]
+
+    client = AsyncMock()
+    client.query.return_value = Result()
+    got = await rollups.existing_rollup_tables(client)
+    assert got == tuple(t for t in rollups.ROLLUP_TABLES if t in {"agent_metrics_1h", "ping_checks_5m"})

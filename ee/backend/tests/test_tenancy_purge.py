@@ -144,8 +144,8 @@ async def test_purge_removes_every_row_of_the_tenant_and_nothing_else(env):
     assert report["users_deleted"] == 1 and report["crypto_shred"] == "destroyed"
     assert all(report["postgres"][t.name] >= 1 for t in tenant_tables())
     # ClickHouse: one scoped count and one DELETE per tenant table, for B.
-    assert fake.deleted == {(t, B) for t in ch.TENANT_TABLES}
-    assert report["clickhouse"] == {t: 3 for t in ch.TENANT_TABLES}
+    assert fake.deleted == {(t, B) for t in ch.TENANT_READ_TABLES}
+    assert report["clickhouse"] == {t: 3 for t in ch.TENANT_READ_TABLES}
     for call in fake.calls:
         if call.kind == "query" and "count()" in call.sql:
             assert ch_call_is_scoped(call, B), call.sql
@@ -386,3 +386,32 @@ async def test_sessions_opened_through_the_tenants_providers_end_with_the_purge(
         assert await s.get(Session, "through-b-idp") is None
         assert await s.get(Session, "password-session") is not None
         assert await s.get(User, shared_id) is not None
+
+
+async def test_purge_covers_rollup_tables(env):
+    from nodeglow_ee.tenancy import purge
+    from services.rollups import ROLLUP_TABLES
+
+    assert len(ROLLUP_TABLES) == 9
+    with clickhouse(PurgeClickHouse()) as fake:
+        report = await purge.purge_clickhouse(B)
+    for t in ROLLUP_TABLES:
+        assert (t, B) in fake.deleted
+        assert report[t] == 3
+
+
+async def test_purge_skips_rollup_tables_that_do_not_exist(env):
+    from nodeglow_ee.tenancy import purge
+
+    class NoRollups(PurgeClickHouse):
+        async def query(self, sql, parameters=None, settings=None, **kw):
+            m = re.search(r"SELECT count\(\) FROM (\w+) WHERE", sql)
+            if m and m.group(1).endswith(("_5m", "_1h", "_1d")):
+                raise RuntimeError(f"Code: 60. DB::Exception: Unknown table {m.group(1)}. (UNKNOWN_TABLE)")
+            return await super().query(sql, parameters, settings, **kw)
+
+    with clickhouse(NoRollups()) as fake:
+        report = await purge.purge_clickhouse(B)
+    assert set(report) >= set(ch.TENANT_TABLES)
+    assert not any(t.endswith(("_5m", "_1h", "_1d")) for t in report)
+    assert {t for t, _ in fake.deleted} == set(ch.TENANT_TABLES)

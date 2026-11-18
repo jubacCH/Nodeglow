@@ -33,6 +33,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from services import tenancy as _tenancy
+from services.rollups import ROLLUP_TABLES
 
 log = logging.getLogger("nodeglow.clickhouse")
 
@@ -42,6 +43,10 @@ log = logging.getLogger("nodeglow.clickhouse")
 # Every table that holds tenant data. A new table must be added here (and get a
 # tenant_id column), or the read guard below does not know about it.
 TENANT_TABLES = ("syslog_messages", "ping_checks", "agent_metrics", "bandwidth_metrics")
+
+# Tables the read guard, row policies and purge cover: the raw tables plus the
+# rollup tables. TENANT_TABLES stays raw-only (the step-B rebuild iterates it).
+TENANT_READ_TABLES = TENANT_TABLES + ROLLUP_TABLES
 
 TENANT_PARAM = "nodeglow_tenant"
 # The predicate every read of a tenant table carries, in raw SQL as well as in
@@ -56,7 +61,7 @@ ROW_POLICY_NAME = "nodeglow_tenant_isolation"
 UNRESTRICTED_POLICY_NAME = "nodeglow_unrestricted"
 
 _TENANT_TABLE_REF = re.compile(
-    r"\b(?:FROM|JOIN)\s+(?:`?\w+`?\.)?`?(" + "|".join(TENANT_TABLES) + r")\b`?",
+    r"\b(?:FROM|JOIN)\s+(?:`?\w+`?\.)?`?(" + "|".join(TENANT_READ_TABLES) + r")\b`?",
     re.IGNORECASE,
 )
 
@@ -115,7 +120,7 @@ def _check_tenant_predicates(sql: str) -> None:
 def _table_filters(tenant_id: int) -> str:
     """``additional_table_filters`` as a ClickHouse map literal."""
     tid = int(tenant_id)
-    pairs = ", ".join(f"'{t}': 'tenant_id = {tid}'" for t in TENANT_TABLES)
+    pairs = ", ".join(f"'{t}': 'tenant_id = {tid}'" for t in TENANT_READ_TABLES)
     return "{" + pairs + "}"
 
 
@@ -572,15 +577,20 @@ def dsn_credentials(dsn: str) -> tuple[str, str | None, str | None]:
 
 
 def revoke_statements(user: str, database: str,
-                      tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
+                      tables: tuple[str, ...] = TENANT_READ_TABLES) -> list[str]:
     """Take a previously provisioned tenant user's grants away."""
     u, db = _quote_ident(user), _quote_ident(database)
     return [f"REVOKE SELECT ON {db}.{_quote_ident(t)} FROM {u}" for t in tables] + [
         f"REVOKE SELECT ON system.settings FROM {u}"]
 
 
-async def provision_tenant_user(client, tenant_dsn: str, database: str | None = None) -> None:
+async def provision_tenant_user(client, tenant_dsn: str, database: str | None = None,
+                                tables: tuple[str, ...] | None = None) -> None:
     """Create/refresh the restricted user of ``tenant_dsn`` and its policies.
+
+    ``tables`` defaults to the raw tables plus the rollup tables that exist:
+    a GRANT on a missing table fails, and a failed provisioning makes
+    ``get_tenant_client()`` refuse every tenant read.
 
     A user the policies were provisioned for before (the DSN's user was
     renamed) loses its grants first: re-targeting the policies would otherwise
@@ -602,7 +612,11 @@ async def provision_tenant_user(client, tenant_dsn: str, database: str | None = 
                     log.debug("%s failed", stmt, exc_info=True)
             log.warning("ClickHouse: revoked the tenant-table grants of %s, the previous "
                         "restricted user (now %s)", previous, user)
-    for stmt in row_policy_statements(user, password, database):
+    if tables is None:
+        from services.rollups import existing_rollup_tables
+
+        tables = TENANT_TABLES + await existing_rollup_tables(client)
+    for stmt in row_policy_statements(user, password, database, tables=tables):
         await client.command(stmt)
     log.info("ClickHouse row policies provisioned for %s on %s", user, database)
 

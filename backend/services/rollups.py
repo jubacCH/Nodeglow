@@ -175,3 +175,14 @@ def view_ddl(source: str, level: Level, cutoff: datetime) -> str:
     CREATE MATERIALIZED VIEW IF NOT EXISTS {table}_mv TO {table} AS
     {select}
     """
+
+
+async def existing_rollup_tables(client) -> tuple[str, ...]:
+    """The rollup tables present in the current database, in ROLLUP_TABLES order."""
+    result = await client.query(
+        "SELECT name FROM system.tables "
+        "WHERE database = currentDatabase() AND name IN {names:Array(String)}",
+        parameters={"names": list(ROLLUP_TABLES)},
+    )
+    present = {row[0] for row in result.result_rows}
+    return tuple(t for t in ROLLUP_TABLES if t in present)
