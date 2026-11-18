@@ -254,6 +254,7 @@ async def evaluate_alerts(db, cfg: IntegrationConfig, instance, data) -> None:
     open_keys = {i.host_ids_hash: i for i in await _open(db, ALERT_RULE, prefix)}
     index = None
     own_host = None
+    switched_off: set[str] = set()
     for key, alert in current.items():
         streak = _streaks[(tenant, key)] = _streaks.get((tenant, key), 0) + 1
         if key not in open_keys and streak < ALERT_MIN_CYCLES:
@@ -263,6 +264,13 @@ async def evaluate_alerts(db, cfg: IntegrationConfig, instance, data) -> None:
             own_host = index.find(endpoint_of(getattr(instance, "config", None)))
         device = index.find(alert.host) if alert.host else None
         hosts = [h for h in (device or own_host,) if h is not None]
+        # A host someone disabled is not to be watched any more, whatever an
+        # integration still says about it: no incident, and an open one ends.
+        # (B8NSWBridge, 2026-11-18: host disabled, UniFi kept opening
+        # "Device disconnected" for it every working day.)
+        if hosts and not hosts[0].enabled:
+            switched_off.add(key)
+            continue
         if key not in open_keys and await _in_maintenance(db, [device, own_host]):
             continue
         await _open_or_extend(
@@ -274,6 +282,8 @@ async def evaluate_alerts(db, cfg: IntegrationConfig, instance, data) -> None:
     for key, incident in open_keys.items():
         if key not in current:
             await _resolve(db, incident, f"Resolved: {cfg.name} no longer reports this")
+        elif key in switched_off:
+            await _resolve(db, incident, "Resolved: the host is disabled in Nodeglow")
 
 
 _MDN_HINT = re.compile(r"\s*For more information check: \S+")
