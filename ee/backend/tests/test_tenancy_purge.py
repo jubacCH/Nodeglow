@@ -415,3 +415,18 @@ async def test_purge_skips_rollup_tables_that_do_not_exist(env):
     assert set(report) >= set(ch.TENANT_TABLES)
     assert not any(t.endswith(("_5m", "_1h", "_1d")) for t in report)
     assert {t for t, _ in fake.deleted} == set(ch.TENANT_TABLES)
+
+
+async def test_purge_raises_on_other_clickhouse_errors_for_rollups(env):
+    from nodeglow_ee.tenancy import purge
+
+    class Broken(PurgeClickHouse):
+        async def query(self, sql, parameters=None, settings=None, **kw):
+            m = re.search(r"SELECT count\(\) FROM (\w+) WHERE", sql)
+            if m and m.group(1) == "ping_checks_5m":
+                raise RuntimeError("Code: 603. DB::Exception: something else")
+            return await super().query(sql, parameters, settings, **kw)
+
+    with clickhouse(Broken()):
+        with pytest.raises(RuntimeError, match="603"):
+            await purge.purge_clickhouse(B)

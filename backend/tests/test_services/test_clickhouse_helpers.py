@@ -587,6 +587,7 @@ async def test_provisioning_skips_missing_rollups(monkeypatch):
     joined = " ".join(client.commands)
     assert "`ping_checks_5m`" in joined
     assert "agent_metrics_5m" not in joined
+    assert "`ping_checks`" in joined
 
 
 async def test_existing_rollup_tables_filters_system_tables():
@@ -597,3 +598,15 @@ async def test_existing_rollup_tables_filters_system_tables():
     client.query.return_value = Result()
     got = await rollups.existing_rollup_tables(client)
     assert got == tuple(t for t in rollups.ROLLUP_TABLES if t in {"agent_metrics_1h", "ping_checks_5m"})
+
+
+def test_table_filters_name_every_rollup_table():
+    f = ch._table_filters(7)
+    for t in rollups.ROLLUP_TABLES:
+        assert f"'{t}': 'tenant_id = 7'" in f
+
+
+def test_revoke_statements_default_covers_rollups():
+    stmts = " ".join(ch.revoke_statements("u", "db"))
+    for t in rollups.ROLLUP_TABLES:
+        assert f"`db`.`{t}`" in stmts

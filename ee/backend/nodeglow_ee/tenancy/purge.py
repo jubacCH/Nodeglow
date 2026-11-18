@@ -35,6 +35,7 @@ so an interrupted purge resumes from the top on the next run
 from __future__ import annotations
 
 import json
+import re
 import logging
 from datetime import datetime
 
@@ -98,7 +99,7 @@ async def _crypto_shred(db, tenant_id: int) -> str:
 def _is_unknown_table(exc: Exception) -> bool:
     """ClickHouse UNKNOWN_TABLE (code 60): the rollup table was never created."""
     text = str(exc)
-    return "UNKNOWN_TABLE" in text or "Code: 60" in text or "code 60" in text.lower()
+    return "UNKNOWN_TABLE" in text or re.search(r"Code: 60\b", text) is not None
 
 
 async def purge_clickhouse(tenant_id: int) -> dict[str, int]:
