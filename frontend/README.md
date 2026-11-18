@@ -46,7 +46,7 @@ CI runs type check, lint, tests and build — see
 | `design-tokens/tokens.json` | Colour, type and spacing tokens for light and dark; generated into `src/styles/tokens.gen.*` and used through semantic Tailwind classes (`bg-surface`, `text-fg-2`, `text-down`, …) |
 | `src/app/globals.css` | Tailwind 4 setup, CSS-first (there is no `tailwind.config.ts`): the `@theme inline` block maps every semantic class to its `--ng-*` token; also the shared `.ng-*` classes and global rules. PostCSS runs only `@tailwindcss/postcss` |
 | `src/lib/theme.ts` | Light / dark / system theme |
-| `src/app/fonts.ts` | Self-hosted fonts (Sora, Inter Tight, JetBrains Mono from `@fontsource-variable/*`) — the build needs no network access |
+| `src/app/fonts.ts` | Self-hosted font (Figtree from `@fontsource-variable/figtree`) — the build needs no network access |
 | `src/lib/features.ts` | `useFeatures()` / `hasFeature()` — show enterprise features only when `/api/v2/features` reports them |
 | `src/hooks/queries/` | TanStack Query hooks per API area |
 | `src/lib/` | API client (`api.ts`), mapping helpers and their unit tests |

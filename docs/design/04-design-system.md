@@ -97,11 +97,14 @@ Abweichungen vom Prototyp (wegen WCAG AA, siehe 2.5): `text-3` dunkel `#6E7380 �
 
 | Rolle | Schrift | Tailwind |
 |---|---|---|
-| UI / Fliesstext | Inter Tight 400/500/600 | `font-sans` (Default am `body`) |
-| Display: Seitentitel, grosse Zahlen | Sora 500 (Zahlen) / 600 (Titel), Laufweite −0.03 … −0.045em | `font-display` |
-| Mono: IPs, Regelnamen, Logs | JetBrains Mono 400/500 | `font-mono` |
+| UI / Fliesstext | Figtree 400/500/600 | `font-sans` (Default am `body`) |
+| Display: Seitentitel, grosse Zahlen | Figtree 500 (Zahlen, Laufweite −0.02em) / 600 (Titel, Laufweite −0.03em) | `font-display` |
+| IPs, Regelnamen, Logs | Figtree mit Tabellenziffern, keine Monospace-Schrift | `font-mono` |
+| Zum Abtippen: Install-Befehl, API-Key, API-Beispiel, 2FA-Secret | System-Monospace (`ui-monospace` …), keine Web-Schrift | `font-code` |
 
-Selbst gehostet aus den npm-Paketen `@fontsource-variable/{inter-tight,sora,jetbrains-mono}` über `next/font/local` (`src/app/fonts.ts`, `display: swap`) — der Build braucht kein Netz (kein `next/font/google` mehr). Pro Familie zwei Faces mit den Google-`unicode-range`s: latin (vorgeladen) und latin-ext (nur bei Bedarf geladen). Variablen `--font-sora(-ext)`, `--font-inter-tight(-ext)`, `--font-jetbrains-mono(-ext)`; die Tokens `--ng-font-*` reihen latin → latin-ext → Fallback-Stack. Inter (alt) ist entfernt.
+Eine Familie für alles (entschieden 2026-11-18): Sora, Inter Tight und JetBrains Mono sind entfernt. `font-display` und `font-mono` bleiben als Rollen bestehen, zeigen aber auf denselben Stack wie `font-sans`. Spalten richten sich über `tabular-nums` aus, nicht über eine Monospace-Schrift. Einzige Ausnahme ist `font-code`: In Figtree sind grosses I und kleines l nicht unterscheidbar, deshalb stehen Zeichenfolgen, die jemand ablesen und abtippen könnte, in der Monospace des Betriebssystems. Die Wortmarke im Logo bleibt Sora 600 als Pfad.
+
+Selbst gehostet aus dem npm-Paket `@fontsource-variable/figtree` über `next/font/local` (`src/app/fonts.ts`, `display: swap`) — der Build braucht kein Netz (kein `next/font/google`). Zwei Faces mit den Google-`unicode-range`s: latin (vorgeladen) und latin-ext (nur bei Bedarf geladen). Variablen `--font-figtree(-ext)`; die Tokens `--ng-font-*` reihen latin → latin-ext → Fallback-Stack.
 
 Schriftgrössen in `rem` relativ zur Benutzer-Schriftgrösse (Default 14 px = `1rem`). Die Namen kollidieren nicht mit `text-xs/sm/base`:
 
@@ -113,8 +116,8 @@ Schriftgrössen in `rem` relativ zur Benutzer-Schriftgrösse (Default 14 px = `1
 | `text-body` | 14 | Fliesstext, Kartentitel |
 | `text-lead` | 17 | Dialog-/Paneltitel, Abschnittstitel |
 | `text-h3` | 20 | Unterüberschrift |
-| `text-h1` | 24 | Seitentitel (Sora) |
-| `text-num-sm` / `text-num` / `text-num-lg` | 28 / 36 / 40 | `BigNumber` (Sora) |
+| `text-h1` | 24 | Seitentitel |
+| `text-num-sm` / `text-num` / `text-num-lg` | 28 / 36 / 40 | `BigNumber` |
 
 Zahlen: `.num` bzw. `tabular-nums` (Tabellenziffern; der `body` hat `tnum` bereits aktiv).
 
@@ -269,7 +272,7 @@ Die Migration ist abgeschlossen (Stand 10.10.2026); die Tabelle bleibt als Refer
 | `EmptyState` | `EmptyState.tsx` | `variant`: `not-configured` (Einrichten anbieten), `no-results` (Filter zurücksetzen), `confirmed` (grün, **nur mit `asOf`-Zeitstempel**). |
 | `QueryState`, `QueryErrorState`, `StaleDataBanner`, `formatAsOf` | `QueryState.tsx` | Lade-/Fehler-/Leer-/Datenzweig einer Query. Fehlgeschlagener Refetch mit Cache → Daten bleiben, gelbes Banner „Showing data from 14:32. Refresh failed …“ (`dataUpdatedAt` mitgeben). 403 → „No access“ ohne Retry. |
 | `Kbd` | `Kbd.tsx` | Tastenkappe. |
-| `BigNumber` | `BigNumber.tsx` | Kennzahl in Sora mit Tabellenziffern, `unit`, `label`, `state` (nur wenn die Zahl der Zustand ist), `stale`. `null` → „—“ in Grau, nie 0. |
+| `BigNumber` | `BigNumber.tsx` | Kennzahl in der Display-Rolle mit Tabellenziffern, `unit`, `label`, `state` (nur wenn die Zahl der Zustand ist), `stale`. `null` → „—“ in Grau, nie 0. |
 | `HealthRing`, `HealthLegend` | `HealthRing.tsx` | Donut für Objektzustände (feste Reihenfolge ok → unknown), Unbekannt schraffiert, Mitte (`center`) mit innerem Schein nach Gesamtlage (kritisch Rot-Orange, Warnung Orange, sonst nichts), atmet nur dunkel. `aria-label` automatisch („48 hosts: 29 ok, …“). |
 | `NodeglowMark`, `Lockup` | `NodeglowMark.tsx` | Zeichen „Puls-N“ (Linie in `currentColor`, Statuspunkt im Akzent mit Halo `mark-halo`), `mono` für einfarbig; Lockup = Zeichen + Wortmarke „nodeglow“ (Sora 600 als Pfad, einfarbig) in einem SVG. Der Punkt ist das einzige Licht im Lockup. |
 | `CommandPalette` / `CommandPaletteHost` | | Ctrl/Cmd+K oder Suchknopf in der Kopfzeile (`useUiStore().setPaletteOpen`). Seiten aus der Navigations-Registry, Hosts, Integrationen, Aktionen. |

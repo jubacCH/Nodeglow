@@ -42,7 +42,7 @@ const nextConfig = {
       // extensively across the app.
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
-      // Self-hosted fonts (Sora, Inter Tight, JetBrains Mono) served from /_next.
+      // Self-hosted font (Figtree) served from /_next.
       "font-src 'self' data:",
       `connect-src ${connectSrc}`,
       // echarts may use blob workers.

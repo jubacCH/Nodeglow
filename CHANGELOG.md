@@ -198,6 +198,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - The refusal to enrol an already enrolled hostname (`409 agent_exists`) now
   points to "Reinstall agent", and the silent-agent incident names it as the
   way to bring an agent back.
+- One typeface for the whole web UI: Figtree replaces Inter Tight (text),
+  Sora (titles and big numbers) and JetBrains Mono (addresses, rule names,
+  logs). No monospace web font is shipped any more; figures still line up in
+  columns through tabular numerals. Install commands, API keys and the 2FA
+  secret use the operating system's monospace face, so similar characters
+  stay distinct. The font stays self-hosted, so builds need no network. The
+  wordmark in the logo is unchanged.
 - New overview (design concept F, phase 2). It answers "what needs me" in one
   sentence and shows every problem once: open incidents first, one line each;
   opening one shows the path from the network edge to the parent its hosts
