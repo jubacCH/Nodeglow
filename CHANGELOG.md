@@ -251,6 +251,14 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- First-run setup page: it works without internet access and matches the
+  current design. The page loaded Tailwind from a CDN at runtime and used
+  classes that were defined nowhere, so on an offline or air-gapped install
+  the first screen was unstyled; it also still showed the old logo and
+  colours. It is now one self-contained page (inline CSS, the Puls-N mark,
+  dark and light, system fonts) that requests nothing from the network. The
+  form is unchanged. The backend's Content-Security-Policy no longer allows
+  `https://cdn.tailwindcss.com` as a script source.
 - Traffic: the total no longer adds up every interface. A download passes
   the gateway, several switch ports and the host, and the page showed the
   sum of all of them (5 Gbit/s for a 2 Gbit/s backup). The total is now the
