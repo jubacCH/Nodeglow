@@ -58,13 +58,14 @@ jobs:
           node-version: "20"
 
       # The lockfile is all npm audit needs; no install required.
-      # Runtime and build tooling are both clean since the Tailwind 4
-      # migration (plus the fast-glob -> tinyglobby override for
-      # @next/eslint-plugin-next in package.json), so both steps fail on high.
+      # The runtime step has no exceptions and fails on any high advisory.
+      # The build-tooling step does the same, except for the advisories
+      # accepted in scripts/audit-tooling.mjs. That script also fails once an
+      # accepted advisory is no longer reported, so exceptions get removed.
       - name: Audit runtime dependencies (high and above)
         run: npm audit --package-lock-only --omit=dev --audit-level=high
       - name: Audit build tooling (high and above)
-        run: npm audit --package-lock-only --audit-level=high
+        run: node scripts/audit-tooling.mjs
 
   cargo-audit:
     name: cargo audit (agent)
