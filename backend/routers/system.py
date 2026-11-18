@@ -604,6 +604,23 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         except Exception:
             pass
 
+    # ── Metric rollups (read only: no DDL from a GET) ───────────────────
+    rollup_info = None
+    if _is_admin:
+        try:
+            from services import rollups
+            marks = await asyncio.wait_for(rollups.state(), timeout=5)
+            rollup_info = {
+                src: (
+                    "not created" if src not in marks
+                    else "ready" if marks[src].backfilled
+                    else "created, backfill pending"
+                )
+                for src in rollups.SOURCES
+            }
+        except Exception:
+            pass
+
     # ── Await thread pool results ────────────────────────────────────────
     sysinfo = await sysinfo_fut
     log_lines = await logs_fut if logs_fut is not None else []
@@ -628,6 +645,7 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
             "maintenance": maintenance_stats,
             "log_intelligence": log_intelligence,
             "clickhouse_tenant_rebuild": ch_rebuild,
+            "rollups": rollup_info,
             "heartbeat": await _heartbeat_status(db),
         },
         "disk_forecast": disk_forecast,

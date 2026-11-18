@@ -53,6 +53,7 @@ JOBS = [
     "run_self_check_job",
     "refresh_disk_predictions",
     "run_clickhouse_tenant_rebuild",
+    "run_rollup_maintenance",
     "send_heartbeat",
 ]
 

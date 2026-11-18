@@ -23,7 +23,7 @@ def test_view_filters_on_cutoff():
     cut = datetime(2026, 11, 19, 0, 0)
     ddl = " ".join(rollups.view_ddl("bandwidth_metrics", rollups.level("5m"), cut).split())
     assert "TO bandwidth_metrics_5m" in ddl
-    assert "timestamp >= toDateTime64('2026-11-19 00:00:00', 3, 'UTC')" in ddl
+    assert "timestamp >= toDateTime64('2026-11-19 00:00:00.000', 3, 'UTC')" in ddl
     assert "FROM bandwidth_metrics " in ddl
 
 
@@ -46,3 +46,20 @@ def test_daily_partitions_by_year():
 def test_agent_p95_ignores_nulls_with_non_nullable_state():
     sel = rollups.select_aggregates("agent_metrics", rollups.level("5m")).replace(" ", "")
     assert "quantileTDigestStateIf(0.95)(assumeNotNull(cpu_pct),isNotNull(cpu_pct))AScpu_pct_p95" in sel
+
+
+def test_select_aggregates_where_sits_before_group_by():
+    sel = " ".join(rollups.select_aggregates(
+        "ping_checks", rollups.level("5m"), where="timestamp < X").split())
+    assert "FROM ping_checks WHERE timestamp < X GROUP BY" in sel
+    assert "WHERE" not in rollups.select_aggregates("ping_checks", rollups.level("5m"))
+
+
+def test_view_cutoff_is_converted_to_utc():
+    from datetime import timedelta, timezone
+    zurich = timezone(timedelta(hours=1))
+    aware = datetime(2026, 11, 19, 1, 0, tzinfo=zurich)  # = 00:00 UTC
+    ddl = rollups.view_ddl("ping_checks", rollups.level("5m"), aware)
+    assert "'2026-11-19 00:00:00.000'" in ddl
+    naive = rollups.view_ddl("ping_checks", rollups.level("5m"), datetime(2026, 11, 19))
+    assert "'2026-11-19 00:00:00.000'" in naive
