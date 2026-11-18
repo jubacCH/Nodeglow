@@ -41,3 +41,8 @@ def test_daily_partitions_by_year():
     ddl = rollups.table_ddl("agent_metrics", rollups.level("1d"))
     assert "PARTITION BY toYear(bucket)" in ddl
     assert "cpu_pct_p95" in ddl and "load_1_max" in ddl
+
+
+def test_agent_p95_ignores_nulls_with_non_nullable_state():
+    sel = rollups.select_aggregates("agent_metrics", rollups.level("5m")).replace(" ", "")
+    assert "quantileTDigestStateIf(0.95)(assumeNotNull(cpu_pct),isNotNull(cpu_pct))AScpu_pct_p95" in sel

@@ -62,7 +62,7 @@ def _agent_aggregates() -> tuple[Agg, ...]:
             Agg(f"{m}_n", _SUM_U64, f"countIf({m} IS NOT NULL)"),
             Agg(f"{m}_min", _MIN_F32, f"min({m})"),
             Agg(f"{m}_max", _MAX_F32, f"max({m})"),
-            Agg(f"{m}_p95", _P95_F32, f"quantileTDigestState(0.95)({m})"),
+            Agg(f"{m}_p95", _P95_F32, f"quantileTDigestStateIf(0.95)(assumeNotNull({m}), isNotNull({m}))"),
         ]
     return tuple(aggs)
 
