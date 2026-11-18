@@ -156,6 +156,10 @@ def _parse(
             "id": c.get("id"),
             "nice_name": nice_name,
             "provider": provider,
+            # NPM renews the certificates it issued itself (Let's Encrypt) on
+            # its own, hourly, once fewer than 30 days are left. Uploaded
+            # ("other") certificates are renewed by nobody but their owner.
+            "auto_renew": provider == "letsencrypt",
             "domains": domains,
             "expires_on": expires_on,
             "days_left": days_left,

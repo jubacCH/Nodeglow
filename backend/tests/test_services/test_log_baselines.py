@@ -282,8 +282,8 @@ async def test_log_anomaly_rule_fires_on_learned_baselines(db):
     corr._rule_hit_counts.clear()
     corr._current_cycle_hits.clear()
 
-    # 60 messages in 10 minutes = 360/h against a ~100/h baseline.
-    counts = AsyncMock(return_value={"10.0.0.1": 60})
+    # 360 messages in the last hour against a ~100/h baseline.
+    counts = AsyncMock(return_value={"10.0.0.1": 360})
     with patch("services.clickhouse_client.count_syslog_received_by_key", new=counts), \
          patch("notifications.notify", new=AsyncMock()):
         await corr._rule_log_anomaly(db, min_cycles=1)
@@ -307,7 +307,7 @@ async def test_log_anomaly_rule_stays_quiet_at_normal_volume(db):
     corr._current_cycle_hits.clear()
 
     with patch("services.clickhouse_client.count_syslog_received_by_key",
-               new=AsyncMock(return_value={"10.0.0.1": 17})), \
+               new=AsyncMock(return_value={"10.0.0.1": 100})), \
          patch("notifications.notify", new=AsyncMock()):
         await corr._rule_log_anomaly(db, min_cycles=1)
         await db.commit()
@@ -584,8 +584,8 @@ async def test_log_anomaly_rule_names_the_host_behind_a_host_key(db):
     corr._rule_hit_counts.clear()
     corr._current_cycle_hits.clear()
 
-    # Only paperless spikes; n8n stays at its normal ~17 per 10 minutes.
-    counts = AsyncMock(return_value={"host:182": 60, "host:179": 17})
+    # Only paperless spikes; n8n stays at its normal ~100 per hour.
+    counts = AsyncMock(return_value={"host:182": 360, "host:179": 100})
     with patch("services.clickhouse_client.count_syslog_received_by_key", new=counts), \
          patch("notifications.notify", new=AsyncMock()):
         await corr._rule_log_anomaly(db, min_cycles=1)
@@ -596,3 +596,46 @@ async def test_log_anomaly_rule_names_the_host_behind_a_host_key(db):
     )).scalars().all()
     assert [i.title for i in incidents] == ["Log volume anomaly: paperless"]
     assert sorted(counts.await_args.args[1]) == ["host:179", "host:182"]
+
+
+async def test_log_anomaly_rule_ignores_a_short_burst_within_the_hour(db):
+    """A ten-minute burst no longer counts six times over (2026-11-18).
+
+    60 messages in ten minutes and nothing else that hour used to read as
+    360/h against a ~100/h baseline. Over the hour it is 100: normal.
+    """
+    from models.incident import Incident
+    from services import correlation as corr
+
+    await _learn(db, "10.0.0.1", 100)
+    corr._rule_hit_counts.clear()
+    corr._current_cycle_hits.clear()
+
+    with patch("services.clickhouse_client.count_syslog_received_by_key",
+               new=AsyncMock(return_value={"10.0.0.1": 100})), \
+         patch("notifications.notify", new=AsyncMock()):
+        await corr._rule_log_anomaly(db, min_cycles=1)
+        await db.commit()
+
+    assert (await db.execute(select(Incident))).scalars().all() == []
+
+
+async def test_log_anomaly_rule_needs_more_than_double_a_tight_baseline(db):
+    """A slot with almost no spread still needs 2.5x its mean to fire."""
+    from models.incident import Incident
+    from services import correlation as corr
+
+    await _learn(db, "10.0.0.1", 100)
+    for b in (await db.execute(select(HostBaseline))).scalars():
+        b.std_rate = 1.0
+    await db.commit()
+    corr._rule_hit_counts.clear()
+    corr._current_cycle_hits.clear()
+
+    with patch("services.clickhouse_client.count_syslog_received_by_key",
+               new=AsyncMock(return_value={"10.0.0.1": 220})), \
+         patch("notifications.notify", new=AsyncMock()):
+        await corr._rule_log_anomaly(db, min_cycles=1)
+        await db.commit()
+
+    assert (await db.execute(select(Incident))).scalars().all() == []
