@@ -4,6 +4,11 @@ Every raw table (ping_checks, agent_metrics, bandwidth_metrics) is rolled up
 into three AggregatingMergeTree tables. The DDL and the SELECT used by both
 the materialized views and the backfill are generated from the specs below.
 
+Known gap (one-time, at rollout): rows with ``timestamp`` before a source's
+cutoff that reach the raw table later than cutoff + 10 minutes (the backfill
+delay) are in neither the views (they only see rows at or after the cutoff)
+nor the backfill (it has already run), so they are missing from the rollups.
+
 This module must not import ``services.clickhouse_client`` at module level:
 that module imports ``ROLLUP_TABLES`` from here.
 """
@@ -232,6 +237,7 @@ MARKER_TABLE = "nodeglow_rollup_state"
 BACKFILL_DELAY = timedelta(minutes=10)
 # Backfills read a whole raw table: far longer than the default 30 s.
 BACKFILL_TIMEOUT_SECONDS = 3600
+BACKFILL_SETTINGS = "SETTINGS optimize_aggregation_in_order = 1"
 READY_CACHE_SECONDS = 60
 READY_FAILURE_CACHE_SECONDS = 30
 
@@ -320,10 +326,31 @@ async def _write_marker(c, source: str, cutoff: datetime, backfilled: bool) -> N
     _ready_cache.pop(source, None)
 
 
+_deferred: dict[str, str] = {}  # source -> reason, for the system status
+_deferred_logged: set[tuple[str, str]] = set()
+
+
+def _note_deferred(source: str, rebuild_state: str) -> None:
+    _deferred[source] = f"deferred: rebuild {rebuild_state}"
+    if (source, rebuild_state) not in _deferred_logged:
+        _deferred_logged.add((source, rebuild_state))
+        log.info("Rollups of %s deferred: tenant rebuild is %s", source, rebuild_state)
+
+
+def deferred_reasons() -> dict[str, str]:
+    """Sources the last maintenance run deferred, with the reason."""
+    return dict(_deferred)
+
+
 def _next_midnight(now: datetime) -> datetime:
     """The next UTC midnight after ``now``: a bucket boundary of every level."""
     day = _utc(now).replace(hour=0, minute=0, second=0, microsecond=0)
     return day + timedelta(days=1)
+
+
+async def _drop_views(c, source: str) -> None:
+    for lv in LEVELS:
+        await c.command(f"DROP VIEW IF EXISTS {rollup_table(source, lv.key)}_mv")
 
 
 async def _backfill(c, source: str, cutoff: datetime) -> None:
@@ -338,7 +365,10 @@ async def _backfill(c, source: str, cutoff: datetime) -> None:
             "SETTINGS mutations_sync = 2"
         )
         select = select_aggregates(source, lv, where=f"timestamp < {cutoff_expr(cutoff)}")
-        await c.command(f"INSERT INTO {table} ({cols}) {select}")
+        # The raw sort keys start with the GROUP BY columns (tenant, entity
+        # keys, timestamp), so aggregating in sort order keeps memory flat:
+        # without it 30 days of 500 hosts exceeded the memory limit.
+        await c.command(f"INSERT INTO {table} ({cols}) {select} {BACKFILL_SETTINGS}")
 
 
 async def maintain(c=None, now: datetime | None = None) -> dict[str, str]:
@@ -386,14 +416,16 @@ async def _setup_source(c, source: str, cutoff: datetime, now: datetime, started
         for lv in LEVELS:
             await c.command(table_ddl(source, lv))
         if views_missing:
-            for lv in LEVELS:
-                await c.command(f"DROP VIEW IF EXISTS {rollup_table(source, lv.key)}_mv")
+            await _drop_views(c, source)
             for lv in LEVELS:
                 await c.command(view_ddl(source, lv, cutoff))
             recreated = True
             current = now + timedelta(seconds=time.monotonic() - started)
             if current >= cutoff:
                 cutoff = _next_midnight(current)
+                # Views first, marker second: a crash in between must not leave
+                # views of the old cutoff next to a marker of the new one.
+                await _drop_views(c, source)
                 await _write_marker(c, source, cutoff, False)
                 continue  # views exist now, but with the stale cutoff
         return cutoff, recreated
@@ -408,17 +440,28 @@ async def _maintain(c, now: datetime, ch, clickhouse_rebuild) -> dict[str, str]:
     out: dict[str, str] = {}
     pending: dict[str, datetime] = {}  # created, awaiting the backfill
     touched = False
+    broken: list[str] = []
 
     for source in SOURCES:
-        if rebuilt.get(source) not in ("rebuilt", "grace"):
+        state_now = rebuilt.get(source)
+        if state_now not in ("rebuilt", "grace"):
             out[source] = "deferred"
+            _note_deferred(source, str(state_now))
             continue
+        _deferred.pop(source, None)
         mark = marks.get(source)
-        if mark is not None and mark.backfilled:
-            out[source] = "ready"
-            continue
         names = _objects(source)
         present = await _present(c, names)
+        if mark is not None and mark.backfilled:
+            gone = [n for n in names if n not in present]
+            if gone:
+                # Readers keep using the rollups of a ready source: without
+                # its views they silently stop filling.
+                broken.append(f"{source}: {', '.join(gone)}")
+                out[source] = "broken"
+            else:
+                out[source] = "ready"
+            continue
         missing = [n for n in names if n not in present]
         views_missing = any(n.endswith("_mv") for n in missing)
         if mark is None:
@@ -432,6 +475,9 @@ async def _maintain(c, now: datetime, ch, clickhouse_rebuild) -> dict[str, str]:
                 # neither the views nor the backfill. Start over from the next
                 # midnight; the backfill clears what is below it first.
                 cutoff = _next_midnight(now)
+                # Drop the old-cutoff views before the marker moves, so a
+                # crash in between cannot leave them double counting.
+                await _drop_views(c, source)
                 await _write_marker(c, source, cutoff, False)
         cutoff, recreated = await _setup_source(c, source, cutoff, now, started, views_missing)
         touched = True
@@ -454,6 +500,17 @@ async def _maintain(c, now: datetime, ch, clickhouse_rebuild) -> dict[str, str]:
         await _backfill(c, source, cutoff)
         await _write_marker(c, source, cutoff, True)
         out[source] = "backfilled"
+    if broken:
+        raise RuntimeError(
+            "rollup tables or views of a backfilled source are missing, its rollups no "
+            "longer fill: " + "; ".join(broken))
+    if any(v == "created" for v in out.values()) and ch.CLICKHOUSE_TENANT_URL \
+            and not ch.PROVISION_TENANT_USER:
+        log.warning(
+            "Rollup tables were created but tenant user provisioning is off "
+            "(NODEGLOW_CLICKHOUSE_PROVISION_TENANT_USER=0): grant SELECT on these tables to the "
+            "tenant user and add the same row policies as on the raw tables, or tenant reads "
+            "fail with ACCESS_DENIED: %s", ", ".join(ROLLUP_TABLES))
     return out
 
 

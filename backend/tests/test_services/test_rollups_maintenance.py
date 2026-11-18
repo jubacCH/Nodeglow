@@ -410,10 +410,105 @@ async def test_repair_recreates_all_three_views_on_one_cutoff(monkeypatch):
     fake.log.clear()
     out = await rollups.maintain(fake, now=datetime(2026, 11, 19, 3, 0))  # past the cutoff
     assert out["ping_checks"] == "created"
-    assert len(fake.matching("DROP VIEW IF EXISTS ping_checks_")) == 3
+    assert len(fake.matching("DROP VIEW IF EXISTS ping_checks_")) >= 3  # all three, idempotent
     cutoffs = {
         s.split("timestamp >= toDateTime64('")[1][:23]
         for s in fake.matching("CREATE MATERIALIZED VIEW", "ping_checks_")
     }
     assert cutoffs == {"2026-11-20 00:00:00.000"}
     assert fake.marker["ping_checks"][0] == datetime(2026, 11, 20, tzinfo=timezone.utc)
+
+
+async def test_backfill_aggregates_in_sort_order(monkeypatch):
+    """The raw sort keys start with the GROUP BY columns; the setting keeps the
+    hash aggregation of 30 days from exceeding the memory limit."""
+    rebuild(monkeypatch, ALL_REBUILT)
+    fake = FakeCH()
+    await rollups.maintain(fake, now=T_CREATE)
+    await rollups.maintain(fake, now=datetime(2026, 11, 19, 0, 11))
+    inserts = [s for s in fake.log if s.startswith("INSERT INTO") and " GROUP BY " in s]
+    assert len(inserts) == 9
+    assert all(s.endswith("SETTINGS optimize_aggregation_in_order = 1") for s in inserts)
+
+
+async def test_warning_when_tenant_grants_are_left_to_the_operator(monkeypatch, caplog):
+    import logging
+
+    rebuild(monkeypatch, ALL_REBUILT)
+    monkeypatch.setattr(ch, "CLICKHOUSE_TENANT_URL", "http://t:t@h/db")
+    monkeypatch.setattr(ch, "PROVISION_TENANT_USER", False)
+    with caplog.at_level(logging.WARNING, logger="services.rollups"):
+        await rollups.maintain(FakeCH(), now=T_CREATE)
+    warns = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warns) == 1
+    assert all(t in warns[0] for t in rollups.ROLLUP_TABLES)
+    assert "ACCESS_DENIED" in warns[0]
+
+
+async def test_no_warning_without_tenant_url_or_with_provisioning(monkeypatch, caplog):
+    import logging
+
+    rebuild(monkeypatch, ALL_REBUILT)
+    monkeypatch.setattr(ch, "PROVISION_TENANT_USER", False)  # no tenant URL
+    with caplog.at_level(logging.WARNING, logger="services.rollups"):
+        await rollups.maintain(FakeCH(), now=T_CREATE)
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+async def test_ready_source_with_a_dropped_view_fails_the_job(monkeypatch):
+    rebuild(monkeypatch, ALL_REBUILT)
+    fake = FakeCH()
+    await rollups.maintain(fake, now=T_CREATE)
+    await rollups.maintain(fake, now=datetime(2026, 11, 19, 0, 11))
+    fake.existing.discard("agent_metrics_1h_mv")
+    with pytest.raises(RuntimeError, match="agent_metrics_1h_mv"):
+        await rollups.maintain(fake, now=datetime(2026, 11, 19, 0, 21))
+
+
+async def test_cutoff_move_drops_old_views_before_the_new_marker(monkeypatch):
+    """A crash between the two must not leave old-cutoff views with a new-cutoff marker."""
+    rebuild(monkeypatch, ALL_REBUILT)
+    fake = FakeCH()
+    await rollups.maintain(fake, now=T_CREATE)
+    fake.existing.discard("ping_checks_1h_mv")  # one view lost, two survive
+    fake.log.clear()
+    await rollups.maintain(fake, now=datetime(2026, 11, 19, 3, 0))  # past the cutoff
+    marker = fake.index_of(f"INSERT INTO {MARKER} ping_checks")
+    drops = [i for i, s in enumerate(fake.log) if s.startswith("DROP VIEW IF EXISTS ping_checks_")]
+    assert len(drops) >= 3 and sorted(drops)[2] < marker
+    assert fake.index_of("CREATE MATERIALIZED VIEW IF NOT EXISTS ping_checks_5m_mv") > marker
+
+
+async def test_midnight_race_drops_views_before_moving_the_marker(monkeypatch):
+    rebuild(monkeypatch, ALL_REBUILT)
+    fake = FakeCH()
+    ticks = {"n": 0}
+
+    def slow_clock():
+        ticks["n"] += 1
+        return 0.0 if ticks["n"] == 1 else 90.0
+
+    monkeypatch.setattr(rollups.time, "monotonic", slow_clock)
+    await rollups.maintain(fake, now=datetime(2026, 11, 18, 23, 59, 0))
+    moved = [i for i, s in enumerate(fake.log)
+             if s.startswith(f"INSERT INTO {MARKER} ping_checks") and i > fake.index_of("CREATE MATERIALIZED VIEW")]
+    assert moved
+    assert any(s.startswith("DROP VIEW IF EXISTS ping_checks_") for s in fake.log[moved[0] - 3:moved[0]])
+
+
+async def test_deferred_reason_is_exposed_and_logged_once(monkeypatch, caplog):
+    import logging
+
+    rollups._deferred.clear()
+    rollups._deferred_logged.clear()
+    rebuild(monkeypatch, {**ALL_REBUILT, "ping_checks": "attention"})
+    fake = FakeCH()
+    with caplog.at_level(logging.INFO, logger="services.rollups"):
+        await rollups.maintain(fake, now=T_CREATE)
+        await rollups.maintain(fake, now=datetime(2026, 11, 18, 10, 27))
+    assert rollups.deferred_reasons() == {"ping_checks": "deferred: rebuild attention"}
+    infos = [r for r in caplog.records if "deferred" in r.getMessage() and r.levelno == logging.INFO]
+    assert len(infos) == 1
+    rebuild(monkeypatch, ALL_REBUILT)
+    await rollups.maintain(fake, now=datetime(2026, 11, 18, 10, 37))
+    assert rollups.deferred_reasons() == {}

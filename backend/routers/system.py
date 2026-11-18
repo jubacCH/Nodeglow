@@ -610,10 +610,12 @@ async def system_status(request: Request, db: AsyncSession = Depends(get_db)):
         try:
             from services import rollups
             marks = await asyncio.wait_for(rollups.state(), timeout=5)
+            deferred = rollups.deferred_reasons()
             rollup_info = {
                 src: (
-                    "not created" if src not in marks
-                    else "ready" if marks[src].backfilled
+                    "ready" if src in marks and marks[src].backfilled
+                    else deferred[src] if src in deferred
+                    else "not created" if src not in marks
                     else "created, backfill pending"
                 )
                 for src in rollups.SOURCES
