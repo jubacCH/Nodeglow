@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filtersFromParams, filtersToParams, formatDuration, hasActiveFilters, hostHealth,
-  incidentDurationMs, incidentNeedsGlow, incidentQueryString, parseServerDate, ruleLabel, severityState,
+  incidentDurationMs, incidentNeedsGlow, incidentQueryString, parseServerDate, reinstallableAgentId, ruleLabel, severityState,
 } from './incidents';
 
 describe('incident filters', () => {
@@ -98,5 +98,19 @@ describe('ruleLabel', () => {
     expect(ruleLabel('integration_failed')).toBe('Integration not collecting');
     expect(ruleLabel('integration_alert')).toBe('Integration alert');
     expect(ruleLabel('multi_host_down')).toBe('Multi host down');
+  });
+});
+
+describe('reinstallableAgentId', () => {
+  it('names the agent of a silent-agent incident that is not resolved', () => {
+    expect(reinstallableAgentId({ rule: 'agent_silent', status: 'open', agent_id: 7 })).toBe(7);
+    expect(reinstallableAgentId({ rule: 'agent_silent', status: 'acknowledged', agent_id: 7 })).toBe(7);
+  });
+
+  it('is null for other rules, resolved incidents or a missing agent', () => {
+    expect(reinstallableAgentId({ rule: 'host_down', status: 'open', agent_id: 7 })).toBeNull();
+    expect(reinstallableAgentId({ rule: 'agent_silent', status: 'resolved', agent_id: 7 })).toBeNull();
+    expect(reinstallableAgentId({ rule: 'agent_silent', status: 'open', agent_id: null })).toBeNull();
+    expect(reinstallableAgentId({ rule: 'agent_silent', status: 'open' })).toBeNull();
   });
 });

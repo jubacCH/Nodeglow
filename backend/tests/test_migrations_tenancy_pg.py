@@ -839,6 +839,9 @@ ROUTER_TESTS_ON_PG = [
     "tests/test_routers/test_tenancy_review_fixes.py",
     "tests/test_routers/test_api_v1.py",
     "tests/test_routers/test_dashboard_v2.py",
+    # Agent reinstall (055): a bound token spends itself with a conditional
+    # update and never reaches another tenant's agent, under RLS too.
+    "tests/test_routers/test_agent_reinstall.py",
     # The phase-8 isolation walk (every route, session / API key / header,
     # reference check, licensed ee walk) as nodeglow_app with RLS on.
     "tests/test_routers/test_tenant_isolation.py",
@@ -1114,5 +1117,38 @@ def test_053_flow_result_columns_up_and_down(pg_db):
     cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
                                    "WHERE table_name = 'sso_flows'")}
     assert not {"redirect_uri", "config_hash", "result_json"} & cols
+    _alembic(pg_db, "upgrade", "head", **env)
+    _alembic(pg_db, "check", **env)
+
+
+def test_055_install_token_agent_cascade(pg_db):
+    """055 binds an install token to an agent: the column and the tenant FK
+    exist, deleting the agent deletes its bound tokens (an unbound token
+    stays), and the downgrade removes the column again."""
+    env = _rls_env(pg_db)
+    _alembic(pg_db, "upgrade", "054", **env)
+    q(pg_db, "INSERT INTO agents (id, tenant_id, name, hostname, token, enabled) "
+             "VALUES (31, 1, 'web01', 'web01', 'h', true)")
+    q(pg_db, "INSERT INTO agent_install_tokens (tenant_id, token_hash, prefix, expires_at, "
+             "revoked, used_count, created_at) VALUES (1, 'unbound', 'nt_u', now() + interval '1 hour', "
+             "false, 0, now())")
+    _alembic(pg_db, "upgrade", "055", **env)
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name = 'agent_install_tokens'")}
+    assert "agent_id" in cols
+    fks = {r[0] for r in q(pg_db, "SELECT conname FROM pg_constraint WHERE contype = 'f' "
+                                  "AND conrelid = 'agent_install_tokens'::regclass")}
+    assert "fk_agent_install_tokens_agent" in fks
+
+    q(pg_db, "INSERT INTO agent_install_tokens (tenant_id, token_hash, prefix, expires_at, "
+             "revoked, used_count, created_at, agent_id) VALUES (1, 'bound', 'nt_b', "
+             "now() + interval '1 hour', false, 0, now(), 31)")
+    q(pg_db, "DELETE FROM agents WHERE id = 31")
+    assert sorted(r[0] for r in q(pg_db, "SELECT token_hash FROM agent_install_tokens")) == ["unbound"]
+
+    _alembic(pg_db, "downgrade", "054", **env)
+    cols = {r[0] for r in q(pg_db, "SELECT column_name FROM information_schema.columns "
+                                   "WHERE table_name = 'agent_install_tokens'")}
+    assert "agent_id" not in cols
     _alembic(pg_db, "upgrade", "head", **env)
     _alembic(pg_db, "check", **env)

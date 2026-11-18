@@ -121,3 +121,10 @@ async def test_auto_resolve_leaves_silent_agents_to_their_job(db):
         await corr._auto_resolve(db, offline_hosts=[])
         await db.commit()
     assert len(await _open(db)) == 1
+
+
+def test_the_incident_points_at_the_reinstall():
+    summary = silence.silent_condition(_agent("a", minutes_ago=30), NOW).summary
+    assert summary.endswith(
+        "Check that the agent service is running on the host and can reach this server, "
+        "or reinstall it from the agent's page.")

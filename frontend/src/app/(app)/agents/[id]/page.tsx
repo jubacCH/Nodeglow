@@ -4,7 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Cpu, HardDrive, MemoryStick, Monitor, Pencil, Save, Trash2, X, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, Cpu, HardDrive, MemoryStick, Monitor, Pencil, RotateCcw, Save, Trash2, X, type LucideIcon } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { Card, CardHeader } from '@/components/ui/Card';
@@ -25,10 +25,11 @@ import { formatUptime, timeAgo } from '@/lib/utils';
 import type { HealthState } from '@/lib/status';
 import { MAX_WATCHED_SERVICES, parseServiceList, serviceBadge } from '@/lib/agentServices';
 import { useToastStore } from '@/stores/toast';
-import { useIsEditor } from '@/stores/auth';
+import { useIsAdmin, useIsEditor } from '@/stores/auth';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { Agent, AgentServiceState, AgentSnapshot } from '@/types';
 import { UsageBar, usageState } from '../_components/agentStatus';
+import { AddAgentDialog } from '../_components/AddAgentDialog';
 
 interface AgentDetail extends Agent {
   snapshots: AgentSnapshot[];
@@ -58,6 +59,8 @@ export default function AgentDetailPage() {
   const chart = useChartTheme();
   const { confirm, ConfirmDialogElement } = useConfirm();
   const [uninstalling, setUninstalling] = useState(false);
+  const [reinstallOpen, setReinstallOpen] = useState(false);
+  const isAdmin = useIsAdmin();
 
   useEffect(() => {
     document.title = `${data?.name ?? 'Agent'} | Nodeglow`;
@@ -121,6 +124,14 @@ export default function AgentDetailPage() {
             <Link href="/agents" className={buttonClasses({ variant: 'ghost', size: 'sm' })}>
               <ArrowLeft size={14} aria-hidden="true" /> Back
             </Link>
+            {isAdmin && data && (
+              <Tooltip content="A new install command for this machine. The agent keeps its id, history and settings.">
+                <Button variant="secondary" size="sm" onClick={() => setReinstallOpen(true)}>
+                  <RotateCcw size={14} aria-hidden="true" />
+                  Reinstall agent
+                </Button>
+              </Tooltip>
+            )}
             <Tooltip content={online ? 'Sends an uninstall command on the next check-in' : 'The agent must be online to receive the uninstall command'}>
               <Button variant="danger" size="sm" onClick={handleUninstall} loading={uninstalling} disabled={!online}>
                 <Trash2 size={14} aria-hidden="true" />
@@ -206,6 +217,14 @@ export default function AgentDetailPage() {
         </>
       )}
       {ConfirmDialogElement}
+      {data && (
+        <AddAgentDialog
+          open={reinstallOpen}
+          onClose={() => setReinstallOpen(false)}
+          agents={[data]}
+          agent={data}
+        />
+      )}
     </div>
   );
 }

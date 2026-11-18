@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
+import os
 import random
 import re
 import socket
@@ -21,6 +23,8 @@ from utils.http_options import BODY_LIMIT, MAX_REDIRECTS, build_url, of_host, st
 
 if TYPE_CHECKING:
     from database import PingHost
+
+logger = logging.getLogger(__name__)
 
 
 # ── ICMP ──────────────────────────────────────────────────────────────────────
@@ -43,6 +47,29 @@ async def _resolve_for_ping(hostname: str) -> str | None:
     return infos[0][4][0] if infos else None
 
 
+# How long a ping process may outlive its own -W reply timeout before it is
+# given up. Without a bound, one child the event loop never reaps hangs the
+# whole run_ping_checks job: APScheduler (max_instances=1) then skips every
+# later tick and no host gets a result. That happened on 2026-10-29 for 2.5
+# days and again on 2026-11-18, both times with a <defunct> ping left behind.
+PING_PROCESS_GRACE_S = 3.0
+
+
+def _abandon_ping(proc: "asyncio.subprocess.Process", target: str) -> None:
+    """Kill and reap a ping process that did not finish in time."""
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        # Reap it here: if the loop's child watcher missed the exit, nobody else
+        # will, and the zombie would stay for the life of the process.
+        os.waitpid(proc.pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+    logger.warning("ping %s: process %s did not finish in time, abandoned", target, proc.pid)
+
+
 async def ping_host(hostname: str, timeout: float = 2.0) -> tuple[bool, float | None]:
     """Ping a host using system ping binary. Returns (success, latency_ms)."""
     target = await _resolve_for_ping(hostname)
@@ -55,7 +82,13 @@ async def ping_host(hostname: str, timeout: float = 2.0) -> tuple[bool, float | 
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await proc.communicate()
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout + PING_PROCESS_GRACE_S,
+            )
+        except asyncio.TimeoutError:
+            _abandon_ping(proc, target)
+            return False, None
         if proc.returncode == 0:
             output = stdout.decode()
             for token in output.split():
