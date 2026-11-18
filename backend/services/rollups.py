@@ -538,7 +538,8 @@ async def _series(source: str, hours: int, key_cond: str, key_params: dict,
     rows = await ch.query(sql, params)
     if lvl != RAW:
         # Rollup aliases carry an r_ prefix: an alias equal to a column name
-        # (sum(checks) AS checks) would make ClickHouse resolve it as nested.
+        # turns ``sum(lat_n) AS lat_n`` into an aggregate inside an aggregate
+        # (ClickHouse ILLEGAL_AGGREGATION).
         rows = [{(k[2:] if k.startswith("r_") else k): v for k, v in r.items()} for r in rows]
     return lvl, secs, rows
 

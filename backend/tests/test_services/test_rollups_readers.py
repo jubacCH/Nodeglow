@@ -75,11 +75,20 @@ async def test_raw_level_uses_chart_bucket_width(fake_query, ready_all):
     assert fake_query.calls[0][1]["b"] == 300
 
 
-async def test_bandwidth_total_uses_rollup_beyond_48h(fake_query, ready_all):
-    await ch.get_bandwidth_total_history_ch(hours=24 * 90)
+async def test_bandwidth_total_stays_raw_up_to_raw_retention(fake_query, ready_all):
+    await ch.get_bandwidth_total_history_ch(hours=168)
     sql, params = fake_query.calls[0]
-    assert "FROM bandwidth_metrics_1h" in sql
-    assert params["b"] == 3600
+    assert "FROM bandwidth_metrics\n" in sql and "bandwidth_metrics_" not in sql
+    assert params["b"] == ch.bandwidth_bucket_seconds(168) == 3600
+
+
+async def test_bandwidth_total_uses_rollup_beyond_raw_retention(fake_query, ready_all):
+    await ch.get_bandwidth_total_history_ch(hours=169)
+    sql, params = fake_query.calls[0]
+    assert "FROM bandwidth_metrics_5m" in sql and params["b"] == 300
+    await ch.get_bandwidth_total_history_ch(hours=24 * 90)
+    sql, params = fake_query.calls[1]
+    assert "FROM bandwidth_metrics_1h" in sql and params["b"] == 3600
 
 
 async def test_bandwidth_total_stays_raw_when_not_ready(fake_query, ready_none):
@@ -90,10 +99,10 @@ async def test_bandwidth_total_stays_raw_when_not_ready(fake_query, ready_none):
 async def test_ping_series_empty_bucket_is_none_not_nan(fake_query, ready_all):
     nan = float("nan")
     fake_query.returns([
-        {"bucket": T0, "checks": 3, "ok": 0, "lat_n": 0, "latency_avg": None,
-         "latency_min": None, "latency_max": None, "latency_p95": nan},
-        {"bucket": T0, "checks": 4, "ok": 3, "lat_n": 3, "latency_avg": 5.0,
-         "latency_min": 4.0, "latency_max": 6.0, "latency_p95": 5.9},
+        {"bucket": T0, "r_checks": 3, "r_ok": 0, "r_lat_n": 0, "r_latency_avg": None,
+         "r_latency_min": None, "r_latency_max": None, "r_latency_p95": nan},
+        {"bucket": T0, "r_checks": 4, "r_ok": 3, "r_lat_n": 3, "r_latency_avg": 5.0,
+         "r_latency_min": 4.0, "r_latency_max": 6.0, "r_latency_p95": 5.9},
     ])
     res = await rollups.ping_series(1, hours=100)
     assert res.points[0] == {"timestamp": T0, "checks": 3, "ok": 0, "latency_avg": None,
@@ -106,8 +115,8 @@ async def test_agent_series_empty_metric_is_none(fake_query, ready_all):
     row = {"bucket": T0}
     for m in ("cpu_pct", "mem_pct", "disk_pct", "load_1"):
         n = 0 if m == "mem_pct" else 2
-        row.update({f"{m}_n": n, f"{m}_avg": 1.0, f"{m}_min": 0.5, f"{m}_max": 2.0,
-                    f"{m}_p95": nan if n == 0 else 1.9})
+        row.update({f"r_{m}_n": n, f"r_{m}_avg": 1.0, f"r_{m}_min": 0.5, f"r_{m}_max": 2.0,
+                    f"r_{m}_p95": nan if n == 0 else 1.9})
     fake_query.returns([row])
     res = await rollups.agent_series(1, hours=100)
     p = res.points[0]
@@ -117,8 +126,8 @@ async def test_agent_series_empty_metric_is_none(fake_query, ready_all):
 
 
 async def test_bandwidth_series_keys(fake_query, ready_all):
-    fake_query.returns([{"bucket": T0, "rx_rate_avg": 1.5, "tx_rate_avg": 2.5,
-                         "rx_rate_max": 3, "tx_rate_max": 4}])
+    fake_query.returns([{"bucket": T0, "r_rx_rate_avg": 1.5, "r_tx_rate_avg": 2.5,
+                         "r_rx_rate_max": 3, "r_tx_rate_max": 4}])
     res = await rollups.bandwidth_series("agent", "7", "total", hours=24 * 30)
     assert res.points == [{"timestamp": T0, "rx_rate_avg": 1.5, "tx_rate_avg": 2.5,
                            "rx_rate_max": 3, "tx_rate_max": 4}]

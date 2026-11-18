@@ -12,6 +12,10 @@ Data whose retention is fixed by the storage, not by a setting, is not
 extended by a larger tier: ClickHouse keeps ``ping_checks`` 30 days, agent
 and bandwidth metrics 7 days, syslog per its severity TTLs (spec "Retention
 per tenant"). A tier is a ceiling, never a promise beyond those.
+
+A tier caps detail data only: the raw tables and ``RETENTION_KEYS``. The
+metric rollups (5 min, 1 h, 1 d) and availability history are not capped by a
+plan; they follow the installation ceilings (owner decision 2026-11-18).
 """
 from __future__ import annotations
 

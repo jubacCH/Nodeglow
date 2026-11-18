@@ -1399,7 +1399,13 @@ async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
     from services import rollups
 
     params: dict = {"h": int(hours), "b": bandwidth_bucket_seconds(int(hours))}
-    lvl = await rollups.effective_level("bandwidth_metrics", int(hours))
+    # Within raw retention the chart keeps its own bucket widths: 5-minute
+    # rollup buckets would give 2016 points over a week and a sawtooth with
+    # slow SNMP polls. Rollups only serve what raw no longer holds.
+    if int(hours) <= rollups.RAW_TTL_HOURS["bandwidth_metrics"]:
+        lvl = rollups.RAW
+    else:
+        lvl = await rollups.effective_level("bandwidth_metrics", int(hours))
     if lvl == rollups.RAW:
         inner = f"""
             SELECT toStartOfInterval(timestamp, toIntervalSecond({{b:UInt32}})) AS bucket,

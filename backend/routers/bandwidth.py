@@ -28,7 +28,7 @@ async def bandwidth_history(
     source_type: Optional[str] = Query(None),
     source_id: Optional[str] = Query(None),
     interface: Optional[str] = Query(None),
-    hours: int = Query(24, ge=1, le=168),
+    hours: int = Query(24, ge=1, le=43800),
 ):
     """Return time-series bandwidth data for charting.
 

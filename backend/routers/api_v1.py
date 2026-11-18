@@ -593,6 +593,14 @@ async def get_host(
     }
 
 
+def _series_points(points: list[dict]) -> list[dict]:
+    """Series points with the bucket start as an ISO timestamp."""
+    return [
+        {**p, "timestamp": iso(p["timestamp"]) if isinstance(p["timestamp"], datetime) else p["timestamp"]}
+        for p in points
+    ]
+
+
 @router.get("/hosts/{host_id}/history", summary="Ping history for a host")
 async def host_history(
     host_id: int,
@@ -621,6 +629,25 @@ async def host_history(
             for r in rows
         ],
     }
+
+
+@router.get("/hosts/{host_id}/series", summary="Aggregated ping series for a host")
+async def host_series(
+    host_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+    hours: int = Query(24, ge=1, le=43800, description="Hours of history (max 43800 = 5 years)"),
+):
+    """Latency and availability per time bucket. The resolution follows the
+    range (raw, 5 min, 1 h, 1 d); ``level`` and ``bucket_seconds`` say which."""
+    host = await db.get(PingHost, host_id)
+    if not host:
+        raise HTTPException(404, "Host not found")
+
+    from services import rollups
+    res = await rollups.ping_series(host_id, hours)
+    return {"host_id": host_id, "level": res.level, "bucket_seconds": res.bucket_seconds,
+            "points": _series_points(res.points)}
 
 
 @router.get("/hosts/{host_id}/timeline", summary="Merged event timeline for a host")
@@ -1214,6 +1241,25 @@ async def list_agents(
             "host_id": host_id,
         })
     return out
+
+
+@router.get("/agents/{agent_id}/series", summary="Aggregated metric series for an agent")
+async def agent_series(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    _key: ApiKey = Depends(require_api_key),
+    hours: int = Query(24, ge=1, le=43800, description="Hours of history (max 43800 = 5 years)"),
+):
+    """CPU, memory, disk and load (avg, min, max, p95) per time bucket. The
+    resolution follows the range (raw, 5 min, 1 h, 1 d)."""
+    agent = await db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+
+    from services import rollups
+    res = await rollups.agent_series(agent_id, hours)
+    return {"agent_id": agent_id, "level": res.level, "bucket_seconds": res.bucket_seconds,
+            "points": _series_points(res.points)}
 
 
 @router.get("/agents/{agent_id}", summary="Agent detail with latest metrics")
