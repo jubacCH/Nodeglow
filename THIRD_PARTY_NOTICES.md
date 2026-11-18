@@ -25,7 +25,7 @@ AGPL-3.0-only and with the commercial `ee/` license. Points to watch:
 | `caniuse-lite` (transitive, build-time data) | CC-BY-4.0 | Compatible; attribution via its package. |
 | `webpki-roots` (transitive, Rust agent) | CDLA-Permissive-2.0 | Compatible (permissive data license; keep its notice). |
 | `ring`, `untrusted` (transitive, Rust agent) | Apache-2.0 AND ISC / ISC | Compatible. |
-| Fonts Sora, Inter Tight, JetBrains Mono (`@fontsource-variable/*`, bundled into the frontend build) | SIL Open Font License 1.1 | Compatible. The fonts are redistributed unmodified as part of the web UI; the OFL travels with the packages. |
+| Font Figtree (`@fontsource-variable/figtree`, bundled into the frontend build) | SIL Open Font License 1.1 | Compatible. The font is redistributed unmodified as part of the web UI; the OFL travels with the package. |
 | `anthropic` SDK | MIT | Compatible. Using the Anthropic API is subject to Anthropic's own terms, accepted by whoever supplies the API key. |
 
 The prebuilt agent binaries in `backend/static/` statically link all
@@ -76,9 +76,7 @@ Versions as resolved in `frontend/package-lock.json`.
 
 | Package | Version | License |
 |---|---|---|
-| @fontsource-variable/inter-tight | 5.3.0 | OFL-1.1 |
-| @fontsource-variable/jetbrains-mono | 5.3.0 | OFL-1.1 |
-| @fontsource-variable/sora | 5.3.0 | OFL-1.1 |
+| @fontsource-variable/figtree | 5.3.0 | OFL-1.1 |
 | @tanstack/react-query | 5.104.1 | MIT |
 | clsx | 2.1.1 | MIT |
 | cmdk | 1.1.1 | MIT |

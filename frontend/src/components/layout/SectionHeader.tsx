@@ -17,7 +17,7 @@ interface SectionHeaderProps {
 
 /**
  * In-page section divider for pages with several logical blocks.
- *   PageHeader    → Sora 24px semibold   (h1)
+ *   PageHeader    → 24px semibold        (h1)
  *   SectionHeader → 17px medium          (h2) ← this
  *   CardHeader    → 14px medium          (h2/h3 inside a card)
  */

@@ -128,6 +128,7 @@
   --font-sans: var(--ng-font-ui);
   --font-display: var(--ng-font-display);
   --font-mono: var(--ng-font-mono);
+  --font-code: var(--ng-font-code);
 
   --radius-card: var(--ng-radius);
   --radius-ctl: var(--ng-radius-ctl);
@@ -225,7 +226,7 @@
     color: var(--ng-text);
     font-family: var(--ng-font-ui);
     line-height: 1.45;
-    font-feature-settings: "tnum" 1, "cv11" 1;
+    font-feature-settings: "tnum" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }

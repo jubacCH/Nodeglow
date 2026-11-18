@@ -40,7 +40,7 @@ export function MetricTile({ label, value, pct, sub }: { label: string; value: s
   return (
     <Card padding="sm">
       <p className="text-meta text-fg-2">{label}</p>
-      <p className={cn('num mt-1 font-display text-num-sm font-medium tracking-[-0.04em]', value === '—' ? 'text-fg-3' : tone?.text ?? 'text-fg')}>{value}</p>
+      <p className={cn('num mt-1 font-display text-num-sm font-medium tracking-[-0.02em]', value === '—' ? 'text-fg-3' : tone?.text ?? 'text-fg')}>{value}</p>
       {pct != null && (
         <div
           className="mt-2 h-1.5 overflow-hidden rounded-pill bg-surface-3"

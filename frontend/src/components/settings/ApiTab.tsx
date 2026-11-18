@@ -246,7 +246,7 @@ export function ApiTab() {
         </div>
         <div className="mt-5 rounded-ctl border border-border bg-surface-2 p-3">
           <p className="mb-1 text-meta font-medium text-fg-2">Example request</p>
-          <pre className="overflow-x-auto font-mono text-meta text-fg">
+          <pre className="overflow-x-auto font-code text-meta text-fg">
 {`curl -H "X-API-Key: ng_your_key_here" \\
   ${origin}/api/v1/hosts`}
           </pre>
@@ -263,7 +263,7 @@ export function ApiTab() {
           <div className="space-y-4">
             <Notice tone="warning">Copy the key now. It will not be shown again.</Notice>
             <div className="flex items-center gap-2 rounded-ctl border border-border-2 bg-surface-2 p-3">
-              <code className="flex-1 break-all font-mono text-ui text-fg">{createdKey}</code>
+              <code className="flex-1 break-all font-code text-ui text-fg">{createdKey}</code>
               <IconButton
                 size="sm"
                 aria-label="Copy API key"

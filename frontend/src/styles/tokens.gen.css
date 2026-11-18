@@ -151,9 +151,10 @@
   --ng-radius-chip: 8px;
   --ng-radius-lg: 24px;
   --ng-radius-pill: 9999px;
-  --ng-font-ui: var(--font-inter-tight), var(--font-inter-tight-ext), "Inter Tight", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --ng-font-display: var(--font-sora), var(--font-sora-ext), "Sora", var(--font-inter-tight), var(--font-inter-tight-ext), "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-  --ng-font-mono: var(--font-jetbrains-mono), var(--font-jetbrains-mono-ext), "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --ng-font-ui: var(--font-figtree), var(--font-figtree-ext), "Figtree", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --ng-font-display: var(--font-figtree), var(--font-figtree-ext), "Figtree", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --ng-font-mono: var(--font-figtree), var(--font-figtree-ext), "Figtree", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --ng-font-code: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --ng-fs-micro: 0.7857rem;
   --ng-fs-meta: 0.8571rem;
   --ng-fs-ui: 0.9286rem;
