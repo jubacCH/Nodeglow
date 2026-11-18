@@ -157,3 +157,18 @@ async def test_mutating_another_tenants_row_changes_nothing():
                 inc = await s.get(Incident, ids["incident"])
                 host = await s.get(PingHost, ids["host"])
         assert inc.status == "open" and host is not None
+
+
+async def test_another_tenants_series_are_not_found(client_and_ids, monkeypatch):
+    from services import rollups
+
+    async def must_not_run(*a, **k):
+        raise AssertionError("series query ran for another tenant's entity")
+
+    monkeypatch.setattr(rollups, "ping_series", must_not_run)
+    monkeypatch.setattr(rollups, "agent_series", must_not_run)
+    client, ids = client_and_ids
+    for template in ("/api/v1/hosts/{host}/series", "/api/v1/agents/{agent}/series"):
+        resp = await client.get(template.format(**ids))
+        assert resp.status_code == 404, f"{template}: {resp.status_code}"
+        assert CANARY not in resp.text
