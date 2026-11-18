@@ -1143,6 +1143,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |
 | `NODEGLOW_PING_LOOKBACK_HOURS` | `nodeglow` | `24` | How far back the "latest check" lookup searches |
 | `NODEGLOW_SYSLOG_LISTENER` | `nodeglow` | `auto` | The server's own syslog listener: `auto` (default tenant while there is one tenant), `on`, `off` (probe-only, SaaS) — [Probe syslog relay](#the-direct-listener) |
+| `NODEGLOW_SSH_DEPLOY` | `nodeglow` | `auto` | Install agents over SSH from the server: `auto` (on, except in a multi-tenant build), `on`, `off` — see the API reference, "Install over SSH" |
 | `NODEGLOW_SYSLOG_CLOCK_SKEW_HOURS` | `nodeglow` | `24` | How far a sender's clock may lag and its messages still show up in time-window queries |
 | `NODEGLOW_SYSLOG_TCP_IDLE_TIMEOUT` | `nodeglow` | `0` | Seconds a syslog TCP sender may stay silent before its connection is closed; `0` keeps it open. Persistent senders (rsyslog, syslog-ng) lose a message on every server-side close |
 | `NODEGLOW_CLICKHOUSE_COMPRESSION` | `nodeglow` | `lz4` | ClickHouse client compression |

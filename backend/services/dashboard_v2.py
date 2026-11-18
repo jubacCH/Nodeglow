@@ -751,11 +751,16 @@ async def section_upcoming(db, base: Base) -> dict:
         if days is None or days > UPCOMING_DAYS or (p.get("confidence") or 0) < 0.3:
             continue
         name = p.get("hostname") or p.get("agent_name") or p.get("config_name")
+        if key.startswith("agent-"):
+            obj = {"kind": "agent", "id": p.get("agent_id"), "name": name}
+        else:
+            # The integration's type is part of its address (/integration/{type}/{id}).
+            obj = {"kind": "integration", "id": p.get("config_id"), "name": name,
+                   "type": p.get("config_type")}
         items.append({"kind": "disk", "due_at": hs.iso(base.now + timedelta(days=days)), "days": days,
                       "title": f"{name} · {p.get('pool_name')} {p.get('current_pct')} %",
                       "estimated_due": True, "method": "linear trend over 14 days",
-                      "object": {"kind": "agent" if key.startswith("agent-") else "integration",
-                                 "id": p.get("agent_id") or p.get("config_id"), "name": name},
+                      "object": obj,
                       "current_pct": p.get("current_pct"), "trend_pct_per_day": p.get("trend_pct_per_day"),
                       "confidence": p.get("confidence"), "source": p.get("source")})
 

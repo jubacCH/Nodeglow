@@ -8,10 +8,12 @@ import { StatusDot } from '@/components/ui/StatusDot';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/Table';
-import { post } from '@/lib/api';
+import { apiErrorMessage, post } from '@/lib/api';
+import { unknownHostKey, type HostKeyQuestion } from '@/lib/agentDeploy';
+import { DeployRunStatus } from '@/components/agents/DeployRunStatus';
+import { HostKeyPrompt } from '@/components/agents/HostKeyPrompt';
 import type { HealthState } from '@/lib/status';
 import { cn } from '@/lib/utils';
-import { CheckCircle, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { SectionTitle, StatGrid, StatTile, StateLabel, TableCard, UsageBar, fixed, isNum, uptime } from './parts';
 
@@ -72,15 +74,16 @@ interface ProxmoxData {
   tasks?: Array<{ type?: string; status?: string; starttime?: number; node?: string; id?: string }>;
 }
 
+/** POST .../deploy-agent: a run to follow (ssh) or a script for the node (script). */
 interface DeployResult {
   ok: boolean;
-  mode?: 'ssh' | 'script';
-  deployed?: number;
-  failed?: number;
-  results: { vmid: number; name: string; status?: string; detail?: string; error?: string }[];
-  manual_script: string | null;
-  syslog_target?: string;
-  skipped_self?: string;
+  mode?: 'ssh' | 'script' | 'none';
+  run_id?: string;
+  results?: { vmid: number; name: string }[];
+  manual_script?: string | null;
+  skipped_self?: string | null;
+  /** Containers on other cluster nodes: pct exec reaches this node only. */
+  skipped_other_nodes?: string[];
   message?: string;
 }
 
@@ -158,16 +161,27 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
 
   const [deploying, setDeploying] = useState(false);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  const [hostKey, setHostKey] = useState<HostKeyQuestion | null>(null);
 
-  async function deploySyslog() {
+  async function deployAgents(fingerprint?: string) {
     if (!configId) return;
     setDeploying(true);
-    setDeployResult(null);
+    if (!fingerprint) setDeployResult(null);
     try {
-      const res = await post<DeployResult>(`/api/v1/integrations/proxmox/${configId}/deploy-agent`, {});
+      const res = await post<DeployResult>(
+        `/api/v1/integrations/proxmox/${configId}/deploy-agent`,
+        fingerprint ? { host_key_fingerprint: fingerprint } : {},
+      );
+      setHostKey(null);
       setDeployResult(res);
-    } catch {
-      setDeployResult({ ok: false, results: [], manual_script: null, message: 'Request failed' });
+    } catch (e) {
+      const asked = unknownHostKey(e);
+      if (asked && !fingerprint) {
+        setHostKey(asked);
+      } else {
+        setHostKey(null);
+        setDeployResult({ ok: false, message: apiErrorMessage(e, 'The deploy could not be started.') });
+      }
     } finally {
       setDeploying(false);
     }
@@ -285,7 +299,7 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
           <CardHeader
             title="Agent deployment"
             actions={
-              <Button size="sm" loading={deploying} onClick={deploySyslog}>
+              <Button size="sm" loading={deploying} onClick={() => deployAgents()} disabled={Boolean(hostKey)}>
                 {deploying ? 'Installing…' : 'Install agent on all LXCs'}
               </Button>
             }
@@ -297,50 +311,43 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
             automatic installation.
           </p>
 
+          {hostKey && (
+            <HostKeyPrompt
+              question={hostKey}
+              busy={deploying}
+              onTrust={() => deployAgents(hostKey.fingerprint)}
+              onCancel={() => setHostKey(null)}
+            />
+          )}
+
           {deployResult && (
             <div className="space-y-3" aria-live="polite">
-              {/* SSH mode: per-LXC results */}
-              {deployResult.mode === 'ssh' && (
+              {(deployResult.skipped_other_nodes?.length ?? 0) > 0 && (
+                <p className="text-meta text-fg-3">
+                  Not included, they run on another node: {deployResult.skipped_other_nodes!.join(', ')}. Add that
+                  node as its own Proxmox integration to install there.
+                </p>
+              )}
+              {/* SSH mode: follow the run */}
+              {deployResult.mode === 'ssh' && deployResult.run_id && (
                 <>
-                  <div
-                    className={cn(
-                      'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-ctl border p-3 text-ui',
-                      deployResult.failed === 0 ? 'border-ok/30 bg-ok-soft text-ok' : 'border-warning/30 bg-warning-soft text-warning',
-                    )}
-                  >
-                    <span className="num">Deployed: {deployResult.deployed ?? '—'} · Failed: {deployResult.failed ?? '—'}</span>
-                    {deployResult.syslog_target && <span className="text-meta text-fg-2">→ <span className="font-mono">{deployResult.syslog_target}</span></span>}
-                    {deployResult.skipped_self && <span className="text-meta text-fg-2">(skipped {deployResult.skipped_self} — Nodeglow host)</span>}
-                  </div>
-                  <ul className="max-h-[250px] space-y-1 overflow-y-auto">
-                    {deployResult.results.map((r) => (
-                      <li key={r.vmid} className="flex min-w-0 items-center gap-2 rounded-chip px-2 py-1 text-meta hover:bg-surface-2">
-                        {r.status === 'ok' ? (
-                          <CheckCircle size={12} className="shrink-0 text-ok" aria-label="Installed" />
-                        ) : (
-                          <XCircle size={12} className="shrink-0 text-down" aria-label="Failed" />
-                        )}
-                        <span className="num w-14 shrink-0 text-fg-2">CT {r.vmid}</span>
-                        <span className="min-w-0 flex-1 truncate text-fg">{r.name}</span>
-                        {r.detail && <span className="shrink-0 text-micro text-fg-3">{r.detail}</span>}
-                        {r.error && <span className="max-w-[250px] truncate text-micro text-down">{r.error}</span>}
-                      </li>
-                    ))}
-                  </ul>
+                  {deployResult.skipped_self && (
+                    <p className="text-meta text-fg-3">Skipped {deployResult.skipped_self}: Nodeglow runs there.</p>
+                  )}
+                  <DeployRunStatus runId={deployResult.run_id} />
                 </>
               )}
 
               {/* Script mode: LXC list + copyable script */}
               {deployResult.mode === 'script' && (
                 <>
-                  {deployResult.results.length > 0 && (
+                  {(deployResult.results?.length ?? 0) > 0 && (
                     <div className="rounded-ctl border border-border-2 bg-surface-2 p-3">
                       <p className="mb-2 text-meta text-fg-2">
-                        {deployResult.results.length} running LXC(s) — add an SSH key in the Proxmox configuration to install automatically
-                        {deployResult.syslog_target && <span className="text-fg-3"> → <span className="font-mono">{deployResult.syslog_target}</span></span>}
+                        {deployResult.results?.length} running LXC(s). Add an SSH key in the Proxmox configuration to install automatically.
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        {deployResult.results.map((r) => (
+                        {deployResult.results?.map((r) => (
                           <Badge key={r.vmid}>
                             CT {r.vmid} <span className="text-fg-3">{r.name}</span>
                           </Badge>
@@ -363,7 +370,7 @@ export function ProxmoxDetail({ data, configId }: { data: ProxmoxData; configId?
               )}
 
               {/* No mode (message only) */}
-              {!deployResult.mode && deployResult.message && (
+              {(!deployResult.mode || deployResult.mode === 'none') && deployResult.message && (
                 <div className="rounded-ctl border border-warning/30 bg-warning-soft p-3 text-ui text-warning" role="alert">
                   {deployResult.message}
                 </div>

@@ -6,6 +6,7 @@ jinja2==3.1.6
 python-multipart==0.0.32
 apscheduler==3.11.3
 cryptography==50.0.2
+asyncssh==2.24.1
 # Id token verification for single sign-on (ee; owner decision 5, SSO spec).
 PyJWT==2.15.1
 httpx==0.28.1

@@ -269,6 +269,24 @@ it works once. An install token that is not bound to the agent still gets
 The incident detail (`GET /incidents/{id}`) carries `agent_id` for rule
 `agent_silent` (else `null`).
 
+Install over SSH (admin, not through support access, 10 per minute; switched
+by `NODEGLOW_SSH_DEPLOY`, `403 ssh_deploy_disabled` when off;
+`GET /api/enrollment-info` reports `ssh_deploy`):
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/agent-deploy` | Body `{host, port=22, credential_id \| username + password and/or private_key [+ passphrase], sudo_password?, agent_id?, host_key_fingerprint?}`. `202 {run_id, jobs}`. Unknown host: `409 host_key_unknown {fingerprint, key_type, host, port}` without logging in; repeat with `host_key_fingerprint` to trust it. With `agent_id` the token is bound to that agent (reinstall) |
+| GET | `/api/agent-deploy/{run_id}` | `{run_id, done, jobs: [{id, kind, target, agent_id, status, detail, created_at, started_at, finished_at}]}`; `status` is `queued`, `running`, `ok` or `failed`; `detail` is the output tail with tokens reduced to their prefix |
+| GET | `/api/ssh-host-keys` | Confirmed host keys `{keys: [{id, host, port, key_type, fingerprint, created_at, created_by}]}` |
+| DELETE | `/api/ssh-host-keys/{id}` | Forget a host key; the next deploy asks again |
+
+`POST /api/v1/integrations/proxmox/{id}/deploy-agent` (admin session, not an
+API key; body `{host_key_fingerprint?}`): with an SSH key in the integration,
+`202 {mode: "ssh", run_id, jobs}` (same host-key flow); otherwise `200 {mode:
+"script", manual_script}` with a fresh install token valid for two hours.
+Only the containers of the node that answers the API are included; the
+others are listed in `skipped_other_nodes`.
+
 ### Sites
 
 Sites group hosts and probes by location inside a tenant. They filter and

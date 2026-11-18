@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@/types';
@@ -9,11 +10,14 @@ import { AddAgentDialog, issueMoment, type ReinstallTarget } from './AddAgentDia
 
 let container: HTMLDivElement;
 let root: Root;
+// One client for the whole test: a re-render is a poll, not a new app.
+let client: QueryClient;
 
 beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
 });
 
 afterEach(() => {
@@ -24,7 +28,9 @@ afterEach(() => {
 function render(target: ReinstallTarget) {
   act(() => {
     root.render(
-      <AddAgentDialog open onClose={() => {}} agents={[target as Agent]} agent={target} />,
+      <QueryClientProvider client={client}>
+        <AddAgentDialog open onClose={() => {}} agents={[target as Agent]} agent={target} />
+      </QueryClientProvider>,
     );
   });
 }
