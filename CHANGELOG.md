@@ -276,6 +276,16 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- A disabled host no longer raises integration alerts. A UniFi "Device
+  disconnected" (or any integration alert about a device) opened an incident
+  even when that device's host was disabled in the host list, because the
+  alert path only checked maintenance. Now an alert about a disabled host
+  opens no incident, and an open one resolves with "monitoring of host … is
+  disabled", so the history shows why it went quiet. Alerts also find their
+  host without an address: a disconnected UniFi device often reports no IP,
+  so the alert fell back to the controller's host. It is now matched by MAC
+  address, then address, then name, and a MAC or name shared by several
+  hosts matches none of them.
 - "Rising error trend" kept firing for errors that had stopped. The trend was
   fitted to the hours a template occurred in, laid side by side, so the quiet
   hours between and after did not count: six scattered failures of a backup

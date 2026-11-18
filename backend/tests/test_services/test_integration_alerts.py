@@ -30,7 +30,8 @@ class _Alerting(BaseIntegration):
 
     def parse_alerts(self, data: dict) -> list[Alert]:
         return [Alert(severity=a.get("severity", "critical"), title=a["title"],
-                      detail=a.get("detail", ""), entity=a.get("entity", ""), host=a.get("host", ""))
+                      detail=a.get("detail", ""), entity=a.get("entity", ""), host=a.get("host", ""),
+                      mac=a.get("mac", ""), name=a.get("name", ""))
                 for a in data.get("alerts", [])]
 
 
@@ -68,10 +69,11 @@ async def _fail(db, cfg, error="connection refused"):
     return out
 
 
-async def _host(db, name, hostname, ip=None, maintenance=False):
+async def _host(db, name, hostname, ip=None, maintenance=False, enabled=True, mac=None):
     from models.ping import PingHost
 
-    host = PingHost(name=name, hostname=hostname, ip_address=ip, maintenance=maintenance)
+    host = PingHost(name=name, hostname=hostname, ip_address=ip, maintenance=maintenance,
+                    enabled=enabled, mac_address=mac)
     db.add(host)
     await db.commit()
     return host
@@ -280,6 +282,114 @@ async def test_an_open_incident_still_resolves_during_maintenance(db):
     await _ok(db, cfg)
     [inc] = await _incidents(db)
     assert inc.status == "resolved"
+
+
+# -- Disabled hosts and matching without an address ---------------------------
+
+# A UniFi device that dropped off: no IP, only its MAC and name.
+GONE = {"title": "Device disconnected", "entity": "device: 8c:ed:e1:1a:97:42",
+        "mac": "8c:ed:e1:1a:97:42", "name": "B8NSWBridge"}
+
+
+async def test_a_disabled_device_opens_nothing(db):
+    await _host(db, "NAS", "nas.example.com")
+    await _host(db, "pve2", "pve2.example.com", enabled=False)
+    cfg = await _cfg(db)
+    for _ in range(3):
+        await _ok(db, cfg, {"title": "Node offline", "entity": "node: pve2", "host": "pve2.example.com"})
+    assert await _incidents(db) == []
+
+
+async def test_disabling_the_device_resolves_its_open_incident_and_says_why(db, _quiet):
+    bridge = await _host(db, "B8NSWBridge", "b8nswbridge.lan", mac="8C-ED-E1-1A-97-42")
+    cfg = await _cfg(db)
+    for _ in range(2):
+        await _ok(db, cfg, GONE)
+    [inc] = await _incidents(db)
+    assert (inc.status, inc.host_ids) == ("open", f"[{bridge.id}]")
+
+    bridge.enabled = False
+    await db.commit()
+    await _ok(db, cfg, GONE)
+    await db.refresh(inc)
+    assert inc.status == "resolved"
+    from models.incident import IncidentEvent
+    events = (await db.execute(select(IncidentEvent.summary).where(
+        IncidentEvent.incident_id == inc.id, IncidentEvent.event_type == "resolved"))).scalars().all()
+    assert events == ["Resolved: monitoring of host B8NSWBridge is disabled"]
+
+    # Still reported, still disabled: nothing reopens.
+    await _ok(db, cfg, GONE)
+    assert [i.status for i in await _incidents(db)] == ["resolved"]
+
+
+async def test_a_disabled_integration_host_does_not_hide_a_device_alert(db):
+    # Only the device the alert is about counts; the controller's own host
+    # being disabled says nothing about the switch that dropped off.
+    await _host(db, "NAS", "nas.example.com", enabled=False)
+    node = await _host(db, "pve2", "pve2.example.com")
+    cfg = await _cfg(db)
+    for _ in range(2):
+        await _ok(db, cfg, {"title": "Node offline", "entity": "node: pve2", "host": "pve2.example.com"})
+    [inc] = await _incidents(db)
+    assert inc.host_ids == f"[{node.id}]"
+
+
+async def test_a_device_without_address_is_found_by_mac(db):
+    await _host(db, "NAS", "nas.example.com")
+    bridge = await _host(db, "Bridge", "192.0.2.40", mac="8c:ed:e1:1a:97:42")
+    cfg = await _cfg(db)
+    for _ in range(2):
+        await _ok(db, cfg, GONE)
+    [inc] = await _incidents(db)
+    assert inc.host_ids == f"[{bridge.id}]"
+
+
+async def test_a_device_without_address_or_mac_is_found_by_its_unique_name(db):
+    await _host(db, "NAS", "nas.example.com")
+    bridge = await _host(db, "B8NSWBridge", "192.0.2.40", enabled=False)
+    cfg = await _cfg(db)
+    for _ in range(3):
+        await _ok(db, cfg, {**GONE, "mac": ""})
+    assert await _incidents(db) == []
+    bridge.enabled = True
+    await db.commit()
+    await _ok(db, cfg, {**GONE, "mac": ""})
+    [inc] = await _incidents(db)
+    assert inc.host_ids == f"[{bridge.id}]"
+
+
+async def test_an_ambiguous_name_or_mac_matches_no_host(db):
+    nas = await _host(db, "NAS", "nas.example.com")
+    await _host(db, "B8NSWBridge", "192.0.2.40", enabled=False, mac="8c:ed:e1:1a:97:42")
+    await _host(db, "B8NSWBridge", "192.0.2.41", mac="8c:ed:e1:1a:97:42")
+    cfg = await _cfg(db)
+    for _ in range(2):
+        await _ok(db, cfg, GONE)
+    # Not suppressed, and attributed to the integration's own host.
+    [inc] = await _incidents(db)
+    assert (inc.status, inc.host_ids) == ("open", f"[{nas.id}]")
+
+
+def test_device_lookup_order():
+    from types import SimpleNamespace as H
+
+    by_mac = H(id=1, name="sw-a", hostname="sw-a.lan", ip_address="192.0.2.1", mac_address="aa:bb:cc:dd:ee:01")
+    by_ip = H(id=2, name="sw-b", hostname="sw-b.lan", ip_address="192.0.2.2", mac_address=None)
+    index = ia.HostIndex([by_mac, by_ip])
+    # The MAC wins over an address that belongs to another host.
+    assert index.device(Alert(host="192.0.2.2", mac="AA-BB-CC-DD-EE-01")) is by_mac
+    assert index.device(Alert(host="192.0.2.2", mac="00:00:00:00:00:00")) is by_ip
+    assert index.device(Alert(name="SW-B")) is by_ip
+    assert index.device(Alert(mac="not a mac", name="unknown")) is None
+
+
+def test_unifi_reports_mac_and_name_of_a_disconnected_device():
+    from integrations.unifi import UnifiIntegration
+
+    [alert] = UnifiIntegration.parse_alerts(None, {"devices": [
+        {"state": 0, "mac": "8c:ed:e1:1a:97:42", "name": "B8NSWBridge", "ip": "", "type_label": "UDB"}]})
+    assert (alert.host, alert.mac, alert.name) == ("", "8c:ed:e1:1a:97:42", "B8NSWBridge")
 
 
 async def test_nothing_is_announced_before_the_commit(db, _quiet):

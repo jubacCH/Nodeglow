@@ -19,8 +19,11 @@ after a failover the new primary reports the same alerts and must continue the
 open incidents rather than open duplicates.
 
 Incidents name the ping hosts they concern: the device an alert names
-(``Alert.host``), else the integration's own endpoint. A host in maintenance
-opens no new incident; open ones still resolve.
+(``Alert.mac``, ``Alert.host`` or ``Alert.name``, see :meth:`HostIndex.device`),
+else the integration's own endpoint. A host in maintenance opens no new
+incident; open ones still resolve. A device whose monitoring is disabled opens
+none either, and its open incident resolves, saying so: disabled means nobody
+wants to hear about that host.
 
 Notifications are queued on the session and sent by the caller after its
 commit (:func:`take_notifications`, :func:`send_notifications`), outside the
@@ -128,13 +131,28 @@ def endpoint_of(config: dict | None) -> str:
     return ""
 
 
+def _mac(value: str) -> str:
+    """A MAC address as twelve lower-case hex digits, or "" if it is none."""
+    digits = re.sub(r"[:\-.\s]", "", (value or "").lower())
+    return digits if re.fullmatch(r"[0-9a-f]{12}", digits) else ""
+
+
 class HostIndex:
-    """Ping hosts by hostname, IP, name and unambiguous short name."""
+    """Ping hosts by hostname, IP, name and unambiguous short name, and by
+    MAC address and display name where those are unambiguous."""
 
     def __init__(self, hosts):
         self._by: dict[str, object] = {}
         short: dict[str, list] = {}
+        macs: dict[str, list] = {}
+        names: dict[str, list] = {}
         for h in hosts:
+            mac = _mac(getattr(h, "mac_address", None) or "")
+            if mac:
+                macs.setdefault(mac, []).append(h)
+            for value in {(h.name or "").strip().lower(), _bare(h.hostname or "").split(".")[0]}:
+                if value:
+                    names.setdefault(value, []).append(h)
             for value in (h.hostname, h.ip_address, h.name):
                 key = _bare(value or "")
                 if key:
@@ -145,12 +163,32 @@ class HostIndex:
         for label, found in short.items():
             if len(found) == 1:
                 self._by.setdefault(label, found[0])
+        self._macs = {k: v[0] for k, v in macs.items() if len(v) == 1}
+        self._names = {k: v[0] for k, v in names.items() if len({id(h) for h in v}) == 1}
 
     def find(self, value: str):
         key = _bare(value)
         if not key:
             return None
         return self._by.get(key) or self._by.get(key.split(".")[0])
+
+    def device(self, alert):
+        """The ping host an alert's device is, or None.
+
+        The MAC address is tried first (it does not change with DHCP), then
+        the address, then the name. A MAC or name shared by several hosts
+        matches none of them: a wrong host would hide the alert or blame the
+        wrong device.
+        """
+        mac = _mac(getattr(alert, "mac", "") or "")
+        if mac and mac in self._macs:
+            return self._macs[mac]
+        host = getattr(alert, "host", "") or ""
+        found = self.find(host) if host else None
+        if found is not None:
+            return found
+        name = (getattr(alert, "name", "") or "").strip().lower()
+        return self._names.get(name) if name else None
 
 
 async def _host_index(db) -> HostIndex:
@@ -261,7 +299,14 @@ async def evaluate_alerts(db, cfg: IntegrationConfig, instance, data) -> None:
         if index is None:
             index = await _host_index(db)
             own_host = index.find(endpoint_of(getattr(instance, "config", None)))
-        device = index.find(alert.host) if alert.host else None
+        device = index.device(alert)
+        if device is not None and not getattr(device, "enabled", True):
+            # Monitoring of this device is off: open nothing, and close what
+            # is open, naming the reason so the history explains the silence.
+            if key in open_keys:
+                await _resolve(db, open_keys[key],
+                               f"Resolved: monitoring of host {device.name} is disabled")
+            continue
         hosts = [h for h in (device or own_host,) if h is not None]
         if key not in open_keys and await _in_maintenance(db, [device, own_host]):
             continue
