@@ -1362,6 +1362,36 @@ async def refresh_noise_scores(db: AsyncSession) -> int:
 
 TREND_MIN_POINTS = 4       # active hours in the window needed for a trend
 TREND_MIN_TEMPLATE_COUNT = 5
+# A template counts as rising only while it is still being logged: its last
+# active hour must be the current one or the one before.
+TREND_RECENT_HOURS = 2
+
+
+def hourly_series(points: list, now: datetime) -> list[int]:
+    """Hourly counts from the first active hour up to the current one.
+
+    ClickHouse returns only the hours a template occurred in. Fitting a slope
+    to those alone treated them as consecutive: a failure that occurred in
+    six scattered hours, the last of them busier, read as +27 %/h for the
+    next two days although it had stopped (ndbrain-backup, 2026-11-18). The
+    quiet hours in between and since are zeros and are counted as such.
+    Hours before the first occurrence are left out, so a template that only
+    started recently is not "rising" merely for having been absent before.
+    """
+    by_hour: dict[datetime, int] = {}
+    for h, cnt, *_ in points:
+        hour = _naive_utc(h).replace(minute=0, second=0, microsecond=0)
+        by_hour[hour] = by_hour.get(hour, 0) + int(cnt)
+    if not by_hour:
+        return []
+    first = min(by_hour)
+    last = max(_naive_utc(now).replace(minute=0, second=0, microsecond=0), max(by_hour))
+    n = int((last - first).total_seconds() // 3600) + 1
+    return [by_hour.get(first + timedelta(hours=i), 0) for i in range(n)]
+
+
+def _naive_utc(ts: datetime) -> datetime:
+    return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
 
 
 def trend_from_counts(counts: list[int]) -> tuple[str, float]:
@@ -1385,7 +1415,7 @@ def trend_from_counts(counts: list[int]) -> tuple[str, float]:
     return "stable", rel_slope
 
 
-async def compute_severity_trends(db: AsyncSession):
+async def compute_severity_trends(db: AsyncSession, now: datetime | None = None):
     """Detect templates increasing in frequency or escalating severity.
     Updates trend_direction, trend_score, and severity_mode on LogTemplate.
 
@@ -1396,6 +1426,7 @@ async def compute_severity_trends(db: AsyncSession):
     """
     from services import clickhouse_client as ch
 
+    now = now or datetime.utcnow()
     rows = await ch.query(
         """SELECT template_hash,
                   groupArray((h, cnt, avg_sev)) AS points
@@ -1429,9 +1460,12 @@ async def compute_severity_trends(db: AsyncSession):
 
     changes: list[dict] = []
     for h, tpl_id in eligible.items():
-        # groupArray gives no order guarantee; sort the hourly points.
-        points = sorted(points_by_hash[h], key=lambda p: p[0])
-        direction, rel_slope = trend_from_counts([int(p[1]) for p in points])
+        points = points_by_hash[h]
+        series = hourly_series(points, now)
+        direction, rel_slope = trend_from_counts(series)
+        quiet_for = len(series) - 1 - max(i for i, c in enumerate(series) if c)
+        if direction == "rising" and quiet_for >= TREND_RECENT_HOURS:
+            direction, rel_slope = "stable", 0.0
         sevs = [float(p[2]) for p in points if p[2] is not None]
         change = {
             "id": tpl_id,

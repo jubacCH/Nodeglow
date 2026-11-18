@@ -264,6 +264,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- "Rising error trend" kept firing for errors that had stopped. The trend was
+  fitted to the hours a template occurred in, laid side by side, so the quiet
+  hours between and after did not count: six scattered failures of a backup
+  job, the last hour busiest, read as +27 %/h for two days after the cause
+  was fixed. Quiet hours now count as zero from the template's first hour to
+  the current one, and a template is rising only while it was logged in the
+  current or the previous hour.
 -- Ping checks could stop for good. A ping child process the event loop never
   reaped kept `run_ping_checks` waiting forever, and with one instance
   allowed every later run was skipped: no host got a result until the
