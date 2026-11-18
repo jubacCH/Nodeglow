@@ -1,108 +1,275 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Setup – NODEGLOW</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <script nonce="{{ request.state.csp_nonce }}" src="https://cdn.tailwindcss.com"></script>
+  {#
+    Self-contained on purpose: this is the first page of a fresh install and it
+    is served by the backend, not by the Next.js app, so it must not depend on
+    the frontend bundle or on anything from the network (offline installs).
+    Colours and radii are copied from frontend/design-tokens/tokens.json; keep
+    them in sync when the tokens change. Type uses the system font stack, the
+    app font is bundled by Next and not served from here.
+  #}
   <script nonce="{{ request.state.csp_nonce }}">
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            'ng-bg':       '#0B1120',
-            'ng-surface':  '#0F172A',
-            'ng-elevated': '#1E293B',
-            'ng-primary':  '#38BDF8',
-            'ng-accent':   '#A78BFA',
-            'ng-mint':     '#34D399',
-            'ng-success':  '#34D399',
-            'ng-warning':  '#FBBF24',
-            'ng-critical': '#FB7185',
-          },
-          fontFamily: {
-            display: ['"Exo 2"', 'Rajdhani', 'sans-serif'],
-            body:    ['Inter', '"Helvetica Neue"', 'sans-serif'],
-            mono:    ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
-          }
+    // Same rule as the app (frontend/src/lib/theme.ts): stored choice, "system"
+    // follows the OS, anything else is dark. Runs before first paint.
+    (function () {
+      var d = document.documentElement, m = 'dark';
+      try {
+        var s = (JSON.parse(localStorage.getItem('ng-theme') || '{}') || {}).state || {};
+        m = s.colorMode;
+        if (m !== 'light' && m !== 'dark') {
+          m = (m === 'system' && window.matchMedia &&
+               window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
         }
-      }
-    }
+      } catch (e) { m = 'dark'; }
+      d.setAttribute('data-theme', m);
+    })();
   </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ng-bg: #101217;
+      --ng-surface: #181A20;
+      --ng-surface-2: #1F222A;
+      --ng-border: rgba(255, 255, 255, 0.06);
+      --ng-border-2: rgba(255, 255, 255, 0.11);
+      --ng-line: #363A45;
+      --ng-text: #ECEEF2;
+      --ng-text-2: #A2A6B1;
+      --ng-accent: #7C6CFF;
+      --ng-accent-btn: #6656F2;
+      --ng-accent-btn-hover: #5A4AE6;
+      --ng-on-accent: #FFFFFF;
+      --ng-focus: #9488FF;
+      --ng-st-down: #F2545B;
+      --ng-st-down-text: #F46A70;
+      --ng-mark-halo: 0.55;
+      --ng-accent-glow: 0 0 0 1px rgba(124, 108, 255, 0.45), 0 0 18px 0 rgba(124, 108, 255, 0.36);
+      --ng-focus-ring: rgba(148, 136, 255, 0.22);
+      --ng-st-down-soft: rgba(242, 84, 91, 0.13);
+      --ng-st-down-edge: rgba(242, 84, 91, 0.3);
+
+      --ng-radius-ctl: 12px;
+      --ng-radius-chip: 8px;
+      --ng-radius-lg: 24px;
+      --ng-radius-pill: 9999px;
+    }
+    html[data-theme="light"] {
+      color-scheme: light;
+      --ng-bg: #F4F5F8;
+      --ng-surface: #FFFFFF;
+      --ng-surface-2: #F2F3F6;
+      --ng-border: #E3E5EA;
+      --ng-border-2: #D6D9E0;
+      --ng-line: #C9CED7;
+      --ng-text: #191B21;
+      --ng-text-2: #5A5E69;
+      --ng-accent: #5B4BE0;
+      --ng-accent-btn: #5B4BE0;
+      --ng-accent-btn-hover: #4C3CD2;
+      --ng-focus: #5B4BE0;
+      --ng-st-down: #DC3540;
+      --ng-st-down-text: #C42A35;
+      --ng-mark-halo: 0.28;
+      --ng-accent-glow: 0 0 0 3px rgba(91, 75, 224, 0.2);
+      --ng-focus-ring: rgba(91, 75, 224, 0.22);
+      --ng-st-down-soft: rgba(220, 53, 64, 0.13);
+      --ng-st-down-edge: rgba(220, 53, 64, 0.3);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html {
+      /* 1rem = 14px, the app's default root size. */
+      font-size: 14px;
+      -webkit-text-size-adjust: 100%;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      background: var(--ng-bg);
+      color: var(--ng-text);
+      font-family: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 1rem;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap { width: 100%; max-width: 384px; }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 32px;
+      text-align: center;
+    }
+    .lockup { display: block; height: 36px; width: auto; overflow: visible; color: var(--ng-text); }
+    .lockup .pulse { fill: none; stroke: currentColor; stroke-width: 3.4; stroke-linecap: round; stroke-linejoin: round; }
+    .lockup .dot { fill: var(--ng-accent); }
+    .lockup .halo { opacity: var(--ng-mark-halo); }
+    .lockup .halo-0 { stop-color: var(--ng-accent); stop-opacity: 0.9; }
+    .lockup .halo-1 { stop-color: var(--ng-accent); stop-opacity: 0.3; }
+    .lockup .halo-2 { stop-color: var(--ng-accent); stop-opacity: 0; }
+    .brand p { margin: 0; font-size: 0.9286rem; color: var(--ng-text-2); }
+
+    .card {
+      padding: 24px;
+      background: var(--ng-surface);
+      border: 1px solid var(--ng-border);
+      border-radius: var(--ng-radius-lg);
+    }
+    .card h1 { margin: 0; font-size: 1.2143rem; line-height: 1.3; font-weight: 600; }
+    .card .lead { margin: 4px 0 20px; font-size: 0.9286rem; color: var(--ng-text-2); }
+
+    form > * + * { margin-top: 16px; }
+
+    .alert {
+      margin: 0;
+      padding: 8px 12px;
+      font-size: 0.9286rem;
+      color: var(--ng-st-down-text);
+      background: var(--ng-st-down-soft);
+      border: 1px solid var(--ng-st-down-edge);
+      border-radius: var(--ng-radius-ctl);
+      overflow-wrap: anywhere;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.8571rem;
+      font-weight: 500;
+      color: var(--ng-text-2);
+    }
+    input {
+      display: block;
+      width: 100%;
+      min-height: 36px;
+      padding: 7px 12px;
+      font: inherit;
+      font-size: 0.9286rem;
+      line-height: 1.4;
+      color: var(--ng-text);
+      background: var(--ng-surface);
+      border: 1px solid var(--ng-border-2);
+      border-radius: var(--ng-radius-ctl);
+      transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+    }
+    input::placeholder { color: var(--ng-text-2); opacity: 0.7; }
+    input:hover { border-color: var(--ng-line); }
+    input:focus, input:focus-visible {
+      outline: none;
+      border-color: var(--ng-focus);
+      box-shadow: 0 0 0 3px var(--ng-focus-ring);
+    }
+    .hint { margin: 6px 0 0; font-size: 0.8571rem; color: var(--ng-text-2); }
+    /* No monospace face here: names are set off with a chip instead. */
+    code {
+      padding: 1px 4px;
+      font: inherit;
+      color: var(--ng-text);
+      background: var(--ng-surface-2);
+      border-radius: var(--ng-radius-chip);
+      white-space: nowrap;
+    }
+
+    button {
+      display: flex;
+      width: 100%;
+      height: 36px;
+      padding: 0 16px;
+      align-items: center;
+      justify-content: center;
+      font: inherit;
+      font-size: 0.9286rem;
+      font-weight: 500;
+      white-space: nowrap;
+      color: var(--ng-on-accent);
+      background: var(--ng-accent-btn);
+      border: 1px solid var(--ng-accent-btn);
+      border-radius: var(--ng-radius-pill);
+      cursor: pointer;
+      transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+    }
+    button:hover { background: var(--ng-accent-btn-hover); border-color: var(--ng-accent-btn-hover); box-shadow: var(--ng-accent-glow); }
+    button:focus-visible { outline: none; box-shadow: var(--ng-accent-glow); }
+
+    @media (max-width: 400px) {
+      body { align-items: flex-start; padding: 24px 16px; }
+      .card { padding: 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      input, button { transition: none; }
+    }
+  </style>
 </head>
-<body class="min-h-screen flex items-center justify-center px-4 font-body">
+<body>
+  <main class="wrap">
 
-  <!-- Ambient glow orbs -->
-  <div class="ambient-orb ambient-orb-blue"></div>
-  <div class="ambient-orb ambient-orb-violet"></div>
-
-  <div class="relative w-full max-w-sm z-10">
-
-    <!-- Brand block -->
-    <div class="flex flex-col items-center mb-8">
-      <div class="mb-4">
-        <svg width="56" height="56" viewBox="0 0 32 32" fill="none">
-          <defs>
-            <filter id="setup-glow"><feGaussianBlur stdDeviation="1.2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          </defs>
-          <circle cx="16" cy="16" r="11" fill="#38BDF8" opacity="0.05"/>
-          <circle cx="16" cy="16" r="6.5" fill="#38BDF8" opacity="0.7" filter="url(#setup-glow)"/>
-          <circle cx="14.5" cy="14.5" r="2" fill="white" opacity="0.3"/>
-          <circle cx="5" cy="8" r="2.5" fill="#A78BFA" opacity="0.5"/>
-          <circle cx="27" cy="8" r="2.5" fill="#34D399" opacity="0.5"/>
-          <circle cx="5" cy="24" r="2" fill="#34D399" opacity="0.4"/>
-          <circle cx="27" cy="24" r="2" fill="#A78BFA" opacity="0.4"/>
-          <line x1="16" y1="16" x2="5" y2="8" stroke="#38BDF8" stroke-width="0.5" opacity="0.18"/>
-          <line x1="16" y1="16" x2="27" y2="8" stroke="#38BDF8" stroke-width="0.5" opacity="0.18"/>
-          <line x1="16" y1="16" x2="5" y2="24" stroke="#A78BFA" stroke-width="0.4" opacity="0.12"/>
-          <line x1="16" y1="16" x2="27" y2="24" stroke="#A78BFA" stroke-width="0.4" opacity="0.12"/>
-        </svg>
-      </div>
-      <h1 class="ng-display text-lg tracking-[6px] text-[--ng-text-primary]">NODEGLOW</h1>
-      <p class="font-mono text-[10px] text-[--ng-text-muted] tracking-[3px] mt-1">INITIAL SETUP</p>
+    <!-- Brand block: the Puls-N mark with the outlined wordmark, same drawing
+         as Lockup in frontend/src/components/ui/NodeglowMark.tsx. -->
+    <div class="brand">
+      <svg class="lockup" viewBox="1 3 154.5 29" role="img" aria-label="nodeglow" focusable="false">
+        <defs>
+          <radialGradient id="ng-halo" cx="23" cy="8.5" r="8.4" gradientUnits="userSpaceOnUse">
+            <stop offset="0" class="halo-0"/>
+            <stop offset="0.45" class="halo-1"/>
+            <stop offset="1" class="halo-2"/>
+          </radialGradient>
+        </defs>
+        <circle class="halo" cx="23" cy="8.5" r="8.4" fill="url(#ng-halo)"/>
+        <path class="pulse" d="M3.5 19H8.5V7L23 25V16.5"/>
+        <circle class="dot" cx="23" cy="8.5" r="3.5"/>
+        <path transform="translate(30.552 25) scale(0.024658)" fill="currentColor" d="M79 0V-543H189V-310H179Q179.0 -392.5 200.75 -448.0Q222.5 -503.5 266.25 -531.75Q310 -560 374.5 -560.0H380.5Q478 -560 528.0 -497.25Q578.0 -434.5 578.0 -310.5V0H439V-323Q439 -373 410.25 -404.0Q381.5 -435.0 331.5 -435.0Q280.5 -435.0 249.25 -403.25Q218.0 -371.5 218 -319V0ZM962.5 19.0Q891.0 19 836.0 -4.0Q781.0 -27 743.0 -66.25Q705.0 -105.5 685.5 -155.5Q666.0 -205.5 666.0 -260V-281Q666.0 -336.5 686.25 -387.25Q706.5 -438.0 745.0 -477.25Q783.5 -516.5 838.5 -539.25Q893.5 -562.0 962.5 -562.0Q1032.0 -562 1086.75 -539.25Q1141.5 -516.5 1180.0 -477.25Q1218.5 -438.0 1238.75 -387.25Q1259.0 -336.5 1259.0 -281V-260Q1259.0 -205.5 1239.5 -155.5Q1220.0 -105.5 1182.0 -66.25Q1144.0 -27 1089.0 -4.0Q1034.0 19 962.5 19.0ZM962.5 -100.0Q1013.5 -100.0 1048.5 -122.25Q1083.5 -144.5 1101.75 -183.25Q1120.0 -222 1120.0 -270.5Q1120.0 -320.5 1101.25 -359.25Q1082.5 -398.0 1047.25 -420.5Q1012.0 -443 962.5 -443.0Q913.5 -443.0 878.0 -420.5Q842.5 -398.0 823.75 -359.25Q805.0 -320.5 805.0 -270.5Q805.0 -222 823.25 -183.25Q841.5 -144.5 876.75 -122.25Q912.0 -100 962.5 -100.0ZM1581.0 18Q1523.5 18.0 1475.75 -3.0Q1428.0 -24 1393.0 -61.75Q1358.0 -99.5 1339.0 -150.0Q1320.0 -200.5 1320.0 -259.5V-280.5Q1320.0 -339 1338.25 -389.75Q1356.5 -440.5 1390.25 -478.75Q1424.0 -517 1471.25 -538.5Q1518.5 -560.0 1576.5 -560.0Q1640.5 -560.0 1689.25 -532.5Q1738.0 -505 1766.75 -450.0Q1795.5 -395.0 1798.5 -312.0L1757.5 -359.5V-730.0H1896.5V0.0H1786.5V-230.5H1810.5Q1807.5 -148.0 1776.5 -92.5Q1745.5 -37.0 1695.0 -9.5Q1644.5 18.0 1581.0 18ZM1612.0 -99Q1653.0 -99 1686.75 -117.5Q1720.5 -136.0 1741.0 -171.25Q1761.5 -206.5 1761.5 -255.0V-295.0Q1761.5 -342.5 1740.5 -375.25Q1719.5 -408.0 1685.5 -425.5Q1651.5 -443.0 1611.5 -443.0Q1567.0 -443 1532.5 -421.25Q1498.0 -399.5 1478.5 -360.75Q1459.0 -322 1459.0 -270Q1459.0 -218 1478.75 -179.5Q1498.5 -141.0 1533.25 -120.0Q1568.0 -99 1612.0 -99ZM2273.0 19Q2203.0 19 2150.5 -5.0Q2098.0 -29 2063.5 -69.25Q2029.0 -109.5 2011.5 -159.5Q1994.0 -209.5 1994.0 -262V-281Q1994.0 -335 2011.5 -385.25Q2029.0 -435.5 2063.25 -475.25Q2097.5 -515.0 2148.75 -538.5Q2200.0 -562 2267.0 -562Q2355.0 -562 2414.25 -523.25Q2473.5 -484.5 2503.75 -422.25Q2534.0 -360 2534.0 -288V-237.5H2053.0V-322.5H2446.5L2404.0 -281Q2404.0 -333 2388.75 -370.0Q2373.5 -407.0 2343.25 -427.0Q2313.0 -447 2267.0 -447Q2220.5 -447.0 2188.5 -425.75Q2156.5 -404.5 2140.25 -365.25Q2124.0 -326 2124.0 -271Q2124.0 -219.5 2139.75 -180.0Q2155.5 -140.5 2188.5 -118.25Q2221.5 -96.0 2273.0 -96Q2323.5 -96.0 2355.5 -116.5Q2387.5 -137.0 2396.5 -166.5H2524.5Q2513.0 -111 2478.75 -69.0Q2444.5 -27.0 2392.25 -4.0Q2340.0 19 2273.0 19ZM2836.5 214.5Q2797.5 214.5 2757.0 211.5Q2716.5 208.5 2682.0 203.5V87Q2717.5 91.5 2758.75 95.0Q2800.0 98.5 2835.5 98.5Q2903.0 98.5 2944.5 82.25Q2986.0 66 3005.25 31.75Q3024.5 -2.5 3024.5 -56.0V-163.0L3054.5 -231.0Q3052.0 -155.5 3024.0 -103.0Q2996.0 -50.5 2948.0 -23.25Q2900.0 4 2837.0 4Q2781.0 4 2735.25 -16.75Q2689.5 -37.5 2657.0 -74.75Q2624.5 -112.0 2606.75 -161.75Q2589.0 -211.5 2589.0 -268.5V-289.5Q2589.0 -347 2607.5 -396.5Q2626.0 -446 2660.0 -482.75Q2694.0 -519.5 2741.0 -539.75Q2788.0 -560 2845.0 -560Q2911.5 -560.0 2961.0 -531.0Q3010.5 -502.0 3038.75 -446.75Q3067.0 -391.5 3069.5 -312.0L3045.5 -308.0V-543.0H3155.5V-64.0Q3155.5 35.0 3121.75 96.25Q3088.0 157.5 3017.5 186.0Q2947.0 214.5 2836.5 214.5ZM2876.5 -115.0Q2917.0 -115 2950.0 -133.0Q2983.0 -151 3002.75 -185.0Q3022.5 -219.0 3022.5 -266.5V-301.5Q3022.5 -348.0 3002.0 -380.0Q2981.5 -412.0 2948.5 -428.5Q2915.5 -445.0 2877.0 -445Q2833.0 -445 2799.25 -424.5Q2765.5 -404.0 2746.75 -366.75Q2728.0 -329.5 2728.0 -279Q2728.0 -228.5 2747.0 -191.5Q2766.0 -154.5 2799.5 -134.75Q2833.0 -115 2876.5 -115.0ZM3290.0 0V-730H3429.0V0ZM3222.0 -626V-730H3429.0V-626ZM3823.5 19.0Q3752.0 19 3697.0 -4.0Q3642.0 -27 3604.0 -66.25Q3566.0 -105.5 3546.5 -155.5Q3527.0 -205.5 3527.0 -260V-281Q3527.0 -336.5 3547.25 -387.25Q3567.5 -438.0 3606.0 -477.25Q3644.5 -516.5 3699.5 -539.25Q3754.5 -562.0 3823.5 -562.0Q3893.0 -562 3947.75 -539.25Q4002.5 -516.5 4041.0 -477.25Q4079.5 -438.0 4099.75 -387.25Q4120.0 -336.5 4120.0 -281V-260Q4120.0 -205.5 4100.5 -155.5Q4081.0 -105.5 4043.0 -66.25Q4005.0 -27 3950.0 -4.0Q3895.0 19 3823.5 19.0ZM3823.5 -100.0Q3874.5 -100.0 3909.5 -122.25Q3944.5 -144.5 3962.75 -183.25Q3981.0 -222 3981.0 -270.5Q3981.0 -320.5 3962.25 -359.25Q3943.5 -398.0 3908.25 -420.5Q3873.0 -443 3823.5 -443.0Q3774.5 -443.0 3739.0 -420.5Q3703.5 -398.0 3684.75 -359.25Q3666.0 -320.5 3666.0 -270.5Q3666.0 -222 3684.25 -183.25Q3702.5 -144.5 3737.75 -122.25Q3773.0 -100 3823.5 -100.0ZM4403.0 0 4506.0 -525H4666.0L4785.0 0H4675.0L4554.0 -522H4612.0L4504.5 0.0ZM4361.5 0.0 4361.0 -114H4471.5L4472.0 0ZM4306.0 0 4158.0 -543H4293.0L4433.5 0.0ZM4709.5 0.0 4710.0 -114H4820.5L4820.0 0ZM4754.0 0 4878.5 -543.0H5005.0L4873.5 0.0Z"/>
+      </svg>
+      <p>Initial setup</p>
     </div>
 
     <!-- Card -->
-    <div class="glass-elevated p-7">
-      <h2 class="text-base font-semibold text-[--ng-text-primary] ng-heading mb-0.5">Welcome</h2>
-      <p class="text-[--ng-text-muted] text-xs font-mono mb-6">Configure your NODEGLOW instance to get started.</p>
+    <div class="card">
+      <h1>Welcome</h1>
+      <p class="lead">Configure your NODEGLOW instance to get started.</p>
 
-      <form method="post" action="/setup/complete" class="space-y-4">
+      <form method="post" action="/setup/complete">
         {{ csrf_input(request)|safe }}
         {% if error %}
-        <p role="alert" class="text-sm" style="color:#F87171">{{ error }}</p>
+        <p role="alert" class="alert">{{ error }}</p>
         {% endif %}
         <div>
-          <label for="setup_token" class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Setup token</label>
-          <input type="text" id="setup_token" name="setup_token" required autocomplete="off" spellcheck="false"
-                 class="ng-input">
-          <p class="text-xs text-[--ng-text-muted] mt-1.5">
-            Printed by the installer (NODEGLOW_SETUP_TOKEN in .env). Without the installer:
+          <label for="setup_token">Setup token</label>
+          <input type="text" id="setup_token" name="setup_token" required autocomplete="off" spellcheck="false">
+          <p class="hint">
+            Printed by the installer (<code>NODEGLOW_SETUP_TOKEN</code> in <code>.env</code>). Without the installer:
             in the server log, or in the file <code>setup-token</code> in the data directory.
           </p>
         </div>
         <div>
-          <label class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Site name</label>
-          <input type="text" name="site_name" value="NODEGLOW"
-                 class="ng-input">
+          <label for="site_name">Site name</label>
+          <input type="text" id="site_name" name="site_name" value="NODEGLOW">
         </div>
         <div>
-          <label class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Admin username</label>
-          <input type="text" name="username" value="admin" required autocomplete="username"
-                 class="ng-input">
+          <label for="username">Admin username</label>
+          <input type="text" id="username" name="username" value="admin" required autocomplete="username">
         </div>
         <div>
-          <label class="block text-xs text-[--ng-text-muted] font-mono mb-1.5">Admin password</label>
-          <input type="password" name="password" required minlength="8" autocomplete="new-password"
-                 class="ng-input" placeholder="Minimum 8 characters">
+          <label for="password">Admin password</label>
+          <input type="password" id="password" name="password" required minlength="8" autocomplete="new-password"
+                 placeholder="Minimum 8 characters">
         </div>
-        <button type="submit" class="ng-btn ng-btn-primary w-full py-2.5">
-          Get started
-        </button>
+        <button type="submit">Get started</button>
       </form>
     </div>
 
-  </div>
+  </main>
 </body>
 </html>
