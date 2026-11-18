@@ -237,7 +237,12 @@ MARKER_TABLE = "nodeglow_rollup_state"
 BACKFILL_DELAY = timedelta(minutes=10)
 # Backfills read a whole raw table: far longer than the default 30 s.
 BACKFILL_TIMEOUT_SECONDS = 3600
+# The raw sort keys start with the GROUP BY columns (tenant, entity keys,
+# timestamp), so each chunk aggregates in sort order with bounded memory.
 BACKFILL_SETTINGS = "SETTINGS optimize_aggregation_in_order = 1"
+# Days of day-sized chunks beyond the raw TTL (parts expire whole, so a
+# partition can outlive the TTL briefly); older rows go into one last chunk.
+BACKFILL_SLACK_DAYS = 2
 READY_CACHE_SECONDS = 60
 READY_FAILURE_CACHE_SECONDS = 30
 
@@ -364,11 +369,29 @@ async def _backfill(c, source: str, cutoff: datetime) -> None:
             f"ALTER TABLE {table} DELETE WHERE bucket < toDateTime('{_cut(cutoff)[:19]}', 'UTC') "
             "SETTINGS mutations_sync = 2"
         )
-        select = select_aggregates(source, lv, where=f"timestamp < {cutoff_expr(cutoff)}")
-        # The raw sort keys start with the GROUP BY columns (tenant, entity
-        # keys, timestamp), so aggregating in sort order keeps memory flat:
-        # without it 30 days of 500 hosts exceeded the memory limit.
-        await c.command(f"INSERT INTO {table} ({cols}) {select} {BACKFILL_SETTINGS}")
+        for where in _backfill_chunks(source, cutoff):
+            select = select_aggregates(source, lv, where=where)
+            await c.command(f"INSERT INTO {table} ({cols}) {select} {BACKFILL_SETTINGS}")
+
+
+def _backfill_chunks(source: str, cutoff: datetime) -> list[str]:
+    """WHERE clauses that split everything before ``cutoff`` into UTC days.
+
+    One INSERT over a whole raw table (30 days of 500 hosts) ran out of memory:
+    aggregating in sort order bounds the SELECT, but the aggregate states of
+    the whole range pile up on the insert side. A day per INSERT bounds both.
+    The cutoff is a UTC midnight and every level's buckets align to it, so no
+    bucket is split across chunks. The first chunk is open-ended: it takes the
+    few rows older than the raw TTL that whole-part expiry has not dropped yet.
+    """
+    days = RAW_TTL_HOURS[source] // 24 + BACKFILL_SLACK_DAYS
+    start = _utc(cutoff) - timedelta(days=days)
+    chunks = [f"timestamp < {cutoff_expr(start)}"]
+    for i in range(days):
+        lo = start + timedelta(days=i)
+        chunks.append(f"timestamp >= {cutoff_expr(lo)} "
+                      f"AND timestamp < {cutoff_expr(lo + timedelta(days=1))}")
+    return chunks
 
 
 async def maintain(c=None, now: datetime | None = None) -> dict[str, str]:

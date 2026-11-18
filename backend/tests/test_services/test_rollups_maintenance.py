@@ -1,5 +1,5 @@
 """Rollup maintenance against a recording fake client (no server)."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -125,8 +125,9 @@ async def test_backfill_waits_ten_minutes_after_cutoff(monkeypatch):
             delete = fake.index_of(f"ALTER TABLE {table} DELETE WHERE bucket < toDateTime('2026-11-19 00:00:00'")
             insert = fake.index_of(f"INSERT INTO {table} (")
             assert delete < insert
-            sql = fake.matching(f"INSERT INTO {table} (")[0]
-            assert f"FROM {source} WHERE timestamp < toDateTime64('2026-11-19 00:00:00.000', 3, 'UTC') GROUP BY" in sql
+            sql = fake.matching(f"INSERT INTO {table} (")[-1]  # the last day chunk
+            assert f"FROM {source} WHERE " in sql
+            assert "AND timestamp < toDateTime64('2026-11-19 00:00:00.000', 3, 'UTC') GROUP BY" in sql
         assert fake.marker[source] == (CUTOFF, True)
     assert fake.matching("mutations_sync = 2")
     # the marker is flipped only after all three levels of that source
@@ -427,8 +428,37 @@ async def test_backfill_aggregates_in_sort_order(monkeypatch):
     await rollups.maintain(fake, now=T_CREATE)
     await rollups.maintain(fake, now=datetime(2026, 11, 19, 0, 11))
     inserts = [s for s in fake.log if s.startswith("INSERT INTO") and " GROUP BY " in s]
-    assert len(inserts) == 9
+    assert inserts
     assert all(s.endswith("SETTINGS optimize_aggregation_in_order = 1") for s in inserts)
+
+
+@pytest.mark.parametrize("source,days", [("ping_checks", 30), ("agent_metrics", 7),
+                                         ("bandwidth_metrics", 7)])
+async def test_backfill_runs_in_day_chunks_up_to_the_cutoff(monkeypatch, source, days):
+    """One INSERT per UTC day keeps each insert bounded (one INSERT over 30 days
+    of 500 hosts ran out of memory); the chunks must cover everything before the
+    cutoff exactly once: one open-ended chunk for rows older than the raw TTL
+    (plus slack), then contiguous days ending at the cutoff."""
+    rebuild(monkeypatch, ALL_REBUILT)
+    fake = FakeCH()
+    await rollups.maintain(fake, now=T_CREATE)
+    await rollups.maintain(fake, now=datetime(2026, 11, 19, 0, 11))
+    for lv in rollups.LEVELS:
+        table = rollups.rollup_table(source, lv.key)
+        wheres = [s.split(" WHERE ", 1)[1].split(" GROUP BY ")[0]
+                  for s in fake.log if s.startswith(f"INSERT INTO {table} (")]
+        n_days = days + rollups.BACKFILL_SLACK_DAYS
+        assert len(wheres) == n_days + 1
+        first = (CUTOFF - timedelta(days=n_days))
+        assert wheres[0] == f"timestamp < {rollups.cutoff_expr(first)}"
+        for i, where in enumerate(wheres[1:]):
+            lo = first + timedelta(days=i)
+            hi = lo + timedelta(days=1)
+            assert where == (f"timestamp >= {rollups.cutoff_expr(lo)} "
+                             f"AND timestamp < {rollups.cutoff_expr(hi)}")
+        assert wheres[-1].endswith(f"timestamp < {rollups.cutoff_expr(CUTOFF)}")
+        # the cleanup of an interrupted run still precedes every insert of the level
+        assert fake.index_of(f"ALTER TABLE {table} DELETE") < fake.index_of(f"INSERT INTO {table} (")
 
 
 async def test_warning_when_tenant_grants_are_left_to_the_operator(monkeypatch, caplog):
