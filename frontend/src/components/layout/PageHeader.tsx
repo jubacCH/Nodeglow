@@ -12,7 +12,7 @@ interface PageHeaderProps {
   status?: ReactNode;
 }
 
-/** Page title row (E3 `.phead`): Sora 24px, actions right, wraps on mobile. */
+/** Page title row (E3 `.phead`): 24px semibold, actions right, wraps on mobile. */
 export function PageHeader({ title, description, actions, status }: PageHeaderProps) {
   return (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-4">

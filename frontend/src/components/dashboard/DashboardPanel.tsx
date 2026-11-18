@@ -41,7 +41,7 @@ function Stats({ items }: { items: [ReactNode, string][] }) {
     <div className="grid grid-cols-3 gap-2">
       {items.map(([v, k]) => (
         <div key={k} className="min-w-0 rounded-ctl bg-surface-2 px-3 py-2.5">
-          <div className="num truncate font-display text-[1.3571rem] font-medium leading-tight tracking-[-0.035em] text-fg">{v}</div>
+          <div className="num truncate font-display text-[1.3571rem] font-medium leading-tight tracking-[-0.02em] text-fg">{v}</div>
           <div className="text-micro text-fg-2">{k}</div>
         </div>
       ))}

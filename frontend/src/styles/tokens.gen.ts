@@ -87,6 +87,7 @@ export const ngSharedTokenNames = [
   "font-ui",
   "font-display",
   "font-mono",
+  "font-code",
   "fs-micro",
   "fs-meta",
   "fs-ui",
@@ -278,9 +279,10 @@ export const ngTokensRaw = {
     "radius-chip": "8px",
     "radius-lg": "24px",
     "radius-pill": "9999px",
-    "font-ui": "var(--font-inter-tight), var(--font-inter-tight-ext), \"Inter Tight\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
-    "font-display": "var(--font-sora), var(--font-sora-ext), \"Sora\", var(--font-inter-tight), var(--font-inter-tight-ext), \"Segoe UI Variable Display\", \"Segoe UI\", system-ui, sans-serif",
-    "font-mono": "var(--font-jetbrains-mono), var(--font-jetbrains-mono-ext), \"JetBrains Mono\", ui-monospace, \"SF Mono\", \"Cascadia Mono\", Consolas, monospace",
+    "font-ui": "var(--font-figtree), var(--font-figtree-ext), \"Figtree\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
+    "font-display": "var(--font-figtree), var(--font-figtree-ext), \"Figtree\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
+    "font-mono": "var(--font-figtree), var(--font-figtree-ext), \"Figtree\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
+    "font-code": "ui-monospace, \"SF Mono\", \"Cascadia Mono\", \"Segoe UI Mono\", Menlo, Consolas, \"Liberation Mono\", monospace",
     "fs-micro": "0.7857rem",
     "fs-meta": "0.8571rem",
     "fs-ui": "0.9286rem",
@@ -324,7 +326,7 @@ export const ngRadius = {
 } as const;
 
 export const ngFont = {
-  "sans": "var(--font-inter-tight), var(--font-inter-tight-ext), \"Inter Tight\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
-  "display": "var(--font-sora), var(--font-sora-ext), \"Sora\", var(--font-inter-tight), var(--font-inter-tight-ext), \"Segoe UI Variable Display\", \"Segoe UI\", system-ui, sans-serif",
-  "mono": "var(--font-jetbrains-mono), var(--font-jetbrains-mono-ext), \"JetBrains Mono\", ui-monospace, \"SF Mono\", \"Cascadia Mono\", Consolas, monospace"
+  "sans": "var(--font-figtree), var(--font-figtree-ext), \"Figtree\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
+  "display": "var(--font-figtree), var(--font-figtree-ext), \"Figtree\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif",
+  "mono": "var(--font-figtree), var(--font-figtree-ext), \"Figtree\", \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, -apple-system, sans-serif"
 } as const;

@@ -115,7 +115,7 @@ export function AddAgentDialog({ open, onClose, agents }: AddAgentDialogProps) {
           <div className="relative">
             <pre
               aria-label={`${platform === 'linux' ? 'Linux' : 'Windows'} install command`}
-              className="overflow-x-auto whitespace-pre-wrap break-all rounded-ctl border border-border bg-surface-2 p-4 pr-10 font-mono text-meta text-fg"
+              className="overflow-x-auto whitespace-pre-wrap break-all rounded-ctl border border-border bg-surface-2 p-4 pr-10 font-code text-meta text-fg"
             >
               {command}
             </pre>

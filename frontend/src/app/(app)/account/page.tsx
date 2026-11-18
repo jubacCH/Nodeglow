@@ -176,7 +176,7 @@ function TwoFactorCard() {
                     </span>
                     <span className="mt-2 block text-meta text-fg-3">Cannot scan? Enter this setup key in the app instead:</span>
                     <span className="mt-1 flex items-center gap-2">
-                      <code className="rounded-chip bg-surface-2 px-2 py-1 font-mono text-ui text-fg">{formatSecret(setup.secret)}</code>
+                      <code className="rounded-chip bg-surface-2 px-2 py-1 font-code text-ui text-fg">{formatSecret(setup.secret)}</code>
                       <CopyButton text={setup.secret} />
                     </span>
                     <a href={setup.otpauth_uri} className="mt-1.5 inline-block text-meta font-medium text-accent hover:text-accent-hover">

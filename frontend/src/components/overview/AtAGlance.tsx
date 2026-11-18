@@ -28,7 +28,7 @@ export function OverviewHero({ open, counts, health, slv, updated }: {
     <section aria-labelledby="overview-title" className="mb-5 flex flex-wrap items-end justify-between gap-x-5 gap-y-3">
       <div className="min-w-0">
         <p className="mb-1.5 text-meta text-fg-2">{updated}</p>
-        <h1 id="overview-title" className="font-display text-[clamp(26px,3vw,38px)] font-medium leading-tight tracking-[-0.04em] text-fg">
+        <h1 id="overview-title" className="font-display text-[clamp(26px,3vw,38px)] font-medium leading-tight tracking-[-0.03em] text-fg">
           {open === null ? 'Overview' : open === 0 ? 'No incident needs you' : (
             <>
               {open}{' '}

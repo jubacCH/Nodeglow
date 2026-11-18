@@ -20,7 +20,7 @@ export interface BigNumberProps {
 const sizes = { sm: 'text-num-sm', md: 'text-num', lg: 'text-num-lg' } as const;
 
 /**
- * Key figure in Sora with tabular numerals (E3 `.big`). Units sit in the UI
+ * Key figure in the display face with tabular numerals (E3 `.big`). Units sit in the UI
  * font, smaller and muted.
  */
 export function BigNumber({ value, unit, label, size = 'md', state, stale, className }: BigNumberProps) {
@@ -29,7 +29,7 @@ export function BigNumber({ value, unit, label, size = 'md', state, stale, class
     <div className={cn('min-w-0', className)}>
       <div
         className={cn(
-          'num font-display font-medium leading-[1.05] tracking-[-0.045em]',
+          'num font-display font-medium leading-[1.05] tracking-[-0.02em]',
           sizes[size],
           empty ? 'text-fg-3' : state ? STATE_TEXT[state] : 'text-fg',
           stale && 'opacity-60',
