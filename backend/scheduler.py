@@ -1010,8 +1010,10 @@ async def run_rollup_maintenance():
 
     try:
         await ch.get_client()
-    except Exception as exc:
-        logger.warning("Rollup maintenance skipped, ClickHouse unreachable: %s", exc)
+    except (ch.ClickHouseUnreachable, OSError) as exc:
+        # No connection at all: not a rollup failure, ClickHouse has its own
+        # checks. Anything else (e.g. an incomplete schema) propagates.
+        logger.warning("Rollup maintenance skipped, no ClickHouse connection: %s", exc)
         return
     states = await rollups.maintain()
     if any(v in ("created", "backfilled") for v in states.values()):

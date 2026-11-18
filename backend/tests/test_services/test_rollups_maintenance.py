@@ -27,6 +27,8 @@ class FakeCH:
         self.log.append(sql)
         if self.fail_on and self.fail_on in sql:
             raise RuntimeError("boom")
+        if sql.startswith("DROP VIEW IF EXISTS "):
+            self.existing.discard(sql.split()[-1])
         for kw in ("CREATE TABLE IF NOT EXISTS ", "CREATE MATERIALIZED VIEW IF NOT EXISTS "):
             if sql.startswith(kw):
                 self.existing.add(sql[len(kw):].split()[0])
@@ -57,6 +59,7 @@ class FakeCH:
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setattr(ch, "CLICKHOUSE_TENANT_URL", "")
+    monkeypatch.setattr(ch, "PROVISION_TENANT_USER", True)
     rollups._ready_cache.clear()
     return None
 
@@ -205,6 +208,20 @@ async def test_tenant_user_provisioned_once_after_create(monkeypatch):
     assert fake.index_of("PROVISION") > last_ddl
 
 
+async def test_provisioning_skipped_when_operator_manages_access(monkeypatch):
+    rebuild(monkeypatch, ALL_REBUILT)
+    monkeypatch.setattr(ch, "CLICKHOUSE_TENANT_URL", "http://t:t@h/db")
+    monkeypatch.setattr(ch, "PROVISION_TENANT_USER", False)
+    calls = []
+
+    async def fake_provision(*a, **k):
+        calls.append(1)
+
+    monkeypatch.setattr(ch, "provision_tenant_user", fake_provision)
+    out = await rollups.maintain(FakeCH(), now=T_CREATE)
+    assert set(out.values()) == {"created"} and not calls
+
+
 async def test_provisioning_failure_raises_and_is_retried(monkeypatch):
     rebuild(monkeypatch, ALL_REBUILT)
     monkeypatch.setattr(ch, "CLICKHOUSE_TENANT_URL", "http://t:t@h/db")
@@ -292,6 +309,46 @@ async def test_job_skips_quietly_when_clickhouse_is_unreachable(monkeypatch):
     await scheduler.run_rollup_maintenance()
 
 
+async def test_job_raises_on_incomplete_schema(monkeypatch):
+    """Only a missing connection is skipped; a broken schema is a failure."""
+    import scheduler
+
+    async def broken():
+        raise ch.SchemaIncomplete("ClickHouse schema incomplete: x")
+
+    monkeypatch.setattr(ch, "get_client", broken)
+    with pytest.raises(ch.SchemaIncomplete):
+        await scheduler.run_rollup_maintenance()
+
+
+async def test_get_client_distinguishes_schema_failure_from_no_connection(monkeypatch):
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(ch.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(ch, "_client", None)
+
+    async def refuse(dsn, **kw):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(ch, "connect", refuse)
+    with pytest.raises(ch.ClickHouseUnreachable):
+        await ch.get_client()
+
+    async def connected(dsn, **kw):
+        return object()
+
+    async def bad_schema(client):
+        raise ch.SchemaIncomplete("ClickHouse schema incomplete: y")
+
+    monkeypatch.setattr(ch, "connect", connected)
+    monkeypatch.setattr(ch, "_ensure_schemas", bad_schema)
+    with pytest.raises(RuntimeError) as exc:
+        await ch.get_client()
+    assert not isinstance(exc.value, ch.ClickHouseUnreachable)
+    assert isinstance(exc.value.__cause__, ch.SchemaIncomplete)
+
+
 def test_job_is_registered_every_ten_minutes():
     import inspect as _inspect
 
@@ -299,3 +356,64 @@ def test_job_is_registered_every_ten_minutes():
 
     src = _inspect.getsource(scheduler)
     assert 'add_job(run_rollup_maintenance, "interval", minutes=10' in src
+
+
+async def test_ready_failure_is_cached_briefly(monkeypatch):
+    calls = []
+
+    class Broken:
+        async def query(self, *a, **k):
+            calls.append(1)
+            raise ConnectionError("down")
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(rollups.time, "monotonic", lambda: clock["t"])
+    assert not await rollups.ready("ping_checks", Broken())
+    assert not await rollups.ready("ping_checks", Broken())
+    assert len(calls) == 1  # second call served from the negative cache
+    clock["t"] += 31
+    assert not await rollups.ready("ping_checks", Broken())
+    assert len(calls) == 2
+
+
+async def test_midnight_race_moves_cutoff_when_creation_crosses_it(monkeypatch):
+    """A run that starts before 00:00 UTC but creates the views after it must not
+    leave a gap between the cutoff and the views."""
+    rebuild(monkeypatch, ALL_REBUILT)
+    fake = FakeCH()
+    real = rollups.time.monotonic
+    ticks = {"n": 0}
+
+    def slow_clock():
+        # first reading (run start) then every later reading is 90 s later
+        ticks["n"] += 1
+        return 0.0 if ticks["n"] == 1 else 90.0
+
+    monkeypatch.setattr(rollups.time, "monotonic", slow_clock)
+    out = await rollups.maintain(fake, now=datetime(2026, 11, 18, 23, 59, 0))
+    monkeypatch.setattr(rollups.time, "monotonic", real)
+    assert set(out.values()) == {"created"}
+    new_cut = datetime(2026, 11, 20, tzinfo=timezone.utc)
+    assert fake.marker["ping_checks"] == (new_cut, False)
+    # final views of every level carry the moved cutoff
+    for source in rollups.SOURCES:
+        for lv in rollups.LEVELS:
+            last = fake.matching("CREATE MATERIALIZED VIEW", f"{source}_{lv.key}_mv")[-1]
+            assert "2026-11-20 00:00:00.000" in last
+
+
+async def test_repair_recreates_all_three_views_on_one_cutoff(monkeypatch):
+    rebuild(monkeypatch, ALL_REBUILT)
+    fake = FakeCH()
+    await rollups.maintain(fake, now=T_CREATE)
+    fake.existing.discard("ping_checks_1h_mv")  # one view lost
+    fake.log.clear()
+    out = await rollups.maintain(fake, now=datetime(2026, 11, 19, 3, 0))  # past the cutoff
+    assert out["ping_checks"] == "created"
+    assert len(fake.matching("DROP VIEW IF EXISTS ping_checks_")) == 3
+    cutoffs = {
+        s.split("timestamp >= toDateTime64('")[1][:23]
+        for s in fake.matching("CREATE MATERIALIZED VIEW", "ping_checks_")
+    }
+    assert cutoffs == {"2026-11-20 00:00:00.000"}
+    assert fake.marker["ping_checks"][0] == datetime(2026, 11, 20, tzinfo=timezone.utc)

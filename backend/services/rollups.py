@@ -233,6 +233,7 @@ BACKFILL_DELAY = timedelta(minutes=10)
 # Backfills read a whole raw table: far longer than the default 30 s.
 BACKFILL_TIMEOUT_SECONDS = 3600
 READY_CACHE_SECONDS = 60
+READY_FAILURE_CACHE_SECONDS = 30
 
 _MARKER_DDL = f"""
     CREATE TABLE IF NOT EXISTS {MARKER_TABLE}
@@ -254,7 +255,7 @@ class RollupState:
     backfilled: bool
 
 
-_ready_cache: dict[str, tuple[float, bool]] = {}
+_ready_cache: dict[str, tuple[float, bool]] = {}  # source -> (expires at, answer)
 _last_updated: datetime | None = None
 
 
@@ -293,18 +294,20 @@ async def state(c=None) -> dict[str, RollupState]:
 
 async def ready(source: str, c=None) -> bool:
     """Created and backfilled: readers may use the rollup tables. Any error
-    reads as "not ready" (raw fallback); the answer is cached for 60 s."""
+    reads as "not ready" (raw fallback). Answers are cached for 60 s, errors
+    for 30 s (a down server must not be retried on every reader call)."""
     hit = _ready_cache.get(source)
     now = time.monotonic()
-    if hit is not None and now - hit[0] < READY_CACHE_SECONDS:
+    if hit is not None and now < hit[0]:
         return hit[1]
     try:
         rs = (await state(c)).get(source)
     except Exception:
         log.warning("rollup state unreadable, reading raw tables", exc_info=True)
+        _ready_cache[source] = (now + READY_FAILURE_CACHE_SECONDS, False)
         return False
     ok = rs is not None and rs.cutoff is not None and rs.backfilled
-    _ready_cache[source] = (now, ok)
+    _ready_cache[source] = (now + READY_CACHE_SECONDS, ok)
     return ok
 
 
@@ -365,7 +368,40 @@ async def maintain(c=None, now: datetime | None = None) -> dict[str, str]:
                     await closed
 
 
+async def _setup_source(c, source: str, cutoff: datetime, now: datetime, started: float,
+                        views_missing: bool) -> tuple[datetime, bool]:
+    """Tables and views of one source, all three views on one cutoff.
+
+    Returns ``(cutoff, recreated)``. Views are only ever created together: when
+    any is missing the rest is dropped and all three are created with the
+    marker's cutoff (``IF NOT EXISTS`` would keep an old cutoff on a survivor
+    and the levels would disagree). After creating them the clock is checked:
+    if the cutoff has already passed, rows between it and the creation are in
+    neither view nor backfill, so the cutoff moves to the next midnight and the
+    views are created again. ``now`` plus the time elapsed since the run began
+    is the clock, so a view is provably created before its cutoff.
+    """
+    recreated = False
+    for _ in range(3):
+        for lv in LEVELS:
+            await c.command(table_ddl(source, lv))
+        if views_missing:
+            for lv in LEVELS:
+                await c.command(f"DROP VIEW IF EXISTS {rollup_table(source, lv.key)}_mv")
+            for lv in LEVELS:
+                await c.command(view_ddl(source, lv, cutoff))
+            recreated = True
+            current = now + timedelta(seconds=time.monotonic() - started)
+            if current >= cutoff:
+                cutoff = _next_midnight(current)
+                await _write_marker(c, source, cutoff, False)
+                continue  # views exist now, but with the stale cutoff
+        return cutoff, recreated
+    raise RuntimeError(f"rollup views of {source} could not be created before their cutoff")
+
+
 async def _maintain(c, now: datetime, ch, clickhouse_rebuild) -> dict[str, str]:
+    started = time.monotonic()
     rebuilt = await clickhouse_rebuild.status(c)
     await c.command(_MARKER_DDL)
     marks = await state(c)
@@ -384,31 +420,31 @@ async def _maintain(c, now: datetime, ch, clickhouse_rebuild) -> dict[str, str]:
         names = _objects(source)
         present = await _present(c, names)
         missing = [n for n in names if n not in present]
+        views_missing = any(n.endswith("_mv") for n in missing)
         if mark is None:
             cutoff = _next_midnight(now)
             await _write_marker(c, source, cutoff, False)
+            views_missing = True
         else:
             cutoff = mark.cutoff
-            if any(n.endswith("_mv") for n in missing) and now >= cutoff:
+            if views_missing and now >= cutoff:
                 # Views missing after the cutoff: rows since then would be in
                 # neither the views nor the backfill. Start over from the next
                 # midnight; the backfill clears what is below it first.
                 cutoff = _next_midnight(now)
                 await _write_marker(c, source, cutoff, False)
-        for lv in LEVELS:
-            await c.command(table_ddl(source, lv))
-        for lv in LEVELS:
-            await c.command(view_ddl(source, lv, cutoff))
+        cutoff, recreated = await _setup_source(c, source, cutoff, now, started, views_missing)
         touched = True
-        if mark is None or missing:
+        if mark is None or missing or recreated:
             out[source] = "created"
         else:
             pending[source] = cutoff
 
-    if touched and ch.CLICKHOUSE_TENANT_URL:
+    if touched and ch.CLICKHOUSE_TENANT_URL and ch.PROVISION_TENANT_USER:
         # Grants and row policies for the new tables; without them the
         # restricted tenant user fails with ACCESS_DENIED. Repeated every run
-        # until the backfill is done, so a failure here is retried.
+        # until the backfill is done, so a failure here is retried. Skipped
+        # for operators who manage ClickHouse access themselves.
         await ch.provision_tenant_user(c, ch.CLICKHOUSE_TENANT_URL)
 
     for source, cutoff in pending.items():

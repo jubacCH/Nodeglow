@@ -380,6 +380,14 @@ async def connect(dsn: str, *, send_receive_timeout: int = 30, database: str | N
     )
 
 
+class SchemaIncomplete(RuntimeError):
+    """A required CREATE TABLE / step-A ALTER failed: the server answers, the schema is not usable."""
+
+
+class ClickHouseUnreachable(RuntimeError):
+    """No connection could be made (as opposed to a connected server with a broken schema)."""
+
+
 async def get_client():
     """Return (or lazily create) the main async ClickHouse client.
 
@@ -392,6 +400,7 @@ async def get_client():
     async with _client_lock:
         if _client is not None:
             return _client
+        last_error: Exception | None = None
         for attempt in range(1, 6):
             try:
                 client = await connect(CLICKHOUSE_URL)
@@ -404,6 +413,7 @@ async def get_client():
                 _client = client
                 return _client
             except Exception as e:
+                last_error = e
                 log.warning("ClickHouse connect attempt %d failed: %s", attempt, e)
                 try:
                     from services.metrics import CLICKHOUSE_CONNECTION_ERRORS
@@ -412,7 +422,9 @@ async def get_client():
                     pass
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
-        raise RuntimeError("Could not connect to ClickHouse after 5 attempts")
+        if isinstance(last_error, SchemaIncomplete):
+            raise RuntimeError("Could not connect to ClickHouse after 5 attempts") from last_error
+        raise ClickHouseUnreachable("Could not connect to ClickHouse after 5 attempts") from last_error
 
 
 def allow_custom_setting(client, name: str) -> None:
@@ -647,7 +659,7 @@ async def _ensure_schemas(client) -> None:
             if ddl in _STEP_A_ALTERS:
                 required_failed.append(ddl)
     if required_failed:
-        raise RuntimeError(f"ClickHouse schema incomplete: {'; '.join(required_failed)}")
+        raise SchemaIncomplete(f"ClickHouse schema incomplete: {'; '.join(required_failed)}")
     # The step-B rebuild stops (TTL) merges on a table for its cutover. Had the
     # process died in between, nothing else would start them again (the
     # blocker lives until the ClickHouse server restarts): the table would
