@@ -351,6 +351,7 @@ PARAM_TABLE = {
     "run_id": "agent_deploy_jobs",
     "probe_id": "agents",
     "command_id": "agent_commands",
+    "credential_id": "probe_credentials",
     "host_key_id": "ssh_host_keys",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",

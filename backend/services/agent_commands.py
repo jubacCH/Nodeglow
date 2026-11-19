@@ -8,6 +8,8 @@ results are stored redacted.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import re
@@ -17,10 +19,11 @@ from sqlalchemy import select, update
 
 from models.agent_deploy import AgentCommand, AgentDeployJob
 from services import seal_keys
+from services.audit import log_action
 
 log = logging.getLogger(__name__)
 
-OPS = frozenset({"ssh_host_key", "deploy_agent"})
+OPS = frozenset({"ssh_host_key", "deploy_agent", "rotate_seal_key"})
 TTL = timedelta(minutes=10)
 # A deploy run of many containers goes out five per heartbeat and installs
 # one after another on the probe: give the last of them time.
@@ -165,8 +168,22 @@ async def apply_results(db, agent, results, now: datetime | None = None) -> None
     for cmd in cmds:
         answer = answers[cmd.id]
         result = answer.get("result") if isinstance(answer.get("result"), dict) else {}
+        status = answer["status"]
+        if cmd.op == "rotate_seal_key" and status == "ok":
+            # The answer is the probe's new sealing key: trust it (the admin
+            # asked for the rotation) and keep only its fingerprint.
+            key = seal_keys.parse_report({"suite": seal_keys.SUITE,
+                                          "public_key": result.get("public_key")})
+            if key is None:
+                status, result = "failed", {"detail": "The probe answered without a valid key."}
+            else:
+                seal_keys.trust(agent, key, cmd.created_by)
+                agent.seal_key_reported = key
+                result = {"fingerprint": seal_keys.fingerprint(key)}
+                await log_action(db, None, "probe.seal_key.trust", "agent", agent.id, agent.name,
+                                 {"fingerprint": result["fingerprint"], "rotation": True})
         text = redact(json.dumps(result))[:RESULT_LIMIT]
-        cmd.status, cmd.result, cmd.finished_at = answer["status"], text, now
+        cmd.status, cmd.result, cmd.finished_at = status, text, now
     by_id = {c.id: c for c in cmds}
     for job in await _jobs_of(db, list(by_id)):
         cmd = by_id[job.command_id]
@@ -177,6 +194,35 @@ async def apply_results(db, agent, results, now: datetime | None = None) -> None
         job.status = "ok" if cmd.status == "ok" else "failed"
         job.detail = redact(str(detail))[-2000:] if detail else None
         job.finished_at = now
+
+
+_ENVELOPE_KEYS = frozenset({"v", "suite", "key", "enc", "ct"})
+_FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+MAX_ENVELOPE = 32768
+
+
+def validate_envelope(raw) -> dict | None:
+    """Shape check of a sealed envelope (the server cannot open it): the clean
+    five-key dict, or None."""
+    if not isinstance(raw, dict) or set(raw) != _ENVELOPE_KEYS:
+        return None
+    if raw["v"] != 1 or isinstance(raw["v"], bool) or raw["suite"] != seal_keys.SUITE:
+        return None
+    key, enc, ct = raw["key"], raw["enc"], raw["ct"]
+    if not isinstance(key, str) or not _FINGERPRINT.match(key):
+        return None
+    if not isinstance(enc, str) or not isinstance(ct, str):
+        return None
+    try:
+        if len(base64.b64decode(enc, validate=True)) != 32:
+            return None
+        if not base64.b64decode(ct, validate=True):
+            return None
+        if len(json.dumps(raw).encode()) > MAX_ENVELOPE:
+            return None
+    except (binascii.Error, ValueError, TypeError):
+        return None
+    return {"v": 1, "suite": raw["suite"], "key": key, "enc": enc, "ct": ct}
 
 
 def sanitize_capability(raw) -> str | None:
