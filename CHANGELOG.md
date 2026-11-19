@@ -321,6 +321,13 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- The update from the UI (git installs) failed at "Build images" with "the
+  classic builder doesn't support additional contexts": the updater's Docker
+  CLI had no buildx plugin, and the backend image is built with the `ee`
+  context. The updater image now ships buildx (and checks it when built), and
+  the preflight refuses an update without it before the backup and the pull.
+  An existing updater has to be rebuilt once by hand
+  (`docker compose build updater && docker compose up -d updater`).
 - The "Reinstall agent" dialog never offered "Through a probe". The agent and
   incident pages hand the dialog only the agent being reinstalled, so no probe
   was ever in its list. The dialog now reads the agent list itself.

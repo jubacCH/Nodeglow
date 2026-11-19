@@ -1,4 +1,4 @@
-# Bundled Go binaries (cosign, docker CLI, compose) are scanned by the release
+# Bundled Go binaries (cosign, docker CLI, compose, buildx) are scanned by the release
 # Trivy gate; keep them on releases built with a current Go toolchain.
 # cosign verifies release image signatures in image update mode
 # (NODEGLOW_UPDATE_MODE=image, see image_update.py). Taken from the official,
@@ -26,8 +26,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL "https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-$(uname -m)" \
        -o /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL "https://github.com/docker/buildx/releases/download/v0.38.2/buildx-v0.38.2.linux-${ARCH}" \
+       -o /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+# buildx: the backend image uses a named build context (ee/), which the
+# classic builder rejects. Fail the image build, not the first update.
+RUN docker buildx version >/dev/null
 
 COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
 RUN cosign version >/dev/null

@@ -339,6 +339,17 @@ def step_preflight(ctx: Ctx) -> str:
             f"HEAD is not on {EXPECTED_REF} (got {head.stdout.strip() or 'detached'})"
         )
 
+    # The backend image is built with a named build context (ee/), which only
+    # BuildKit can do. Without the buildx plugin, "build" would fail after the
+    # backup and the pull, so refuse here while nothing has changed.
+    buildx = ctx.run_cmd(["docker", "buildx", "version"], timeout=15)
+    if buildx.returncode != 0:
+        raise StepError(
+            "The updater's Docker CLI has no buildx plugin, which the image build "
+            "needs. Rebuild the updater once by hand: "
+            "`docker compose build updater && docker compose up -d updater`"
+        )
+
     if not ctx.db_container:
         raise StepError(
             f"Database container not found for compose project {ctx.compose_project!r}; "

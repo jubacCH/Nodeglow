@@ -166,6 +166,7 @@ def _git_responder(overrides=None, config=None, mounts=None):
         ("git", "status", "--porcelain"): CmdResult(0, "", ""),
         ("git", "symbolic-ref", "-q", "HEAD"): CmdResult(0, "refs/heads/main", ""),
         ("docker", "inspect", "-f", "{{.State.Running}}", "vigil-db-1"): CmdResult(0, "true", ""),
+        ("docker", "buildx", "version"): CmdResult(0, "github.com/docker/buildx v0.38.2", ""),
         ("docker", "inspect", "-f", "{{json .Mounts}}", "nodeglow"):
             mounts or CmdResult(0, _mounts(), ""),
     }
@@ -187,6 +188,16 @@ def test_preflight_passes(tmp_path):
     detail = step_preflight(make_ctx(tmp_path, run_cmd=_git_responder()))
     assert "20.0 GB free" in detail
     assert "vigil-db-1 running" in detail
+
+
+def test_preflight_requires_buildx(tmp_path):
+    # The backend build uses a named build context (ee/), which the classic
+    # builder cannot do: without buildx the update would fail at "build",
+    # after the backup and the pull. Stop before anything changes.
+    missing = CmdResult(1, "", "docker: 'buildx' is not a docker command.")
+    ctx = make_ctx(tmp_path, run_cmd=_git_responder({("docker", "buildx", "version"): missing}))
+    with pytest.raises(StepError, match="buildx"):
+        step_preflight(ctx)
 
 
 def test_preflight_rejects_low_disk(tmp_path):
