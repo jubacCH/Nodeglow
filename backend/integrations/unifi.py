@@ -484,7 +484,8 @@ class UnifiIntegration(BaseIntegration):
                 alerts.append(Alert(severity="critical", title="Device disconnected",
                                     detail=f"{dev.get('type_label') or 'Device'} {name} is not connected",
                                     entity=f"device: {dev.get('mac') or name}",
-                                    host=dev.get("ip") or dev.get("fqdn") or ""))
+                                    host=dev.get("ip") or dev.get("fqdn") or "",
+                                    mac=dev.get("mac") or "", name=dev.get("name") or ""))
         return alerts
 
     async def health_check(self) -> bool:

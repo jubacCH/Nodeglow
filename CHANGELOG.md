@@ -324,6 +324,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 - The "Reinstall agent" dialog never offered "Through a probe". The agent and
   incident pages hand the dialog only the agent being reinstalled, so no probe
   was ever in its list. The dialog now reads the agent list itself.
+- Agent memory, load and network counters never reached ClickHouse. The
+  heartbeat handler only read the nested shape of the legacy Python agents
+  (`memory.pct`, `load.load_1`, `network.rx_bytes`), while the Rust agent sends
+  flat keys (`mem_pct`, `load_1`, `rx_bytes`), so every agent showed Memory
+  as "-" and `mem_pct` was null in `/api/v1/agents`. Both shapes are read now,
+  flat keys first. Rows stored so far keep their NULLs.
 - A disabled host still raised incidents through integrations and agents.
   An integration alert about a device whose ping host is disabled (a UniFi
   bridge reported "Device disconnected" every working day) and a silent agent
@@ -339,6 +345,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   failing; without an SSH key it returns a script with a fresh install
   token. The
   integration has a new optional field "SSH Port (for deploy)".
+- Integration alerts find their host without an address: a disconnected UniFi
+  device often reports no IP, so the alert fell back to the controller's host
+  and a disabled device still raised it. It is now matched by MAC address, then
+  address, then name, and a MAC or name shared by several hosts matches none of
+  them.
 - "Rising error trend" kept firing for errors that had stopped. The trend was
   fitted to the hours a template occurred in, laid side by side, so the quiet
   hours between and after did not count: six scattered failures of a backup
