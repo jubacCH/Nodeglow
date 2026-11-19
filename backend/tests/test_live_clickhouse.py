@@ -21,7 +21,7 @@ import inspect
 import os
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -204,7 +204,10 @@ async def test_step_a_on_an_old_schema_table(ch):
 
 async def _seed_two_tenants(ch):
     host_a, host_b = random.randint(10**8, 2 * 10**8), random.randint(2 * 10**8, 3 * 10**8)
-    now = datetime.utcnow()
+    # Aware UTC: clickhouse-connect sends a naive datetime as local time, which
+    # on a non-UTC machine moves the rows an hour or more back, out of the
+    # one-hour window of get_latest_bandwidth_per_iface (flaky outside CI).
+    now = datetime.now(timezone.utc)
     await ch.insert_ping_checks([
         {"tenant_id": A, "timestamp": now - timedelta(minutes=2), "host_id": host_a, "success": True, "latency_ms": 1.0},
         {"tenant_id": A, "timestamp": now - timedelta(minutes=1), "host_id": host_a, "success": False},
@@ -566,3 +569,196 @@ async def test_step_b_refuses_when_disk_is_short(ch, monkeypatch):
     finally:
         await admin.command(f"DROP TABLE IF EXISTS {table}")
         await _close(admin)
+
+
+# ── Metric rollups ────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+async def rollups_clean(ch):
+    """Rollup views, tables and the marker table gone before and after a test:
+    the raw tables are shared, and maintain() is meant to run once per install."""
+    from services import rollups
+
+    client = await ch.get_client()
+
+    async def wipe():
+        for table in rollups.ROLLUP_TABLES:
+            await client.command(f"DROP VIEW IF EXISTS {table}_mv")
+        for table in rollups.ROLLUP_TABLES:
+            await client.command(f"DROP TABLE IF EXISTS {table}")
+        await client.command(f"DROP TABLE IF EXISTS {rollups.MARKER_TABLE}")
+
+    await wipe()
+    rollups._ready_cache.clear()
+    yield client
+    await wipe()
+    rollups._ready_cache.clear()
+
+
+def _tid() -> int:
+    return random.randint(3 * 10**6, 4 * 10**6)
+
+
+async def test_raw_inserts_work_with_rollup_views(ch, rollups_clean):
+    from services import rollups
+
+    client = rollups_clean
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    out = await rollups.maintain(client, now=now)
+    assert out == {s: "created" for s in rollups.SOURCES}, out
+    tid, host = _tid(), random.randint(10**8, 2 * 10**8)
+    cut = rollups._next_midnight(now)
+    # Past the cutoff the views are live: this is the path that must not break inserts.
+    ts = cut + timedelta(minutes=1)
+    await ch.insert_ping_checks([{"tenant_id": tid, "timestamp": ts, "host_id": host, "success": True,
+                                  "latency_ms": 3.0}])
+    # All metrics None in one row: the p95 state and the sums must accept it.
+    await ch.insert_agent_metrics([{"tenant_id": tid, "timestamp": ts, "agent_id": host,
+                                    "agent_name": "a"}])
+    await ch.insert_bandwidth_metrics([{"tenant_id": tid, "timestamp": ts, "source_type": "unifi",
+                                        "source_id": f"mac-{host}", "interface_name": "p1",
+                                        "rx_rate_bps": 5, "tx_rate_bps": 7}])
+    for table in ("ping_checks", "agent_metrics", "bandwidth_metrics"):
+        assert await _scalar(client, f"SELECT count() FROM {table} WHERE tenant_id = {tid}") == 1
+    # ...and the live view really wrote them to the rollups.
+    assert await _scalar(client, f"SELECT sum(checks) FROM ping_checks_5m WHERE tenant_id = {tid}") == 1
+    assert await _scalar(client, f"SELECT sum(cpu_pct_n) FROM agent_metrics_1h WHERE tenant_id = {tid}") == 0
+    assert await _scalar(client, f"SELECT sum(rate_n) FROM bandwidth_metrics_1d WHERE tenant_id = {tid}") == 1
+
+
+async def test_backfill_and_view_do_not_double_count(ch, rollups_clean):
+    from services import rollups
+
+    client = rollups_clean
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cut = rollups._next_midnight(now)
+    tid, host = _tid(), random.randint(10**8, 2 * 10**8)
+
+    async def ping(ts):
+        await ch.insert_ping_checks([{"tenant_id": tid, "timestamp": ts, "host_id": host,
+                                      "success": True, "latency_ms": 1.0}])
+
+    await ping(cut - timedelta(hours=2))
+    await ping(cut - timedelta(minutes=1))                    # before the views exist
+    assert (await rollups.maintain(client, now=now))["ping_checks"] == "created"
+    assert not (await rollups.state(client))["ping_checks"].backfilled
+    await ping(cut - timedelta(seconds=30))                   # after creation, before the cutoff
+    await ping(cut + timedelta(minutes=1))                    # after the cutoff: view only
+
+    async def assert_counts():
+        raw = await _scalar(client, f"SELECT count() FROM ping_checks WHERE tenant_id = {tid}")
+        assert raw == 4
+        for lv in rollups.LEVELS:
+            got = await _scalar(
+                client, f"SELECT sum(checks) FROM ping_checks_{lv.key} "
+                        f"WHERE tenant_id = {tid} AND host_id = {host}")
+            assert got == raw, (lv.key, got, raw)
+
+    after = cut + timedelta(minutes=11)
+    assert (await rollups.maintain(client, now=cut + timedelta(minutes=5)))["ping_checks"] == "waiting"
+    assert (await rollups.maintain(client, now=after))["ping_checks"] == "backfilled"
+    assert (await rollups.state(client))["ping_checks"].backfilled
+    await assert_counts()
+    assert (await rollups.maintain(client, now=after))["ping_checks"] == "ready"
+    await assert_counts()
+
+    # Interrupted-backfill retry: marker back to "not backfilled", rows already there.
+    await rollups._write_marker(client, "ping_checks", cut, False)
+    assert (await rollups.maintain(client, now=after + timedelta(minutes=1)))["ping_checks"] == "backfilled"
+    await assert_counts()
+
+
+async def test_rollup_matches_raw_aggregates(ch, rollups_clean):
+    from services import rollups
+
+    client = rollups_clean
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cut = rollups._next_midnight(now)
+    tid, agent = _tid(), random.randint(10**8, 2 * 10**8)
+    base = cut - timedelta(hours=4)  # on an hour boundary (cut is midnight)
+    rng = random.Random(7)
+    rows = [
+        {"tenant_id": tid, "agent_id": agent, "agent_name": "a",
+         "timestamp": base + timedelta(seconds=rng.randrange(3 * 3600)),
+         "cpu_pct": None if rng.random() < 0.1 else round(rng.uniform(0, 100), 2)}
+        for _ in range(200)
+    ]
+    await ch.insert_agent_metrics(rows)
+    assert (await rollups.maintain(client, now=now))["agent_metrics"] == "created"
+    assert (await rollups.maintain(client, now=cut + timedelta(minutes=11)))["agent_metrics"] == "backfilled"
+
+    roll = await _rows(client, f"""
+        SELECT bucket, sum(cpu_pct_sum) AS s, sum(cpu_pct_n) AS n, min(cpu_pct_min) AS mn,
+               max(cpu_pct_max) AS mx, quantileTDigestMerge(0.95)(cpu_pct_p95) AS p95
+        FROM agent_metrics_1h WHERE tenant_id = {tid} AND agent_id = {agent}
+        GROUP BY bucket ORDER BY bucket""")
+    raw = await _rows(client, f"""
+        SELECT toStartOfHour(timestamp, 'UTC') AS bucket, sum(cpu_pct) AS s, count(cpu_pct) AS n,
+               min(cpu_pct) AS mn, max(cpu_pct) AS mx, quantile(0.95)(cpu_pct) AS p95
+        FROM agent_metrics WHERE tenant_id = {tid} AND agent_id = {agent}
+        GROUP BY bucket ORDER BY bucket""")
+    assert len(raw) >= 3 and len(roll) == len(raw)
+    for r, w in zip(roll, raw):
+        assert r["bucket"] == w["bucket"]
+        assert r["n"] == w["n"]
+        assert r["s"] == pytest.approx(w["s"], rel=1e-6)
+        assert r["mn"] == w["mn"] and r["mx"] == w["mx"]
+        # A t-digest on ~60 samples is no exact quantile: compare by rank, the
+        # digest's p95 must sit between the raw p90 and p99 (and, loosely, near
+        # the raw value).
+        vals = sorted(x["cpu_pct"] for x in rows if x["cpu_pct"] is not None
+                      and x["timestamp"].replace(minute=0, second=0, microsecond=0) == r["bucket"].replace(tzinfo=timezone.utc))
+        rank = sum(v <= r["p95"] + 1e-4 for v in vals) / len(vals)
+        assert 0.90 <= rank <= 0.99, (r["bucket"], r["p95"], rank)
+        assert r["p95"] == pytest.approx(w["p95"], abs=6.0)
+
+
+async def test_series_readers_over_rolled_up_ranges(ch, rollups_clean):
+    from services import rollups
+
+    client = rollups_clean
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cut = rollups._next_midnight(now)
+    tid, host = _tid(), random.randint(10**8, 2 * 10**8)
+    # Old enough for the 5m range (> 48 h), before the cutoff: backfilled rows.
+    base = (now - timedelta(hours=60)).replace(minute=0, second=0)
+    rows = [{"tenant_id": tid, "timestamp": base + timedelta(minutes=i), "host_id": host,
+             "success": i % 10 != 0, "latency_ms": None if i % 10 == 0 else float(i % 7 + 1)}
+            for i in range(120)]
+    # One bucket of failed pings only: no latency, must read as None.
+    rows += [{"tenant_id": tid, "timestamp": base + timedelta(hours=3, minutes=i), "host_id": host,
+              "success": False, "latency_ms": None} for i in range(3)]
+    await ch.insert_ping_checks(rows)
+    await ch.insert_agent_metrics([{"tenant_id": tid, "timestamp": base + timedelta(minutes=i),
+                                    "agent_id": host, "agent_name": "a",
+                                    "cpu_pct": float(i % 50)} for i in range(60)])
+    await ch.insert_bandwidth_metrics([{"tenant_id": tid, "timestamp": base + timedelta(minutes=i),
+                                        "source_type": "agent", "source_id": str(host),
+                                        "interface_name": "total", "rx_rate_bps": 100 + i,
+                                        "tx_rate_bps": 10} for i in range(60)])
+    assert set((await rollups.maintain(client, now=now)).values()) == {"created"}
+    assert set((await rollups.maintain(client, now=cut + timedelta(minutes=11))).values()) == {"backfilled"}
+    rollups._ready_cache.clear()
+
+    with tenant_scope(tid):
+        res = await rollups.ping_series(host, hours=24 * 7)
+        assert res.level == "5m" and res.bucket_seconds == 300
+        assert sum(p["checks"] for p in res.points) == 123
+        assert sum(p["ok"] for p in res.points) == 108
+        full = [p for p in res.points if p["latency_avg"] is not None]
+        assert full and all(1 <= p["latency_min"] <= p["latency_p95"] <= p["latency_max"] <= 7
+                            for p in full)
+        empty = [p for p in res.points if p["ok"] == 0]
+        assert empty and all(p["latency_avg"] is None and p["latency_p95"] is None for p in empty)
+        res_1h = await rollups.ping_series(host, hours=24 * 60)
+        assert res_1h.level == "1h" and sum(p["checks"] for p in res_1h.points) == 123
+        ag = await rollups.agent_series(host, hours=24 * 7)
+        assert ag.level == "5m" and ag.points
+        assert all(p["mem_pct_avg"] is None and p["mem_pct_p95"] is None for p in ag.points)
+        assert max(p["cpu_pct_max"] for p in ag.points) == 49.0
+        bw = await rollups.bandwidth_series("agent", str(host), "total", hours=24 * 7)
+        assert bw.level == "5m" and max(p["rx_rate_max"] for p in bw.points) == 159
+        assert all(p["tx_rate_avg"] == 10 for p in bw.points)
+        total = await ch.get_bandwidth_total_history_ch(hours=24 * 7)
+        assert any(r["agents_n"] == 1 for r in total)

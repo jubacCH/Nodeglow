@@ -33,6 +33,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from services import tenancy as _tenancy
+from services.rollups import ROLLUP_TABLES
 
 log = logging.getLogger("nodeglow.clickhouse")
 
@@ -42,6 +43,10 @@ log = logging.getLogger("nodeglow.clickhouse")
 # Every table that holds tenant data. A new table must be added here (and get a
 # tenant_id column), or the read guard below does not know about it.
 TENANT_TABLES = ("syslog_messages", "ping_checks", "agent_metrics", "bandwidth_metrics")
+
+# Tables the read guard, row policies and purge cover: the raw tables plus the
+# rollup tables. TENANT_TABLES stays raw-only (the step-B rebuild iterates it).
+TENANT_READ_TABLES = TENANT_TABLES + ROLLUP_TABLES
 
 TENANT_PARAM = "nodeglow_tenant"
 # The predicate every read of a tenant table carries, in raw SQL as well as in
@@ -56,7 +61,7 @@ ROW_POLICY_NAME = "nodeglow_tenant_isolation"
 UNRESTRICTED_POLICY_NAME = "nodeglow_unrestricted"
 
 _TENANT_TABLE_REF = re.compile(
-    r"\b(?:FROM|JOIN)\s+(?:`?\w+`?\.)?`?(" + "|".join(TENANT_TABLES) + r")\b`?",
+    r"\b(?:FROM|JOIN)\s+(?:`?\w+`?\.)?`?(" + "|".join(TENANT_READ_TABLES) + r")\b`?",
     re.IGNORECASE,
 )
 
@@ -115,7 +120,7 @@ def _check_tenant_predicates(sql: str) -> None:
 def _table_filters(tenant_id: int) -> str:
     """``additional_table_filters`` as a ClickHouse map literal."""
     tid = int(tenant_id)
-    pairs = ", ".join(f"'{t}': 'tenant_id = {tid}'" for t in TENANT_TABLES)
+    pairs = ", ".join(f"'{t}': 'tenant_id = {tid}'" for t in TENANT_READ_TABLES)
     return "{" + pairs + "}"
 
 
@@ -375,6 +380,14 @@ async def connect(dsn: str, *, send_receive_timeout: int = 30, database: str | N
     )
 
 
+class SchemaIncomplete(RuntimeError):
+    """A required CREATE TABLE / step-A ALTER failed: the server answers, the schema is not usable."""
+
+
+class ClickHouseUnreachable(RuntimeError):
+    """No connection could be made (as opposed to a connected server with a broken schema)."""
+
+
 async def get_client():
     """Return (or lazily create) the main async ClickHouse client.
 
@@ -387,6 +400,7 @@ async def get_client():
     async with _client_lock:
         if _client is not None:
             return _client
+        last_error: Exception | None = None
         for attempt in range(1, 6):
             try:
                 client = await connect(CLICKHOUSE_URL)
@@ -399,6 +413,7 @@ async def get_client():
                 _client = client
                 return _client
             except Exception as e:
+                last_error = e
                 log.warning("ClickHouse connect attempt %d failed: %s", attempt, e)
                 try:
                     from services.metrics import CLICKHOUSE_CONNECTION_ERRORS
@@ -407,7 +422,9 @@ async def get_client():
                     pass
                 if attempt < 5:
                     await asyncio.sleep(attempt * 2)
-        raise RuntimeError("Could not connect to ClickHouse after 5 attempts")
+        if isinstance(last_error, SchemaIncomplete):
+            raise RuntimeError("Could not connect to ClickHouse after 5 attempts") from last_error
+        raise ClickHouseUnreachable("Could not connect to ClickHouse after 5 attempts") from last_error
 
 
 def allow_custom_setting(client, name: str) -> None:
@@ -572,15 +589,20 @@ def dsn_credentials(dsn: str) -> tuple[str, str | None, str | None]:
 
 
 def revoke_statements(user: str, database: str,
-                      tables: tuple[str, ...] = TENANT_TABLES) -> list[str]:
+                      tables: tuple[str, ...] = TENANT_READ_TABLES) -> list[str]:
     """Take a previously provisioned tenant user's grants away."""
     u, db = _quote_ident(user), _quote_ident(database)
     return [f"REVOKE SELECT ON {db}.{_quote_ident(t)} FROM {u}" for t in tables] + [
         f"REVOKE SELECT ON system.settings FROM {u}"]
 
 
-async def provision_tenant_user(client, tenant_dsn: str, database: str | None = None) -> None:
+async def provision_tenant_user(client, tenant_dsn: str, database: str | None = None,
+                                tables: tuple[str, ...] | None = None) -> None:
     """Create/refresh the restricted user of ``tenant_dsn`` and its policies.
+
+    ``tables`` defaults to the raw tables plus the rollup tables that exist:
+    a GRANT on a missing table fails, and a failed provisioning makes
+    ``get_tenant_client()`` refuse every tenant read.
 
     A user the policies were provisioned for before (the DSN's user was
     renamed) loses its grants first: re-targeting the policies would otherwise
@@ -602,7 +624,11 @@ async def provision_tenant_user(client, tenant_dsn: str, database: str | None = 
                     log.debug("%s failed", stmt, exc_info=True)
             log.warning("ClickHouse: revoked the tenant-table grants of %s, the previous "
                         "restricted user (now %s)", previous, user)
-    for stmt in row_policy_statements(user, password, database):
+    if tables is None:
+        from services.rollups import existing_rollup_tables
+
+        tables = TENANT_TABLES + await existing_rollup_tables(client)
+    for stmt in row_policy_statements(user, password, database, tables=tables):
         await client.command(stmt)
     log.info("ClickHouse row policies provisioned for %s on %s", user, database)
 
@@ -633,7 +659,7 @@ async def _ensure_schemas(client) -> None:
             if ddl in _STEP_A_ALTERS:
                 required_failed.append(ddl)
     if required_failed:
-        raise RuntimeError(f"ClickHouse schema incomplete: {'; '.join(required_failed)}")
+        raise SchemaIncomplete(f"ClickHouse schema incomplete: {'; '.join(required_failed)}")
     # The step-B rebuild stops (TTL) merges on a table for its cutover. Had the
     # process died in between, nothing else would start them again (the
     # blocker lives until the ClickHouse server restarts): the table would
@@ -1370,9 +1396,47 @@ async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
     summed after: interfaces report at different moments, and adding up raw
     samples would count an interface once per sample it happened to send.
     """
+    from services import rollups
+
     params: dict = {"h": int(hours), "b": bandwidth_bucket_seconds(int(hours))}
-    where = " AND ".join(
-        [tenant_clause(params), "timestamp >= now() - toIntervalHour({h:UInt32})"])
+    # Within raw retention the chart keeps its own bucket widths: 5-minute
+    # rollup buckets would give 2016 points over a week and a sawtooth with
+    # slow SNMP polls. Rollups only serve what raw no longer holds.
+    if int(hours) <= rollups.RAW_TTL_HOURS["bandwidth_metrics"]:
+        lvl = rollups.RAW
+    else:
+        lvl = await rollups.effective_level("bandwidth_metrics", int(hours))
+    if lvl == rollups.RAW:
+        inner = f"""
+            SELECT toStartOfInterval(timestamp, toIntervalSecond({{b:UInt32}})) AS bucket,
+                   source_type, source_id, interface_name,
+                   avg(rx_rate_bps) AS rx, avg(tx_rate_bps) AS tx
+            FROM bandwidth_metrics
+            WHERE {{where}}
+            GROUP BY bucket, source_type, source_id, interface_name"""
+        where = " AND ".join(
+            [tenant_clause(params), "timestamp >= now() - toIntervalHour({h:UInt32})"])
+    else:
+        # Hourly points at the finest: the 5 m level would give 2000+ points
+        # and a sawtooth when interfaces poll slower than every 5 minutes.
+        # Sums and counts are added per (coarse bucket, interface) before
+        # dividing, so the averages stay exact.
+        params["b"] = max(rollups.level(lvl).seconds, 3600)
+        inner = f"""
+            SELECT bkt AS bucket, source_type, source_id, interface_name,
+                   rxs / nullIf(n, 0) AS rx, txs / nullIf(n, 0) AS tx
+            FROM (
+                SELECT toStartOfInterval(bucket, toIntervalSecond({{b:UInt32}}), 'UTC') AS bkt,
+                       source_type, source_id, interface_name,
+                       sum(rx_rate_sum) AS rxs, sum(tx_rate_sum) AS txs, sum(rate_n) AS n
+                FROM {rollups.rollup_table("bandwidth_metrics", lvl)}
+                WHERE {{where}}
+                GROUP BY bkt, source_type, source_id, interface_name)"""
+        where = " AND ".join([
+            tenant_clause(params),
+            "bucket >= toStartOfInterval(now() - toIntervalHour({h:UInt32}), "
+            "toIntervalSecond({b:UInt32}), 'UTC')"])
+    inner = inner.replace("{where}", where)
     sums = ",\n               ".join(
         f"toUInt64(sumIf(rx, {pred})) AS {name}_rx, toUInt64(sumIf(tx, {pred})) AS {name}_tx, "
         f"countIf({pred}) AS {name}_n"
@@ -1380,13 +1444,7 @@ async def get_bandwidth_total_history_ch(hours: int = 24) -> list[dict]:
     sql = f"""
         SELECT bucket AS timestamp,
                {sums}
-        FROM (
-            SELECT toStartOfInterval(timestamp, toIntervalSecond({{b:UInt32}})) AS bucket,
-                   source_type, source_id, interface_name,
-                   avg(rx_rate_bps) AS rx, avg(tx_rate_bps) AS tx
-            FROM bandwidth_metrics
-            WHERE {where}
-            GROUP BY bucket, source_type, source_id, interface_name
+        FROM ({inner}
         )
         GROUP BY bucket
         ORDER BY bucket ASC

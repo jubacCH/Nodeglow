@@ -744,6 +744,37 @@ file.
 
 ---
 
+## Metric rollups
+
+Ping, agent and bandwidth history is also kept as 5-minute, 1-hour and 1-day
+aggregates in nine ClickHouse tables, filled by materialized views. They are
+created by the `rollup_maintenance` job once the tenant rebuild is done, and
+backfilled from the raw tables once. `/api/system/status` (admin) shows
+the state per source under `rollups` (`ready`, `deferred: rebuild <state>`,
+`created, backfill pending`, `not created`). Until a source is `ready`,
+long ranges read the raw tables and reach back only as far as raw retention.
+
+If a view or table of a backfilled source disappears, the job fails (and the
+self-check raises an incident): the rollups would silently stop filling.
+
+**Restricted tenant user.** With `CLICKHOUSE_TENANT_URL` set, Nodeglow grants
+the tenant user `SELECT` on the rollup tables and adds the row policies
+itself. If you manage ClickHouse access yourself
+(`NODEGLOW_CLICKHOUSE_PROVISION_TENANT_USER=0`), do it for the new tables as
+well, with the same grant and row policy as the raw tables, or tenant reads
+fail with `ACCESS_DENIED` once a source is ready. The job logs a warning
+naming them when it creates them:
+
+`ping_checks_5m`, `ping_checks_1h`, `ping_checks_1d`, `agent_metrics_5m`,
+`agent_metrics_1h`, `agent_metrics_1d`, `bandwidth_metrics_5m`,
+`bandwidth_metrics_1h`, `bandwidth_metrics_1d`
+
+**Known gap at rollout.** Each source's views start at a midnight (UTC) cutoff
+and the backfill runs 10 minutes after it. A row with a timestamp before the
+cutoff that reaches the raw table later than that (a delayed probe batch) is
+in neither the views nor the backfill, so it is missing from the rollups. This
+affects only the rollout window of each source, once.
+
 ## When something looks wrong
 
 ### Nodeglow tells you first

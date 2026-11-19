@@ -1,4 +1,7 @@
 """Tests for /api/v1/ endpoints — key routes for external API."""
+from datetime import datetime
+
+from services import rollups
 from services.tenancy import bind_session
 
 
@@ -513,3 +516,90 @@ async def test_host_timeline_falls_back_to_created_at(client):
     events = resp.json()["events"]
     assert [e["details"]["kind"] for e in events] == ["created"]
     assert events[0]["title"] == "Host created"
+
+
+# ── Rollup series ────────────────────────────────────────────────────────────
+
+
+async def test_host_series_returns_level_and_iso_points(client, monkeypatch):
+    seen = {}
+
+    async def fake(host_id, hours):
+        seen["args"] = (host_id, hours)
+        return rollups.SeriesResult("1h", 3600, [
+            {"timestamp": datetime(2026, 11, 1, 12), "checks": 60, "ok": 59, "latency_avg": 4.2,
+             "latency_min": 1.0, "latency_max": 9.0, "latency_p95": 8.0}])
+
+    monkeypatch.setattr(rollups, "ping_series", fake)
+    host_id = (await client.post("/api/v1/hosts", json={
+        "name": "series-host", "hostname": "10.0.0.51", "check_type": "icmp"})).json()["id"]
+
+    resp = await client.get(f"/api/v1/hosts/{host_id}/series?hours=2160")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert (data["host_id"], data["level"], data["bucket_seconds"]) == (host_id, "1h", 3600)
+    assert data["points"][0]["timestamp"].startswith("2026-11-01T12:00:00")
+    assert data["points"][0]["checks"] == 60
+    assert seen["args"] == (host_id, 2160)
+
+
+async def test_agent_series_returns_level(monkeypatch):
+    from models.agent import Agent
+    from tests.test_routers.conftest import make_client
+
+    async def fake(agent_id, hours):
+        return rollups.SeriesResult("1h", 3600, [{"timestamp": datetime(2026, 11, 1), "cpu_pct_avg": 3.0}])
+
+    monkeypatch.setattr(rollups, "agent_series", fake)
+    async with make_client() as (ac, sf):
+        async with sf() as s:
+            s.add(Agent(id=77, name="series-agent", hostname="srv", token="series-token"))
+            await s.commit()
+        resp = await ac.get("/api/v1/agents/77/series?hours=2160")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert (data["agent_id"], data["level"], data["bucket_seconds"]) == (77, "1h", 3600)
+    assert data["points"][0]["cpu_pct_avg"] == 3.0
+
+
+async def test_series_unknown_entity_is_404(client):
+    assert (await client.get("/api/v1/hosts/99999/series")).status_code == 404
+    assert (await client.get("/api/v1/agents/99999/series")).status_code == 404
+
+
+async def test_series_hours_bounds(client):
+    host_id = (await client.post("/api/v1/hosts", json={
+        "name": "bounds-host", "hostname": "10.0.0.52", "check_type": "icmp"})).json()["id"]
+    for hours in (0, 43801):
+        assert (await client.get(f"/api/v1/hosts/{host_id}/series?hours={hours}")).status_code == 422
+        assert (await client.get(f"/api/v1/agents/1/series?hours={hours}")).status_code == 422
+
+
+async def test_bandwidth_history_accepts_long_ranges(client, monkeypatch):
+    from services import bandwidth as bw
+
+    async def fake(hours):
+        return {"basis": None, "samples": []}
+
+    monkeypatch.setattr(bw, "get_bandwidth_total_history", fake)
+    assert (await client.get("/api/bandwidth/history?hours=2160")).status_code == 200
+    assert (await client.get("/api/bandwidth/history?hours=43800")).status_code == 200
+    assert (await client.get("/api/bandwidth/history?hours=43801")).status_code == 422
+
+
+async def test_filtered_bandwidth_history_is_limited_to_raw_retention(client, monkeypatch):
+    from services import bandwidth as bw
+
+    seen = []
+
+    async def fake_history(**kw):
+        seen.append(kw)
+        return []
+
+    monkeypatch.setattr(bw, "get_bandwidth_history", fake_history)
+    for q in ("source_type=proxmox", "source_id=x", "interface=eth0"):
+        assert (await client.get(f"/api/bandwidth/history?{q}&hours=169")).status_code == 422
+        assert (await client.get(f"/api/bandwidth/history?{q}&hours=168")).status_code == 200
+    resp = await client.get("/api/bandwidth/history?source_type=agent&hours=2160")
+    assert resp.status_code == 422 and "168" in resp.json()["detail"]
+    assert len(seen) == 3  # only the 168 h calls got through
