@@ -134,8 +134,8 @@ How it gets set without a shell on the probe:
 
 - **Install command:** the "Add agent" dialog (Linux command) gets a checkbox
   "This machine is a probe and may install agents on other hosts". The
-  install token gets a `probe` flag (column on `agent_install_tokens`); the
-  install URL gets `&deploy=1`; the installer script runs
+  install token gets a `probe` flag (column on `agent_install_tokens`), and
+  the installer script generated for such a token runs
   `/opt/nodeglow/nodeglow-agent enable-deploy` after placing the binary, and
   the enrolment with a `probe` token sets `agents.is_probe`. No admin step on
   the server afterwards.
