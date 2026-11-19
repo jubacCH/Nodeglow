@@ -12,7 +12,9 @@
 # The signed message is  nodeglow-agent-binary:v1:<platform>:<sha256 hex>
 # (pure Ed25519, no prehash) — must match release_message() in
 # agent/src/updater.rs and backend/services/agent_release.py. <platform> is
-# "linux" or "windows", the platform name the agent asks the server for.
+# "linux" (x86_64), "linux-arm64" (aarch64) or "windows", the platform name
+# the agent asks the server for. It is part of the signed message, so a
+# signature for one architecture never verifies a binary for another.
 #
 # <binary>.sig is one line of JSON:
 #   {"format":"nodeglow-agent-signature-v1","alg":"ed25519","platform":"linux",
@@ -66,7 +68,7 @@ case "$cmd" in
     sign)
         [ $# -eq 4 ] || { echo "usage: sign.sh sign <key.pem> <platform> <binary>" >&2; exit 2; }
         key=$2; platform=$3; bin=$4
-        case "$platform" in linux|windows) ;; *) echo "sign.sh: platform must be linux or windows" >&2; exit 2;; esac
+        case "$platform" in linux|linux-arm64|windows) ;; *) echo "sign.sh: platform must be linux, linux-arm64 or windows" >&2; exit 2;; esac
         check_key "$key"
         tmp=$(mktemp -d)
         trap 'rm -rf "$tmp"' EXIT

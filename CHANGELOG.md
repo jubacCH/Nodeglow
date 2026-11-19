@@ -10,6 +10,16 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- The agent runs on 64-bit ARM Linux (aarch64): a static musl build, built
+  natively on GitHub's arm runner and release-signed like the others. The
+  Linux installer (and the SSH deploy, which runs it) picks the build by
+  `uname -m` and stops before enrolling on any other CPU; a probe deploys the
+  build that matches the target. Its platform name is `linux-arm64` (served
+  at `/agents/download/linux-arm64`, `/api/agent/version/linux-arm64`, file
+  `backend/static/nodeglow-agent-linux-arm64`); `linux` stays x86_64, so
+  installed agents update as before. The platform is part of the signed
+  message, so a signature for one architecture never verifies the other.
+  Releases attach `nodeglow-agent-linux-arm64` and its `.sig`.
 - Metric rollups. Ping, agent and bandwidth metrics are kept at 5-minute
   (90 days), hourly (400 days) and daily (5 years) resolution in nine new
   ClickHouse tables, filled by materialized views and a one-time backfill of
@@ -33,7 +43,7 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe asks for the host key first (you confirm its fingerprint), installs
   the release-signed agent binary it verified itself with a fixed procedure,
   binds it to its own server, and waits for it to enrol; progress shows per
-  target. Linux x86_64 targets; logins with ed25519 or ecdsa keys or a
+  target. Linux x86_64 and aarch64 targets; logins with ed25519 or ecdsa keys or a
   password; non-root users need passwordless sudo. Needs the updated agent
   on the probe. New table `agent_commands` (migration 057), routes under
   `/api/probes/{id}/…`, agents report `deploy`. See docs/OPERATIONS.md,
@@ -240,6 +250,8 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   probe-only.
 
 ### Changed
+- `/agents/download/<platform>` answers 404 for a platform it has no build
+  for; before, any unknown name got the x86_64 Linux binary.
 - The refusal to enrol an already enrolled hostname (`409 agent_exists`) now
   points to "Reinstall agent", and the silent-agent incident names it as the
   way to bring an agent back.

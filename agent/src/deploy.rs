@@ -28,8 +28,9 @@ use tracing::{info, warn};
 use crate::client::ApiClient;
 use crate::updater;
 
-/// Targets this probe can install on: the only signed Linux build is x86_64.
-pub const SUPPORTED_ARCH: &[&str] = &["x86_64"];
+/// Targets this probe can install on: `uname -m` of the release-signed Linux
+/// builds (see `platform_for_arch`).
+pub const SUPPORTED_ARCH: &[&str] = &["x86_64", "aarch64"];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 const ENROL_WAIT: Duration = Duration::from_secs(45);
@@ -572,19 +573,30 @@ fn valid_tmp(path: &str) -> bool {
     path.starts_with('/') && path.chars().all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c))
 }
 
-/// Download the Linux binary from the probe's server and verify its release
-/// signature against the compiled-in keys.
-pub async fn verified_binary(api: &ApiClient) -> anyhow::Result<Vec<u8>> {
-    let info = api.get_version_info("linux").await?;
+/// The server platform whose build runs on a target that reports `uname -m`.
+pub fn platform_for_arch(machine: &str) -> Option<&'static str> {
+    match machine.trim() {
+        "x86_64" | "amd64" => Some("linux"),
+        "aarch64" | "arm64" => Some("linux-arm64"),
+        _ => None,
+    }
+}
+
+/// Download the Linux binary for `platform` from the probe's server and verify
+/// its release signature (which binds the platform) against the compiled-in
+/// keys.
+pub async fn verified_binary(api: &ApiClient, platform: &str) -> anyhow::Result<Vec<u8>> {
+    let info = api.get_version_info(platform).await?;
     let (Some(sig), Some(key_id)) = (info.release_signature.as_deref(), info.release_key_id.as_deref())
     else {
-        bail!("The server offers no release-signed agent binary; refusing to install an unsigned one.");
+        bail!("The server offers no release-signed agent binary for {platform}; \
+               refusing to install an unsigned one.");
     };
-    let data = api.download_agent("linux").await?;
+    let data = api.download_agent(platform).await?;
     if !hex::encode(Sha256::digest(&data)).eq_ignore_ascii_case(info.hash.trim()) {
         bail!("The downloaded agent binary does not match the published hash.");
     }
-    updater::verify_release_signature(&updater::compiled_release_keys(), key_id, sig, "linux", &data)?;
+    updater::verify_release_signature(&updater::compiled_release_keys(), key_id, sig, platform, &data)?;
     Ok(data)
 }
 
@@ -619,10 +631,10 @@ async fn deploy(ctx: &ProbeContext, file: &DeployFile, p: &DeployPayload) -> any
         bail!("This probe accepts an invalid TLS certificate from its server (allow_insecure_tls); \
                an agent it installs would not. Give the server a valid certificate first.");
     }
-    let binary = verified_binary(&ctx.api).await?;
     let config = target_config(&ctx.server, &p.enrollment_token);
     let session = connect(host, port, cred, &p.host_key_fingerprint).await?;
-    let result = install(&session, &p.target, &binary, &config).await;
+    let api = &ctx.api;
+    let result = install(&session, &p.target, &config, |platform| verified_binary(api, platform)).await;
     session.close().await;
     let where_ = match &p.target {
         Target::Host { host, .. } => host.clone(),
@@ -632,18 +644,26 @@ async fn deploy(ctx: &ProbeContext, file: &DeployFile, p: &DeployPayload) -> any
     result
 }
 
-async fn install(s: &Session, target: &Target, binary: &[u8], config: &str) -> anyhow::Result<String> {
+/// Install on `target`: `fetch` gets the verified binary for the platform that
+/// matches the target's architecture.
+async fn install<F, Fut>(s: &Session, target: &Target, config: &str, fetch: F) -> anyhow::Result<String>
+where
+    F: FnOnce(&'static str) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Vec<u8>>>,
+{
     let proc = match target {
         Target::Host { .. } => Procedure::host(s.sudo),
         Target::Lxc { vmid, .. } => Procedure::lxc(s.sudo, *vmid),
     };
     let arch = s.must(&proc.arch(), b"", "Reading the architecture").await?;
-    if !SUPPORTED_ARCH.contains(&arch.trim()) {
-        bail!("The target is {}; only x86_64 is supported for now.", arch.trim());
-    }
+    let Some(platform) = platform_for_arch(&arch) else {
+        bail!("The target is {}; supported are {}.", arch.trim(), SUPPORTED_ARCH.join(" and "));
+    };
     if s.run(&proc.has_systemd(), b"").await?.0 != 0 {
         bail!("The target has no systemd; the agent is installed as a systemd service.");
     }
+    let binary = fetch(platform).await?;
+    let binary = binary.as_slice();
     // An agent already there: its token, to tell the new enrolment from it.
     let before = match s.run(&proc.read_config(), b"").await {
         Ok((0, cfg)) => token_of(&cfg),
@@ -830,7 +850,7 @@ mod tests {
     fn capability_names_credentials_but_never_their_contents() {
         let file: DeployFile = serde_json::from_str(FILE).unwrap();
         let cap = capability(Some(&file));
-        assert_eq!(cap, json!({"enabled": true, "credentials": ["lab-root", "pve"], "arch": ["x86_64"]}));
+        assert_eq!(cap, json!({"enabled": true, "credentials": ["lab-root", "pve"], "arch": ["x86_64", "aarch64"]}));
         assert!(!cap.to_string().contains("secret-pw"));
         let off = DeployFile { allow_deploy_agents: false, ..file };
         assert_eq!(capability(Some(&off))["enabled"], json!(false));
@@ -945,6 +965,8 @@ mod ssh_tests {
         auth_attempts: usize,
         commands: Vec<String>,
         stdin: HashMap<String, Vec<u8>>,
+        /// What `uname -m` prints; x86_64 when empty.
+        machine: String,
     }
 
     #[derive(Clone)]
@@ -999,8 +1021,15 @@ mod ssh_tests {
         async fn channel_eof(&mut self, channel: ChannelId,
                              session: &mut server::Session) -> Result<(), Self::Error> {
             let (cmd, stdin) = self.current.lock().unwrap().remove(&channel).unwrap_or_default();
-            let reply = if cmd.contains("uname -m") { "x86_64\n".to_string() } else { format!("ran {cmd}\n") };
-            self.seen.lock().unwrap().stdin.insert(cmd, stdin);
+            let mut seen = self.seen.lock().unwrap();
+            let reply = if cmd.contains("uname -m") {
+                let m = if seen.machine.is_empty() { "x86_64" } else { seen.machine.as_str() };
+                format!("{m}\n")
+            } else {
+                format!("ran {cmd}\n")
+            };
+            seen.stdin.insert(cmd, stdin);
+            drop(seen);
             session.data(channel, reply.into_bytes())?;
             session.exit_status_request(channel, 0)?;
             session.eof(channel)?;
@@ -1088,5 +1117,57 @@ mod ssh_tests {
         s.must(&Procedure::lxc(s.sudo, 105).arch(), b"", "arch").await.unwrap();
         s.close().await;
         assert_eq!(seen.lock().unwrap().commands, vec!["sudo -n pct exec 105 -- sh -c 'uname -m'"]);
+    }
+    #[test]
+    fn each_supported_arch_has_a_platform() {
+        assert_eq!(platform_for_arch("x86_64\n"), Some("linux"));
+        assert_eq!(platform_for_arch("amd64"), Some("linux"));
+        assert_eq!(platform_for_arch("aarch64\n"), Some("linux-arm64"));
+        assert_eq!(platform_for_arch("arm64"), Some("linux-arm64"));
+        for m in ["armv7l", "i686", "riscv64", "", "x86_64 aarch64"] {
+            assert_eq!(platform_for_arch(m), None, "{m}");
+        }
+        for arch in SUPPORTED_ARCH {
+            assert!(platform_for_arch(arch).is_some(), "{arch}");
+        }
+    }
+
+    /// Runs `install` until it asks for the binary (the fetch fails on purpose,
+    /// so nothing is written); returns the platform it asked for and the error.
+    async fn install_asks_for(machine: &str) -> (Option<&'static str>, String, Vec<String>) {
+        let (port, seen, fp) = start().await;
+        seen.lock().unwrap().machine = machine.into();
+        let s = connect("127.0.0.1", port, &root(), &fp).await.unwrap();
+        let target = Target::Host { host: "127.0.0.1".into(), port };
+        let asked = StdMutex::new(None);
+        let err = install(&s, &target, "{}", |platform| {
+            *asked.lock().unwrap() = Some(platform);
+            async { Err(anyhow!("no binary in this test")) }
+        }).await.expect_err("the fetch fails");
+        s.close().await;
+        let commands = seen.lock().unwrap().commands.clone();
+        (asked.into_inner().unwrap(), format!("{err:#}"), commands)
+    }
+
+    #[tokio::test]
+    async fn an_arm64_target_gets_the_arm64_build() {
+        let (asked, err, commands) = install_asks_for("aarch64").await;
+        assert_eq!(asked, Some("linux-arm64"));
+        assert!(err.contains("no binary in this test"), "{err}");
+        assert!(!commands.iter().any(|c| c.contains("nodeglow-agent.new")), "{commands:?}");
+    }
+
+    #[tokio::test]
+    async fn an_x86_64_target_gets_the_x86_64_build() {
+        let (asked, _err, _commands) = install_asks_for("x86_64").await;
+        assert_eq!(asked, Some("linux"));
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_target_is_refused_before_any_download() {
+        let (asked, err, commands) = install_asks_for("armv7l").await;
+        assert_eq!(asked, None);
+        assert!(err.contains("armv7l") && err.contains("aarch64"), "{err}");
+        assert_eq!(commands.len(), 1, "{commands:?}");
     }
 }

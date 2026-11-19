@@ -25,6 +25,12 @@ jobs:
             target: x86_64-unknown-linux-musl
             artifact: nodeglow-agent-linux
             binary: nodeglow-agent
+          # arm64 builds natively on GitHub's arm runner: the same musl-tools
+          # static build as x86_64, and its tests run on the real architecture.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: nodeglow-agent-linux-arm64
+            binary: nodeglow-agent
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: nodeglow-agent.exe
@@ -104,7 +110,7 @@ jobs:
           path: agent/${{ matrix.artifact }}
           retention-days: 90
 
-  # Release signing (spec 2026-10-11 rule 4, P2a). Signs both binaries with
+  # Release signing (spec 2026-10-11 rule 4, P2a). Signs all binaries with
   # the release key from the secret AGENT_RELEASE_SIGNING_KEY (Ed25519,
   # PKCS#8 PEM, or that PEM base64-encoded) — see tools/agent-release-key/.
   # Without the secret (forks, PRs from forks) the job still passes and marks
@@ -121,6 +127,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: nodeglow-agent-linux
+          path: dist/
+
+      - name: Download Linux arm64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: nodeglow-agent-linux-arm64
           path: dist/
 
       - name: Download Windows binary
@@ -164,8 +176,10 @@ jobs:
           fi
 
           sh tools/agent-release-key/sign.sh sign "$key" linux dist/nodeglow-agent-linux
+          sh tools/agent-release-key/sign.sh sign "$key" linux-arm64 dist/nodeglow-agent-linux-arm64
           sh tools/agent-release-key/sign.sh sign "$key" windows dist/nodeglow-agent.exe
           sh tools/agent-release-key/sign.sh verify "$key" dist/nodeglow-agent-linux
+          sh tools/agent-release-key/sign.sh verify "$key" dist/nodeglow-agent-linux-arm64
           sh tools/agent-release-key/sign.sh verify "$key" dist/nodeglow-agent.exe
           { echo "### Agent binaries: release-signed (key $kid)"; echo; echo '```'; cat dist/*.sig; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           echo "signed=true" >> "$GITHUB_OUTPUT"
@@ -211,15 +225,14 @@ jobs:
         run: |
           set -e
           mkdir -p backend/static
-          cp dist/nodeglow-agent-linux backend/static/nodeglow-agent-linux
-          cp dist/nodeglow-agent.exe backend/static/nodeglow-agent.exe
-          chmod +x backend/static/nodeglow-agent-linux
-          if [ -f dist/nodeglow-agent-linux.sig ] && [ -f dist/nodeglow-agent.exe.sig ]; then
-            cp dist/nodeglow-agent-linux.sig backend/static/nodeglow-agent-linux.sig
-            cp dist/nodeglow-agent.exe.sig backend/static/nodeglow-agent.exe.sig
+          bins="nodeglow-agent-linux nodeglow-agent-linux-arm64 nodeglow-agent.exe"
+          for b in $bins; do cp "dist/$b" "backend/static/$b"; done
+          chmod +x backend/static/nodeglow-agent-linux backend/static/nodeglow-agent-linux-arm64
+          if [ "${{ needs.sign.outputs.signed }}" = "true" ]; then
+            for b in $bins; do cp "dist/$b.sig" "backend/static/$b.sig"; done
           else
             # Unsigned (fork): never leave a signature of older bytes behind.
-            rm -f backend/static/nodeglow-agent-linux.sig backend/static/nodeglow-agent.exe.sig
+            for b in $bins; do rm -f "backend/static/$b.sig"; done
           fi
           ls -lh dist/ backend/static/nodeglow-agent*
 
