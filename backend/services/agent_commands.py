@@ -45,7 +45,8 @@ def redact(text: str) -> str:
 
 
 async def enqueue(db, probe, op: str, payload: dict, *, created_by: str | None,
-                  target: str | None = None, ttl: timedelta | None = None) -> AgentCommand:
+                  target: str | None = None, ttl: timedelta | None = None,
+                  credential_id: int | None = None) -> AgentCommand:
     """Queue ``op`` for ``probe`` (flushed, not committed)."""
     from services import tenant_keys
 
@@ -58,7 +59,7 @@ async def enqueue(db, probe, op: str, payload: dict, *, created_by: str | None,
     now = datetime.utcnow()
     cmd = AgentCommand(
         agent_id=probe.id, op=op, status="queued", created_at=now, expires_at=now + ttl,
-        created_by=created_by, target=target,
+        created_by=created_by, target=target, credential_id=credential_id,
         payload=await tenant_keys.encrypt_secret(db, json.dumps(payload), tenant_id=probe.tenant_id),
     )
     db.add(cmd)

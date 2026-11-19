@@ -343,3 +343,128 @@ async def test_the_agent_api_shows_what_a_probe_can_deploy(admin_pair):
     assert listed[probe_id]["deploy"]["enabled"] is True
     plain = await _seed_probe(sf, is_probe=False, name="plain")
     assert (await client.get(f"/api/v1/agents/{plain}")).json()["deploy"] is None
+
+
+# ── Sealed logins ───────────────────────────────────────────────────────────
+
+import base64  # noqa: E402
+
+from services import seal_keys  # noqa: E402
+
+_SEAL_PUB = base64.b64encode(bytes(range(32))).decode()
+_SEAL_PUB_B = base64.b64encode(bytes(range(1, 33))).decode()
+
+
+def _envelope(pub=_SEAL_PUB):
+    return {"v": 1, "suite": seal_keys.SUITE, "key": seal_keys.fingerprint(pub),
+            "enc": base64.b64encode(b"e" * 32).decode(), "ct": base64.b64encode(b"ct").decode()}
+
+
+async def _seed_sealed(sf, *, sealed=True, other_probe=False):
+    """A probe with a seal key and one sealed login; returns (probe_id, row_id)."""
+    from models.agent import Agent
+    from models.probe_credential import ProbeCredential
+    from services import tenant_keys
+    cap = {"enabled": True, "credentials": [], "arch": ["x86_64"], "sealed": sealed}
+    async with sf() as db:
+        probe = Agent(name="sp", hostname="sp", token="sp".ljust(64, "x"), is_probe=True,
+                      deploy_capability=json.dumps(cap), seal_public_key=_SEAL_PUB,
+                      seal_key_reported=_SEAL_PUB)
+        db.add(probe)
+        await db.flush()
+        owner = probe
+        if other_probe:
+            owner = Agent(name="sq", hostname="sq", token="sq".ljust(64, "x"), is_probe=True,
+                          deploy_capability=json.dumps(cap), seal_public_key=_SEAL_PUB,
+                          seal_key_reported=_SEAL_PUB)
+            db.add(owner)
+            await db.flush()
+        row = ProbeCredential(
+            probe_id=owner.id, name="lab", username="root", auth="password", hosts="[]",
+            key_fingerprint=seal_keys.fingerprint(_SEAL_PUB),
+            sealed=await tenant_keys.encrypt_secret(db, json.dumps(_envelope()),
+                                                    tenant_id=probe.tenant_id))
+        db.add(row)
+        await db.commit()
+        return probe.id, row.id
+
+
+async def test_deploy_with_sealed_login_carries_envelope(admin_pair):
+    from models.agent_deploy import AgentCommand
+    from models.audit import AuditLog
+    from models.probe_credential import ProbeCredential
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf)
+    await _answer_host_key(sf, probe_id)
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json={
+        "target": {"kind": "host", "host": "10.0.0.5", "port": 22},
+        "sealed_credential_id": cred_id, "host_key_fingerprint": FP})
+    assert resp.status_code == 202, resp.text
+    (cmd,) = [c for c in await _rows(sf, AgentCommand) if c.op == "deploy_agent"]
+    payload = await _payload(sf, cmd)
+    assert payload["sealed_credential"] == _envelope()
+    assert "credential" not in payload
+    assert cmd.credential_id == cred_id
+    (row,) = await _rows(sf, ProbeCredential)
+    assert row.last_used_at is not None
+    audit = [a for a in await _rows(sf, AuditLog) if a.action == "agent.deploy"][0]
+    details = json.loads(audit.details)
+    assert details["sealed_credential"] == {"id": cred_id, "name": "lab"}
+    assert "credential" not in details
+
+
+async def test_host_key_with_sealed_login(admin_pair):
+    from models.agent_deploy import AgentCommand
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf)
+    resp = await client.post(f"/api/probes/{probe_id}/host-key", json={
+        "host": "10.0.0.5", "sealed_credential_id": cred_id})
+    assert resp.status_code == 202, resp.text
+    (cmd,) = await _rows(sf, AgentCommand)
+    assert cmd.target == "10.0.0.5:22" and cmd.credential_id == cred_id
+    assert await _payload(sf, cmd) == {"host": "10.0.0.5", "port": 22,
+                                       "sealed_credential": _envelope()}
+
+
+async def test_both_credentials_refused(admin_pair):
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf)
+    for extra in ({"credential": "lab-root", "sealed_credential_id": cred_id}, {}):
+        body = {"target": {"kind": "host", "host": "10.0.0.5"}, **extra}
+        resp = await client.post(f"/api/probes/{probe_id}/deploy", json=body)
+        assert resp.status_code == 400 and resp.json()["code"] == "invalid_credential"
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json={
+        "target": {"kind": "host", "host": "10.0.0.5"}, "sealed_credential_id": True})
+    assert resp.status_code == 400 and resp.json()["code"] == "invalid_credential"
+
+
+async def test_stale_sealed_login_refused(admin_pair):
+    from models.agent import Agent
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf)
+    async with sf() as db:
+        (await db.get(Agent, probe_id)).seal_public_key = _SEAL_PUB_B
+        await db.commit()
+    body = {"target": {"kind": "host", "host": "10.0.0.5"}, "sealed_credential_id": cred_id}
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json=body)
+    assert resp.status_code == 409 and resp.json()["code"] == "credential_stale"
+    resp = await client.post(f"/api/probes/{probe_id}/host-key", json={
+        "host": "10.0.0.5", "sealed_credential_id": cred_id})
+    assert resp.status_code == 409 and resp.json()["code"] == "credential_stale"
+
+
+async def test_sealed_refused_when_probe_did_not_opt_in(admin_pair):
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf, sealed=False)
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json={
+        "target": {"kind": "host", "host": "10.0.0.5"}, "sealed_credential_id": cred_id})
+    assert resp.status_code == 409 and resp.json()["code"] == "sealed_not_enabled"
+
+
+async def test_unknown_and_foreign_sealed_login_refused(admin_pair):
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf, other_probe=True)
+    for cid in (cred_id, 9999):
+        resp = await client.post(f"/api/probes/{probe_id}/host-key", json={
+            "host": "10.0.0.5", "sealed_credential_id": cid})
+        assert resp.status_code == 400 and resp.json()["code"] == "unknown_credential"
