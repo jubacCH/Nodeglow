@@ -175,13 +175,11 @@ def _targets(raw) -> list[dict] | JSONResponse:
 async def deploy_through_probe(probe_id: int, request: Request):
     """Install (or, with ``agent_id``, reinstall) the agent on a host or in
     containers the probe can reach. 202 with the run id."""
-    from routers.agents import _username, issue_install_token, resolve_server_url
+    from routers.agents import _username, issue_install_token
 
     if err := _guard(request):
         return err
     body = await _body(request)
-    # Resolved before the transaction: it reads settings in a session of its own.
-    server_url = await resolve_server_url(request)
     async with models_base.AsyncSessionLocal() as db:
         probe = await _load_probe(db, probe_id)
         if isinstance(probe, JSONResponse):
@@ -221,7 +219,9 @@ async def deploy_through_probe(probe_id: int, request: Request):
                 agent_id=agent.id if agent else None)
             cmd = await agent_commands.enqueue(db, probe, "deploy_agent", {
                 "target": target, "credential": credential, "host_key_fingerprint": fingerprint,
-                "enrollment_token": raw, "server_url": server_url,
+                # No server URL: the probe binds the new agent to its own
+                # server, so a command cannot point an agent elsewhere.
+                "enrollment_token": raw,
             }, created_by=user)
             job = AgentDeployJob(run_id=run_id, kind=f"probe_{target['kind']}", target=label,
                                  agent_id=agent.id if agent else None, status="queued",

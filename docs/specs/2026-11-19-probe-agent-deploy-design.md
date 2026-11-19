@@ -85,8 +85,8 @@ one heartbeat interval; a long-poll is left for later. The old
 Ops, a closed set:
 
 - `ssh_host_key {host, port}` → `{key_type, fingerprint, public_key}`.
-- `deploy_agent {target, credential, host_key_fingerprint, enrollment_token,
-  server_url}` with `target` either `{"kind": "host", "host", "port"}` or
+- `deploy_agent {target, credential, host_key_fingerprint, enrollment_token}`
+  with `target` either `{"kind": "host", "host", "port"}` or
   `{"kind": "lxc", "host", "port", "vmid"}` (the node). One command per
   target (per container).
 
@@ -101,9 +101,11 @@ Ops, a closed set:
    given fingerprint. Run `uname -m`; anything but `x86_64` is refused.
 4. Host target, as root or through `sudo -n`, fixed commands only:
    `mkdir -p /opt/nodeglow`, write the binary (stdin), `config.json` (stdin,
-   0600: `server`, `enrollment_key`, `interval`, and the probe's own trust
-   setting — `require_release_signature` or `update_public_key` as in its own
-   config), the systemd unit (the installer's), then
+   0600: `server` — the probe's own server, never a URL from the command, so a
+   command cannot bind an agent to another server — `enrollment_key`,
+   `interval`, and `require_release_signature: true`, whatever the probe's
+   own setting: an agent a probe installed accepts release-signed updates
+   only), the systemd unit (the installer's), then
    `systemctl daemon-reload && systemctl enable --now nodeglow-agent`
    (`restart` when it was running). The new agent enrols itself on start.
    LXC target: the same files through `pct push <vmid>` from a temp dir on the

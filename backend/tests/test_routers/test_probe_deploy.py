@@ -156,7 +156,7 @@ async def test_deploy_to_a_host(admin_pair):
     raw = payload["enrollment_token"]
     assert payload == {"target": {"kind": "host", "host": "10.0.0.5", "port": 22},
                        "credential": "lab-root", "host_key_fingerprint": FP,
-                       "enrollment_token": raw, "server_url": payload["server_url"]}
+                       "enrollment_token": raw}
     (token,) = await _rows(sf, AgentInstallToken)
     assert token.token_hash == _hash_install_token(raw) and token.agent_id is None
     assert token.note == "probe deploy 10.0.0.5"
