@@ -645,7 +645,8 @@ sudo install -m 600 -o root -g root deploy.json /opt/nodeglow/deploy.json
 ```
 
 - The probe reports only the credential **names**; logins never leave the
-  probe. A key file needs no passphrase, or set `"passphrase"`.
+  probe. A key file needs no passphrase, or set `"passphrase"`. Use an
+  ed25519 or ecdsa key: RSA keys are not supported for deploy logins.
 - A user other than root needs passwordless sudo (`sudo -n`); for Proxmox
   containers, for `pct`.
 - The probe re-reads the file every interval; removing it (or setting
