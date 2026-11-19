@@ -48,7 +48,12 @@ export function ProbeDeployForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  // Set on mount too: StrictMode mounts twice in development.
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+  const cancelled = useRef(false);
 
   const probe = probes.find((p) => String(p.id) === form.probeId);
   const set = (key: keyof ProbeForm) => (e: { target: { value: string } }) =>
@@ -56,6 +61,7 @@ export function ProbeDeployForm({
 
   /** Ask the probe which host key the target presents, and wait for it. */
   async function askHostKey() {
+    cancelled.current = false;
     setAsking(true);
     try {
       const port = form.port.trim() === '' ? 22 : Number(form.port);
@@ -63,7 +69,7 @@ export function ProbeDeployForm({
       const { command_id } = await post<{ command_id: number }>(
         `/api/probes/${form.probeId}/host-key`, { host, port });
       const deadline = Date.now() + ASK_TIMEOUT_MS;
-      while (alive.current && Date.now() < deadline) {
+      while (alive.current && !cancelled.current && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         const cmd = await get<CommandView>(`/api/probes/${form.probeId}/commands/${command_id}`);
         if (cmd.status === 'ok' && cmd.result?.fingerprint) {
@@ -75,7 +81,7 @@ export function ProbeDeployForm({
           return;
         }
       }
-      if (alive.current) setError('The probe did not answer. Is it online and up to date?');
+      if (alive.current && !cancelled.current) setError('The probe did not answer. Is it online and up to date?');
     } catch (e) {
       setError(apiErrorMessage(e, 'Could not ask the probe for the host key'));
     } finally {
@@ -133,10 +139,13 @@ export function ProbeDeployForm({
 
   if (asking) {
     return (
-      <p role="status" className="flex items-center gap-2 text-meta text-fg-2">
-        <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-        Asking the probe for the host key of {form.host.trim()}. It answers with its next heartbeat.
-      </p>
+      <div className="space-y-3">
+        <p role="status" className="flex items-center gap-2 text-meta text-fg-2">
+          <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          Asking the probe for the host key of {form.host.trim()}. It answers with its next heartbeat.
+        </p>
+        <Button size="sm" onClick={() => { cancelled.current = true; setAsking(false); }}>Cancel</Button>
+      </div>
     );
   }
 

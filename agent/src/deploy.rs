@@ -37,7 +37,7 @@ const DETAIL_LIMIT: usize = 1500;
 
 // ── deploy.json ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Credential {
     pub username: String,
     #[serde(default)]
@@ -46,6 +46,74 @@ pub struct Credential {
     pub private_key_file: Option<PathBuf>,
     #[serde(default)]
     pub passphrase: Option<String>,
+    /// Where this login may be used: host names, `*.domain`, IP addresses or
+    /// CIDR networks. Required — without it the credential reaches nothing,
+    /// so the server cannot send it to an address of its choosing.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credential")
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "***"))
+            .field("private_key_file", &self.private_key_file)
+            .field("passphrase", &self.passphrase.as_ref().map(|_| "***"))
+            .field("hosts", &self.hosts)
+            .finish()
+    }
+}
+
+impl Credential {
+    /// Whether `host` (as the command names it) is on this credential's list.
+    pub fn allows(&self, host: &str) -> bool {
+        let host = connect_host(host);
+        self.hosts.iter().any(|entry| host_matches(entry.trim(), host))
+    }
+}
+
+/// The address to connect to: `[v6]` without the brackets.
+pub fn connect_host(host: &str) -> &str {
+    host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host)
+}
+
+fn host_matches(entry: &str, host: &str) -> bool {
+    use std::net::IpAddr;
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if let Some((net, bits)) = entry.split_once('/') {
+            let (Ok(net), Ok(bits)) = (net.parse::<IpAddr>(), bits.parse::<u32>()) else { return false };
+            return in_network(ip, net, bits);
+        }
+        return entry.parse::<IpAddr>().is_ok_and(|e| e == ip);
+    }
+    if let Some(suffix) = entry.strip_prefix("*.") {
+        let host = host.to_ascii_lowercase();
+        let suffix = suffix.to_ascii_lowercase();
+        return host.len() > suffix.len() + 1 && host.ends_with(&format!(".{suffix}"));
+    }
+    entry.eq_ignore_ascii_case(host)
+}
+
+fn in_network(ip: std::net::IpAddr, net: std::net::IpAddr, bits: u32) -> bool {
+    use std::net::IpAddr::{V4, V6};
+    match (ip, net) {
+        (V4(ip), V4(net)) if bits <= 32 => {
+            let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+            u32::from(ip) & mask == u32::from(net) & mask
+        }
+        (V6(ip), V6(net)) if bits <= 128 => {
+            let mask = if bits == 0 { 0 } else { u128::MAX << (128 - bits) };
+            u128::from(ip) & mask == u128::from(net) & mask
+        }
+        _ => false,
+    }
+}
+
+/// Names the server accepts (it drops others); see agent_commands._NAME.
+fn reportable_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || "_.@-".contains(c))
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -103,7 +171,7 @@ pub fn capability(file: Option<&DeployFile>) -> Value {
     match file {
         Some(f) if f.enabled() => json!({
             "enabled": true,
-            "credentials": f.credentials.keys().collect::<Vec<_>>(),
+            "credentials": f.credentials.keys().filter(|n| reportable_name(n)).collect::<Vec<_>>(),
             "arch": SUPPORTED_ARCH,
         }),
         _ => json!({"enabled": false, "credentials": [], "arch": []}),
@@ -195,6 +263,9 @@ pub fn expired(cmd: &Command, now: chrono::DateTime<chrono::Utc>) -> bool {
 #[derive(Clone)]
 pub struct ProbeContext {
     pub deploy_file: Option<DeployFile>,
+    /// The probe accepts an invalid TLS certificate from its server; an
+    /// agent it installs would not (that setting is not carried over).
+    pub insecure_tls: bool,
     /// The probe's own server: the only one a deployed agent is bound to.
     pub server: String,
     pub api: Arc<ApiClient>,
@@ -211,6 +282,9 @@ pub async fn handle(ctx: &ProbeContext, cmd: Command) -> CommandResult {
     };
     match cmd.op.as_str() {
         "ssh_host_key" => match serde_json::from_value::<HostKeyPayload>(cmd.payload) {
+            Ok(p) if valid_host(&p.host) && !file.credentials.values().any(|c| c.allows(&p.host)) => {
+                CommandResult::failed(id, format!("{} is not allowed by any credential in deploy.json (\"hosts\").", p.host))
+            }
             Ok(p) if valid_host(&p.host) => match fetch_host_key(&p.host, p.port).await {
                 Ok(key) => CommandResult::ok(id, key),
                 Err(e) => CommandResult::failed(id, format!("{e:#}")),
@@ -293,8 +367,8 @@ fn ssh_config() -> Arc<client::Config> {
 pub async fn fetch_host_key(host: &str, port: u16) -> anyhow::Result<Value> {
     let seen = Arc::new(std::sync::Mutex::new(None));
     let handler = PinnedKey { expected: None, seen: seen.clone() };
-    let attempt = tokio::time::timeout(CONNECT_TIMEOUT,
-                                       client::connect(ssh_config(), (host, port), handler)).await;
+    let attempt = tokio::time::timeout(
+        CONNECT_TIMEOUT, client::connect(ssh_config(), (connect_host(host), port), handler)).await;
     if attempt.is_err() {
         bail!("No SSH server answered on {host}:{port}.");
     }
@@ -319,7 +393,7 @@ pub async fn connect(host: &str, port: u16, cred: &Credential, expected_fp: &str
     let seen = Arc::new(std::sync::Mutex::new(None));
     let handler = PinnedKey { expected: Some(expected_fp.to_string()), seen: seen.clone() };
     let mut handle = match tokio::time::timeout(
-        CONNECT_TIMEOUT, client::connect(ssh_config(), (host, port), handler)).await
+        CONNECT_TIMEOUT, client::connect(ssh_config(), (connect_host(host), port), handler)).await
     {
         Err(_) => bail!("No SSH server answered on {host}:{port}."),
         Ok(Ok(h)) => h,
@@ -416,11 +490,13 @@ WantedBy=multi-user.target
 ";
 
 /// Swap in the new files and (re)start the service, in one shell line.
+/// Everything after the stop is chained with `&&`: a failed step must not
+/// restart the old agent and pass for a successful install.
 const ACTIVATE: &str = "systemctl stop nodeglow-agent 2>/dev/null; \
 mv -f /opt/nodeglow/nodeglow-agent.new /opt/nodeglow/nodeglow-agent && \
 mv -f /opt/nodeglow/config.json.new /opt/nodeglow/config.json && \
 mv -f /etc/systemd/system/nodeglow-agent.service.new /etc/systemd/system/nodeglow-agent.service && \
-systemctl daemon-reload && systemctl enable nodeglow-agent >/dev/null 2>&1; \
+systemctl daemon-reload && { systemctl enable nodeglow-agent >/dev/null 2>&1 || true; } && \
 systemctl restart nodeglow-agent";
 
 /// The config a deployed agent starts with: the probe's server, the
@@ -460,6 +536,11 @@ impl Procedure {
 
     pub fn arch(&self) -> String {
         self.on_target("uname -m")
+    }
+
+    /// Exits non-zero on a target without systemd.
+    pub fn has_systemd(&self) -> String {
+        self.on_target("command -v systemctl >/dev/null")
     }
 
     pub fn read_config(&self) -> String {
@@ -507,11 +588,21 @@ pub async fn verified_binary(api: &ApiClient) -> anyhow::Result<Vec<u8>> {
     Ok(data)
 }
 
-fn enrolled(config_json: &str) -> bool {
+fn token_of(config_json: &str) -> Option<String> {
     serde_json::from_str::<Value>(config_json)
         .ok()
-        .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(|t| !t.is_empty()))
-        .unwrap_or(false)
+        .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(str::to_string))
+        .filter(|t| !t.is_empty())
+}
+
+#[cfg(test)]
+fn enrolled(config_json: &str) -> bool {
+    token_of(config_json).is_some()
+}
+
+/// The new agent wrote a token, and not the one an agent there had before.
+fn enrolled_anew(config_json: &str, before: Option<&str>) -> bool {
+    token_of(config_json).is_some_and(|t| Some(t.as_str()) != before)
 }
 
 async fn deploy(ctx: &ProbeContext, file: &DeployFile, p: &DeployPayload) -> anyhow::Result<String> {
@@ -520,6 +611,13 @@ async fn deploy(ctx: &ProbeContext, file: &DeployFile, p: &DeployPayload) -> any
     let (host, port) = p.target.address();
     if !valid_host(host) {
         bail!("Invalid host.");
+    }
+    if !cred.allows(host) {
+        bail!("{host} is not allowed for the credential {:?} (\"hosts\" in deploy.json).", p.credential);
+    }
+    if ctx.insecure_tls {
+        bail!("This probe accepts an invalid TLS certificate from its server (allow_insecure_tls); \
+               an agent it installs would not. Give the server a valid certificate first.");
     }
     let binary = verified_binary(&ctx.api).await?;
     let config = target_config(&ctx.server, &p.enrollment_token);
@@ -543,6 +641,14 @@ async fn install(s: &Session, target: &Target, binary: &[u8], config: &str) -> a
     if !SUPPORTED_ARCH.contains(&arch.trim()) {
         bail!("The target is {}; only x86_64 is supported for now.", arch.trim());
     }
+    if s.run(&proc.has_systemd(), b"").await?.0 != 0 {
+        bail!("The target has no systemd; the agent is installed as a systemd service.");
+    }
+    // An agent already there: its token, to tell the new enrolment from it.
+    let before = match s.run(&proc.read_config(), b"").await {
+        Ok((0, cfg)) => token_of(&cfg),
+        _ => None,
+    };
     match target {
         Target::Host { .. } => {
             s.must(&proc.write("/opt/nodeglow/nodeglow-agent.new", "755"), binary, "Copying the agent").await?;
@@ -576,7 +682,7 @@ async fn install(s: &Session, target: &Target, binary: &[u8], config: &str) -> a
     while tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_secs(3)).await;
         if let Ok((0, cfg)) = s.run(&proc.read_config(), b"").await {
-            if enrolled(&cfg) {
+            if enrolled_anew(&cfg, before.as_deref()) {
                 return Ok("Installed; the agent enrolled and is running.".into());
             }
         }
@@ -615,6 +721,82 @@ mod tests {
     const FILE: &str = r#"{"allow_deploy_agents": true, "credentials": {
         "lab-root": {"username": "root", "private_key_file": "/root/.ssh/id_ed25519"},
         "pve": {"username": "deploy", "password": "secret-pw"}}}"#;
+
+    const ALLOW: &str = r#"{"allow_deploy_agents": true, "credentials": {
+        "lab": {"username": "root", "password": "pw", "hosts": ["web01.lab", "10.0.0.0/24", "*.lab.example", "2001:db8::/32"]},
+        "none": {"username": "root", "password": "pw"}}}"#;
+
+    #[test]
+    fn a_credential_only_reaches_its_allowed_hosts() {
+        let file: DeployFile = serde_json::from_str(ALLOW).unwrap();
+        let lab = &file.credentials["lab"];
+        for ok in ["web01.lab", "WEB01.lab", "10.0.0.7", "db.lab.example", "[2001:db8::5]"] {
+            assert!(lab.allows(ok), "{ok}");
+        }
+        for bad in ["evil.example", "10.0.1.7", "lab.example", "web01.lab.evil", "x.lab.example.evil", "2001:db9::1"] {
+            assert!(!lab.allows(bad), "{bad}");
+        }
+        // No list: the credential reaches nothing.
+        assert!(!file.credentials["none"].allows("web01.lab"));
+    }
+
+    #[tokio::test]
+    async fn the_server_cannot_send_a_credential_elsewhere() {
+        let cfg = crate::config::Config::for_test();
+        let file: DeployFile = serde_json::from_str(ALLOW).unwrap();
+        let ctx = ProbeContext { deploy_file: Some(file), server: cfg.server.clone(), insecure_tls: false,
+                                 api: Arc::new(ApiClient::new(&cfg)) };
+        let deploy = Command { id: 1, op: "deploy_agent".into(), expires_at: None, payload: json!({
+            "target": {"kind": "host", "host": "evil.example", "port": 22}, "credential": "lab",
+            "host_key_fingerprint": "SHA256:x", "enrollment_token": "nt_0123456789"})};
+        let res = handle(&ctx, deploy).await;
+        assert_eq!(res.status, "failed");
+        assert!(res.result["detail"].as_str().unwrap().contains("not allowed"), "{:?}", res.result);
+        let ask = Command { id: 2, op: "ssh_host_key".into(), expires_at: None,
+                            payload: json!({"host": "evil.example", "port": 22})};
+        let res = handle(&ctx, ask).await;
+        assert_eq!(res.status, "failed");
+        assert!(res.result["detail"].as_str().unwrap().contains("not allowed"));
+    }
+
+    #[test]
+    fn credentials_never_print_their_secrets() {
+        let file: DeployFile = serde_json::from_str(FILE).unwrap();
+        let text = format!("{:?}", file);
+        assert!(!text.contains("secret-pw"), "{text}");
+    }
+
+    #[test]
+    fn capability_skips_names_the_server_would_drop() {
+        let file: DeployFile = serde_json::from_str(r#"{"allow_deploy_agents": true, "credentials": {
+            "ok-name": {"username": "root"}, "bad name": {"username": "root"}}}"#).unwrap();
+        assert_eq!(capability(Some(&file))["credentials"], json!(["ok-name"]));
+    }
+
+    #[test]
+    fn activation_stops_at_the_first_failure() {
+        // Everything up to the restart is chained with &&: a failed mv must
+        // not restart the old agent and look like success.
+        let restart = ACTIVATE.find("systemctl restart").unwrap();
+        let tail = &ACTIVATE[..restart];
+        assert!(tail.trim_end().ends_with("&&"), "{ACTIVATE}");
+        assert!(!ACTIVATE[ACTIVATE.find("mv -f").unwrap()..].contains("; systemctl restart"));
+    }
+
+    #[test]
+    fn a_reinstall_needs_a_new_token() {
+        let old = r#"{"server":"s","token":"old"}"#;
+        assert!(!enrolled_anew(old, Some("old")));
+        assert!(enrolled_anew(r#"{"server":"s","token":"new"}"#, Some("old")));
+        assert!(enrolled_anew(r#"{"server":"s","token":"new"}"#, None));
+        assert!(!enrolled_anew(r#"{"server":"s","token":""}"#, None));
+    }
+
+    #[test]
+    fn brackets_are_dropped_for_the_connection() {
+        assert_eq!(connect_host("[fe80::1]"), "fe80::1");
+        assert_eq!(connect_host("web01"), "web01");
+    }
 
     #[cfg(unix)]
     #[test]
@@ -729,7 +911,7 @@ mod tests {
     #[tokio::test]
     async fn nothing_runs_without_the_local_opt_in() {
         let cfg = crate::config::Config::for_test();
-        let ctx = ProbeContext { deploy_file: None, server: cfg.server.clone(),
+        let ctx = ProbeContext { deploy_file: None, server: cfg.server.clone(), insecure_tls: false,
                                  api: Arc::new(ApiClient::new(&cfg)) };
         let cmd = Command { id: 7, op: "deploy_agent".into(), payload: json!({}), expires_at: None };
         let res = handle(&ctx, cmd).await;
@@ -741,7 +923,7 @@ mod tests {
     async fn unknown_ops_are_refused() {
         let cfg = crate::config::Config::for_test();
         let file: DeployFile = serde_json::from_str(FILE).unwrap();
-        let ctx = ProbeContext { deploy_file: Some(file), server: cfg.server.clone(),
+        let ctx = ProbeContext { deploy_file: Some(file), server: cfg.server.clone(), insecure_tls: false,
                                  api: Arc::new(ApiClient::new(&cfg)) };
         let cmd = Command { id: 8, op: "run_shell".into(), payload: json!({"cmd": "id"}), expires_at: None };
         assert_eq!(handle(&ctx, cmd).await.status, "failed");
@@ -851,7 +1033,8 @@ mod ssh_tests {
     }
 
     fn root() -> Credential {
-        Credential { username: "root".into(), password: Some("pw".into()), private_key_file: None, passphrase: None }
+        Credential { username: "root".into(), password: Some("pw".into()), private_key_file: None,
+                     passphrase: None, hosts: vec!["127.0.0.1".into()] }
     }
 
     #[tokio::test]

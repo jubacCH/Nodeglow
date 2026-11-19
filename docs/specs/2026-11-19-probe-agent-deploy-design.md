@@ -57,11 +57,18 @@ written by the agent, never sent to the server):
 {
   "allow_deploy_agents": true,
   "credentials": {
-    "lab-root": {"username": "root", "private_key_file": "/root/.ssh/id_ed25519"},
-    "pve": {"username": "deploy", "password": "…", "sudo": true}
+    "lab-root": {"username": "root", "private_key_file": "/root/.ssh/id_ed25519",
+                 "hosts": ["10.0.20.0/24", "*.lab.example"]},
+    "pve": {"username": "deploy", "password": "…", "hosts": ["pve1.lab.example"]}
   }
 }
 ```
+
+`hosts` is required (names, `*.domain`, IPs, CIDRs): the probe uses a
+credential only for those addresses, and answers `ssh_host_key` only for an
+address some credential allows. Without it, a compromised server could name
+any address, confirm its own host key and collect a password. A user other
+than `root` goes through `sudo -n`.
 
 Without the file, or with `allow_deploy_agents` not `true`, the probe refuses
 every deploy command. The probe reports in its heartbeat

@@ -200,6 +200,7 @@ async fn main() {
                 for cmd in resp.commands.unwrap_or_default() {
                     let ctx = deploy::ProbeContext {
                         deploy_file: deploy_file.clone(),
+                        insecure_tls: cfg.allow_insecure_tls,
                         server: cfg.server.clone(),
                         api: deploy_api.clone(),
                     };
@@ -208,7 +209,13 @@ async fn main() {
                     let running = deploys_running.clone();
                     running.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     tokio::spawn(async move {
-                        let _slot = gate.acquire_owned().await;
+                        // Host-key questions are quick and the UI waits for
+                        // them: they do not queue behind running deploys.
+                        let _slot = if cmd.op == "deploy_agent" {
+                            Some(gate.acquire_owned().await)
+                        } else {
+                            None
+                        };
                         info!(id = cmd.id, op = %cmd.op, "Running command");
                         let result = deploy::handle(&ctx, cmd).await;
                         results.lock().expect("command results").push(result);

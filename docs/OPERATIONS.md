@@ -634,8 +634,9 @@ is ignored:
 {
   "allow_deploy_agents": true,
   "credentials": {
-    "lab-root": {"username": "root", "private_key_file": "/root/.ssh/id_ed25519"},
-    "pve":      {"username": "deploy", "password": "…"}
+    "lab-root": {"username": "root", "private_key_file": "/root/.ssh/id_ed25519",
+                 "hosts": ["10.0.20.0/24", "*.lab.example"]},
+    "pve":      {"username": "deploy", "password": "…", "hosts": ["pve1.lab.example"]}
   }
 }
 ```
@@ -644,9 +645,17 @@ is ignored:
 sudo install -m 600 -o root -g root deploy.json /opt/nodeglow/deploy.json
 ```
 
-- The probe reports only the credential **names**; logins never leave the
+- **`hosts` is required** per credential: host names, `*.domain`, IP
+  addresses or CIDR networks the login may be used for. The probe refuses any
+  other address, also for reading a host key. This is what keeps a
+  compromised server from sending a login (a password above all) to a host of
+  its choosing; keep the lists tight. A name matches only as written: the
+  probe does not resolve it for the check.
+- The probe reports only the credential **names**; the logins stay on the
   probe. A key file needs no passphrase, or set `"passphrase"`. Use an
   ed25519 or ecdsa key: RSA keys are not supported for deploy logins.
+- Not with `allow_insecure_tls`: an installed agent would not accept the
+  server's certificate. Targets need systemd.
 - A user other than root needs passwordless sudo (`sudo -n`); for Proxmox
   containers, for `pct`.
 - The probe re-reads the file every interval; removing it (or setting

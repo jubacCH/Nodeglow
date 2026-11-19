@@ -14,8 +14,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   "Through a probe" when a probe allows it: pick the probe, a host in its
   network or containers of a Proxmox node (`105, 107, 110-112`), and one of
   the probe's credentials. The SSH logins stay on the probe, in a root-only
-  `/opt/nodeglow/deploy.json` that also switches the feature on; Nodeglow
-  knows their names only, so this works on a hosted installation too. The
+  `/opt/nodeglow/deploy.json` that also switches the feature on and lists,
+  per login, the hosts it may be used for; Nodeglow knows their names only,
+  so this works on a hosted installation too. The
   probe asks for the host key first (you confirm its fingerprint), installs
   the release-signed agent binary it verified itself with a fixed procedure,
   binds it to its own server, and waits for it to enrol; progress shows per
