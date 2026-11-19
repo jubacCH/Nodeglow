@@ -77,6 +77,9 @@ class AgentCommand(TenantScoped, Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     agent_id = Column(Integer, nullable=False)
     op = Column(String(32), nullable=False)
+    # What the command is about ("host:port"), not secret: the server matches
+    # answers against what it asked, never against what the probe says.
+    target = Column(String(300), nullable=True)
     payload = Column(Text, nullable=True)
     status = Column(String(16), nullable=False, default="queued")
     result = Column(Text, nullable=True)

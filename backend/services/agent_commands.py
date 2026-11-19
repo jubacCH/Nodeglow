@@ -9,15 +9,21 @@ results are stored redacted.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from models.agent_deploy import AgentCommand, AgentDeployJob
 
+log = logging.getLogger(__name__)
+
 OPS = frozenset({"ssh_host_key", "deploy_agent"})
 TTL = timedelta(minutes=10)
+# A deploy run of many containers goes out five per heartbeat and installs
+# one after another on the probe: give the last of them time.
+DEPLOY_TTL = timedelta(minutes=30)
 # A delivered command whose result has not come back this long after it
 # expired is given up (the probe went away or never answered).
 RESULT_GRACE = timedelta(minutes=10)
@@ -35,7 +41,7 @@ def redact(text: str) -> str:
 
 
 async def enqueue(db, probe, op: str, payload: dict, *, created_by: str | None,
-                  ttl: timedelta = TTL) -> AgentCommand:
+                  target: str | None = None, ttl: timedelta | None = None) -> AgentCommand:
     """Queue ``op`` for ``probe`` (flushed, not committed)."""
     from services import tenant_keys
 
@@ -43,10 +49,12 @@ async def enqueue(db, probe, op: str, payload: dict, *, created_by: str | None,
         raise ValueError(f"unknown op {op!r}")
     if not probe.is_probe:
         raise ValueError("commands are for probes only")
+    if ttl is None:
+        ttl = DEPLOY_TTL if op == "deploy_agent" else TTL
     now = datetime.utcnow()
     cmd = AgentCommand(
         agent_id=probe.id, op=op, status="queued", created_at=now, expires_at=now + ttl,
-        created_by=created_by,
+        created_by=created_by, target=target,
         payload=await tenant_keys.encrypt_secret(db, json.dumps(payload), tenant_id=probe.tenant_id),
     )
     db.add(cmd)
@@ -70,23 +78,57 @@ async def _jobs_of(db, cmd_ids: list[int]) -> list[AgentDeployJob]:
         AgentDeployJob.command_id.in_(cmd_ids)))).scalars().all())
 
 
+async def _fail_jobs(db, cmd_ids: list[int], detail: str, now: datetime) -> None:
+    for job in await _jobs_of(db, cmd_ids):
+        if job.status in ("queued", "running"):
+            job.status, job.finished_at, job.detail = "failed", now, detail
+
+
 async def deliver(db, agent, now: datetime | None = None) -> list[dict]:
-    """The commands to hand out with this heartbeat; marks them delivered."""
+    """The commands to hand out with this heartbeat; marks them delivered.
+
+    Each command is claimed with a conditional update, so two heartbeats of
+    the same probe at once cannot both hand out the same command. Delivered
+    commands whose answer is overdue are written off here as well.
+    """
     from services import tenant_keys
 
     now = now or datetime.utcnow()
+    overdue = (await db.execute(select(AgentCommand).where(
+        AgentCommand.agent_id == agent.id, AgentCommand.status == "delivered",
+        AgentCommand.expires_at <= now - RESULT_GRACE))).scalars().all()
+    for cmd in overdue:
+        cmd.status, cmd.finished_at = "expired", now
+    await _fail_jobs(db, [c.id for c in overdue],
+                     "The probe did not answer in time (offline, or an older agent).", now)
+
     pending = (await db.execute(select(AgentCommand).where(
         AgentCommand.agent_id == agent.id, AgentCommand.status == "queued",
     ).order_by(AgentCommand.id))).scalars().all()
-    out, delivered = [], []
+    out, delivered, expired, broken = [], [], [], []
     for cmd in pending:
         if cmd.expires_at <= now:
             cmd.status, cmd.payload, cmd.finished_at = "expired", None, now
+            expired.append(cmd.id)
             continue
         if len(out) >= MAX_PER_HEARTBEAT:
             continue
-        payload = json.loads(await tenant_keys.decrypt_secret(db, cmd.payload,
-                                                              tenant_id=cmd.tenant_id))
+        claimed = await db.execute(
+            update(AgentCommand)
+            .where(AgentCommand.id == cmd.id, AgentCommand.status == "queued")
+            .values(status="delivered", delivered_at=now)
+            .execution_options(synchronize_session=False))
+        if claimed.rowcount != 1:
+            continue  # another heartbeat took it
+        try:
+            payload = json.loads(await tenant_keys.decrypt_secret(db, cmd.payload,
+                                                                  tenant_id=cmd.tenant_id))
+        except Exception:  # noqa: BLE001 — one unreadable command must not stop the heartbeat
+            log.error("Command %d for agent %d cannot be decrypted", cmd.id, agent.id)
+            cmd.status, cmd.payload, cmd.finished_at = "failed", None, now
+            cmd.result = json.dumps({"detail": "The command could not be decrypted."})
+            broken.append(cmd.id)
+            continue
         out.append({"id": cmd.id, "op": cmd.op, "payload": payload,
                     "expires_at": cmd.expires_at.isoformat() + "Z"})
         cmd.status, cmd.payload, cmd.delivered_at = "delivered", None, now
@@ -94,11 +136,8 @@ async def deliver(db, agent, now: datetime | None = None) -> list[dict]:
     for job in await _jobs_of(db, delivered):
         if job.status == "queued":
             job.status, job.started_at = "running", now
-    expired = [c.id for c in pending if c.status == "expired"]
-    for job in await _jobs_of(db, expired):
-        if job.status in ("queued", "running"):
-            job.status, job.finished_at = "failed", now
-            job.detail = "The probe did not pick up the command in time."
+    await _fail_jobs(db, expired, "The probe did not pick up the command in time.", now)
+    await _fail_jobs(db, broken, "The command could not be decrypted on the server.", now)
     return out
 
 
@@ -119,7 +158,9 @@ async def apply_results(db, agent, results, now: datetime | None = None) -> None
         return
     cmds = (await db.execute(select(AgentCommand).where(
         AgentCommand.id.in_(list(answers)), AgentCommand.agent_id == agent.id,
-        AgentCommand.status == "delivered"))).scalars().all()
+        AgentCommand.status == "delivered",
+        # An answer after the UI gave up does not reverse what it showed.
+        AgentCommand.expires_at > now - RESULT_GRACE))).scalars().all()
     for cmd in cmds:
         answer = answers[cmd.id]
         result = answer.get("result") if isinstance(answer.get("result"), dict) else {}
@@ -163,5 +204,11 @@ async def handle_heartbeat(db, agent, body: dict) -> list[dict] | None:
         return None
     if "deploy" in body:
         agent.deploy_capability = sanitize_capability(body.get("deploy"))
-    await apply_results(db, agent, body.get("command_results"))
-    return await deliver(db, agent)
+    now = datetime.utcnow()
+    await apply_results(db, agent, body.get("command_results"), now)
+    return await deliver(db, agent, now)
+
+
+# Keys of the heartbeat that belong to commands, not to the metrics snapshot
+# (the snapshot is stored and served as is).
+HEARTBEAT_KEYS = ("command_results", "deploy")

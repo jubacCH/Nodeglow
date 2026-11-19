@@ -215,3 +215,61 @@ def test_effective_status_expires_unanswered_commands():
     assert agent_commands.effective_status(queued, now) == "expired"
     assert agent_commands.effective_status(delivered, now) == "delivered"
     assert agent_commands.effective_status(lost, now) == "expired"
+
+
+
+async def test_the_metrics_snapshot_keeps_no_command_results(auth_client):
+    from unittest.mock import patch
+    client, sf = auth_client
+    probe_id, token = await _probe(client, sf)
+    cmd_id = await _enqueue(sf, probe_id)
+    await _report(client, token)
+    stored = []
+
+    async def capture(rows):
+        stored.extend(rows)
+
+    # A patch scoped to the call: restored before the client's own patches.
+    with patch("services.clickhouse_client.insert_agent_metrics", capture):
+        await _report(client, token, deploy={"enabled": True, "credentials": ["x"]},
+                      command_results=[{"id": cmd_id, "status": "failed",
+                                        "result": {"detail": TOKEN}}])
+    assert stored and all(TOKEN not in r["data_json"] for r in stored)
+    assert all("command_results" not in json.loads(r["data_json"]) for r in stored)
+
+
+async def test_a_late_result_does_not_reverse_an_expired_command(auth_client):
+    from models.agent_deploy import AgentDeployJob
+    from services import agent_commands
+    client, sf = auth_client
+    probe_id, token = await _probe(client, sf)
+    cmd_id = await _enqueue(sf, probe_id)
+    async with sf() as db:
+        db.add(AgentDeployJob(run_id="r", kind="probe_host", target="h", status="queued",
+                              probe_id=probe_id, command_id=cmd_id))
+        await db.commit()
+    await _report(client, token)
+    async with sf() as db:
+        cmd = await db.get(__import__("models.agent_deploy", fromlist=["AgentCommand"]).AgentCommand, cmd_id)
+        cmd.expires_at = datetime.utcnow() - agent_commands.RESULT_GRACE - timedelta(seconds=1)
+        await db.commit()
+    await _report(client, token, command_results=[{"id": cmd_id, "status": "ok", "result": {}}])
+    cmd = await _command(sf, cmd_id)
+    assert cmd.status == "expired"
+    async with sf() as db:
+        job = (await db.execute(__import__("sqlalchemy").select(AgentDeployJob))).scalars().one()
+    assert job.status == "failed"
+
+
+async def test_an_undecryptable_payload_fails_only_its_command(auth_client):
+    client, sf = auth_client
+    probe_id, token = await _probe(client, sf)
+    bad = await _enqueue(sf, probe_id)
+    good = await _enqueue(sf, probe_id)
+    async with sf() as db:
+        cmd = await db.get(__import__("models.agent_deploy", fromlist=["AgentCommand"]).AgentCommand, bad)
+        cmd.payload = "v2:nope:garbage"
+        await db.commit()
+    resp = await _report(client, token)
+    assert [c["id"] for c in resp["commands"]] == [good]
+    assert (await _command(sf, bad)).status == "failed"

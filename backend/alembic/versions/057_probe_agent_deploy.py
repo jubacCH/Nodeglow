@@ -50,6 +50,16 @@ def _unique_names(table: str) -> set[str]:
     return names
 
 
+def _has_index(name: str) -> bool:
+    """Read from the catalogue: reflection skips expression indexes on SQLite."""
+    bind = op.get_bind()
+    if _is_pg():
+        sql = "SELECT 1 FROM pg_indexes WHERE indexname = :n"
+    else:
+        sql = "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = :n"
+    return bind.execute(sa.text(sql), {"n": name}).first() is not None
+
+
 def upgrade() -> None:
     if not _has_column("agents", "deploy_capability"):
         op.add_column("agents", sa.Column("deploy_capability", sa.Text(), nullable=True))
@@ -64,7 +74,7 @@ def upgrade() -> None:
     if UNIQUE in {u["name"] for u in _insp().get_unique_constraints(HOST_KEYS)}:
         with op.batch_alter_table(HOST_KEYS) as batch:
             batch.drop_constraint(UNIQUE, type_="unique")
-    if UNIQUE not in _unique_names(HOST_KEYS):
+    if not _has_index(UNIQUE):
         op.create_index(UNIQUE, HOST_KEYS,
                         ["tenant_id", sa.text("coalesce(probe_id, 0)"), "host", "port"], unique=True)
     if _is_pg() and PROBE_FK not in {fk["name"] for fk in _insp().get_foreign_keys(HOST_KEYS)}:
@@ -77,6 +87,7 @@ def upgrade() -> None:
             sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
             sa.Column("agent_id", sa.Integer(), nullable=False),
             sa.Column("op", sa.String(32), nullable=False),
+            sa.Column("target", sa.String(300), nullable=True),
             sa.Column("payload", sa.Text(), nullable=True),
             sa.Column("status", sa.String(16), nullable=False),
             sa.Column("result", sa.Text(), nullable=True),
@@ -111,9 +122,9 @@ def downgrade() -> None:
 
     if _is_pg() and PROBE_FK in {fk["name"] for fk in _insp().get_foreign_keys(HOST_KEYS)}:
         op.drop_constraint(PROBE_FK, HOST_KEYS, type_="foreignkey")
-    if UNIQUE in _unique_names(HOST_KEYS):
-        op.drop_index(UNIQUE, table_name=HOST_KEYS)
     if _has_column(HOST_KEYS, "probe_id"):
+        if _has_index(UNIQUE):
+            op.drop_index(UNIQUE, table_name=HOST_KEYS)
         with op.batch_alter_table(HOST_KEYS) as batch:
             batch.drop_column("probe_id")
             batch.create_unique_constraint(UNIQUE, ["tenant_id", "host", "port"])

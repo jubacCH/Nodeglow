@@ -285,6 +285,20 @@ API key; body `{host_key_fingerprint?}`): with an SSH key in the integration,
 Only the containers of the node that answers the API are included; the
 others are listed in `skipped_other_nodes`.
 
+Install through a probe (part C; admin session, not through support access).
+The probe must report `deploy.enabled` (its local `deploy.json`); SSH
+credentials stay on the probe and are named, never sent:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/probes/{id}/host-key` | Body `{host, port=22}`. `202 {command_id}`: the probe reads the host key with its next heartbeat (audited) |
+| GET | `/api/probes/{id}/commands/{command_id}` | `{id, op, status, result}`; for `ssh_host_key` the result is `{key_type, fingerprint, public_key}` |
+| POST | `/api/probes/{id}/deploy` | Body `{target: {kind: "host", host, port} \| {kind: "lxc", host, port, vmids: [...]}, credential, agent_id?, host_key_fingerprint?}`. Unknown host key: `409 host_key_unknown` (ask `/host-key` first, then confirm its fingerprint). Else `202 {run_id, jobs}`, followed by `GET /api/agent-deploy/{run_id}`; one job (and one install token) per host or container |
+
+Probes receive these as `commands` in the heartbeat response and answer with
+`command_results` in the next heartbeat; they report
+`deploy: {enabled, credentials, arch}` in every heartbeat.
+
 ### Sites
 
 Sites group hosts and probes by location inside a tenant. They filter and

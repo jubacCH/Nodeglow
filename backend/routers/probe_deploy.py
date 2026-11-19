@@ -89,7 +89,9 @@ async def ask_host_key(probe_id: int, request: Request):
             return address
         host, port = address
         cmd = await agent_commands.enqueue(db, probe, "ssh_host_key", {"host": host, "port": port},
-                                           created_by=_username(request))
+                                           created_by=_username(request), target=f"{host}:{port}")
+        await log_action(db, request, "agent.host_key_query", "agent", probe.id, probe.name,
+                         {"target": f"{host}:{port}", "command_id": cmd.id})
         await db.commit()
         return JSONResponse({"ok": True, "command_id": cmd.id}, status_code=202)
 
@@ -124,9 +126,11 @@ async def _pinned(db, request, probe: Agent, host: str, port: int,
                       host=host, port=port)
     if not confirmed:
         return unknown
+    # Answers to what the server asked about this address (``target`` is the
+    # server's, not the probe's), whose key really hashes to the fingerprint.
     answers = (await db.execute(select(AgentCommand).where(
         AgentCommand.agent_id == probe.id, AgentCommand.op == "ssh_host_key",
-        AgentCommand.status == "ok",
+        AgentCommand.status == "ok", AgentCommand.target == f"{host}:{port}",
         AgentCommand.created_at >= datetime.utcnow() - HOST_KEY_ANSWER_TTL,
     ).order_by(AgentCommand.id.desc()))).scalars().all()
     for answer in answers:
@@ -134,18 +138,45 @@ async def _pinned(db, request, probe: Agent, host: str, port: int,
             seen = json.loads(answer.result or "{}")
         except ValueError:
             continue
-        if (seen.get("host"), seen.get("port"), seen.get("fingerprint")) == (host, port, confirmed):
-            user = getattr(request.state, "current_user", None)
-            row = SshHostKey(host=host, port=port, probe_id=probe.id,
-                             key_type=str(seen.get("key_type") or "")[:64],
-                             public_key=str(seen.get("public_key") or ""),
-                             fingerprint=confirmed, created_by=user.username if user else None)
-            db.add(row)
-            await db.flush()
-            await log_action(db, request, "ssh_host_key.trust", "ssh_host_key", row.id,
-                             f"{host}:{port}", {"fingerprint": confirmed, "probe_id": probe.id})
-            return confirmed
+        public_key = str(seen.get("public_key") or "")
+        if seen.get("fingerprint") != confirmed or openssh_fingerprint(public_key) != confirmed:
+            continue
+        from sqlalchemy.exc import IntegrityError
+
+        user = getattr(request.state, "current_user", None)
+        try:
+            async with db.begin_nested():
+                row = SshHostKey(host=host, port=port, probe_id=probe.id,
+                                 key_type=str(seen.get("key_type") or "")[:64],
+                                 public_key=public_key, fingerprint=confirmed,
+                                 created_by=user.username if user else None)
+                db.add(row)
+                await db.flush()
+        except IntegrityError:
+            # Another request pinned it a moment ago: use what is stored.
+            stored = (await db.execute(select(SshHostKey).where(
+                SshHostKey.probe_id == probe.id, SshHostKey.host == host,
+                SshHostKey.port == port))).scalar_one()
+            return stored.fingerprint
+        await log_action(db, request, "ssh_host_key.trust", "ssh_host_key", row.id,
+                         f"{host}:{port}", {"fingerprint": confirmed, "probe_id": probe.id})
+        return confirmed
     return unknown
+
+
+def openssh_fingerprint(public_key: str) -> str | None:
+    """SHA256 fingerprint of an OpenSSH public key line, as ssh-keygen -l."""
+    import base64
+    import hashlib
+
+    parts = public_key.split()
+    if len(parts) < 2:
+        return None
+    try:
+        blob = base64.b64decode(parts[1], validate=True)
+    except ValueError:
+        return None
+    return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
 
 def _targets(raw) -> list[dict] | JSONResponse:

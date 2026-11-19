@@ -474,7 +474,10 @@ async def _handle_report(db, agent: Agent, body: dict):
     load = body.get("load", {})
 
     snap_ts = datetime.utcnow()
-    snap_data_json = json.dumps(body)
+    # Command answers and the deploy report are not metrics: kept out of the
+    # stored snapshot, which is served back by the API as is.
+    from services.agent_commands import HEARTBEAT_KEYS
+    snap_data_json = json.dumps({k: v for k, v in body.items() if k not in HEARTBEAT_KEYS})
 
     # Extract bandwidth samples from agent network data (writes to ClickHouse)
     try:

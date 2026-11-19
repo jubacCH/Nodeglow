@@ -9,8 +9,11 @@ import pytest
 
 import services.shared_state as ss
 
-FP = "SHA256:probe-seen-key"
-PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExam"
+import asyncssh
+
+_KEY = asyncssh.generate_private_key("ssh-ed25519")
+FP = _KEY.get_fingerprint("sha256")
+PUB = _KEY.export_public_key("openssh").decode().strip()
 
 
 @pytest.fixture(autouse=True)
@@ -51,19 +54,20 @@ async def _payload(sf, cmd):
         return json.loads(await tenant_keys.decrypt_secret(db, cmd.payload, tenant_id=cmd.tenant_id))
 
 
-async def _answer_host_key(sf, probe_id, host="10.0.0.5", port=22, fingerprint=FP):
-    """The probe answers the host-key question (delivered, then its result)."""
+async def _answer_host_key(sf, probe_id, host="10.0.0.5", port=22, fingerprint=FP, public_key=PUB):
+    """The probe answers the host-key question (delivered, then its result,
+    shaped as the spec says: no address, the server knows what it asked)."""
     from models.agent import Agent
     from services import agent_commands
     async with sf() as db:
         probe = await db.get(Agent, probe_id)
         cmd = await agent_commands.enqueue(db, probe, "ssh_host_key", {"host": host, "port": port},
-                                           created_by="admin")
+                                           created_by="admin", target=f"{host}:{port}")
         await agent_commands.deliver(db, probe)
         await agent_commands.apply_results(db, probe, [{"id": cmd.id, "status": "ok", "result": {
-            "host": host, "port": port, "key_type": "ssh-ed25519", "fingerprint": fingerprint,
-            "public_key": PUB}}])
+            "key_type": "ssh-ed25519", "fingerprint": fingerprint, "public_key": public_key}}])
         await db.commit()
+        return cmd.id
 
 
 def _deploy_body(**kw):
@@ -288,3 +292,41 @@ async def test_the_server_gate_does_not_apply(admin_pair, monkeypatch):
     probe_id = await _seed_probe(sf)
     resp = await client.post(f"/api/probes/{probe_id}/host-key", json={"host": "10.0.0.5"})
     assert resp.status_code == 202
+
+
+
+async def test_an_answer_for_another_address_does_not_confirm(admin_pair):
+    client, sf = admin_pair
+    probe_id = await _seed_probe(sf)
+    await _answer_host_key(sf, probe_id, host="10.0.0.9")
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json=_deploy_body(host_key_fingerprint=FP))
+    assert resp.status_code == 409 and resp.json()["code"] == "host_key_unknown"
+
+
+async def test_a_public_key_that_does_not_hash_to_the_fingerprint_is_refused(admin_pair):
+    client, sf = admin_pair
+    probe_id = await _seed_probe(sf)
+    other = asyncssh.generate_private_key("ssh-ed25519").export_public_key("openssh").decode().strip()
+    await _answer_host_key(sf, probe_id, public_key=other)
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json=_deploy_body(host_key_fingerprint=FP))
+    assert resp.status_code == 409 and resp.json()["code"] == "host_key_unknown"
+
+
+async def test_the_host_key_question_is_audited(admin_pair):
+    from models.audit import AuditLog
+    client, sf = admin_pair
+    probe_id = await _seed_probe(sf)
+    await client.post(f"/api/probes/{probe_id}/host-key", json={"host": "10.0.0.5"})
+    rows = [r for r in await _rows(sf, AuditLog) if r.action == "agent.host_key_query"]
+    assert len(rows) == 1 and "10.0.0.5" in rows[0].details
+
+
+async def test_deploy_commands_live_long_enough_for_a_big_run(admin_pair):
+    from models.agent_deploy import AgentCommand
+    from services import agent_commands
+    client, sf = admin_pair
+    probe_id = await _seed_probe(sf)
+    await _answer_host_key(sf, probe_id)
+    await client.post(f"/api/probes/{probe_id}/deploy", json=_deploy_body(host_key_fingerprint=FP))
+    cmd = [c for c in await _rows(sf, AgentCommand) if c.op == "deploy_agent"][0]
+    assert cmd.expires_at - cmd.created_at == agent_commands.DEPLOY_TTL
