@@ -13,10 +13,10 @@ from datetime import datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from models import base as models_base
 from models.agent import Agent
-from models.agent_deploy import AgentCommand
 from models.probe_credential import ProbeCredential
 from ratelimit import rate_limit
 from routers.agent_deploy import _refuse
@@ -123,8 +123,12 @@ async def create_credential(probe_id: int, request: Request):
             sealed=await tenant_keys.encrypt_secret(db, json.dumps(envelope),
                                                     tenant_id=probe.tenant_id),
             created_at=datetime.utcnow(), created_by=_username(request))
-        db.add(row)
-        await db.flush()
+        try:
+            async with db.begin_nested():
+                db.add(row)
+                await db.flush()
+        except IntegrityError:
+            return _refuse("A login with that name exists already.", 409, "name_taken")
         await log_action(db, request, "probe.credential.create", "agent", probe.id, probe.name,
                          {"credential": name, "credential_id": row.id, "auth": row.auth})
         await db.commit()
@@ -140,18 +144,12 @@ async def delete_credential(probe_id: int, credential_id: int, request: Request)
         row = await db.get(ProbeCredential, credential_id)
         if row is None or row.probe_id != probe_id:
             return _refuse("Login not found", 404)
-        now = datetime.utcnow()
-        queued = (await db.execute(select(AgentCommand).where(
-            AgentCommand.credential_id == row.id, AgentCommand.status == "queued",
-        ))).scalars().all()
-        for cmd in queued:
-            cmd.status, cmd.payload, cmd.finished_at = "expired", None, now
-        await agent_commands._fail_jobs(db, [c.id for c in queued], DELETED_DETAIL, now)
+        expired = await agent_commands.expire_for_credential(db, row.id, probe_id, DELETED_DETAIL)
         probe = await db.get(Agent, probe_id)
         await log_action(db, request, "probe.credential.delete", "agent", probe_id,
                          probe.name if probe else None,
                          {"credential": row.name, "credential_id": row.id,
-                          "expired_commands": len(queued)})
+                          "expired_commands": len(expired)})
         await db.delete(row)
         await db.commit()
         return {"ok": True}

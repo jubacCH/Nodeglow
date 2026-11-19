@@ -88,6 +88,24 @@ async def _fail_jobs(db, cmd_ids: list[int], detail: str, now: datetime) -> None
             job.status, job.finished_at, job.detail = "failed", now, detail
 
 
+async def expire_for_credential(db, credential_id: int, probe_id: int, detail: str,
+                                now: datetime | None = None) -> list[int]:
+    """Expire the still-queued commands that carry ``credential_id`` and fail
+    their jobs; returns the expired ids. The conditional update cannot race
+    with ``deliver``: a command already claimed there is left alone."""
+    now = now or datetime.utcnow()
+    rows = await db.execute(
+        update(AgentCommand)
+        .where(AgentCommand.credential_id == credential_id, AgentCommand.agent_id == probe_id,
+               AgentCommand.status == "queued")
+        .values(status="expired", payload=None, finished_at=now)
+        .returning(AgentCommand.id)
+        .execution_options(synchronize_session=False))
+    ids = [r[0] for r in rows.all()]
+    await _fail_jobs(db, ids, detail, now)
+    return ids
+
+
 async def deliver(db, agent, now: datetime | None = None) -> list[dict]:
     """The commands to hand out with this heartbeat; marks them delivered.
 
@@ -204,9 +222,16 @@ MAX_ENVELOPE = 32768
 def validate_envelope(raw) -> dict | None:
     """Shape check of a sealed envelope (the server cannot open it): the clean
     five-key dict, or None."""
-    if not isinstance(raw, dict) or set(raw) != _ENVELOPE_KEYS:
+    if not isinstance(raw, dict):
         return None
-    if raw["v"] != 1 or isinstance(raw["v"], bool) or raw["suite"] != seal_keys.SUITE:
+    try:
+        if len(json.dumps(raw).encode()) > MAX_ENVELOPE:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if set(raw) != _ENVELOPE_KEYS:
+        return None
+    if type(raw["v"]) is not int or raw["v"] != 1 or raw["suite"] != seal_keys.SUITE:
         return None
     key, enc, ct = raw["key"], raw["enc"], raw["ct"]
     if not isinstance(key, str) or not _FINGERPRINT.match(key):
@@ -217,8 +242,6 @@ def validate_envelope(raw) -> dict | None:
         if len(base64.b64decode(enc, validate=True)) != 32:
             return None
         if not base64.b64decode(ct, validate=True):
-            return None
-        if len(json.dumps(raw).encode()) > MAX_ENVELOPE:
             return None
     except (binascii.Error, ValueError, TypeError):
         return None

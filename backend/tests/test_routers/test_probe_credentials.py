@@ -165,8 +165,34 @@ async def test_create_validation(admin_pair, kw, code):
 async def test_username_must_be_set(admin_pair):
     client, sf = admin_pair
     pid = await _seed_probe(sf)
-    assert (await _create(client, pid, username="")).status_code == 400
-    assert (await _create(client, pid, username="u" * 256)).status_code == 400
+    for name in ("", "u" * 256):
+        resp = await _create(client, pid, username=name)
+        assert resp.status_code == 400 and resp.json()["code"] == "invalid_username"
+
+
+async def test_state_checks_come_before_body_validation(admin_pair):
+    client, sf = admin_pair
+    pid = await _seed_probe(sf, sealed=False)
+    resp = await _create(client, pid, name="bad name", sealed=None)
+    assert resp.status_code == 409 and resp.json()["code"] == "sealed_not_enabled"
+
+
+async def test_delete_leaves_a_delivered_command_alone(admin_pair):
+    from models.agent import Agent
+    from models.agent_deploy import AgentCommand
+    from services import agent_commands
+    client, sf = admin_pair
+    pid = await _seed_probe(sf)
+    cid = (await _create(client, pid)).json()["credential"]["id"]
+    async with sf() as db:
+        probe = await db.get(Agent, pid)
+        cmd = await agent_commands.enqueue(db, probe, "deploy_agent", {"x": 1}, created_by="admin")
+        cmd.credential_id = cid
+        await agent_commands.deliver(db, probe)
+        await db.commit()
+    assert (await client.delete(f"/api/probes/{pid}/credentials/{cid}")).status_code == 200
+    (stored,) = await _rows(sf, AgentCommand)
+    assert stored.status == "delivered"
 
 
 async def test_wrong_key_is_refused(admin_pair):
