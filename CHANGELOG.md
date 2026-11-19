@@ -321,6 +321,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- The "Reinstall agent" dialog never offered "Through a probe". The agent and
+  incident pages hand the dialog only the agent being reinstalled, so no probe
+  was ever in its list. The dialog now reads the agent list itself.
 - A disabled host still raised incidents through integrations and agents.
   An integration alert about a device whose ping host is disabled (a UniFi
   bridge reported "Device disconnected" every working day) and a silent agent

@@ -3,10 +3,11 @@ import { get } from '@/lib/api';
 import type { Agent } from '@/types';
 import { whileLive } from '@/stores/websocket';
 
-export function useAgents() {
+export function useAgents(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['agents'],
     queryFn: () => get<Agent[]>('/api/v1/agents'),
+    enabled: options.enabled ?? true,
     // CPU/mem/disk arrive live over the WebSocket; poll slower while it is up.
     refetchInterval: whileLive(15_000, 60_000),
   });

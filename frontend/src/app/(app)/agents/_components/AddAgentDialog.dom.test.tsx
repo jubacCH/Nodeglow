@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from '@/types';
 import { AddAgentDialog, issueMoment, type ReinstallTarget } from './AddAgentDialog';
 
@@ -51,6 +51,29 @@ describe('AddAgentDialog reinstall mode in the browser', () => {
     // The next poll hands the dialog a new object for the same agent.
     render({ id: 7, name: 'web01', platform: 'Linux', last_seen: '2026-11-16T12:00:15Z' });
     expect((document.body.querySelector('select') as HTMLSelectElement).value).toBe('24');
+  });
+});
+
+describe('AddAgentDialog probe option on a reinstall', () => {
+  const probe = { id: 4, name: 'probe1', is_probe: true,
+    deploy: { enabled: true, credentials: ['lab-root'], arch: ['x86_64'] } } as unknown as Agent;
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('offers "Through a probe" although the caller passed only the reinstalled agent', async () => {
+    const target = { id: 7, name: 'web01', platform: 'Linux', last_seen: '2026-11-16T12:00:00Z' };
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/api/v1/agents')) return json([target, probe]);
+      if (url.endsWith('/api/enrollment-info')) return json({ ssh_deploy: false });
+      return json({});
+    }));
+    // Queries run here, unlike in the tests above.
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(target);
+    for (let i = 0; i < 5; i++) await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    const labels = Array.from(document.body.querySelectorAll('button')).map((b) => b.textContent);
+    expect(labels).toContain('Through a probe');
   });
 });
 

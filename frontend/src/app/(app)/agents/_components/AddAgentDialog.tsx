@@ -12,6 +12,7 @@ import { get, post, apiErrorMessage } from '@/lib/api';
 import { SshDeployForm } from './SshDeployForm';
 import { ProbeDeployForm } from './ProbeDeployForm';
 import { deployProbes } from '@/lib/probeDeploy';
+import { useAgents } from '@/hooks/queries/useAgents';
 import type { Agent } from '@/types';
 
 /** Response of POST /api/agents/install-tokens. The token is shown once. */
@@ -97,7 +98,12 @@ interface AddAgentDialogProps {
  * server never hands out a shared enrollment secret, so there is nothing to
  * show before the token exists.
  */
-export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogProps) {
+export function AddAgentDialog({ open, onClose, agents: agentsProp, agent }: AddAgentDialogProps) {
+  // The roster comes from the shared agents query, not from the caller: a
+  // reinstall page only knows its own agent, yet the probes that can deploy
+  // are other agents. The prop is the fallback until the query has data.
+  const roster = useAgents({ enabled: open });
+  const agents = roster.data ?? agentsProp;
   const validity = validityFor(agent);
   const [platform, setPlatform] = useState<Platform>(initialPlatform(agent));
   const [ttlHours, setTtlHours] = useState<number>(validity[0].hours);
