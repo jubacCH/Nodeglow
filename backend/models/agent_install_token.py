@@ -12,6 +12,7 @@ hostname, and only once.
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import false as sa_false
 
 from models.base import Base
 from models.tenant import TenantScoped, tenant_fk
@@ -44,7 +45,7 @@ class AgentInstallToken(TenantScoped, Base):
     # Set for a reinstall token: the existing agent it re-enrols.
     agent_id = Column(Integer, nullable=True, index=True)
     # Set for a token that enrols a probe.
-    probe = Column(Boolean, default=False, nullable=False)
+    probe = Column(Boolean, default=False, nullable=False, server_default=sa_false())
 
     __table_args__ = (
         tenant_fk("site_id", "sites", name="fk_agent_install_tokens_site"),
