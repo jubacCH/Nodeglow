@@ -175,7 +175,8 @@ async def test_the_probe_reports_its_deploy_capability(auth_client):
                                          "arch": ["x86_64"], "extra": "ignored"})
     async with sf() as db:
         cap = json.loads((await db.get(Agent, probe_id)).deploy_capability)
-    assert cap == {"enabled": True, "credentials": ["lab-root"], "arch": ["x86_64"]}
+    assert cap == {"enabled": True, "credentials": ["lab-root"], "arch": ["x86_64"],
+                   "sealed": False}
     await _report(client, token, deploy={"enabled": "yes"})
     async with sf() as db:
         cap = json.loads((await db.get(Agent, probe_id)).deploy_capability)

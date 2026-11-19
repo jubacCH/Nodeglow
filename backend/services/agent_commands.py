@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, update
 
 from models.agent_deploy import AgentCommand, AgentDeployJob
+from services import seal_keys
 
 log = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ def sanitize_capability(raw) -> str | None:
     names = [n for n in raw.get("credentials") or [] if isinstance(n, str) and _NAME.match(n)]
     arch = [a for a in raw.get("arch") or [] if isinstance(a, str) and _NAME.match(a)]
     return json.dumps({"enabled": raw.get("enabled") is True, "credentials": names[:32],
-                       "arch": arch[:8]})
+                       "arch": arch[:8], "sealed": raw.get("sealed") is True})
 
 
 def capability(agent) -> dict:
@@ -194,7 +195,10 @@ def capability(agent) -> dict:
         cap = json.loads(agent.deploy_capability or "null")
     except ValueError:
         cap = None
-    return cap if isinstance(cap, dict) else {"enabled": False, "credentials": [], "arch": []}
+    if not isinstance(cap, dict):
+        cap = {"enabled": False, "credentials": [], "arch": []}
+    # Rows stored before the flag existed read as not sealed.
+    return {**cap, "sealed": cap.get("sealed") is True}
 
 
 async def handle_heartbeat(db, agent, body: dict) -> list[dict] | None:
@@ -204,6 +208,9 @@ async def handle_heartbeat(db, agent, body: dict) -> list[dict] | None:
         return None
     if "deploy" in body:
         agent.deploy_capability = sanitize_capability(body.get("deploy"))
+        deploy = body.get("deploy")
+        await seal_keys.observe(
+            db, agent, seal_keys.parse_report(deploy.get("seal") if isinstance(deploy, dict) else None))
     now = datetime.utcnow()
     await apply_results(db, agent, body.get("command_results"), now)
     return await deliver(db, agent, now)
