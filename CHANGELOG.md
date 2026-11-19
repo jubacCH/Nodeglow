@@ -10,6 +10,20 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Install an agent through a probe. "Add agent" and "Reinstall agent" offer
+  "Through a probe" when a probe allows it: pick the probe, a host in its
+  network or containers of a Proxmox node (`105, 107, 110-112`), and one of
+  the probe's credentials. The SSH logins stay on the probe, in a root-only
+  `/opt/nodeglow/deploy.json` that also switches the feature on; Nodeglow
+  knows their names only, so this works on a hosted installation too. The
+  probe asks for the host key first (you confirm its fingerprint), installs
+  the release-signed agent binary it verified itself with a fixed procedure,
+  binds it to its own server, and waits for it to enrol; progress shows per
+  target. Linux x86_64 targets; logins with ed25519 or ecdsa keys or a
+  password; non-root users need passwordless sudo. Needs the updated agent
+  on the probe. New table `agent_commands` (migration 057), routes under
+  `/api/probes/{id}/…`, agents report `deploy`. See docs/OPERATIONS.md,
+  "Deploying agents from a probe".
 - Install an agent over SSH. "Add agent" and "Reinstall agent" offer
   "Install over SSH": enter the host and a login (or pick an SSH credential
   from the store) and Nodeglow logs in and runs the Linux installer as root
