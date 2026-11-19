@@ -29,6 +29,11 @@ ed25519-dalek = "3"
 # No "rsa": the rsa crate has an unfixed timing advisory (RUSTSEC-2023-0071);
 # deploy logins and host keys use ed25519 or ecdsa.
 russh = { version = "=0.65.1", default-features = false, features = ["ring"] }
+# Sealed deploy logins: HPKE (RFC 9180) base mode, pure Rust.
+hpke = { version = "0.13", default-features = false, features = ["x25519", "alloc"] }
+zeroize = "1"
+base64 = "0.22"
+getrandom = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 sysinfo = "0.32"

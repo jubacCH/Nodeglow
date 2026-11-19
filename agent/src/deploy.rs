@@ -44,6 +44,10 @@ pub struct Credential {
     pub password: Option<String>,
     #[serde(default)]
     pub private_key_file: Option<PathBuf>,
+    /// A pasted private key (PEM text), set only for logins sealed to this
+    /// probe; never read from deploy.json.
+    #[serde(skip)]
+    pub private_key: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,
     /// Where this login may be used: host names, `*.domain`, IP addresses or
@@ -59,6 +63,7 @@ impl std::fmt::Debug for Credential {
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "***"))
             .field("private_key_file", &self.private_key_file)
+            .field("private_key", &self.private_key.as_ref().map(|_| "***"))
             .field("passphrase", &self.passphrase.as_ref().map(|_| "***"))
             .field("hosts", &self.hosts)
             .finish()
@@ -154,13 +159,13 @@ impl DeployFile {
 }
 
 #[cfg(unix)]
-fn private_enough(meta: &std::fs::Metadata, require_root: bool) -> bool {
+pub(crate) fn private_enough(meta: &std::fs::Metadata, require_root: bool) -> bool {
     use std::os::unix::fs::MetadataExt;
     meta.is_file() && meta.mode() & 0o077 == 0 && (!require_root || meta.uid() == 0)
 }
 
 #[cfg(not(unix))]
-fn private_enough(_meta: &std::fs::Metadata, _require_root: bool) -> bool {
+pub(crate) fn private_enough(_meta: &std::fs::Metadata, _require_root: bool) -> bool {
     // Not offered on Windows probes yet: no equivalent check is in place.
     false
 }
@@ -386,6 +391,12 @@ pub struct Session {
     sudo: &'static str,
 }
 
+/// A pasted key as the SSH parser wants it: LF line endings, no trailing
+/// whitespace on any line, no blank lines around it.
+pub fn normalize_pem(pem: &str) -> String {
+    pem.trim().lines().map(str::trim_end).collect::<Vec<_>>().join("\n")
+}
+
 /// Log in to `host:port`, trusting only the key with `expected_fp`.
 pub async fn connect(host: &str, port: u16, cred: &Credential, expected_fp: &str)
     -> anyhow::Result<Session>
@@ -406,7 +417,13 @@ pub async fn connect(host: &str, port: u16, cred: &Credential, expected_fp: &str
             bail!("Cannot connect to {host}:{port}: {e}");
         }
     };
-    let auth = if let Some(path) = &cred.private_key_file {
+    let auth = if let Some(pem) = &cred.private_key {
+        let key = russh::keys::decode_secret_key(&normalize_pem(pem), cred.passphrase.as_deref())
+            .context("Cannot read the private key")?;
+        let hash = handle.best_supported_rsa_hash().await?.flatten();
+        handle.authenticate_publickey(&cred.username,
+                                      PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?
+    } else if let Some(path) = &cred.private_key_file {
         let key = russh::keys::load_secret_key(path, cred.passphrase.as_deref())
             .with_context(|| format!("Cannot read the private key {}", path.display()))?;
         let hash = handle.best_supported_rsa_hash().await?.flatten();
@@ -1033,7 +1050,7 @@ mod ssh_tests {
     }
 
     fn root() -> Credential {
-        Credential { username: "root".into(), password: Some("pw".into()), private_key_file: None,
+        Credential { username: "root".into(), password: Some("pw".into()), private_key_file: None, private_key: None,
                      passphrase: None, hosts: vec!["127.0.0.1".into()] }
     }
 

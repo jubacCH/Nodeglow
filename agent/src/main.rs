@@ -7,6 +7,7 @@ mod services;
 mod syslog_relay;
 mod updater;
 mod deploy;
+mod seal;
 
 #[cfg(target_os = "linux")]
 mod collector_linux;
