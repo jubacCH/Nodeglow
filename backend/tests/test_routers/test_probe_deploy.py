@@ -443,7 +443,8 @@ async def test_stale_sealed_login_refused(admin_pair):
     client, sf = admin_pair
     probe_id, cred_id = await _seed_sealed(sf)
     async with sf() as db:
-        (await db.get(Agent, probe_id)).seal_public_key = _SEAL_PUB_B
+        probe = await db.get(Agent, probe_id)
+        probe.seal_public_key = probe.seal_key_reported = _SEAL_PUB_B
         await db.commit()
     body = {"target": {"kind": "host", "host": "10.0.0.5"}, "sealed_credential_id": cred_id}
     resp = await client.post(f"/api/probes/{probe_id}/deploy", json=body)
@@ -468,3 +469,61 @@ async def test_unknown_and_foreign_sealed_login_refused(admin_pair):
         resp = await client.post(f"/api/probes/{probe_id}/host-key", json={
             "host": "10.0.0.5", "sealed_credential_id": cid})
         assert resp.status_code == 400 and resp.json()["code"] == "unknown_credential"
+
+
+async def test_changed_seal_key_refused_on_both_routes(admin_pair):
+    from models.agent import Agent
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf)
+    async with sf() as db:
+        (await db.get(Agent, probe_id)).seal_key_reported = _SEAL_PUB_B
+        await db.commit()
+    for path, body in (("deploy", {"target": {"kind": "host", "host": "10.0.0.5"}}),
+                       ("host-key", {"host": "10.0.0.5"})):
+        resp = await client.post(f"/api/probes/{probe_id}/{path}",
+                                 json={**body, "sealed_credential_id": cred_id})
+        assert resp.status_code == 409 and resp.json()["code"] == "seal_key_changed", path
+
+
+async def test_unreadable_envelope_is_credential_stale(admin_pair):
+    from models.probe_credential import ProbeCredential
+    from services import tenant_keys
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf)
+    for plain in ("not json", "[1, 2]"):
+        async with sf() as db:
+            row = await db.get(ProbeCredential, cred_id)
+            row.sealed = await tenant_keys.encrypt_secret(db, plain, tenant_id=row.tenant_id)
+            await db.commit()
+        resp = await client.post(f"/api/probes/{probe_id}/host-key", json={
+            "host": "10.0.0.5", "sealed_credential_id": cred_id})
+        assert resp.status_code == 409 and resp.json()["code"] == "credential_stale", plain
+
+
+async def test_string_sealed_id_is_invalid(admin_pair):
+    client, sf = admin_pair
+    probe_id, _ = await _seed_sealed(sf)
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json={
+        "target": {"kind": "host", "host": "10.0.0.5"}, "sealed_credential_id": "5"})
+    assert resp.status_code == 400 and resp.json()["code"] == "invalid_credential"
+
+
+async def test_another_probes_sealed_id_refused_on_deploy(admin_pair):
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf, other_probe=True)
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json={
+        "target": {"kind": "host", "host": "10.0.0.5"}, "sealed_credential_id": cred_id})
+    assert resp.status_code == 400 and resp.json()["code"] == "unknown_credential"
+
+
+async def test_sealed_deploy_failing_pinning_queues_nothing(admin_pair):
+    from models.agent_deploy import AgentCommand
+    from models.probe_credential import ProbeCredential
+    client, sf = admin_pair
+    probe_id, cred_id = await _seed_sealed(sf)
+    resp = await client.post(f"/api/probes/{probe_id}/deploy", json={
+        "target": {"kind": "host", "host": "10.0.0.5"}, "sealed_credential_id": cred_id})
+    assert resp.status_code == 409 and resp.json()["code"] == "host_key_unknown"
+    assert await _rows(sf, AgentCommand) == []
+    (row,) = await _rows(sf, ProbeCredential)
+    assert row.last_used_at is None

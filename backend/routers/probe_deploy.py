@@ -71,6 +71,9 @@ async def _sealed(db, probe: Agent, raw) -> tuple[ProbeCredential, dict] | JSONR
     if not agent_commands.capability(probe).get("sealed"):
         return _refuse("Sealed logins are not switched on on this probe.", 409,
                        "sealed_not_enabled")
+    if seal_keys.state(probe)["state"] == "changed":
+        return _refuse("The probe reported a different sealing key. Trust it first.", 409,
+                       "seal_key_changed")
     row = (await db.execute(select(ProbeCredential).where(
         ProbeCredential.id == raw, ProbeCredential.probe_id == probe.id))).scalar_one_or_none()
     if row is None:
@@ -78,13 +81,15 @@ async def _sealed(db, probe: Agent, raw) -> tuple[ProbeCredential, dict] | JSONR
     if row.key_fingerprint != seal_keys.fingerprint(probe.seal_public_key):
         return _refuse("The probe's sealing key changed. Create the login again.", 409,
                        "credential_stale")
+    unreadable = _refuse("The sealed login cannot be read. Create it again.", 409,
+                         "credential_stale")
     try:
+        # TenantKeyUnavailable/Destroyed are not ValueErrors: they propagate (fail closed).
         envelope = json.loads(await tenant_keys.decrypt_secret(db, row.sealed,
                                                                tenant_id=row.tenant_id))
     except ValueError:
-        return _refuse("The sealed login cannot be read. Create it again.", 409,
-                       "credential_stale")
-    return row, envelope
+        return unreadable
+    return (row, envelope) if isinstance(envelope, dict) else unreadable
 
 
 async def _body(request: Request) -> dict:
