@@ -321,6 +321,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- Agent memory, load and network counters never reached ClickHouse. The
+  heartbeat handler only read the nested shape of the legacy Python agents
+  (`memory.pct`, `load.load_1`, `network.rx_bytes`), while the Rust agent sends
+  flat keys (`mem_pct`, `load_1`, `rx_bytes`), so every agent showed Memory
+  as "-" and `mem_pct` was null in `/api/v1/agents`. Both shapes are read now,
+  flat keys first. Rows stored so far keep their NULLs.
 - A disabled host still raised incidents through integrations and agents.
   An integration alert about a device whose ping host is disabled (a UniFi
   bridge reported "Device disconnected" every working day) and a silent agent

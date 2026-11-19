@@ -447,6 +447,34 @@ async def agent_report(request: Request):
             return await _handle_report(db, agent, body)
 
 
+def _pick(body: dict, flat_key: str, group: str, nested_key: str):
+    """Flat top-level key first, the legacy nested ``group.nested_key`` as fallback."""
+    value = body.get(flat_key)
+    if value is not None:
+        return value
+    nested = body.get(group)
+    return nested.get(nested_key) if isinstance(nested, dict) else None
+
+
+def _host_metrics(body: dict) -> dict:
+    """Memory, load and traffic counters from a heartbeat, in either shape.
+
+    The Rust agent reports flat top-level keys (``mem_pct``, ``load_1``,
+    ``rx_bytes``); the legacy Python agents nest them (``memory.pct``,
+    ``load.load_1``, ``network.rx_bytes``). Flat keys win; a reported 0 is kept.
+    """
+    return {
+        "mem_pct": _pick(body, "mem_pct", "memory", "pct"),
+        "mem_used_mb": _pick(body, "mem_used_mb", "memory", "used_mb"),
+        "mem_total_mb": _pick(body, "mem_total_mb", "memory", "total_mb"),
+        "load_1": _pick(body, "load_1", "load", "load_1"),
+        "load_5": _pick(body, "load_5", "load", "load_5"),
+        "load_15": _pick(body, "load_15", "load", "load_15"),
+        "rx_bytes": _pick(body, "rx_bytes", "network", "rx_bytes"),
+        "tx_bytes": _pick(body, "tx_bytes", "network", "tx_bytes"),
+    }
+
+
 async def _handle_report(db, agent: Agent, body: dict):
     """The heartbeat after authentication, inside the agent's tenant scope."""
     # Update agent metadata
@@ -470,8 +498,7 @@ async def _handle_report(db, agent: Agent, body: dict):
         root = next((d for d in disks if d.get("mount") == "/"), None)
         primary_disk_pct = root["pct"] if root else disks[0].get("pct")
 
-    mem = body.get("memory", {})
-    load = body.get("load", {})
+    host_metrics = _host_metrics(body)
 
     snap_ts = datetime.utcnow()
     # Command answers and the deploy report are not metrics: kept out of the
@@ -519,16 +546,16 @@ async def _handle_report(db, agent: Agent, body: dict):
             "agent_id": agent.id,
             "agent_name": agent.name,
             "cpu_pct": body.get("cpu_pct"),
-            "mem_pct": mem.get("pct"),
-            "mem_used_mb": mem.get("used_mb"),
-            "mem_total_mb": mem.get("total_mb"),
+            "mem_pct": host_metrics["mem_pct"],
+            "mem_used_mb": host_metrics["mem_used_mb"],
+            "mem_total_mb": host_metrics["mem_total_mb"],
             "disk_pct": primary_disk_pct,
-            "load_1": load.get("load_1"),
-            "load_5": load.get("load_5"),
-            "load_15": load.get("load_15"),
+            "load_1": host_metrics["load_1"],
+            "load_5": host_metrics["load_5"],
+            "load_15": host_metrics["load_15"],
             "uptime_s": body.get("uptime_s"),
-            "rx_bytes": body.get("network", {}).get("rx_bytes"),
-            "tx_bytes": body.get("network", {}).get("tx_bytes"),
+            "rx_bytes": host_metrics["rx_bytes"],
+            "tx_bytes": host_metrics["tx_bytes"],
             "data_json": snap_data_json,
         }])
     except Exception as ch_exc:
@@ -538,9 +565,9 @@ async def _handle_report(db, agent: Agent, body: dict):
     await broadcast_agent_metric(agent.id, agent.name, tenant_id=agent.tenant_id, metrics={
         "hostname": body.get("hostname"),
         "cpu_pct": body.get("cpu_pct"),
-        "mem_pct": mem.get("pct"),
+        "mem_pct": host_metrics["mem_pct"],
         "disk_pct": primary_disk_pct,
-        "load_1": load.get("load_1"),
+        "load_1": host_metrics["load_1"],
         "uptime_s": body.get("uptime_s"),
     })
 
