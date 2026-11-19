@@ -1,13 +1,17 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, Loader2, Monitor, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Field, Select } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { SegmentedControl } from '@/components/ui/Tabs';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { post, apiErrorMessage } from '@/lib/api';
+import { get, post, apiErrorMessage } from '@/lib/api';
+import { SshDeployForm } from './SshDeployForm';
+import { ProbeDeployForm } from './ProbeDeployForm';
+import { deployProbes } from '@/lib/probeDeploy';
 import type { Agent } from '@/types';
 
 /** Response of POST /api/agents/install-tokens. The token is shown once. */
@@ -66,6 +70,14 @@ export function reconnectedSince(target: ReinstallTarget | undefined, issuedAt: 
   return Date.parse(target.last_seen) > issuedAt;
 }
 
+/** Whether to offer "Install over SSH": the server allows it, and the
+ * installer it runs is the Linux one. */
+export function canDeployOverSsh(sshDeploy: boolean | undefined, target: ReinstallTarget | undefined): boolean {
+  return sshDeploy === true && initialPlatform(target) === 'linux';
+}
+
+type Method = 'command' | 'ssh' | 'probe';
+
 /** Agents that enrolled after the command was issued. */
 export function newAgentsSince(agents: Agent[] | undefined, knownIds: ReadonlySet<number>): Agent[] {
   return (agents ?? []).filter((a) => !knownIds.has(a.id));
@@ -92,6 +104,8 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
   const [issued, setIssued] = useState<InstallToken | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [method, setMethod] = useState<Method>('command');
+  const [sshStarted, setSshStarted] = useState(false);
   const knownIds = useRef<Set<number>>(new Set());
   const issuedAt = useRef<number>(0);
 
@@ -101,8 +115,26 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
       setIssued(null);
       setError(null);
       setBusy(false);
+      setMethod('command');
+      setSshStarted(false);
     }
   }, [open]);
+
+  const info = useQuery({
+    queryKey: ['enrollment-info'],
+    queryFn: () => get<{ ssh_deploy?: boolean }>('/api/enrollment-info'),
+    enabled: open,
+    staleTime: 60_000,
+  });
+  const sshOffered = canDeployOverSsh(info.data?.ssh_deploy, agent);
+  // Through a probe: for Linux targets, when a probe allows it locally.
+  const probeOffered = initialPlatform(agent) === 'linux' && deployProbes(agents).length > 0;
+
+  function sshRunStarted(serverTime: string | null) {
+    knownIds.current = new Set((agents ?? []).map((a) => a.id));
+    issuedAt.current = issueMoment({ issued_at: serverTime }, Date.now());
+    setSshStarted(true);
+  }
 
   // Defaults follow the agent, not every poll of it: a refetch hands in a new
   // object and must not undo what the admin picked.
@@ -133,7 +165,8 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
 
   const command = issued ? (platform === 'linux' ? issued.install_linux : issued.install_windows) : '';
   const live = agent ? (agents?.find((a) => a.id === agent.id) ?? agent) : undefined;
-  const connected = !issued
+  const waiting = Boolean(issued) || sshStarted;
+  const connected = !waiting
     ? []
     : agent
       ? (reconnectedSince(live, issuedAt.current) ? [live as Agent] : [])
@@ -148,9 +181,33 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
       description={agent
         ? `A new install command for ${agent.name}. Run it on that machine: the agent keeps its history and settings. The command works once and only on this host.`
         : 'Create an install command and run it on the machine you want to monitor. The agent installs itself and reports to this server.'}
-      footer={<Button variant="secondary" onClick={onClose}>{issued ? 'Done' : 'Cancel'}</Button>}
+      footer={<Button variant="secondary" onClick={onClose}>{waiting ? 'Done' : 'Cancel'}</Button>}
     >
-      {!issued ? (
+      {(sshOffered || probeOffered) && !issued && !sshStarted && (
+        <div className="mb-4">
+          <SegmentedControl
+            label="How to install"
+            value={method}
+            onChange={setMethod}
+            options={[
+              { value: 'command', label: 'Copy a command' },
+              ...(sshOffered ? [{ value: 'ssh' as const, label: 'Install over SSH' }] : []),
+              ...(probeOffered ? [{ value: 'probe' as const, label: 'Through a probe' }] : []),
+            ]}
+          />
+        </div>
+      )}
+      {method === 'ssh' && sshOffered ? (
+        <div className="space-y-4">
+          <SshDeployForm agentId={agent?.id} onStarted={sshRunStarted} />
+          {sshStarted && <ConnectionStatus connected={connected} />}
+        </div>
+      ) : method === 'probe' && probeOffered ? (
+        <div className="space-y-4">
+          <ProbeDeployForm agents={agents} agentId={agent?.id} onStarted={sshRunStarted} />
+          {sshStarted && <ConnectionStatus connected={connected} />}
+        </div>
+      ) : !issued ? (
         <div className="space-y-4">
           <Field
             label="Command valid for"
@@ -197,26 +254,33 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
               : 'Run it in PowerShell as administrator on the target machine.'}{' '}
             The command contains a secret and is shown only now. Copy it before you close this dialog.
           </p>
-          <div
-            role="status"
-            className="flex items-center gap-2 rounded-ctl border border-border bg-surface-2 px-3 py-2 text-meta"
-          >
-            {connected.length > 0 ? (
-              <>
-                <CheckCircle2 size={14} className="shrink-0 text-ok" aria-hidden="true" />
-                <span className="text-fg">
-                  Connected: {connected.map((a) => a.name || a.hostname).join(', ')}
-                </span>
-              </>
-            ) : (
-              <>
-                <Loader2 size={14} className="shrink-0 animate-spin text-fg-3 motion-reduce:animate-none" aria-hidden="true" />
-                <span className="text-fg-2">Waiting for the agent to report in. This list updates by itself.</span>
-              </>
-            )}
-          </div>
+          <ConnectionStatus connected={connected} />
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Says when the installed agent has reported in. */
+function ConnectionStatus({ connected }: { connected: Agent[] }) {
+  return (
+    <div
+      role="status"
+      className="flex items-center gap-2 rounded-ctl border border-border bg-surface-2 px-3 py-2 text-meta"
+    >
+      {connected.length > 0 ? (
+        <>
+          <CheckCircle2 size={14} className="shrink-0 text-ok" aria-hidden="true" />
+          <span className="text-fg">
+            Connected: {connected.map((a) => a.name || a.hostname).join(', ')}
+          </span>
+        </>
+      ) : (
+        <>
+          <Loader2 size={14} className="shrink-0 animate-spin text-fg-3 motion-reduce:animate-none" aria-hidden="true" />
+          <span className="text-fg-2">Waiting for the agent to report in. This list updates by itself.</span>
+        </>
+      )}
+    </div>
   );
 }

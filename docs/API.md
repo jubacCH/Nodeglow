@@ -102,7 +102,8 @@ Base path `/api/v1`. Unless noted, reading needs any role and changing needs
 |---|---|---|
 | GET | `/hosts` | All hosts with [state](#host-state), latency, last check, uptime (`h24`, `d7`, `d30`), maintenance fields, `probe_id`, `site_id` (effective site) and `site_set` (the host's own site, `null` = automatic). Filters: `state` (comma list), `status` (legacy), `source` (`manual`, `proxmox`, `agent`, `phpipam`), `enabled`, `site` (effective site id) |
 | GET | `/hosts/{id}` | Detail with latest metrics (agent metrics for agent hosts, matching integration data) |
-| GET | `/hosts/{id}/history` | Ping history |
+| GET | `/hosts/{id}/history` | Ping history (raw checks, `hours` up to 720) |
+| GET | `/hosts/{id}/series` | Aggregated ping series: `hours` 1–43800 (default 24). Returns `host_id`, `level` (`raw`, `5m`, `1h`, `1d`), `bucket_seconds` and `points` (`timestamp`, `checks`, `ok`, `latency_avg`, `latency_min`, `latency_max`, `latency_p95`; latency is `null` for a bucket without a successful check). The level follows the range: up to 48 h raw, up to 30 d 5 min, up to 400 d 1 h, beyond that 1 d. While the rollups are not ready `level` is `raw` and data reaches back only as far as raw retention (ping 30 d) |
 | GET | `/hosts/{id}/timeline` | Merged timeline: incidents, changes, syslog — each source gets a fair share of the limit |
 | POST | `/hosts` | Create. `name`, `hostname` required; `check_type` (`icmp`, `tcp`, `http`, `https`), `port`, `latency_threshold_ms`, `enabled`, `http_options`. The hostname goes through the same SSRF validation as the UI |
 | PATCH | `/hosts/{id}` | Update any of `name`, `hostname`, `check_type`, `port`, `latency_threshold_ms`, `enabled`, `maintenance`, `maintenance_until`, `http_options`, `probe_id` (`null` = checked by the server), `site_id` (`null` = automatic, see [Sites](#sites)). Changed fields are audited |
@@ -247,6 +248,7 @@ one of its incidents.
 |---|---|---|
 | GET | `/agents` | All agents |
 | GET | `/agents/{id}` | Detail with latest metrics |
+| GET | `/agents/{id}/series` | Aggregated metric series: `hours` 1–43800 (default 24). Returns `agent_id`, `level`, `bucket_seconds` and `points` with `timestamp` and `avg`/`min`/`max`/`p95` for `cpu_pct`, `mem_pct`, `disk_pct` and `load_1` (e.g. `cpu_pct_avg`); `null` where a bucket has no value. Same levels as the host series; while the rollups are not ready `level` is `raw` and data reaches back only as far as raw retention (agent 7 d) |
 | PATCH | `/agents/{id}` | `log_levels`, `log_channels`, `log_file_paths`, `agent_log_level`, `enabled`, and probe mode: `is_probe`, `probe_interval_seconds`; probe syslog relay (admin, probes only): `syslog_relay_enabled`, `syslog_relay_port` (1–65535, `null` = 514); `site_id` (admin, `null` = default site). Agent responses carry `syslog_relay` (`enabled`, `port`, `status` with the probe's last reported counters; `null` for non-probes) |
 | DELETE | `/agents/{id}` | Delete / decommission |
 | POST | `/agents/{id}/uninstall` | Queue a remote uninstall |
@@ -266,6 +268,38 @@ it works once. An install token that is not bound to the agent still gets
 
 The incident detail (`GET /incidents/{id}`) carries `agent_id` for rule
 `agent_silent` (else `null`).
+
+Install over SSH (admin, not through support access, 10 per minute; switched
+by `NODEGLOW_SSH_DEPLOY`, `403 ssh_deploy_disabled` when off;
+`GET /api/enrollment-info` reports `ssh_deploy`):
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/agent-deploy` | Body `{host, port=22, credential_id \| username + password and/or private_key [+ passphrase], sudo_password?, agent_id?, host_key_fingerprint?}`. `202 {run_id, jobs}`. Unknown host: `409 host_key_unknown {fingerprint, key_type, host, port}` without logging in; repeat with `host_key_fingerprint` to trust it. With `agent_id` the token is bound to that agent (reinstall) |
+| GET | `/api/agent-deploy/{run_id}` | `{run_id, done, jobs: [{id, kind, target, agent_id, status, detail, created_at, started_at, finished_at}]}`; `status` is `queued`, `running`, `ok` or `failed`; `detail` is the output tail with tokens reduced to their prefix |
+| GET | `/api/ssh-host-keys` | Confirmed host keys `{keys: [{id, host, port, key_type, fingerprint, created_at, created_by}]}` |
+| DELETE | `/api/ssh-host-keys/{id}` | Forget a host key; the next deploy asks again |
+
+`POST /api/v1/integrations/proxmox/{id}/deploy-agent` (admin session, not an
+API key; body `{host_key_fingerprint?}`): with an SSH key in the integration,
+`202 {mode: "ssh", run_id, jobs}` (same host-key flow); otherwise `200 {mode:
+"script", manual_script}` with a fresh install token valid for two hours.
+Only the containers of the node that answers the API are included; the
+others are listed in `skipped_other_nodes`.
+
+Install through a probe (part C; admin session, not through support access).
+The probe must report `deploy.enabled` (its local `deploy.json`); SSH
+credentials stay on the probe and are named, never sent:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/probes/{id}/host-key` | Body `{host, port=22}`. `202 {command_id}`: the probe reads the host key with its next heartbeat (audited) |
+| GET | `/api/probes/{id}/commands/{command_id}` | `{id, op, status, result}`; for `ssh_host_key` the result is `{key_type, fingerprint, public_key}` |
+| POST | `/api/probes/{id}/deploy` | Body `{target: {kind: "host", host, port} \| {kind: "lxc", host, port, vmids: [...]}, credential, agent_id?, host_key_fingerprint?}`. Unknown host key: `409 host_key_unknown` (ask `/host-key` first, then confirm its fingerprint). Else `202 {run_id, jobs}`, followed by `GET /api/agent-deploy/{run_id}`; one job (and one install token) per host or container |
+
+Probes receive these as `commands` in the heartbeat response and answer with
+`command_results` in the next heartbeat; they report
+`deploy: {enabled, credentials, arch}` in every heartbeat.
 
 ### Sites
 

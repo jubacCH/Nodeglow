@@ -52,9 +52,10 @@ def test_global_list_has_no_stale_entries():
 def test_expected_counts():
     # 35 tenant-owned (support_grants since 045, tenant_keys since 046,
     # identity_providers, user_identities and sso_flows since 052,
-    # incident_relations since 054), 9 global.
+    # incident_relations since 054, ssh_host_keys and agent_deploy_jobs
+    # since 056, agent_commands since 057), 9 global.
     # Changing these numbers is a deliberate act.
-    assert (len(TENANT_TABLES), len(GLOBAL_TABLES)) == (35, 9), TENANT_TABLES
+    assert (len(TENANT_TABLES), len(GLOBAL_TABLES)) == (38, 9), TENANT_TABLES
 
 
 @pytest.mark.parametrize("name", TENANT_TABLES)

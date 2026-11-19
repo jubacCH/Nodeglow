@@ -35,6 +35,7 @@ so an interrupted purge resumes from the top on the next run
 from __future__ import annotations
 
 import json
+import re
 import logging
 from datetime import datetime
 
@@ -95,6 +96,12 @@ async def _crypto_shred(db, tenant_id: int) -> str:
     return "destroyed"
 
 
+def _is_unknown_table(exc: Exception) -> bool:
+    """ClickHouse UNKNOWN_TABLE (code 60): the rollup table was never created."""
+    text = str(exc)
+    return "UNKNOWN_TABLE" in text or re.search(r"Code: 60\b", text) is not None
+
+
 async def purge_clickhouse(tenant_id: int) -> dict[str, int]:
     """Delete the tenant's rows from every ClickHouse tenant table. Returns
     the rows found (and deleted) per table. Raises when ClickHouse fails —
@@ -105,10 +112,16 @@ async def purge_clickhouse(tenant_id: int) -> dict[str, int]:
     out: dict[str, int] = {}
     client = await ch.get_client()
     with tenant_scope(tenant_id):
-        for table in ch.TENANT_TABLES:
+        for table in ch.TENANT_READ_TABLES:
             params: dict = {}
             where = ch.tenant_clause(params)
-            found = int(await ch.query_scalar(f"SELECT count() FROM {table} WHERE {where}", params) or 0)
+            try:
+                found = int(await ch.query_scalar(
+                    f"SELECT count() FROM {table} WHERE {where}", params) or 0)
+            except Exception as exc:  # noqa: BLE001 — only a not-yet-created rollup is skipped
+                if table in ch.TENANT_TABLES or not _is_unknown_table(exc):
+                    raise
+                continue
             if found:
                 await client.command(f"DELETE FROM {table} WHERE {where}", parameters=params)
                 left = int(await ch.query_scalar(

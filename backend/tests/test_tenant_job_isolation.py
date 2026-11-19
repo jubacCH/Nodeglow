@@ -57,7 +57,7 @@ JOBS = [
 # Installation jobs: no tenant data (system scope by design).
 INSTALLATION_JOBS = {"cleanup_clickhouse_logs", "cleanup_legacy_api_keys", "update_geoip",
                      "send_heartbeat",
-                     "run_clickhouse_tenant_rebuild"}
+                     "run_clickhouse_tenant_rebuild", "run_rollup_maintenance"}
 
 # Jobs that must reach ClickHouse in this scenario (a check that finds no
 # call at all would pass vacuously).

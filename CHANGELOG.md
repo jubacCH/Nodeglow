@@ -10,6 +10,51 @@ Each release's section becomes its GitHub Release notes. Cut a release with
 ## [Unreleased]
 
 ### Added
+- Metric rollups. Ping, agent and bandwidth metrics are kept at 5-minute
+  (90 days), hourly (400 days) and daily (5 years) resolution in nine new
+  ClickHouse tables, filled by materialized views and a one-time backfill of
+  the existing raw data. The job `rollup_maintenance` (every 10 minutes)
+  creates them once the tenant rebuild of a raw table is done and reports a
+  failed or broken setup as a self-check incident; `/api/system/status` shows
+  the state per source. Retention plans do not cap the rollups. New routes
+  `GET /api/v1/hosts/{id}/series` and `GET /api/v1/agents/{id}/series`
+  (up to 5 years) pick raw or rollup resolution by range and fall back to raw
+  data until the rollups are ready. The traffic total accepts ranges up to
+  5 years; filtered bandwidth history beyond 7 days returns 422. Operators
+  who manage ClickHouse access themselves must grant the new tables, see
+  [docs/OPERATIONS.md](docs/OPERATIONS.md).
+- Install an agent through a probe. "Add agent" and "Reinstall agent" offer
+  "Through a probe" when a probe allows it: pick the probe, a host in its
+  network or containers of a Proxmox node (`105, 107, 110-112`), and one of
+  the probe's credentials. The SSH logins stay on the probe, in a root-only
+  `/opt/nodeglow/deploy.json` that also switches the feature on and lists,
+  per login, the hosts it may be used for; Nodeglow knows their names only,
+  so this works on a hosted installation too. The
+  probe asks for the host key first (you confirm its fingerprint), installs
+  the release-signed agent binary it verified itself with a fixed procedure,
+  binds it to its own server, and waits for it to enrol; progress shows per
+  target. Linux x86_64 targets; logins with ed25519 or ecdsa keys or a
+  password; non-root users need passwordless sudo. Needs the updated agent
+  on the probe. New table `agent_commands` (migration 057), routes under
+  `/api/probes/{id}/…`, agents report `deploy`. See docs/OPERATIONS.md,
+  "Deploying agents from a probe".
+- Install an agent over SSH. "Add agent" and "Reinstall agent" offer
+  "Install over SSH": enter the host and a login (or pick an SSH credential
+  from the store) and Nodeglow logs in and runs the Linux installer as root
+  (directly, with `sudo -n`, or with a sudo password that only sudo sees).
+  The installer goes over stdin with its own install token, so no secret
+  ends up in a command line, and credentials entered once are not stored.
+  The first connection to a host shows its host key fingerprint to confirm;
+  after that only that key is accepted (the Credentials page lists the
+  confirmed keys and can remove one after a host was rebuilt). Progress per
+  target is shown live. SSH credentials in the store have a new optional
+  field for the key passphrase.
+  New routes `POST /api/agent-deploy`, `GET /api/agent-deploy/{run_id}`,
+  `GET`/`DELETE /api/ssh-host-keys` (admin, audited), new tables
+  `ssh_host_keys` and `agent_deploy_jobs` (migration 056), new dependency
+  `asyncssh`. Switched by `NODEGLOW_SSH_DEPLOY` (`auto`/`on`/`off`); `auto`
+  is off in a multi-tenant (enterprise) build, so such an installation sets
+  `on` to use it.
 - Reinstall an agent. "Reinstall agent" on an agent's page (and on a
   silent-agent incident) issues an install command bound to that agent: run
   on the agent's machine, it re-enrols the agent under its existing id, with
@@ -276,16 +321,26 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
-- A disabled host no longer raises integration alerts. A UniFi "Device
-  disconnected" (or any integration alert about a device) opened an incident
-  even when that device's host was disabled in the host list, because the
-  alert path only checked maintenance. Now an alert about a disabled host
-  opens no incident, and an open one resolves with "monitoring of host … is
-  disabled", so the history shows why it went quiet. Alerts also find their
-  host without an address: a disconnected UniFi device often reports no IP,
-  so the alert fell back to the controller's host. It is now matched by MAC
-  address, then address, then name, and a MAC or name shared by several
-  hosts matches none of them.
+- A disabled host still raised incidents through integrations and agents.
+  An integration alert about a device whose ping host is disabled (a UniFi
+  bridge reported "Device disconnected" every working day) and a silent agent
+  whose hosts are all disabled now open nothing, like a host in maintenance;
+  an open integration alert for such a host is resolved on the next snapshot
+  and a silent-agent incident on the next run.
+- Proxmox "Install agent on all LXCs" never worked: it ran `/install/linux`
+  without an install token (always refused) through an `ssh` binary the
+  backend image does not contain. It now uses the SSH deploy above (one
+  connection to the node, `pct exec` per container, a token per container,
+  the node's host key confirmed first) and shows each container's result.
+  Containers on other nodes of a cluster are listed as skipped instead of
+  failing; without an SSH key it returns a script with a fresh install
+  token. The
+  integration has a new optional field "SSH Port (for deploy)".
+- Integration alerts find their host without an address: a disconnected UniFi
+  device often reports no IP, so the alert fell back to the controller's host
+  and a disabled device still raised it. It is now matched by MAC address, then
+  address, then name, and a MAC or name shared by several hosts matches none of
+  them.
 - "Rising error trend" kept firing for errors that had stopped. The trend was
   fitted to the hours a template occurred in, laid side by side, so the quiet
   hours between and after did not count: six scattered failures of a backup

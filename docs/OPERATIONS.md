@@ -620,6 +620,56 @@ Limits above); for that, forward the audit log to a system the backend cannot wr
 
 ---
 
+## Deploying agents from a probe
+
+A probe can install the Nodeglow agent on Linux hosts in its network, and in
+containers of a Proxmox node, when its own machine allows it. Nothing is
+enabled by default, and the server cannot enable it.
+
+Create `/opt/nodeglow/deploy.json` on the probe (next to `config.json`),
+owned by root, mode 600 — a file others can read, or that root does not own,
+is ignored:
+
+```json
+{
+  "allow_deploy_agents": true,
+  "credentials": {
+    "lab-root": {"username": "root", "private_key_file": "/root/.ssh/id_ed25519",
+                 "hosts": ["10.0.20.0/24", "*.lab.example"]},
+    "pve":      {"username": "deploy", "password": "…", "hosts": ["pve1.lab.example"]}
+  }
+}
+```
+
+```bash
+sudo install -m 600 -o root -g root deploy.json /opt/nodeglow/deploy.json
+```
+
+- **`hosts` is required** per credential: host names, `*.domain`, IP
+  addresses or CIDR networks the login may be used for. The probe refuses any
+  other address, also for reading a host key. This is what keeps a
+  compromised server from sending a login (a password above all) to a host of
+  its choosing; keep the lists tight. A name matches only as written: the
+  probe does not resolve it for the check.
+- The probe reports only the credential **names**; the logins stay on the
+  probe. A key file needs no passphrase, or set `"passphrase"`. Use an
+  ed25519 or ecdsa key: RSA keys are not supported for deploy logins.
+- Not with `allow_insecure_tls`: an installed agent would not accept the
+  server's certificate. Targets need systemd.
+- A user other than root needs passwordless sudo (`sudo -n`); for Proxmox
+  containers, for `pct`.
+- The probe re-reads the file every interval; removing it (or setting
+  `allow_deploy_agents` to false) switches the feature off.
+- What runs on a target is fixed in the agent: it checks `uname -m` (x86_64
+  only for now), copies the agent binary it downloaded from its server and
+  verified against the release key, writes `/opt/nodeglow/config.json`
+  (bound to the probe's server, release-signed updates only) and the systemd
+  unit, and starts the service; for a container through `pct push` and
+  `pct exec`. It then waits up to 45 s for the new agent to enrol.
+- The first deploy to an address asks for its host key in the UI; after
+  that only that key is accepted. Each run is in the probe's log and in the
+  audit log.
+
 ## Probe syslog relay
 
 Syslog from network devices normally goes straight to the server (514/udp,
@@ -693,6 +743,37 @@ With `off` you can also remove the 514/1514 port mappings from the compose
 file.
 
 ---
+
+## Metric rollups
+
+Ping, agent and bandwidth history is also kept as 5-minute, 1-hour and 1-day
+aggregates in nine ClickHouse tables, filled by materialized views. They are
+created by the `rollup_maintenance` job once the tenant rebuild is done, and
+backfilled from the raw tables once. `/api/system/status` (admin) shows
+the state per source under `rollups` (`ready`, `deferred: rebuild <state>`,
+`created, backfill pending`, `not created`). Until a source is `ready`,
+long ranges read the raw tables and reach back only as far as raw retention.
+
+If a view or table of a backfilled source disappears, the job fails (and the
+self-check raises an incident): the rollups would silently stop filling.
+
+**Restricted tenant user.** With `CLICKHOUSE_TENANT_URL` set, Nodeglow grants
+the tenant user `SELECT` on the rollup tables and adds the row policies
+itself. If you manage ClickHouse access yourself
+(`NODEGLOW_CLICKHOUSE_PROVISION_TENANT_USER=0`), do it for the new tables as
+well, with the same grant and row policy as the raw tables, or tenant reads
+fail with `ACCESS_DENIED` once a source is ready. The job logs a warning
+naming them when it creates them:
+
+`ping_checks_5m`, `ping_checks_1h`, `ping_checks_1d`, `agent_metrics_5m`,
+`agent_metrics_1h`, `agent_metrics_1d`, `bandwidth_metrics_5m`,
+`bandwidth_metrics_1h`, `bandwidth_metrics_1d`
+
+**Known gap at rollout.** Each source's views start at a midnight (UTC) cutoff
+and the backfill runs 10 minutes after it. A row with a timestamp before the
+cutoff that reaches the raw table later than that (a delayed probe batch) is
+in neither the views nor the backfill, so it is missing from the rollups. This
+affects only the rollout window of each source, once.
 
 ## When something looks wrong
 
@@ -1112,6 +1193,7 @@ it — see [INSTALL.md](INSTALL.md#customising-the-compose-file)).
 | `NODEGLOW_SPEEDTEST_TIMEOUT` | `nodeglow` | `180` | Seconds per speedtest run |
 | `NODEGLOW_PING_LOOKBACK_HOURS` | `nodeglow` | `24` | How far back the "latest check" lookup searches |
 | `NODEGLOW_SYSLOG_LISTENER` | `nodeglow` | `auto` | The server's own syslog listener: `auto` (default tenant while there is one tenant), `on`, `off` (probe-only, SaaS) — [Probe syslog relay](#the-direct-listener) |
+| `NODEGLOW_SSH_DEPLOY` | `nodeglow` | `auto` | Install agents over SSH from the server: `auto` (on, except in a multi-tenant build), `on`, `off` — see the API reference, "Install over SSH" |
 | `NODEGLOW_SYSLOG_CLOCK_SKEW_HOURS` | `nodeglow` | `24` | How far a sender's clock may lag and its messages still show up in time-window queries |
 | `NODEGLOW_SYSLOG_TCP_IDLE_TIMEOUT` | `nodeglow` | `0` | Seconds a syslog TCP sender may stay silent before its connection is closed; `0` keeps it open. Persistent senders (rsyslog, syslog-ng) lose a message on every server-side close |
 | `NODEGLOW_CLICKHOUSE_COMPRESSION` | `nodeglow` | `lz4` | ClickHouse client compression |

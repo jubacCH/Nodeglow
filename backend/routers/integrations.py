@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select as sa_select
 
 from integrations import get_registry, get_integration
 from integrations._base import BaseIntegration
@@ -476,29 +475,51 @@ async def api_list_integrations(db: AsyncSession = Depends(get_db)):
     ])
 
 
-# ── Proxmox: Deploy Syslog Config ───────────────────────────────────────────
+# ── Proxmox: deploy the agent into every running container ──────────────────
 
 
 @router.post("/api/v1/integrations/proxmox/{config_id}/deploy-agent")
+@rate_limit(max_requests=10, window_seconds=60)
 async def deploy_agent_to_lxcs(
     config_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
     _key: ApiKey = Depends(require_admin),
 ):
-    """Deploy Nodeglow agent to all running LXCs via SSH → pct exec.
+    """Install the Nodeglow agent in every running container of a Proxmox
+    integration.
 
-    The agent auto-enrolls, collects system metrics, system logs (journalctl),
-    and Docker container logs — then reports everything to Nodeglow.
+    With an SSH key in the integration (and SSH deploy switched on): one SSH
+    connection to the node, ``pct exec`` per container, each with its own
+    install token; answers 202 with a run to follow under
+    ``GET /api/agent-deploy/{run_id}``. An unknown node key is asked about
+    first (409 ``host_key_unknown``; repeat with ``host_key_fingerprint``).
+    Otherwise: a script for the node's shell, with a fresh install token.
+    See docs/specs/2026-11-18-agent-ssh-deploy-design.md.
     """
-    import asyncio
     import socket
-    import tempfile
-    import os
-    from database import get_setting
+    from urllib.parse import urlparse
+
     from integrations.proxmox import ProxmoxAPI
+    from models.agent_deploy import AgentDeployJob
     from models.integration import IntegrationConfig
-    import services.integration as int_svc
+    from routers import agent_deploy as deploy_routes
+    from routers.agents import (
+        _require_access_admin, _username, issue_install_token, resolve_server_url,
+    )
+    from services import agent_deploy, ssh_deploy, tenancy
+    from services.audit import log_action
+
+    # Like issuing install tokens: an admin in a session, never an API key
+    # and never through support access (tokens and runs outlive both).
+    if err := _require_access_admin(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
 
     cfg = await db.get(IntegrationConfig, config_id)
     if not cfg or cfg.type != "proxmox":
@@ -514,174 +535,113 @@ async def deploy_agent_to_lxcs(
         )
 
     config_dict = await int_svc.decrypt_config(db, cfg)
-
     api = ProxmoxAPI(
         host=config_dict["host"],
         token_id=config_dict["token_id"],
         token_secret=config_dict["token_secret"],
         verify_ssl=config_dict.get("verify_ssl", True),
     )
-
     resources = await api.cluster_resources()
-
-    # Detect Nodeglow's LXC IP — find the PingHost for this Nodeglow instance
-    # (Docker-internal IPs like 172.18.x.x are NOT reachable from LXCs)
-    from models.ping import PingHost
-    from urllib.parse import urlparse
-    # The configured agent server URL (Settings → General) wins; the legacy
-    # nodeglow_ip setting and the hostname heuristic remain as fallbacks.
-    agent_server_url = (await get_setting(db, "agent_server_url", "") or "").strip().rstrip("/")
-    nodeglow_ip = urlparse(agent_server_url).hostname if agent_server_url else ""
-    if not nodeglow_ip:
-        nodeglow_ip = await get_setting(db, "nodeglow_ip", "")
-    if not nodeglow_ip:
-        # Find by source_detail matching this Proxmox config, hostname containing "monitoring" or "nodeglow"
-        ph_result = await db.execute(
-            sa_select(PingHost).where(
-                PingHost.source == "proxmox",
-                PingHost.hostname.ilike("%monitoring%"),
-            )
-        )
-        ph = ph_result.scalar_one_or_none()
-        if ph:
-            # Resolve hostname to IP
-            try:
-                nodeglow_ip = socket.gethostbyname(ph.hostname)
-            except Exception:
-                nodeglow_ip = ph.hostname
-    if not nodeglow_ip:
-        return JSONResponse(
-            {"error": "Nodeglow's address for agents is unknown. Set the agent server URL "
-                      "under Settings → General and try again."},
-            status_code=400,
-        )
-
-    nodeglow_url = agent_server_url or f"http://{nodeglow_ip}:8000"
-
-    # Exclude the Nodeglow LXC itself
-    _self_names = set()
+    # pct exec reaches the containers of the node behind the connection only:
+    # the node that answers the API (``local``) at config.host.
     try:
-        resolved = socket.getfqdn(nodeglow_ip)
-        _self_names.add(resolved.lower())
-        try:
-            rev = socket.gethostbyaddr(nodeglow_ip)[0]
-            _self_names.add(rev.lower())
-        except Exception:
-            pass
-    except Exception:
-        pass
+        local_node = next((n.get("name") for n in await api.cluster_status()
+                           if n.get("type") == "node" and n.get("local")), None)
+    except Exception:  # noqa: BLE001 — unknown: do not filter
+        local_node = None
 
-    lxcs = []
-    skipped_self = None
+    server_url = await resolve_server_url(request)
+    # Leave out the container Nodeglow itself runs in.
+    self_names: set[str] = set()
+    server_host = urlparse(server_url).hostname or ""
+    if server_host:
+        self_names.add(server_host.lower().split(".")[0])
+        try:
+            self_names.add(socket.getfqdn(server_host).lower().split(".")[0])
+        except OSError:
+            pass
+    lxcs, skipped_self, other_nodes = [], None, []
     for r in resources:
         if r.get("type") != "lxc" or r.get("status") != "running":
             continue
+        if local_node and r.get("node") and r["node"] != local_node:
+            other_nodes.append(f"{r.get('vmid')} {r.get('name') or '?'} ({r['node']})")
+            continue
         name = (r.get("name") or "").lower()
-        if name and name in _self_names:
-            skipped_self = r.get("name", f"ct-{r.get('vmid')}")
+        if name and name.split(".")[0] in self_names:
+            skipped_self = r.get("name")
             continue
         lxcs.append(r)
-
     if not lxcs:
-        return JSONResponse({"ok": True, "results": [], "deployed": 0, "failed": 0,
-                             "message": "No running LXCs found",
-                             "manual_script": None, "nodeglow_url": nodeglow_url})
+        return JSONResponse({"ok": True, "mode": "none", "results": [], "jobs": [],
+                             "skipped_other_nodes": other_nodes,
+                             "message": "No running containers found on this node",
+                             "manual_script": None, "nodeglow_url": server_url,
+                             "skipped_self": skipped_self})
 
-    # Install command: download + run install script from Nodeglow
-    install_cmd = f"curl -sSL {nodeglow_url}/install/linux 2>/dev/null | bash"
+    ssh_key = (config_dict.get("ssh_private_key") or "").strip()
+    ssh_user = (config_dict.get("ssh_user") or "root").strip() or "root"
+    node = config_dict["host"].split("://")[-1].split(":")[0].split("/")[0]
+    try:
+        ssh_port = int(config_dict.get("ssh_port") or 22)
+    except (TypeError, ValueError):
+        ssh_port = 22
 
-    ssh_key = config_dict.get("ssh_private_key", "").strip()
-    ssh_user = config_dict.get("ssh_user", "root").strip() or "root"
-    proxmox_host = config_dict["host"].split("://")[-1].split(":")[0].split("/")[0]
-
-    # ── SSH deploy (automatic) ───────────────────────────────────────────
-    if ssh_key:
-        results = []
-        deployed = 0
-        failed = 0
-
-        key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
-        key_file.write(ssh_key if ssh_key.endswith("\n") else ssh_key + "\n")
-        key_file.close()
-        os.chmod(key_file.name, 0o600)
-
-        try:
-            for lxc in lxcs:
-                vmid = lxc.get("vmid")
-                name = lxc.get("name", f"ct-{vmid}")
-                cmd = f'pct exec {vmid} -- bash -c "{install_cmd}"'
-
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        "ssh", "-i", key_file.name,
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", "ConnectTimeout=10",
-                        "-o", "IdentitiesOnly=yes",
-                        f"{ssh_user}@{proxmox_host}",
-                        cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-                    output = stdout.decode().strip()
-                    if proc.returncode == 0:
-                        results.append({"vmid": vmid, "name": name, "status": "ok",
-                                        "detail": output[-200:] if len(output) > 200 else output})
-                        deployed += 1
-                    else:
-                        err = stderr.decode().strip() or output or f"exit code {proc.returncode}"
-                        results.append({"vmid": vmid, "name": name, "status": "failed",
-                                        "error": err[-200:]})
-                        failed += 1
-                except asyncio.TimeoutError:
-                    results.append({"vmid": vmid, "name": name, "status": "failed",
-                                    "error": "Timeout (60s)"})
-                    failed += 1
-                except Exception as exc:
-                    results.append({"vmid": vmid, "name": name, "status": "failed",
-                                    "error": str(exc)})
-                    failed += 1
-        finally:
-            os.unlink(key_file.name)
-
-        return JSONResponse({
-            "ok": True,
-            "mode": "ssh",
-            "deployed": deployed,
-            "failed": failed,
-            "results": results,
-            "manual_script": None,
-            "nodeglow_url": nodeglow_url,
-            "skipped_self": skipped_self,
+    if ssh_key and agent_deploy.deploy_enabled():
+        pinned = await deploy_routes.pinned_host_key(db, request, node, ssh_port,
+                                                     body.get("host_key_fingerprint"))
+        if isinstance(pinned, JSONResponse):
+            return pinned
+        run_id = deploy_routes.new_run_id()
+        targets, views = [], []
+        for lxc in lxcs:
+            vmid = int(lxc["vmid"])
+            name = lxc.get("name") or f"ct-{vmid}"
+            _row, raw = await issue_install_token(
+                db, note=f"proxmox deploy {name}", ttl_hours=1, created_by=_username(request))
+            job = AgentDeployJob(run_id=run_id, kind="proxmox_lxc", target=f"{vmid} {name}",
+                                 status="queued", created_by=_username(request))
+            db.add(job)
+            await db.flush()
+            targets.append(agent_deploy.RunTarget(job_id=job.id, token=raw, vmid=vmid))
+            views.append(agent_deploy.job_view(job))
+        await log_action(db, request, "agent.deploy", "integration", cfg.id, cfg.name, {
+            "run_id": run_id, "kind": "proxmox_lxc", "target": node, "port": ssh_port,
+            "username": ssh_user, "containers": [v["target"] for v in views],
         })
+        await db.commit()
+        agent_deploy.start(agent_deploy.Run(
+            run_id=run_id, tenant_id=tenancy.current_tenant_id(), host=node, port=ssh_port,
+            pinned_public_key=pinned,
+            creds=ssh_deploy.SshCredentials(username=ssh_user, private_key=ssh_key),
+            server_url=server_url, targets=targets,
+        ))
+        return JSONResponse({"ok": True, "mode": "ssh", "run_id": run_id, "jobs": views,
+                             "nodeglow_url": server_url, "skipped_self": skipped_self,
+                             "skipped_other_nodes": other_nodes},
+                            status_code=202)
 
-    # ── No SSH → generate script ─────────────────────────────────────────
-    vmids = " ".join(str(lxc.get("vmid")) for lxc in lxcs)
-    results = [
-        {"vmid": lxc.get("vmid"), "name": lxc.get("name", f"ct-{lxc.get('vmid')}")}
-        for lxc in lxcs
-    ]
-
+    # No key (or SSH deploy switched off): a script for the node's shell. One
+    # install token for all of them, valid for two hours.
+    _row, raw = await issue_install_token(
+        db, note=f"proxmox script {cfg.name}"[:256], ttl_hours=2, created_by=_username(request))
+    await log_action(db, request, "install_token.create", "install_token", _row.id, _row.prefix,
+                     {"ttl_hours": 2, "proxmox_config": cfg.id})
+    await db.commit()
+    vmids = " ".join(str(int(lxc["vmid"])) for lxc in lxcs)
     manual_script = (
-        f'# Run on your Proxmox node shell\n'
-        f'# Installs Nodeglow agent on all running LXCs\n'
-        f'NODEGLOW="{nodeglow_url}"\n'
-        f'\n'
-        f'for VMID in {vmids}; do\n'
-        f'  echo "=== Installing agent on CT $VMID ==="\n'
-        f'  pct exec $VMID -- bash -c "curl -sSL $NODEGLOW/install/linux | bash"\n'
-        f'  echo "  Done"\n'
-        f'done\n'
-        f'echo "\\nAll done! Agents will auto-enroll and appear in Nodeglow within 30 seconds."'
+        "# Run on the Proxmox node's shell: installs the Nodeglow agent\n"
+        "# in every running container. The token is valid for two hours.\n"
+        f"URL='{server_url}/install/linux?token={raw}'\n"
+        "\n"
+        f"for VMID in {vmids}; do\n"
+        '  echo "=== CT $VMID ==="\n'
+        '  pct exec "$VMID" -- bash -c "curl -sSL \'$URL\' | bash"\n'
+        "done\n"
     )
-
     return JSONResponse({
-        "ok": True,
-        "mode": "script",
-        "deployed": 0,
-        "failed": 0,
-        "results": results,
-        "manual_script": manual_script,
-        "nodeglow_url": nodeglow_url,
-        "skipped_self": skipped_self,
+        "ok": True, "mode": "script", "deployed": 0, "failed": 0,
+        "results": [{"vmid": lxc.get("vmid"), "name": lxc.get("name")} for lxc in lxcs],
+        "manual_script": manual_script, "nodeglow_url": server_url,
+        "skipped_self": skipped_self, "skipped_other_nodes": other_nodes,
     })

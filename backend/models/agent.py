@@ -41,6 +41,10 @@ class Agent(TenantScoped, Base):
                                   server_default=sa_false())
     syslog_relay_port = Column(Integer, nullable=True)
     syslog_relay_status = Column(Text, nullable=True)
+    # What the probe reported about deploying agents (part C): JSON
+    # {enabled, credentials: [names], arch: [...]}. The opt-in lives on the
+    # probe; this is only the last report of it. NULL for every other agent.
+    deploy_capability = Column(Text, nullable=True)
     watched_services = Column(Text, nullable=True)
     # Latest reported state of the watched services plus the failure streaks,
     # JSON (see services.agent_services). NULL until the agent first reports

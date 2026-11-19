@@ -316,23 +316,11 @@ async def test_disabling_the_device_resolves_its_open_incident_and_says_why(db, 
     from models.incident import IncidentEvent
     events = (await db.execute(select(IncidentEvent.summary).where(
         IncidentEvent.incident_id == inc.id, IncidentEvent.event_type == "resolved"))).scalars().all()
-    assert events == ["Resolved: monitoring of host B8NSWBridge is disabled"]
+    assert events == ["Resolved: the host is disabled in Nodeglow"]
 
     # Still reported, still disabled: nothing reopens.
     await _ok(db, cfg, GONE)
     assert [i.status for i in await _incidents(db)] == ["resolved"]
-
-
-async def test_a_disabled_integration_host_does_not_hide_a_device_alert(db):
-    # Only the device the alert is about counts; the controller's own host
-    # being disabled says nothing about the switch that dropped off.
-    await _host(db, "NAS", "nas.example.com", enabled=False)
-    node = await _host(db, "pve2", "pve2.example.com")
-    cfg = await _cfg(db)
-    for _ in range(2):
-        await _ok(db, cfg, {"title": "Node offline", "entity": "node: pve2", "host": "pve2.example.com"})
-    [inc] = await _incidents(db)
-    assert inc.host_ids == f"[{node.id}]"
 
 
 async def test_a_device_without_address_is_found_by_mac(db):

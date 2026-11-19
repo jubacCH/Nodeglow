@@ -60,6 +60,7 @@ CREDENTIAL_TYPES = {
             {"name": "username", "label": "Username", "type": "text", "required": True},
             {"name": "password", "label": "Password", "type": "password"},
             {"name": "private_key", "label": "Private Key", "type": "textarea"},
+            {"name": "passphrase", "label": "Key Passphrase", "type": "password"},
         ],
     },
 }

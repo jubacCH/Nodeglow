@@ -108,6 +108,13 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
         "agent_install_tokens": [dict(id=b, token_hash=f"install-hash-{tid}", prefix=f"ngi_{tid}",
                                       note=c("agent_install_tokens"), expires_at=_later(),
                                       site_id=b)],
+        "ssh_host_keys": [dict(id=b, host=f"{net}.0.0.7", port=22, key_type="ssh-ed25519",
+                               public_key=c("ssh_host_keys"), fingerprint=f"SHA256:{tag}")],
+        "agent_deploy_jobs": [dict(id=b, run_id=f"run-{tag}", kind="ssh", target=f"{net}.0.0.7",
+                                   status="ok", detail=c("agent_deploy_jobs"))],
+        "agent_commands": [dict(id=b, agent_id=b, op="ssh_host_key", status="ok",
+                                result=json.dumps({"fingerprint": c("agent_commands")}),
+                                expires_at=_later())],
         "ping_hosts": [dict(id=b, name=c("ping_hosts"), hostname=f"{net}.0.0.1", probe_id=b,
                             site_id=b, ssl_expiry_days=5, ip_address=f"{net}.0.0.1",
                             check_detail=json.dumps({"icmp": c("check_detail")}),
@@ -338,6 +345,10 @@ PARAM_TABLE = {
     "provider_id": "identity_providers",
     "flow_id": "sso_flows",
     "site_id": "sites",
+    "run_id": "agent_deploy_jobs",
+    "probe_id": "agents",
+    "command_id": "agent_commands",
+    "host_key_id": "ssh_host_keys",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",
 }
@@ -538,6 +549,7 @@ def _ids_of(tid: int) -> dict[str, Any]:
     ids = {t: b for t in PARAM_TABLE.values()}
     ids["snmp_host_configs"] = b
     ids["log_templates"] = _tpl_hash(tid)
+    ids["agent_deploy_jobs"] = f"run-{TAG[tid]}"  # run_id is a string key
     ids["tenants"] = tid
     return ids
 
@@ -547,6 +559,7 @@ def _missing_ids() -> dict[str, Any]:
     ids = {t: 999_999 for t in PARAM_TABLE.values()}
     ids["snmp_host_configs"] = 999_999
     ids["log_templates"] = "f" * 16
+    ids["agent_deploy_jobs"] = "run-missing"
     return ids
 
 

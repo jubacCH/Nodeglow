@@ -127,6 +127,7 @@ async def predict_disk_full(db: AsyncSession, days_back: int = 14) -> dict[str, 
             key = f"{prefix}{cfg.id}:{pool_name}"
             predictions[key] = {
                 "config_id": cfg.id,
+                "config_type": cfg.type,
                 "config_name": cfg.name,
                 "pool_name": pool_name,
                 "source": label,

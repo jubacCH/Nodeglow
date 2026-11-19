@@ -997,6 +997,31 @@ async def run_clickhouse_tenant_rebuild():
         logger.debug("ClickHouse tenant rebuild: %s", states)
 
 
+@instrument_job("rollup_maintenance")
+@system_job("Metric rollups: create views, backfill (installation)")
+async def run_rollup_maintenance():
+    """Create the rollup tables/views once the tenant rebuild is done and
+    backfill the history once (services/rollups.py). A DDL or backfill failure
+    raises, so a failing run shows up through the job check. An unreachable
+    ClickHouse is not a rollup failure: it is reported by its own checks.
+    """
+    from services import clickhouse_client as ch
+    from services import rollups
+
+    try:
+        await ch.get_client()
+    except (ch.ClickHouseUnreachable, OSError) as exc:
+        # No connection at all: not a rollup failure, ClickHouse has its own
+        # checks. Anything else (e.g. an incomplete schema) propagates.
+        logger.warning("Rollup maintenance skipped, no ClickHouse connection: %s", exc)
+        return
+    states = await rollups.maintain()
+    if any(v in ("created", "backfilled") for v in states.values()):
+        logger.info("Rollup maintenance: %s", states)
+    else:
+        logger.debug("Rollup maintenance: %s", states)
+
+
 # ── Scheduler lifecycle ──────────────────────────────────────────────────────
 
 
@@ -1540,6 +1565,13 @@ async def start_scheduler():
                       id="ch_tenant_rebuild", replace_existing=True,
                       max_instances=1, coalesce=True,
                       next_run_time=datetime.now() + timedelta(minutes=5))
+
+    # Metric rollups: views and one-time backfill (no-op until the tenant
+    # rebuild is done and again once everything is backfilled).
+    scheduler.add_job(run_rollup_maintenance, "interval", minutes=10,
+                      id="rollup_maintenance", replace_existing=True,
+                      next_run_time=datetime.now() + timedelta(minutes=6),
+                      **JOB_DEFAULTS)
 
     # DNS resolution + host dedup (every 30 minutes)
     scheduler.add_job(resolve_host_dns, "interval", minutes=30,

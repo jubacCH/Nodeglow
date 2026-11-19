@@ -140,7 +140,7 @@ export function needItems(
       icon: 'probe',
       title: `${g.name} silent${age !== null ? ` for ${formatDuration(age)}` : ''}`,
       detail: `${g.host_count} host${g.host_count === 1 ? '' : 's'} without data · unknown, not up`,
-      href: '/agents',
+      href: g.id !== null ? `/agents/${g.id}` : '/agents',
       action: 'Check',
     });
   }
@@ -172,7 +172,7 @@ export function needItems(
       icon: 'integration',
       title: `${f.name} is failing`,
       detail: f.error ?? `${f.type} integration`,
-      href: `/integration/${f.type}`,
+      href: `/integration/${encodeURIComponent(f.type)}/${f.id}`,
       action: 'Open',
     });
   }
@@ -184,11 +184,13 @@ export function needItems(
     out.push({ key: 'disk', tone: 'warning', icon: 'disk', title: `${v.title} full in ${v.when}`, detail: v.subtitle, href: v.href ?? '/hosts', action: 'Open' });
   } else if (disks.length > 1) {
     const first = [...disks].sort((a, b) => a.days - b.days)[0];
+    // No page lists every forecast: open the object of the earliest one,
+    // which the detail line names.
     out.push({
       key: 'disk', tone: 'warning', icon: 'disk',
       title: `${disks.length} volumes full within ${Math.max(...disks.map((x) => Math.ceil(x.days)))} days`,
       detail: `Earliest: ${first.title} in ~${Math.max(0, Math.round(first.days))} days`,
-      href: '/hosts', action: 'Review',
+      href: upcomingView(first, now).href ?? '/hosts', action: 'Review',
     });
   }
   const certs = items.filter((i) => i.kind === 'certificate');
