@@ -342,6 +342,11 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   failing; without an SSH key it returns a script with a fresh install
   token. The
   integration has a new optional field "SSH Port (for deploy)".
+- Integration alerts find their host without an address: a disconnected UniFi
+  device often reports no IP, so the alert fell back to the controller's host
+  and a disabled device still raised it. It is now matched by MAC address, then
+  address, then name, and a MAC or name shared by several hosts matches none of
+  them.
 - "Rising error trend" kept firing for errors that had stopped. The trend was
   fitted to the hours a template occurred in, laid side by side, so the quiet
   hours between and after did not count: six scattered failures of a backup

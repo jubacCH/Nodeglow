@@ -70,6 +70,11 @@ class Alert:
     # own endpoint (a Proxmox node, a UniFi switch). Links the incident to that
     # ping host and honours its maintenance window.
     host: str = ""
+    # MAC address and name of that device. They identify it when it reports no
+    # address (a disconnected UniFi device often has none); a match on either
+    # must be unambiguous to count.
+    mac: str = ""
+    name: str = ""
 
 
 @dataclass(frozen=True)
