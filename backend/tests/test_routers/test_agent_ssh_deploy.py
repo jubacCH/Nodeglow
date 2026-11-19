@@ -486,3 +486,23 @@ def test_stored_ssh_credentials_have_a_passphrase():
     from routers.credentials import CREDENTIAL_TYPES
     names = [f["name"] for f in CREDENTIAL_TYPES["ssh"]["fields"]]
     assert "passphrase" in names
+
+
+async def test_a_probes_key_for_the_same_address_is_not_the_servers(admin_pair, ssh_server):
+    """Part C stores keys as seen from a probe; the server trusts only its own."""
+    import asyncssh
+    from models.agent import Agent
+    from models.agent_deploy import SshHostKey
+    client, sf = admin_pair
+    other = asyncssh.generate_private_key("ssh-ed25519")
+    async with sf() as db:
+        probe = Agent(name="probe", hostname="probe", token="p" * 64, is_probe=True)
+        db.add(probe)
+        await db.flush()
+        db.add(SshHostKey(host="127.0.0.1", port=ssh_server["port"], key_type="ssh-ed25519",
+                          public_key=other.export_public_key("openssh").decode().strip(),
+                          fingerprint=other.get_fingerprint("sha256"), probe_id=probe.id))
+        await db.commit()
+    resp = await client.post("/api/agent-deploy", json=_body(ssh_server))
+    assert resp.status_code == 409 and resp.json()["code"] == "host_key_unknown"
+    assert resp.json()["fingerprint"] == ssh_server["fingerprint"]

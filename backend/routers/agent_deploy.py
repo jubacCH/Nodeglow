@@ -97,7 +97,8 @@ async def pinned_host_key(db, request: Request, host: str, port: int,
     about first (409 with the fingerprint); a confirmed fingerprint that
     matches what the host presents now is stored and trusted."""
     stored = (await db.execute(select(SshHostKey).where(
-        SshHostKey.host == host, SshHostKey.port == port))).scalar_one_or_none()
+        SshHostKey.host == host, SshHostKey.port == port,
+        SshHostKey.probe_id.is_(None)))).scalar_one_or_none()
     if stored is not None:
         return stored.public_key
     try:
@@ -214,7 +215,8 @@ async def list_host_keys(request: Request):
     async with models_base.AsyncSessionLocal() as db:
         rows = (await db.execute(select(SshHostKey).order_by(
             SshHostKey.host, SshHostKey.port))).scalars().all()
-    return {"keys": [{"id": r.id, "host": r.host, "port": r.port, "key_type": r.key_type,
+    return {"keys": [{"id": r.id, "host": r.host, "port": r.port, "probe_id": r.probe_id,
+                      "key_type": r.key_type,
                       "fingerprint": r.fingerprint, "created_at": iso(r.created_at),
                       "created_by": r.created_by} for r in rows]}
 
