@@ -845,6 +845,10 @@ ROUTER_TESTS_ON_PG = [
     # Agent deploy over SSH (056): host keys and deploy jobs per tenant, the
     # background task writing its results under the tenant scope, with RLS.
     "tests/test_routers/test_agent_ssh_deploy.py",
+    # Agent deploy through a probe (057): commands and probe host keys per
+    # tenant, the heartbeat delivering and answering them, under RLS.
+    "tests/test_routers/test_probe_commands.py",
+    "tests/test_routers/test_probe_deploy.py",
     # The phase-8 isolation walk (every route, session / API key / header,
     # reference check, licensed ee walk) as nodeglow_app with RLS on.
     "tests/test_routers/test_tenant_isolation.py",

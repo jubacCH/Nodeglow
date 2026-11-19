@@ -112,6 +112,9 @@ def _seeds(tid: int) -> dict[str, list[dict]]:
                                public_key=c("ssh_host_keys"), fingerprint=f"SHA256:{tag}")],
         "agent_deploy_jobs": [dict(id=b, run_id=f"run-{tag}", kind="ssh", target=f"{net}.0.0.7",
                                    status="ok", detail=c("agent_deploy_jobs"))],
+        "agent_commands": [dict(id=b, agent_id=b, op="ssh_host_key", status="ok",
+                                result=json.dumps({"fingerprint": c("agent_commands")}),
+                                expires_at=_later())],
         "ping_hosts": [dict(id=b, name=c("ping_hosts"), hostname=f"{net}.0.0.1", probe_id=b,
                             site_id=b, ssl_expiry_days=5, ip_address=f"{net}.0.0.1",
                             check_detail=json.dumps({"icmp": c("check_detail")}),
@@ -343,6 +346,8 @@ PARAM_TABLE = {
     "flow_id": "sso_flows",
     "site_id": "sites",
     "run_id": "agent_deploy_jobs",
+    "probe_id": "agents",
+    "command_id": "agent_commands",
     "host_key_id": "ssh_host_keys",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",

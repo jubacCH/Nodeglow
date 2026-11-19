@@ -97,7 +97,8 @@ async def pinned_host_key(db, request: Request, host: str, port: int,
     about first (409 with the fingerprint); a confirmed fingerprint that
     matches what the host presents now is stored and trusted."""
     stored = (await db.execute(select(SshHostKey).where(
-        SshHostKey.host == host, SshHostKey.port == port))).scalar_one_or_none()
+        SshHostKey.host == host, SshHostKey.port == port,
+        SshHostKey.probe_id.is_(None)))).scalar_one_or_none()
     if stored is not None:
         return stored.public_key
     try:
@@ -193,14 +194,32 @@ async def get_deploy(run_id: str, request: Request):
 
     if err := _require_access_admin(request):
         return err
+    from models.agent_deploy import AgentCommand
+    from services import agent_commands
+
     async with models_base.AsyncSessionLocal() as db:
         jobs = (await db.execute(select(AgentDeployJob).where(
             AgentDeployJob.run_id == run_id).order_by(AgentDeployJob.id))).scalars().all()
+        command_ids = [j.command_id for j in jobs if j.command_id]
+        commands = {c.id: c for c in (await db.execute(select(AgentCommand).where(
+            AgentCommand.id.in_(command_ids)))).scalars()} if command_ids else {}
     if not jobs:
         return _refuse("Deploy run not found", 404)
     now = datetime.utcnow()
     live = agent_deploy.is_live(run_id)
-    views = [agent_deploy.job_view(j, now, live=live) for j in jobs]
+    views = []
+    for job in jobs:
+        if job.command_id is None:
+            views.append(agent_deploy.job_view(job, now, live=live))
+            continue
+        # Carried by a probe: alive as long as its command is.
+        view = agent_deploy.job_view(job, now, live=True)
+        cmd = commands.get(job.command_id)
+        if view["status"] in agent_deploy.ACTIVE and (
+                cmd is None or agent_commands.effective_status(cmd, now) == "expired"):
+            view["status"] = "failed"
+            view["detail"] = "The probe did not answer in time (offline, or an older agent)."
+        views.append(view)
     return {"run_id": run_id, "done": all(v["status"] not in agent_deploy.ACTIVE for v in views),
             "jobs": views}
 
@@ -214,7 +233,8 @@ async def list_host_keys(request: Request):
     async with models_base.AsyncSessionLocal() as db:
         rows = (await db.execute(select(SshHostKey).order_by(
             SshHostKey.host, SshHostKey.port))).scalars().all()
-    return {"keys": [{"id": r.id, "host": r.host, "port": r.port, "key_type": r.key_type,
+    return {"keys": [{"id": r.id, "host": r.host, "port": r.port, "probe_id": r.probe_id,
+                      "key_type": r.key_type,
                       "fingerprint": r.fingerprint, "created_at": iso(r.created_at),
                       "created_by": r.created_by} for r in rows]}
 
