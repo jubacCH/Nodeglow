@@ -330,3 +330,14 @@ async def test_deploy_commands_live_long_enough_for_a_big_run(admin_pair):
     await client.post(f"/api/probes/{probe_id}/deploy", json=_deploy_body(host_key_fingerprint=FP))
     cmd = [c for c in await _rows(sf, AgentCommand) if c.op == "deploy_agent"][0]
     assert cmd.expires_at - cmd.created_at == agent_commands.DEPLOY_TTL
+
+
+async def test_the_agent_api_shows_what_a_probe_can_deploy(admin_pair):
+    client, sf = admin_pair
+    probe_id = await _seed_probe(sf, credentials=("lab-root", "pve"))
+    detail = (await client.get(f"/api/v1/agents/{probe_id}")).json()
+    assert detail["deploy"] == {"enabled": True, "credentials": ["lab-root", "pve"], "arch": ["x86_64"]}
+    listed = {a["id"]: a for a in (await client.get("/api/v1/agents")).json()}
+    assert listed[probe_id]["deploy"]["enabled"] is True
+    plain = await _seed_probe(sf, is_probe=False, name="plain")
+    assert (await client.get(f"/api/v1/agents/{plain}")).json()["deploy"] is None
