@@ -43,6 +43,8 @@ class AgentInstallToken(TenantScoped, Base):
     site_id = Column(Integer, nullable=True)
     # Set for a reinstall token: the existing agent it re-enrols.
     agent_id = Column(Integer, nullable=True, index=True)
+    # Set for a token that enrols a probe.
+    probe = Column(Boolean, default=False, nullable=False)
 
     __table_args__ = (
         tenant_fk("site_id", "sites", name="fk_agent_install_tokens_site"),

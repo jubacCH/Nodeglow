@@ -45,6 +45,12 @@ class Agent(TenantScoped, Base):
     # {enabled, credentials: [names], arch: [...]}. The opt-in lives on the
     # probe; this is only the last report of it. NULL for every other agent.
     deploy_capability = Column(Text, nullable=True)
+    # Sealed credentials: the probe's public key (as the server holds it), the
+    # key the probe last reported, and who trusted it when.
+    seal_public_key = Column(Text, nullable=True)
+    seal_key_reported = Column(Text, nullable=True)
+    seal_key_trusted_at = Column(DateTime, nullable=True)
+    seal_key_trusted_by = Column(String(255), nullable=True)
     watched_services = Column(Text, nullable=True)
     # Latest reported state of the watched services plus the failure streaks,
     # JSON (see services.agent_services). NULL until the agent first reports
