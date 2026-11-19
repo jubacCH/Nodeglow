@@ -37,6 +37,8 @@ const DETAIL_LIMIT: usize = 1500;
 
 // ── deploy.json ─────────────────────────────────────────────────────────────
 
+/// An SSH login. One taken from a `seal::SealedLogin` carries decrypted
+/// secrets and must not be cloned out of it: the copy would not be zeroized.
 #[derive(Clone, Deserialize)]
 pub struct Credential {
     pub username: String,
@@ -418,7 +420,7 @@ pub async fn connect(host: &str, port: u16, cred: &Credential, expected_fp: &str
         }
     };
     let auth = if let Some(pem) = &cred.private_key {
-        let key = russh::keys::decode_secret_key(&normalize_pem(pem), cred.passphrase.as_deref())
+        let key = russh::keys::decode_secret_key(&zeroize::Zeroizing::new(normalize_pem(pem)), cred.passphrase.as_deref())
             .context("Cannot read the private key")?;
         let hash = handle.best_supported_rsa_hash().await?.flatten();
         handle.authenticate_publickey(&cred.username,

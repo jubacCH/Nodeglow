@@ -31,7 +31,7 @@ ed25519-dalek = "3"
 russh = { version = "=0.65.1", default-features = false, features = ["ring"] }
 # Sealed deploy logins: HPKE (RFC 9180) base mode, pure Rust.
 hpke = { version = "0.13", default-features = false, features = ["x25519", "alloc"] }
-zeroize = "1"
+zeroize = { version = "1", features = ["serde"] }
 base64 = "0.22"
 getrandom = "0.4"
 

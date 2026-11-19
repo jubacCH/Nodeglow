@@ -58,8 +58,7 @@ impl fmt::Debug for SealKey {
 }
 
 impl SealKey {
-    fn from_private_bytes(bytes: [u8; 32]) -> Self {
-        let private = Zeroizing::new(bytes);
+    fn from_private_bytes(private: Zeroizing<[u8; 32]>) -> Self {
         // from_bytes only fails on a wrong length, which the array rules out.
         let sk = <Kem as KemTrait>::PrivateKey::from_bytes(private.as_slice())
             .expect("32-byte X25519 scalar");
@@ -72,7 +71,7 @@ impl SealKey {
     fn generate() -> anyhow::Result<Self> {
         let mut bytes = Zeroizing::new([0u8; 32]);
         getrandom::fill(bytes.as_mut_slice()).map_err(|e| anyhow!("No randomness available: {e}"))?;
-        Ok(Self::from_private_bytes(*bytes))
+        Ok(Self::from_private_bytes(bytes))
     }
 
     /// The stored key, `None` when the file is absent. Errors when the file is
@@ -90,8 +89,11 @@ impl SealKey {
             std::fs::read_to_string(path).with_context(|| format!("Cannot read {}", path.display()))?);
         let raw = Zeroizing::new(
             B64.decode(text.trim()).map_err(|_| anyhow!("{} is not a seal key", path.display()))?);
-        let bytes: [u8; 32] = raw.as_slice().try_into()
-            .map_err(|_| anyhow!("{} is not a seal key", path.display()))?;
+        if raw.len() != 32 {
+            bail!("{} is not a seal key", path.display());
+        }
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        bytes.copy_from_slice(&raw);
         Ok(Some(Self::from_private_bytes(bytes)))
     }
 
@@ -131,7 +133,13 @@ impl SealKey {
             let mut file = opts.open(&tmp)?;
             file.write_all(text.as_bytes())?;
             file.sync_all()?;
-            std::fs::rename(&tmp, path)
+            std::fs::rename(&tmp, path)?;
+            // Make the rename itself durable.
+            #[cfg(unix)]
+            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::File::open(dir)?.sync_all()?;
+            }
+            Ok(())
         })();
         if let Err(e) = written {
             let _ = std::fs::remove_file(&tmp);
@@ -201,20 +209,27 @@ fn valid_name(name: &str) -> bool {
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'@' | b'-'))
 }
 
-fn text_field(v: &Value, key: &str) -> Result<String, OpenError> {
-    match v.get(key) {
-        Some(Value::String(s)) if !s.is_empty() => Ok(s.clone()),
-        _ => Err(OpenError::Invalid(format!("`{key}` is missing"))),
-    }
+/// The decrypted JSON, read straight into types that zeroize their secrets
+/// on every path (no `Value` intermediate, no clones).
+#[derive(serde::Deserialize)]
+struct RawPlaintext {
+    v: Option<u64>,
+    id: Option<String>,
+    name: Option<String>,
+    username: Option<String>,
+    password: Option<Zeroizing<String>>,
+    private_key: Option<Zeroizing<String>>,
+    passphrase: Option<Zeroizing<String>>,
+    hosts: Option<Vec<String>>,
 }
 
-fn optional_text(v: &Value, key: &str) -> Result<Option<String>, OpenError> {
-    match v.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
-        Some(Value::String(_)) => Ok(None),
-        _ => Err(OpenError::Invalid(format!("`{key}` must be text"))),
-    }
+/// An empty string counts as absent; the secret moves out, the husk zeroizes.
+fn take_secret(field: Option<Zeroizing<String>>) -> Option<String> {
+    field.filter(|s| !s.is_empty()).map(|mut s| std::mem::take(&mut *s))
+}
+
+fn required(field: Option<String>, name: &str) -> Result<String, OpenError> {
+    field.filter(|s| !s.is_empty()).ok_or_else(|| OpenError::Invalid(format!("`{name}` is missing")))
 }
 
 /// Check the decrypted JSON against the plaintext rules.
@@ -222,44 +237,38 @@ fn parse_plaintext(bytes: &[u8]) -> Result<SealedLogin, OpenError> {
     if bytes.len() > MAX_PLAINTEXT {
         return Err(OpenError::Invalid("too large".into()));
     }
-    let v: Value = serde_json::from_slice(bytes).map_err(|_| OpenError::Invalid("not JSON".into()))?;
-    if !v.is_object() || v.get("v") != Some(&json!(1)) {
+    // The serde message is dropped: it could quote part of a secret.
+    let raw: RawPlaintext = serde_json::from_slice(bytes)
+        .map_err(|_| OpenError::Invalid("not a valid login".into()))?;
+    if raw.v != Some(1) {
         return Err(OpenError::Invalid("unsupported version".into()));
     }
-    let name = text_field(&v, "name")?;
+    let name = required(raw.name, "name")?;
     if !valid_name(&name) {
         return Err(OpenError::Invalid("bad name".into()));
     }
-    let id = text_field(&v, "id")?;
-    let username = text_field(&v, "username")?;
-    let mut password = optional_text(&v, "password")?;
-    let mut private_key = optional_text(&v, "private_key")?;
-    let mut passphrase = optional_text(&v, "passphrase")?;
-    let hosts = match v.get("hosts") {
-        Some(Value::Array(list)) => list.iter().map(|h| match h {
-            Value::String(s) if !s.trim().is_empty() && s.len() <= MAX_HOST_LEN => Ok(s.clone()),
-            _ => Err(OpenError::Invalid("bad host entry".into())),
-        }).collect::<Result<Vec<_>, _>>()?,
-        _ => return Err(OpenError::Invalid("`hosts` is missing".into())),
-    };
-    let result = if password.is_some() == private_key.is_some() {
-        Err(OpenError::Invalid("exactly one of password and private key is required".into()))
-    } else if hosts.is_empty() || hosts.len() > MAX_HOSTS {
-        Err(OpenError::Invalid(format!("1 to {MAX_HOSTS} hosts are required")))
-    } else {
-        Ok(())
-    };
-    if let Err(e) = result {
-        password.zeroize();
-        private_key.zeroize();
-        passphrase.zeroize();
-        return Err(e);
+    let id = required(raw.id, "id")?;
+    let username = required(raw.username, "username")?;
+    let hosts = raw.hosts.ok_or_else(|| OpenError::Invalid("`hosts` is missing".into()))?;
+    if hosts.is_empty() || hosts.len() > MAX_HOSTS {
+        return Err(OpenError::Invalid(format!("1 to {MAX_HOSTS} hosts are required")));
     }
-    Ok(SealedLogin {
+    if hosts.iter().any(|h| h.trim().is_empty() || h.len() > MAX_HOST_LEN) {
+        return Err(OpenError::Invalid("bad host entry".into()));
+    }
+    let password = take_secret(raw.password);
+    let private_key = take_secret(raw.private_key);
+    let passphrase = take_secret(raw.passphrase);
+    let login = SealedLogin {
         id,
         name,
         credential: Credential { username, password, private_key_file: None, private_key, passphrase, hosts },
-    })
+    };
+    // On rejection `login` drops here and zeroizes its secrets.
+    if login.credential.password.is_some() == login.credential.private_key.is_some() {
+        return Err(OpenError::Invalid("exactly one of password and private key is required".into()));
+    }
+    Ok(login)
 }
 
 /// Open an envelope sealed to `key`.
@@ -339,6 +348,7 @@ impl Throttle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     const FIXTURE: &str = include_str!("../tests/fixtures/sealed_v1.json");
@@ -346,10 +356,13 @@ mod tests {
     fn fixture() -> (SealKey, Value, Value) {
         let f: Value = serde_json::from_str(FIXTURE).unwrap();
         let sk = B64.decode(f["private_key"].as_str().unwrap()).unwrap();
-        let key = SealKey::from_private_bytes(sk.try_into().unwrap());
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        bytes.copy_from_slice(&sk);
+        let key = SealKey::from_private_bytes(bytes);
         (key, f["envelope"].clone(), f["plaintext"].clone())
     }
 
+    #[cfg(unix)]
     fn tempdir() -> PathBuf {
         let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("ng-seal-{}-{n}", std::process::id()));
@@ -455,6 +468,7 @@ mod tests {
         assert!(!format!("{key:?}").contains(&B64.encode(key.private.as_slice())));
     }
 
+    #[cfg(unix)]
     #[test]
     fn key_file_created_0600_and_reloaded() {
         let dir = tempdir();
@@ -469,6 +483,7 @@ mod tests {
         assert_eq!(key_path_for(&dir.join("config.json")), path);
     }
 
+    #[cfg(unix)]
     #[test]
     fn key_file_world_readable_refused() {
         let dir = tempdir();
@@ -479,6 +494,7 @@ mod tests {
         assert!(SealKey::load_or_create(&path, false).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn rotate_changes_fingerprint() {
         let dir = tempdir();
