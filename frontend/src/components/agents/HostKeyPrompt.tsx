@@ -9,9 +9,11 @@ import { hostKeyFile, type HostKeyQuestion } from '@/lib/agentDeploy';
  * time. Nothing is sent to the host until it is trusted.
  */
 export function HostKeyPrompt({
-  question, busy, onTrust, onCancel,
+  question, busy, onTrust, onCancel, via = 'Nodeglow',
 }: {
   question: HostKeyQuestion;
+  /** Who connects: "Nodeglow" (the server) or "The probe". */
+  via?: string;
   busy?: boolean;
   onTrust: () => void;
   onCancel: () => void;
@@ -22,7 +24,7 @@ export function HostKeyPrompt({
       <div className="flex items-start gap-2">
         <ShieldAlert size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
         <p className="text-meta text-fg">
-          Nodeglow has not connected to <span className="font-code">{where}</span> before. Compare its {question.keyType} host
+          {via} has not connected to <span className="font-code">{where}</span> before. Compare its {question.keyType} host
           key with the one on the host before you trust it. Nothing has been sent to the host yet.
         </p>
       </div>

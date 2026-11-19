@@ -4,7 +4,7 @@ import { apiErrorBody } from './api';
 export interface DeployJob {
   id: number;
   run_id: string;
-  kind: 'ssh' | 'proxmox_lxc';
+  kind: 'ssh' | 'proxmox_lxc' | 'probe_host' | 'probe_lxc';
   target: string;
   agent_id: number | null;
   status: 'queued' | 'running' | 'ok' | 'failed';
