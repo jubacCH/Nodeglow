@@ -47,6 +47,20 @@ pub fn release_message(platform: &str, sha256_hex: &str) -> String {
     format!("{RELEASE_MESSAGE_PREFIX}:{platform}:{}", sha256_hex.to_ascii_lowercase())
 }
 
+/// The platform name this build asks the server for, and that its release
+/// signature binds: `linux` is x86_64 (the name predates arm64, and installed
+/// agents keep asking for it), `linux-arm64` is aarch64. An agent therefore
+/// only ever updates to a build for its own CPU.
+pub const fn own_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_arch = "aarch64") {
+        "linux-arm64"
+    } else {
+        "linux"
+    }
+}
+
 /// Key id of a raw Ed25519 public key: first 8 bytes of its SHA-256, hex.
 pub fn key_id(public_key: &[u8; 32]) -> String {
     hex::encode(&Sha256::digest(public_key)[..8])
@@ -313,11 +327,7 @@ pub async fn check_and_update(
     trust: &mut TrustState,
     trust_path: &Path,
 ) -> anyhow::Result<bool> {
-    let platform = if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "linux"
-    };
+    let platform = own_platform();
 
     let version = api.get_version_info(platform).await?;
     // Latch before deciding anything: "multi-tenant" can only tighten.
@@ -537,6 +547,31 @@ mod tests {
     fn accepts_a_release_signature_made_outside_rust() {
         let keys = parse_release_keys(&[PUBLIC_KEY]);
         assert_eq!(verify_release_signature(&keys, KEY_ID, RELEASE_SIGNATURE, "linux", MESSAGE).unwrap(), KEY_ID);
+    }
+
+    #[test]
+    fn own_platform_matches_the_build() {
+        let expected = if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_arch = "aarch64") {
+            "linux-arm64"
+        } else {
+            "linux"
+        };
+        assert_eq!(own_platform(), expected);
+    }
+
+    #[test]
+    fn an_x86_64_signature_does_not_verify_an_arm64_binary() {
+        let (sk, pk) = throwaway(42);
+        let id = key_id(&sk.verifying_key().to_bytes());
+        let keys = parse_release_keys(&[pk.as_str()]);
+        let data = b"the same bytes";
+        let sig = release_sign(&sk, "linux", data);
+        assert!(verify_release_signature(&keys, &id, &sig, "linux-arm64", data).is_err());
+        let sig = release_sign(&sk, "linux-arm64", data);
+        assert_eq!(verify_release_signature(&keys, &id, &sig, "linux-arm64", data).unwrap(), id);
+        assert!(verify_release_signature(&keys, &id, &sig, "linux", data).is_err());
     }
 
     #[test]

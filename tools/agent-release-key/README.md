@@ -13,7 +13,7 @@ make an agent trust another key.
 | Private key (vault, GH secret) | Ed25519, PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`), unencrypted. The secret may also hold that PEM base64-encoded (one line). |
 | Public key (agent) | 64 hex chars, the raw 32-byte Ed25519 public key |
 | Key id | first 8 bytes of SHA-256(raw public key), hex (16 chars) — derived, never typed |
-| `<binary>.sig` | one line of JSON: `format` `nodeglow-agent-signature-v1`, `alg` `ed25519`, `platform` (`linux`/`windows`), `key_id`, `sha256`, `signature` (128 hex) |
+| `<binary>.sig` | one line of JSON: `format` `nodeglow-agent-signature-v1`, `alg` `ed25519`, `platform` (`linux` = x86_64, `linux-arm64` = aarch64, `windows`), `key_id`, `sha256`, `signature` (128 hex) |
 | Signed message | `nodeglow-agent-binary:v1:<platform>:<sha256 hex of the binary>` (pure Ed25519) |
 
 `sign.sh` (needs OpenSSL 3) is the only signing implementation; CI runs it in

@@ -578,19 +578,24 @@ jobs:
           cp scripts/install.sh dist/install.sh
           # The agent binaries are the ones committed by agent-build.yml at
           # this tag — the same files the backend image serves to agents.
-          cp backend/static/nodeglow-agent-linux dist/nodeglow-agent-linux-x86_64
-          cp backend/static/nodeglow-agent.exe dist/nodeglow-agent-windows-x86_64.exe
-          # Their release signatures (P2a), published outside the SaaS so a
-          # customer can check a binary before installing it. A tag whose
-          # binaries are unsigned dev builds is not released.
-          for sig in nodeglow-agent-linux.sig nodeglow-agent.exe.sig; do
-            if [ ! -f "backend/static/$sig" ]; then
-              echo "::error::backend/static/$sig is missing: the agent binaries at this tag are not release-signed" >&2
-              exit 1
-            fi
+          # Static name -> release asset name, one line per agent binary.
+          agents="nodeglow-agent-linux:nodeglow-agent-linux-x86_64
+          nodeglow-agent-linux-arm64:nodeglow-agent-linux-arm64
+          nodeglow-agent.exe:nodeglow-agent-windows-x86_64.exe"
+          for pair in $agents; do
+            src=${pair%%:*}; dst=${pair#*:}
+            # Their release signatures (P2a), published outside the SaaS so a
+            # customer can check a binary before installing it. A tag whose
+            # binaries are missing or unsigned dev builds is not released.
+            for f in "$src" "$src.sig"; do
+              if [ ! -f "backend/static/$f" ]; then
+                echo "::error::backend/static/$f is missing: the agent binaries at this tag are incomplete or not release-signed" >&2
+                exit 1
+              fi
+            done
+            cp "backend/static/$src" "dist/$dst"
+            cp "backend/static/$src.sig" "dist/$dst.sig"
           done
-          cp backend/static/nodeglow-agent-linux.sig dist/nodeglow-agent-linux-x86_64.sig
-          cp backend/static/nodeglow-agent.exe.sig dist/nodeglow-agent-windows-x86_64.exe.sig
           cd dist
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
