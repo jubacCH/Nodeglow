@@ -408,7 +408,8 @@ async def test_proxmox_without_a_key_returns_a_script_with_a_token(admin_pair, m
     assert body["mode"] == "script"
     (token,) = await _rows(sf, AgentInstallToken)
     assert "/install/linux?token=" in body["manual_script"] and token.prefix in body["manual_script"]
-    assert "105 107" in body["manual_script"] and "300" not in body["manual_script"]
+    # The container list itself (the random token may contain any digits).
+    assert "for VMID in 105 107; do" in body["manual_script"].splitlines()
     assert await _rows(sf, AgentDeployJob) == []
 
 
