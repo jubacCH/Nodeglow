@@ -162,6 +162,11 @@ change.
 **`HEAD is not on refs/heads/main`** — the checkout is on a branch or detached.
 `git checkout main` in the installation directory.
 
+**`The updater's Docker CLI has no buildx plugin`** — the updater image predates
+the plugin, and the backend build needs BuildKit for its `ee` build context.
+Rebuild the updater once by hand in the installation directory:
+`docker compose build updater && docker compose up -d updater`.
+
 **`Not enough free disk space`** — under 2 GB free. The build needs room for new
 images; old ones can be reclaimed with `docker image prune`.
 
