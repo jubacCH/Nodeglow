@@ -163,6 +163,8 @@ export interface Agent {
   probe_interval_seconds?: number | null;
   /** Site of the agent; the hosts its probe checks follow it unless they have their own. */
   site_id?: number | null;
+  /** Probes only: whether the probe may install agents (its local deploy.json), with credential names. */
+  deploy?: { enabled: boolean; credentials: string[]; arch: string[] } | null;
 }
 
 /** Last reported state of one watched service on an agent. */
