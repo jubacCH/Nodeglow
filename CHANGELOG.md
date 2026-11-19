@@ -321,6 +321,9 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- The "Reinstall agent" dialog never offered "Through a probe". The agent and
+  incident pages hand the dialog only the agent being reinstalled, so no probe
+  was ever in its list. The dialog now reads the agent list itself.
 - Agent memory, load and network counters never reached ClickHouse. The
   heartbeat handler only read the nested shape of the legacy Python agents
   (`memory.pct`, `load.load_1`, `network.rx_bytes`), while the Rust agent sends
