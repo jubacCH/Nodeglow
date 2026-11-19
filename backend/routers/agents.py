@@ -1130,7 +1130,8 @@ def render_linux_installer(
     probe_block = (
         'if [ -x "$INSTALL_DIR/nodeglow-agent" ]; then '
         '"$INSTALL_DIR/nodeglow-agent" --config "$CONFIG_FILE" enable-deploy '
-        '|| echo "  Warning: could not enable agent deploys on this probe"; fi\n\n'
+        '|| echo "  Warning: could not enable agent deploys on this probe"; '
+        'else echo "  Warning: could not enable agent deploys on this probe"; fi\n\n'
         if probe else "")
 
     script = f'''#!/bin/bash

@@ -183,7 +183,8 @@ async def start_deploy(request: Request):
     agent_deploy.start(agent_deploy.Run(
         run_id=run_id, tenant_id=tenancy.current_tenant_id(), host=host, port=port, pinned_public_key=pinned,
         creds=creds, server_url=await resolve_server_url(request),
-        targets=[agent_deploy.RunTarget(job_id=view["id"], token=raw)],
+        targets=[agent_deploy.RunTarget(job_id=view["id"], token=raw,
+                                         fresh=token_row.agent_id is None)],
     ))
     return JSONResponse({"ok": True, "run_id": run_id, "jobs": [view]}, status_code=202)
 

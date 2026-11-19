@@ -47,7 +47,8 @@ def test_render_probe_has_enable_deploy_before_service_start():
     assert ENABLE in script
     line = ('if [ -x "$INSTALL_DIR/nodeglow-agent" ]; then "$INSTALL_DIR/nodeglow-agent" '
             '--config "$CONFIG_FILE" enable-deploy || echo "  Warning: could not enable '
-            'agent deploys on this probe"; fi')
+            'agent deploys on this probe"; else echo "  Warning: could not enable agent deploys '
+            'on this probe"; fi')
     assert line in script
     assert script.index(line) < script.index("systemctl daemon-reload")
     assert script.index(line) > script.index('chmod 600 "$CONFIG_FILE"')
