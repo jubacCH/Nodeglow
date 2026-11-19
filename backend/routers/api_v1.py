@@ -1156,6 +1156,12 @@ async def delete_host(
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 
+def _deploy_view(agent: Agent) -> dict | None:
+    from services.agent_commands import capability
+
+    return capability(agent) if agent.is_probe else None
+
+
 def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) -> dict:
     """Probe role and freshness of an agent, as the API reports it."""
     from services.probes import ProbeState, is_stale, staleness_window
@@ -1166,6 +1172,9 @@ def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) ->
         "probe_interval_seconds": agent.probe_interval_seconds,
         "syslog_relay": relay_view(agent),
         "site_id": agent.site_id,
+        # What the probe reported about deploying agents (its local opt-in);
+        # credential names only. None for agents that are not probes.
+        "deploy": _deploy_view(agent),
     }
     if agent.is_probe:
         st = ProbeState(

@@ -474,7 +474,10 @@ async def _handle_report(db, agent: Agent, body: dict):
     load = body.get("load", {})
 
     snap_ts = datetime.utcnow()
-    snap_data_json = json.dumps(body)
+    # Command answers and the deploy report are not metrics: kept out of the
+    # stored snapshot, which is served back by the API as is.
+    from services.agent_commands import HEARTBEAT_KEYS
+    snap_data_json = json.dumps({k: v for k, v in body.items() if k not in HEARTBEAT_KEYS})
 
     # Extract bandwidth samples from agent network data (writes to ClickHouse)
     try:
@@ -494,6 +497,11 @@ async def _handle_report(db, agent: Agent, body: dict):
     from services import probe_syslog
     if agent.is_probe and "syslog_relay" in body:
         agent.syslog_relay_status = probe_syslog.sanitize_status(body.get("syslog_relay"))
+
+    # Structured commands (probes only, part C): results in, new ones out,
+    # in the same transaction as the heartbeat.
+    from services import agent_commands
+    commands = await agent_commands.handle_heartbeat(db, agent, body)
 
     await db.commit()
 
@@ -566,6 +574,8 @@ async def _handle_report(db, agent: Agent, body: dict):
         resp["config"]["syslog_relay"] = relay
     if command:
         resp["command"] = command
+    if commands is not None:
+        resp["commands"] = commands
 
     # Probe assignments ride the heartbeat: no second endpoint, no second
     # authentication path, and an assignment change takes effect within one

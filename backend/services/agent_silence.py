@@ -99,7 +99,9 @@ async def silent_conditions(db, now: datetime) -> dict[str, Condition]:
     """Dedup key -> condition for every agent that is silent right now.
 
     An agent whose host is in maintenance is left out: someone took the
-    machine down on purpose.
+    machine down on purpose. So is one whose hosts are all disabled: nobody
+    wants that machine watched any more (PC-JULIAN, 2026-11-18, host disabled
+    and still reported as a silent agent).
     """
     from services.maintenance import maintenance_ids
 
@@ -116,7 +118,7 @@ async def silent_conditions(db, now: datetime) -> dict[str, Condition]:
     wanted: dict[str, Condition] = {}
     for agent in agents:
         own = hosts.get(agent.id, [])
-        if own and all(h.id in in_maintenance for h in own):
+        if own and all(h.id in in_maintenance or not h.enabled for h in own):
             continue
         cond = silent_condition(agent, now, [h.id for h in own])
         if cond is not None:

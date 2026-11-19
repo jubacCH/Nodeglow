@@ -23,6 +23,21 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   5 years; filtered bandwidth history beyond 7 days returns 422. Operators
   who manage ClickHouse access themselves must grant the new tables, see
   [docs/OPERATIONS.md](docs/OPERATIONS.md).
+- Install an agent through a probe. "Add agent" and "Reinstall agent" offer
+  "Through a probe" when a probe allows it: pick the probe, a host in its
+  network or containers of a Proxmox node (`105, 107, 110-112`), and one of
+  the probe's credentials. The SSH logins stay on the probe, in a root-only
+  `/opt/nodeglow/deploy.json` that also switches the feature on and lists,
+  per login, the hosts it may be used for; Nodeglow knows their names only,
+  so this works on a hosted installation too. The
+  probe asks for the host key first (you confirm its fingerprint), installs
+  the release-signed agent binary it verified itself with a fixed procedure,
+  binds it to its own server, and waits for it to enrol; progress shows per
+  target. Linux x86_64 targets; logins with ed25519 or ecdsa keys or a
+  password; non-root users need passwordless sudo. Needs the updated agent
+  on the probe. New table `agent_commands` (migration 057), routes under
+  `/api/probes/{id}/…`, agents report `deploy`. See docs/OPERATIONS.md,
+  "Deploying agents from a probe".
 - Install an agent over SSH. "Add agent" and "Reinstall agent" offer
   "Install over SSH": enter the host and a login (or pick an SSH credential
   from the store) and Nodeglow logs in and runs the Linux installer as root
@@ -306,6 +321,12 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   customer's router).
 
 ### Fixed
+- A disabled host still raised incidents through integrations and agents.
+  An integration alert about a device whose ping host is disabled (a UniFi
+  bridge reported "Device disconnected" every working day) and a silent agent
+  whose hosts are all disabled now open nothing, like a host in maintenance;
+  an open integration alert for such a host is resolved on the next snapshot
+  and a silent-agent incident on the next run.
 - Proxmox "Install agent on all LXCs" never worked: it ran `/install/linux`
   without an install token (always refused) through an `ssh` binary the
   backend image does not contain. It now uses the SSH deploy above (one

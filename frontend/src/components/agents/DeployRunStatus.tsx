@@ -56,7 +56,7 @@ export function DeployRunStatus({ runId }: { runId: string }) {
             <div className="flex min-w-0 items-center gap-2">
               <JobIcon status={job.status} />
               <span className="min-w-0 flex-1 truncate text-fg">
-                {job.kind === 'proxmox_lxc' ? `CT ${job.target}` : job.target}
+                {job.kind === 'proxmox_lxc' || job.kind === 'probe_lxc' ? `CT ${job.target}` : job.target}
               </span>
               <span className="shrink-0 text-micro text-fg-3">{job.status}</span>
             </div>

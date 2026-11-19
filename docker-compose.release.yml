@@ -105,6 +105,9 @@ services:
       # PostgreSQL row-level security as the second tenant-isolation layer.
       # off (default for existing installs) | on (install.sh, new installs).
       NODEGLOW_RLS: ${NODEGLOW_RLS:-off}
+      # Install agents over SSH from the server (docs/API.md, "Install over
+      # SSH"): auto (off in a multi-tenant build) | on | off.
+      NODEGLOW_SSH_DEPLOY: ${NODEGLOW_SSH_DEPLOY:-auto}
       CLICKHOUSE_URL: http://nodeglow:${CLICKHOUSE_PASSWORD:-${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}}@clickhouse:8123/nodeglow
       DATA_DIR: /data
       SKIP_MIGRATIONS: ${SKIP_MIGRATIONS:-}

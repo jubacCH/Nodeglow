@@ -85,6 +85,15 @@ async def test_the_incident_names_the_host_and_maintenance_keeps_it_quiet(db):
         "Agent silent: web": [host.id], "Agent silent: 10": []}
 
 
+async def test_an_agent_whose_host_is_disabled_is_not_silent(db):
+    """PC-JULIAN: the host was disabled, the agent entry stayed enabled."""
+    pc = PingHost(name="PC-JULIAN", hostname="pc-julian", check_type="icmp", enabled=False, source="agent")
+    db.add_all([pc, _agent("PC-Julian", minutes_ago=60 * 24 * 200)])
+    await db.flush()
+
+    assert await silence.silent_conditions(db, NOW) == {}
+
+
 def test_nothing_is_judged_right_after_a_start():
     """While the server was down no agent could report."""
     assert silence.started_recently(now_ts=1000.0, process_start=900.0)

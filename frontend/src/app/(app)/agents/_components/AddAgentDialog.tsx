@@ -10,6 +10,8 @@ import { SegmentedControl } from '@/components/ui/Tabs';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { get, post, apiErrorMessage } from '@/lib/api';
 import { SshDeployForm } from './SshDeployForm';
+import { ProbeDeployForm } from './ProbeDeployForm';
+import { deployProbes } from '@/lib/probeDeploy';
 import type { Agent } from '@/types';
 
 /** Response of POST /api/agents/install-tokens. The token is shown once. */
@@ -74,7 +76,7 @@ export function canDeployOverSsh(sshDeploy: boolean | undefined, target: Reinsta
   return sshDeploy === true && initialPlatform(target) === 'linux';
 }
 
-type Method = 'command' | 'ssh';
+type Method = 'command' | 'ssh' | 'probe';
 
 /** Agents that enrolled after the command was issued. */
 export function newAgentsSince(agents: Agent[] | undefined, knownIds: ReadonlySet<number>): Agent[] {
@@ -125,6 +127,8 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
     staleTime: 60_000,
   });
   const sshOffered = canDeployOverSsh(info.data?.ssh_deploy, agent);
+  // Through a probe: for Linux targets, when a probe allows it locally.
+  const probeOffered = initialPlatform(agent) === 'linux' && deployProbes(agents).length > 0;
 
   function sshRunStarted(serverTime: string | null) {
     knownIds.current = new Set((agents ?? []).map((a) => a.id));
@@ -179,7 +183,7 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
         : 'Create an install command and run it on the machine you want to monitor. The agent installs itself and reports to this server.'}
       footer={<Button variant="secondary" onClick={onClose}>{waiting ? 'Done' : 'Cancel'}</Button>}
     >
-      {sshOffered && !issued && !sshStarted && (
+      {(sshOffered || probeOffered) && !issued && !sshStarted && (
         <div className="mb-4">
           <SegmentedControl
             label="How to install"
@@ -187,7 +191,8 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
             onChange={setMethod}
             options={[
               { value: 'command', label: 'Copy a command' },
-              { value: 'ssh', label: 'Install over SSH' },
+              ...(sshOffered ? [{ value: 'ssh' as const, label: 'Install over SSH' }] : []),
+              ...(probeOffered ? [{ value: 'probe' as const, label: 'Through a probe' }] : []),
             ]}
           />
         </div>
@@ -195,6 +200,11 @@ export function AddAgentDialog({ open, onClose, agents, agent }: AddAgentDialogP
       {method === 'ssh' && sshOffered ? (
         <div className="space-y-4">
           <SshDeployForm agentId={agent?.id} onStarted={sshRunStarted} />
+          {sshStarted && <ConnectionStatus connected={connected} />}
+        </div>
+      ) : method === 'probe' && probeOffered ? (
+        <div className="space-y-4">
+          <ProbeDeployForm agents={agents} agentId={agent?.id} onStarted={sshRunStarted} />
           {sshStarted && <ConnectionStatus connected={connected} />}
         </div>
       ) : !issued ? (

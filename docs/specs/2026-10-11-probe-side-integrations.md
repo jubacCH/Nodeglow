@@ -548,8 +548,9 @@ on-demand collects and tests that is too slow, and it carries no payload.
   needs no WebSocket support, and falls back to the heartbeat command where it
   is unavailable.
 - A command: `{"id", "op", "config_id", "expires_at"}` with `op` one of
-  `collect`, `test`, `refresh_assignments`, and — on-prem / single-tenant only,
-  under the conditions in "Proxmox deploy-agent" below — `deploy_agents`. The
+  `collect`, `test`, `refresh_assignments`, and — under the conditions in
+  "Proxmox deploy-agent" below — `ssh_host_key` and `deploy_agent` (built,
+  part C: delivered with the heartbeat, table `agent_commands`). The
   result of `collect`/`test` comes back through the results endpoint with the
   command id; the UI request waits up to its timeout, then shows "pending".
   `wipe` is not a command on this channel: a probe of a suspended or purged
@@ -674,33 +675,33 @@ collecting with cached credentials through the whole suspension.
 
 ### Proxmox deploy-agent
 
-The Proxmox **deploy-agent** feature is the one place where the backend uses a
-secret itself (SSH from the backend). Today it runs
-`curl -sSL {nodeglow_url}/install/linux | bash` as root in every running LXC —
-a script chosen by whoever controls the server. Turned into a probe command
-as-is, it would let a compromised SaaS, a cross-tenant bug or an operator
-outside an approved support session (decision 8) run arbitrary code as root in
-every container of the customer's Proxmox nodes, which breaks rule 4, the
-"not a general-purpose door" goal and decision 8. Therefore:
+*Amended 2026-11-19 by `2026-11-19-probe-agent-deploy-design.md` (part C),
+which replaces the rules below that forbade the deploy in multi-tenant
+mode.*
 
-- **Multi-tenant mode (SaaS): not available** for probe-assigned configs —
-  neither from the backend (rule 2, and the backend cannot reach the node) nor
-  as a probe command. The UI shows the manual install command for the customer
-  to run themselves.
-- **Single-tenant / on-prem**: `deploy_agents` exists as a probe command only
-  when all of these hold:
-  - a **probe-local opt-in** (`allow_deploy_agents = true` in the agent's local
-    config, set by the installer or by hand; the backend cannot change it);
-  - the probe deploys **its own release-signed agent binary** — the payload is
-    the binary plus a fixed install procedure compiled into the agent (`pct
-    push`, write the config with the token from the command, install the
-    service), verified against the compiled-in release key before anything is
-    run; **no server-served script is piped into a shell**;
-  - the command carries only data (target node, VMIDs, the enrolment token),
-    never a command line;
-  - every run is written to the probe's local log and to the audit log.
-- Until release-signed agent updates exist (see "Signing"), `deploy_agents` is
-  not offered at all.
+The backend's own SSH deploy (part B, `2026-11-18-agent-ssh-deploy-design.md`)
+is for installations whose server reaches the hosts; it is off by default in
+a multi-tenant build. Through a probe, deploying agents is available in both
+modes when all of these hold:
+
+- a **probe-local opt-in**: `deploy.json` next to the agent's config,
+  root-owned 0600; the backend cannot create or change it;
+- **credentials only on the probe** (S3): the SaaS stores credential names;
+- the probe installs the **release-signed binary it verified itself** with a
+  procedure compiled into the agent; commands carry data only (target,
+  credential name, host-key fingerprint, enrolment token), never a command
+  line or a URL;
+- a deployed agent is bound to the **probe's own server** and accepts
+  release-signed updates only;
+- install tokens are single use (reinstall) or valid for one hour, and are
+  encrypted at rest until delivered;
+- every run is in the probe's log and in the audit log.
+
+What the old rule guarded against — a compromised SaaS running arbitrary code
+as root in the customer's containers — is closed by the third and fourth
+point: a compromised SaaS can at most install the genuine signed agent, bound
+to the probe's server, on hosts the customer opted in, with credentials it
+never sees.
 
 ### Data contract, backpressure and buffering
 

@@ -47,6 +47,17 @@ struct ReportPayload<'a> {
     /// Syslog relay counters; only once the relay was ever switched on.
     #[serde(skip_serializing_if = "Option::is_none")]
     syslog_relay: Option<&'a RelayStatus>,
+    /// Whether this probe deploys agents (its local deploy.json), with the
+    /// credential names only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deploy: Option<&'a serde_json::Value>,
+    /// Answers to commands of earlier heartbeats.
+    #[serde(skip_serializing_if = "no_command_results")]
+    command_results: &'a [crate::deploy::CommandResult],
+}
+
+fn no_command_results(results: &&[crate::deploy::CommandResult]) -> bool {
+    results.is_empty()
 }
 
 fn is_empty(results: &&[CheckResult]) -> bool {
@@ -76,6 +87,9 @@ pub struct ReportResponse {
     /// Absent or empty for every agent that is not a probe.
     #[serde(default)]
     pub checks: Option<Vec<CheckAssignment>>,
+    /// Structured commands (probes only); answered with the next heartbeat.
+    #[serde(default)]
+    pub commands: Option<Vec<crate::deploy::Command>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,6 +180,7 @@ impl ApiClient {
 
     /// Send metrics + logs to the server, plus any probe check results that are
     /// waiting for delivery and the state of the watched services.
+    #[allow(clippy::too_many_arguments)]
     pub async fn report(
         &self,
         metrics: &SystemMetrics,
@@ -173,6 +188,8 @@ impl ApiClient {
         check_results: &[CheckResult],
         service_states: &[ServiceStatus],
         syslog_relay: Option<&RelayStatus>,
+        deploy: Option<&serde_json::Value>,
+        command_results: &[crate::deploy::CommandResult],
     ) -> anyhow::Result<ReportResponse> {
         let resp = self
             .client
@@ -183,6 +200,8 @@ impl ApiClient {
                 check_results,
                 service_states,
                 syslog_relay,
+                deploy,
+                command_results,
             })
             .send()
             .await?;
@@ -454,6 +473,8 @@ mod tests {
             check_results: &[],
             service_states: &[],
             syslog_relay: None,
+            deploy: None,
+            command_results: &[],
         };
         let with_probe_field = serde_json::to_value(&payload).unwrap();
         let plain = serde_json::to_value(&metrics).unwrap();
@@ -472,6 +493,8 @@ mod tests {
             check_results: &results,
             service_states: &[],
             syslog_relay: None,
+            deploy: None,
+            command_results: &[],
         };
         let json = serde_json::to_value(&payload).unwrap();
 
@@ -503,6 +526,8 @@ mod tests {
             check_results: &[],
             service_states: &states,
             syslog_relay: None,
+            deploy: None,
+            command_results: &[],
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["hostname"], "probe01");
@@ -560,6 +585,8 @@ mod tests {
             check_results: &[],
             service_states: &[],
             syslog_relay: Some(&status),
+            deploy: None,
+            command_results: &[],
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["hostname"], "probe01");
