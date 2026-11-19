@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Nodeglow monitoring agent — lightweight, cross-platform system metrics collector"
 license = "AGPL-3.0-only"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [[bin]]
 name = "nodeglow-agent"
@@ -24,6 +24,9 @@ hex = "0.4"
 chrono = { version = "0.4.38", features = ["serde"] }
 anyhow = "1"
 ed25519-dalek = "3"
+# SSH client for deploying agents from a probe (part C). ring, not aws-lc-rs:
+# no extra C toolchain for the static musl build; ring is already in via rustls.
+russh = { version = "=0.65.1", default-features = false, features = ["ring", "rsa"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 sysinfo = "0.32"

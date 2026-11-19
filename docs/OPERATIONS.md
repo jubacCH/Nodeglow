@@ -620,6 +620,46 @@ Limits above); for that, forward the audit log to a system the backend cannot wr
 
 ---
 
+## Deploying agents from a probe
+
+A probe can install the Nodeglow agent on Linux hosts in its network, and in
+containers of a Proxmox node, when its own machine allows it. Nothing is
+enabled by default, and the server cannot enable it.
+
+Create `/opt/nodeglow/deploy.json` on the probe (next to `config.json`),
+owned by root, mode 600 — a file others can read, or that root does not own,
+is ignored:
+
+```json
+{
+  "allow_deploy_agents": true,
+  "credentials": {
+    "lab-root": {"username": "root", "private_key_file": "/root/.ssh/id_ed25519"},
+    "pve":      {"username": "deploy", "password": "…"}
+  }
+}
+```
+
+```bash
+sudo install -m 600 -o root -g root deploy.json /opt/nodeglow/deploy.json
+```
+
+- The probe reports only the credential **names**; logins never leave the
+  probe. A key file needs no passphrase, or set `"passphrase"`.
+- A user other than root needs passwordless sudo (`sudo -n`); for Proxmox
+  containers, for `pct`.
+- The probe re-reads the file every interval; removing it (or setting
+  `allow_deploy_agents` to false) switches the feature off.
+- What runs on a target is fixed in the agent: it checks `uname -m` (x86_64
+  only for now), copies the agent binary it downloaded from its server and
+  verified against the release key, writes `/opt/nodeglow/config.json`
+  (bound to the probe's server, release-signed updates only) and the systemd
+  unit, and starts the service; for a container through `pct push` and
+  `pct exec`. It then waits up to 45 s for the new agent to enrol.
+- The first deploy to an address asks for its host key in the UI; after
+  that only that key is accepted. Each run is in the probe's log and in the
+  audit log.
+
 ## Probe syslog relay
 
 Syslog from network devices normally goes straight to the server (514/udp,

@@ -6,6 +6,7 @@ mod release_keys;
 mod services;
 mod syslog_relay;
 mod updater;
+mod deploy;
 
 #[cfg(target_os = "linux")]
 mod collector_linux;
@@ -94,6 +95,15 @@ async fn main() {
         relay_hostname,
     );
 
+    // Deploying agents onto other hosts (part C): only with the local
+    // deploy.json opt-in, re-read every interval. Answers wait here until a
+    // heartbeat delivered them; at most two deploys run at a time.
+    let deploy_path = deploy::DeployFile::path_for(&cfg.config_path);
+    let deploy_api = Arc::new(ApiClient::with_token(&cfg, &token));
+    let command_results: deploy::Answers = Default::default();
+    let deploy_gate = Arc::new(tokio::sync::Semaphore::new(2));
+    let deploys_running = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
     // Update trust (spec rule 4): latched from what the server reports, it
     // only ever tightens. See updater.rs.
     let trust_path = updater::TrustState::path_for(&cfg.config_path);
@@ -141,6 +151,10 @@ async fn main() {
         // last successful heartbeat.
         let delivered = pending_results.len();
         let relay_status = relay.status();
+        let deploy_file = deploy::DeployFile::load(&deploy_path, true);
+        let deploy_capability = deploy::capability(deploy_file.as_ref());
+        let answers: Vec<deploy::CommandResult> =
+            std::mem::take(&mut *command_results.lock().expect("command results"));
         match api
             .report(
                 &metrics,
@@ -148,6 +162,8 @@ async fn main() {
                 pending_results.as_slice(),
                 &service_states,
                 relay_status.as_ref(),
+                Some(&deploy_capability),
+                &answers,
             )
             .await
         {
@@ -179,6 +195,27 @@ async fn main() {
                     }
                 }
 
+                // Structured commands: each runs in its own task and answers
+                // with a later heartbeat.
+                for cmd in resp.commands.unwrap_or_default() {
+                    let ctx = deploy::ProbeContext {
+                        deploy_file: deploy_file.clone(),
+                        server: cfg.server.clone(),
+                        api: deploy_api.clone(),
+                    };
+                    let results = command_results.clone();
+                    let gate = deploy_gate.clone();
+                    let running = deploys_running.clone();
+                    running.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    tokio::spawn(async move {
+                        let _slot = gate.acquire_owned().await;
+                        info!(id = cmd.id, op = %cmd.op, "Running command");
+                        let result = deploy::handle(&ctx, cmd).await;
+                        results.lock().expect("command results").push(result);
+                        running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    });
+                }
+
                 // Probe assignments for the coming interval. An absent or empty
                 // list means this agent is not a probe.
                 let next = resp.checks.unwrap_or_default();
@@ -186,6 +223,13 @@ async fn main() {
                 assignments = next;
             }
             Err(e) => {
+                // Command answers go out with the next heartbeat instead.
+                if !answers.is_empty() {
+                    let mut guard = command_results.lock().expect("command results");
+                    let later = std::mem::take(&mut *guard);
+                    *guard = answers;
+                    guard.extend(later);
+                }
                 // The results stay buffered (bounded) and go out with the next
                 // successful heartbeat. The assignment list is kept as it is:
                 // the probe carries on checking what it was last told to check.
@@ -210,7 +254,9 @@ async fn main() {
         // Auto-update check (every 5 minutes)
         let count = update_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let checks_per_update = (300 / cfg.interval).max(1);
-        if count % checks_per_update == 0 {
+        // An update restarts the agent: not while a deploy is running.
+        let deploying = deploys_running.load(std::sync::atomic::Ordering::SeqCst) > 0;
+        if count % checks_per_update == 0 && !deploying {
             match updater::check_and_update(&api, &cfg, &mut trust, &trust_path).await {
                 Ok(true) => {
                     info!("Update applied, restarting...");
