@@ -346,6 +346,8 @@ PARAM_TABLE = {
     "flow_id": "sso_flows",
     "site_id": "sites",
     "run_id": "agent_deploy_jobs",
+    "probe_id": "agents",
+    "command_id": "agent_commands",
     "host_key_id": "ssh_host_keys",
     # Tenant ids themselves: only the operator's installation routes take one.
     "tenant_id": "tenants",
