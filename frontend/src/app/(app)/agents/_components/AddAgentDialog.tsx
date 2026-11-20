@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, Loader2, Monitor, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { Field, Select } from '@/components/ui/Field';
+import { Checkbox, Field, Select } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
 import { SegmentedControl } from '@/components/ui/Tabs';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -48,10 +48,10 @@ export function validityFor(target: ReinstallTarget | undefined): ReadonlyArray<
 }
 
 /** Where to ask for the command: a bound token for a reinstall, a plain one otherwise. */
-export function issueRequest(target: ReinstallTarget | undefined, ttlHours: number) {
+export function issueRequest(target: ReinstallTarget | undefined, ttlHours: number, probe = false) {
   return {
     url: target ? `/api/agents/${target.id}/reinstall` : '/api/agents/install-tokens',
-    body: { ttl_hours: ttlHours },
+    body: probe ? { ttl_hours: ttlHours, probe: true } : { ttl_hours: ttlHours },
   };
 }
 
@@ -108,6 +108,7 @@ export function AddAgentDialog({ open, onClose, agents: agentsProp, agent }: Add
   const [platform, setPlatform] = useState<Platform>(initialPlatform(agent));
   const [ttlHours, setTtlHours] = useState<number>(validity[0].hours);
   const [issued, setIssued] = useState<InstallToken | null>(null);
+  const [probeOptIn, setProbeOptIn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [method, setMethod] = useState<Method>('command');
@@ -119,6 +120,7 @@ export function AddAgentDialog({ open, onClose, agents: agentsProp, agent }: Add
   useEffect(() => {
     if (!open) {
       setIssued(null);
+      setProbeOptIn(false);
       setError(null);
       setBusy(false);
       setMethod('command');
@@ -158,7 +160,7 @@ export function AddAgentDialog({ open, onClose, agents: agentsProp, agent }: Add
     setError(null);
     try {
       knownIds.current = new Set((agents ?? []).map((a) => a.id));
-      const { url, body } = issueRequest(agent, ttlHours);
+      const { url, body } = issueRequest(agent, ttlHours, probeOptIn && initialPlatform(agent) === 'linux');
       const token = await post<InstallToken>(url, body);
       issuedAt.current = issueMoment(token, Date.now());
       setIssued(token);
@@ -227,6 +229,14 @@ export function AddAgentDialog({ open, onClose, agents: agentsProp, agent }: Add
               ))}
             </Select>
           </Field>
+          {initialPlatform(agent) === 'linux' && (
+            <Checkbox
+              checked={probeOptIn}
+              onChange={(e) => setProbeOptIn(e.target.checked)}
+              label="This machine is a probe and may install agents on other hosts"
+              description="Linux only. The probe still needs its own go-ahead on the machine (enable-deploy)."
+            />
+          )}
           {error && <p role="alert" className="text-meta text-down">{error}</p>}
           <Button onClick={issue} disabled={busy}>
             {busy ? 'Creating…' : 'Create install command'}

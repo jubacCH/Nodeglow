@@ -51,6 +51,8 @@ def state(agent) -> dict:
         status = "trusted"
     return {
         "fingerprint": fingerprint(trusted) if trusted else None,
+        # Public data: the browser seals to it, after checking it against the fingerprint.
+        "public_key": trusted or None,
         "reported_fingerprint": fingerprint(reported) if reported else None,
         "state": status,
     }

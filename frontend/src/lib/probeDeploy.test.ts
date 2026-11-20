@@ -39,7 +39,7 @@ describe('probeFormProblem', () => {
     [{ probeId: '' }, 'probe'],
     [{ host: ' ' }, 'host'],
     [{ port: '0' }, 'port'],
-    [{ credential: '' }, 'credential'],
+    [{ credential: '' }, 'Pick a login.'],
     [{ kind: 'lxc' as const, vmids: 'x' }, 'container'],
   ])('names what is missing: %j', (patch, text) => {
     expect(probeFormProblem(form(patch))).toContain(text);
@@ -61,5 +61,18 @@ describe('probeDeployBody', () => {
       target: { kind: 'lxc', host: 'pve1', port: 22, vmids: [105, 107] }, credential: 'lab-root',
       agent_id: 3, host_key_fingerprint: 'SHA256:x',
     });
+  });
+});
+
+describe('probeDeployBody with a sealed login', () => {
+  it('sends the sealed id and no credential name', () => {
+    const body = probeDeployBody(form({ credential: 'sealed:7' }));
+    expect(body.sealed_credential_id).toBe(7);
+    expect('credential' in body).toBe(false);
+  });
+  it('keeps a local name as it was', () => {
+    const body = probeDeployBody(form({ credential: 'lab-root' }));
+    expect(body.credential).toBe('lab-root');
+    expect('sealed_credential_id' in body).toBe(false);
   });
 });

@@ -49,7 +49,7 @@ async def test_first_reported_key_is_trusted_and_audited(auth_client):
     assert len(rows) == 1
     assert json.loads(rows[0].details) == {"fingerprint": fp, "automatic": True}
     view = _deploy_view(agent)["seal"]
-    assert view == {"fingerprint": fp, "reported_fingerprint": fp, "state": "trusted"}
+    assert view == {"fingerprint": fp, "public_key": pub, "reported_fingerprint": fp, "state": "trusted"}
 
 
 async def test_changed_key_is_reported_not_trusted(auth_client):
@@ -63,7 +63,7 @@ async def test_changed_key_is_reported_not_trusted(auth_client):
     agent = await _agent(sf, probe_id)
     assert agent.seal_public_key == first
     assert _deploy_view(agent)["seal"] == {
-        "fingerprint": fp1, "reported_fingerprint": fp2, "state": "changed"}
+        "fingerprint": fp1, "public_key": first, "reported_fingerprint": fp2, "state": "changed"}
 
 
 async def test_garbage_seal_report_is_ignored(auth_client):

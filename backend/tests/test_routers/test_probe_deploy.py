@@ -338,7 +338,7 @@ async def test_the_agent_api_shows_what_a_probe_can_deploy(admin_pair):
     detail = (await client.get(f"/api/v1/agents/{probe_id}")).json()
     assert detail["deploy"] == {
             "enabled": True, "credentials": ["lab-root", "pve"], "arch": ["x86_64"], "sealed": False,
-            "seal": {"fingerprint": None, "reported_fingerprint": None, "state": "none"}}
+            "seal": {"fingerprint": None, "public_key": None, "reported_fingerprint": None, "state": "none"}}
     listed = {a["id"]: a for a in (await client.get("/api/v1/agents")).json()}
     assert listed[probe_id]["deploy"]["enabled"] is True
     plain = await _seed_probe(sf, is_probe=False, name="plain")

@@ -164,7 +164,20 @@ export interface Agent {
   /** Site of the agent; the hosts its probe checks follow it unless they have their own. */
   site_id?: number | null;
   /** Probes only: whether the probe may install agents (its local deploy.json), with credential names. */
-  deploy?: { enabled: boolean; credentials: string[]; arch: string[] } | null;
+  deploy?: {
+    enabled: boolean;
+    credentials: string[];
+    arch: string[];
+    /** Whether the probe accepts logins sealed to its key. */
+    sealed: boolean;
+    seal?: {
+      fingerprint: string | null;
+      /** The trusted public key (padded base64); public data. */
+      public_key?: string | null;
+      reported_fingerprint: string | null;
+      state: 'trusted' | 'changed' | 'none';
+    };
+  } | null;
 }
 
 /** Last reported state of one watched service on an agent. */
