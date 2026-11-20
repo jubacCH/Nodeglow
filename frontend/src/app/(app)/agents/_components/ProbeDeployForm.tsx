@@ -73,9 +73,9 @@ export function ProbeDeployForm({
   const saved = useQuery({
     queryKey: credsKey,
     queryFn: () => get<{ credentials: ProbeCredential[] }>(`/api/probes/${form.probeId}/credentials`),
-    enabled: sealedOn && form.probeId !== '',
+    enabled: form.probeId !== '',
   });
-  const savedLogins = sealedOn ? (saved.data?.credentials ?? []) : [];
+  const savedLogins = saved.data?.credentials ?? [];
   const localLogins = probe?.deploy?.credentials ?? [];
 
   function pickLogin(value: string) {
@@ -327,8 +327,8 @@ export function ProbeDeployForm({
           {savedLogins.length > 0 && (
             <optgroup label="Saved in Nodeglow">
               {savedLogins.map((c) => (
-                <option key={c.id} value={sealedValue(c.id)} disabled={c.stale}>
-                  {c.name} ({c.username}){c.stale ? ' - sealed to an old key' : ''}
+                <option key={c.id} value={sealedValue(c.id)} disabled={c.stale || !sealedOn}>
+                  {c.name} ({c.username}){c.stale ? ' - sealed to an old key' : !sealedOn ? ' - switched off' : ''}
                 </option>
               ))}
             </optgroup>
@@ -336,7 +336,13 @@ export function ProbeDeployForm({
           {sealedOn && seal?.state === 'trusted' && <option value={ADD_LOGIN}>Add a login…</option>}
         </Select>
       </Field>
-      {sealedOn && savedLogins.length > 0 && (
+      {saved.isError && (
+        <p role="alert" className="text-meta text-down">Could not load the logins saved in Nodeglow.</p>
+      )}
+      {!sealedOn && savedLogins.length > 0 && (
+        <p className="text-meta text-fg-3">Sealed logins are switched off on this probe.</p>
+      )}
+      {savedLogins.length > 0 && (
         <ul className="divide-y divide-border rounded-ctl border border-border text-meta" aria-label="Logins saved in Nodeglow">
           {savedLogins.map((c) => (
             <li key={c.id} className="flex items-center justify-between gap-3 px-3 py-2">
