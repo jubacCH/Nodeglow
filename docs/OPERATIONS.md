@@ -631,6 +631,9 @@ A probe can install the Nodeglow agent on Linux hosts in its network, and in
 containers of a Proxmox node, when its own machine allows it. Nothing is
 enabled by default, and the server cannot enable it.
 
+Logins can also be entered in the UI and sealed to the probe, see
+[Sealed logins](#sealed-logins-entered-in-the-ui).
+
 Create `/opt/nodeglow/deploy.json` on the probe (next to `config.json`),
 owned by root, mode 600 — a file others can read, or that root does not own,
 is ignored:
@@ -674,6 +677,84 @@ sudo install -m 600 -o root -g root deploy.json /opt/nodeglow/deploy.json
 - The first deploy to an address asks for its host key in the UI; after
   that only that key is accepted. Each run is in the probe's log and in the
   audit log.
+
+### Sealed logins (entered in the UI)
+
+Instead of keeping logins in `deploy.json`, an admin can enter an SSH login
+(password, or private key with optional passphrase) in the deploy form. The
+browser encrypts it to the public key of that one probe (HPKE: X25519,
+HKDF-SHA256, ChaCha20-Poly1305) before it leaves the page. Nodeglow stores
+only that ciphertext (under the tenant key on top), never returns it, and
+sends it to the probe with each deploy command; the probe opens it in memory
+and keeps nothing. `deploy.json` logins keep working side by side ("On the
+probe" and "Saved in Nodeglow" in the form's Login select).
+
+**Switching it on.** A probe needs both `allow_deploy_agents` and
+`allow_sealed_credentials` set in `deploy.json`; the server cannot set either.
+
+- New probe: tick "This machine is a probe and may install agents on other
+  hosts" in the Add agent dialog (Linux command). The install token carries a
+  `probe` flag; the installer runs `nodeglow-agent enable-deploy`, and the
+  enrolment marks the agent a probe.
+- Existing probe: reinstall with that checkbox, or run
+  `sudo /opt/nodeglow/nodeglow-agent enable-deploy`. It sets both flags (other
+  content of `deploy.json`, including local logins, is kept), creates the file
+  root-only (0600) if missing, makes sure the sealing key exists and prints its
+  fingerprint. `disable-deploy` sets both flags to false.
+
+**Sealing key.** The probe keeps its private key in `/opt/nodeglow/seal.key`
+(next to `config.json`, owned by root, mode 600; a file that is not root-owned
+or is readable by others is not used, and no key is reported). The key never
+leaves the machine; the heartbeat reports only the public key. Show the
+fingerprint with `nodeglow-agent seal-key`, or make a new key with
+`nodeglow-agent seal-key --rotate` (as root).
+
+- The first key a probe reports is trusted automatically (audited as
+  `probe.seal_key.trust`). To check it, compare the fingerprint in the form
+  with the one printed on the probe.
+- If the probe later reports a different key, the form shows "key changed"
+  with both fingerprints and seals nothing until an admin clicks "Trust the
+  new key". Logins sealed to the old key are marked stale and refused.
+- A fresh enrolment (an install token that is not bound to an existing agent)
+  replaces `seal.key`, so a machine enrolled anew never keeps a key an old
+  entry trusted. A reinstall with a bound token keeps it.
+- "Revoke all sealed logins" in the form (or `seal-key --rotate`) makes a new
+  key; every login sealed to the old key becomes useless. When Nodeglow asked
+  for the rotation, the new key is trusted automatically.
+- Deleting a saved login removes the copy on the server and expires queued
+  commands that carry it. It does not recall copies in backups: the real
+  revocation is rotating the key.
+
+**What the probe enforces.** The probe uses only what is inside the sealed
+login: its `hosts` list (same syntax as in `deploy.json`) decides which hosts
+it may be used for, also for reading a host key; user name, auth and hosts
+shown by Nodeglow are for display only, so a server that edits them changes
+the screen, not the probe. Sealed logins are throttled in memory on the probe
+(`deploy.json` logins are not): at most 20 different target hosts per rolling
+hour (a run over several containers of one node counts as one host), and after
+5 failures within 15 minutes (login refused, no SSH server, host key mismatch)
+sealed operations are refused for 15 minutes.
+
+**Threat model.**
+
+- Protected: stored logins at rest in Nodeglow (database, backups, an operator
+  reading tables, an approved support session), and a login's host list
+  against a compromised backend.
+- Not protected: input typed into a compromised Nodeglow. The server serves
+  the JavaScript that seals, so whoever controls it can read the input or
+  serve its own key. If that is in your threat model, keep using `deploy.json`.
+- A compromised server can seal logins of its own, with any host list. It gains
+  no real login from that, but it can use a probe that allows sealed logins to
+  look for SSH servers and try logins in the probe's network; the throttle
+  limits scanning and brute force. If you do not accept that, leave
+  `allow_sealed_credentials` off.
+- On-prem (single tenant) the installer pins the server's own update key, so
+  that server can ship code to the probe and read `seal.key`. The protection
+  against a compromised server holds only where probes accept release-signed
+  updates only (hosted, multi-tenant). On-prem the server is yours.
+- Known limitation: the agent zeroizes the decrypted login after use, but
+  copies held inside the SSH library and the JSON parser cannot be wiped and
+  may stay in process memory until reused.
 
 ## Probe syslog relay
 
