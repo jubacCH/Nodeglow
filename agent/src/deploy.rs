@@ -188,9 +188,12 @@ pub fn running_as_root() -> bool {
 const REQUIRE_ROOT: bool = !cfg!(test);
 
 /// Turn deploying (and sealed logins) on or off in `deploy.json`, keeping
-/// every other key. Atomic write, mode 0600. Returns the new file's path.
+/// every other key. Atomic write (temp file + rename), mode 0600.
 pub fn set_deploy_flags(path: &Path, on: bool) -> anyhow::Result<()> {
     use std::io::Write;
+    static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut doc: Value = match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)
             .with_context(|| format!("{} is not valid JSON; fix or remove it first", path.display()))?,
@@ -202,7 +205,8 @@ pub fn set_deploy_flags(path: &Path, on: bool) -> anyhow::Result<()> {
     obj.insert("allow_deploy_agents".into(), json!(on));
     obj.insert("allow_sealed_credentials".into(), json!(on));
     let text = Zeroizing::new(serde_json::to_string_pretty(&doc)? + "\n");
-    let tmp = path.with_file_name(format!(".deploy.json.tmp-{}", std::process::id()));
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".deploy.json.tmp-{}-{n}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -446,7 +450,7 @@ async fn host_key(ctx: &ProbeContext, file: &DeployFile, id: i64, payload: Value
     };
     if !login.credential.allows(&p.host) {
         return CommandResult::failed(
-            id, format!("{} is not allowed for the login {:?} (\"hosts\").", p.host, login.name));
+            id, format!("{} is not allowed for the login {:?}.", p.host, login.name));
     }
     if let Err(e) = admit(ctx, &p.host) {
         return CommandResult::failed(id, e);
@@ -792,15 +796,12 @@ async fn deploy(ctx: &ProbeContext, file: &DeployFile, p: &DeployPayload) -> any
     }
 }
 
-/// Log in to the target. Sealed logins pass the throttle first, and a failed
-/// connect or login counts towards the pause.
+/// Log in to the target. For a sealed login a failed connect or login counts
+/// towards the throttle's pause.
 async fn login(ctx: &ProbeContext, p: &DeployPayload, cred: &Credential, sealed: bool)
     -> anyhow::Result<Session>
 {
     let (host, port) = p.target.address();
-    if sealed {
-        admit(ctx, host).map_err(|e| anyhow!(e))?;
-    }
     let session = connect(host, port, cred, &p.host_key_fingerprint).await;
     if sealed && session.is_err() {
         note_failure(ctx);
@@ -816,7 +817,13 @@ async fn run_deploy(ctx: &ProbeContext, p: &DeployPayload, cred: &Credential, la
         bail!("Invalid host.");
     }
     if !cred.allows(host) {
+        if sealed {
+            bail!("{host} is not allowed for this login (its host list).");
+        }
         bail!("{host} is not allowed for the credential {label:?} (\"hosts\" in deploy.json).");
+    }
+    if sealed {
+        admit(ctx, host).map_err(|e| anyhow!(e))?;
     }
     if ctx.insecure_tls {
         bail!("This probe accepts an invalid TLS certificate from its server (allow_insecure_tls); \
@@ -1167,6 +1174,7 @@ mod tests {
         assert_eq!(res.result["detail"], json!("Sealed logins are not switched on on this probe (deploy.json)."));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sealed_host_not_in_list_refused() {
         let (ctx, key) = sealed_ctx(SEALED_ON);
@@ -1245,6 +1253,7 @@ mod tests {
         assert!(file.credentials.contains_key("pve"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn rotate_refused_without_flag() {
         let (ctx, key) = sealed_ctx(r#"{"allow_deploy_agents": true}"#);
@@ -1255,6 +1264,7 @@ mod tests {
         assert_eq!(after.fingerprint(), key.fingerprint(), "key untouched");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn rotate_replaces_the_key() {
         let (ctx, key) = sealed_ctx(SEALED_ON);
@@ -1266,6 +1276,7 @@ mod tests {
         assert_eq!(res.result["public_key"], json!(after.public_b64()));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn throttle_counts_failed_sealed_connect() {
         let (ctx, key) = sealed_ctx(SEALED_ON);
@@ -1276,14 +1287,43 @@ mod tests {
             "sealed_credential": env, "host_key_fingerprint": "SHA256:x",
             "enrollment_token": "nt_0123456789"})).unwrap();
         for _ in 0..5 {
+            admit(&ctx, "127.0.0.1").expect("admitted");
             let err = login(&ctx, &payload, &login_.credential, true).await.err().expect("refused");
             assert!(!format!("{err:#}").contains("paused"), "{err:#}");
         }
-        let err = login(&ctx, &payload, &login_.credential, true).await.err().expect("throttled");
-        assert!(format!("{err:#}").contains("paused"), "{err:#}");
-        // Local credentials are not throttled.
-        let err = login(&ctx, &payload, &login_.credential, false).await.err().expect("refused");
-        assert!(!format!("{err:#}").contains("paused"), "{err:#}");
+        assert!(admit(&ctx, "127.0.0.1").unwrap_err().contains("paused"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_connect_failures_are_not_throttled() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let env = login_for(&key, &["127.0.0.1"]);
+        let login_ = seal::open(&key, &env).unwrap();
+        let payload: DeployPayload = serde_json::from_value(json!({
+            "target": {"kind": "host", "host": "127.0.0.1", "port": 1},
+            "credential": "lab", "host_key_fingerprint": "SHA256:x",
+            "enrollment_token": "nt_0123456789"})).unwrap();
+        for _ in 0..6 {
+            login(&ctx, &payload, &login_.credential, false).await.err().expect("refused");
+        }
+        admit(&ctx, "127.0.0.1").expect("not paused");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sealed_host_key_failures_are_throttled() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let env = login_for(&key, &["127.0.0.1"]);
+        let ask = |id| Command { id, op: "ssh_host_key".into(), expires_at: None,
+                                 payload: json!({"host": "127.0.0.1", "port": 1, "sealed_credential": env.clone()}) };
+        for i in 0..5 {
+            let res = handle(&ctx, ask(i)).await;
+            assert_eq!(res.status, "failed");
+            assert!(!res.result["detail"].as_str().unwrap().contains("paused"), "{:?}", res.result);
+        }
+        let res = handle(&ctx, ask(6)).await;
+        assert!(res.result["detail"].as_str().unwrap().contains("paused"), "{:?}", res.result);
     }
 
     #[tokio::test]

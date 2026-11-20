@@ -377,7 +377,6 @@ fn run_command(cfg: &Config, command: config::CliCommand) -> anyhow::Result<()> 
         }
         SealKey { rotate } => {
             let key = if rotate {
-                seal::SealKey::load_or_create(&seal_path, true)?;
                 seal::SealKey::rotate(&seal_path, true)?
             } else {
                 seal::SealKey::load_or_create(&seal_path, true)?

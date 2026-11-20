@@ -35,6 +35,10 @@ const MAX_HOST_LEN: usize = 255;
 
 type Kem = X25519HkdfSha256;
 
+/// Serialises key writes within the process (commands run in parallel tasks).
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// `seal.key` next to the agent config.
 pub fn key_path_for(config_path: &Path) -> PathBuf {
     config_path.with_file_name("seal.key")
@@ -99,6 +103,11 @@ impl SealKey {
         if let Some(key) = Self::load(path, require_root)? {
             return Ok(key);
         }
+        let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Another caller may have created it while this one waited.
+        if let Some(key) = Self::load(path, require_root)? {
+            return Ok(key);
+        }
         let key = Self::generate()?;
         key.store(path)?;
         Ok(key)
@@ -106,6 +115,7 @@ impl SealKey {
 
     /// Replace the stored key with a fresh one.
     pub fn rotate(path: &Path, require_root: bool) -> anyhow::Result<SealKey> {
+        let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Refuse to touch a file that is not private, like load does.
         Self::load(path, require_root)?;
         let key = Self::generate()?;
@@ -116,7 +126,8 @@ impl SealKey {
     /// Atomic write: a 0600 temp file in the same directory, fsync, rename.
     fn store(&self, path: &Path) -> anyhow::Result<()> {
         use std::io::Write;
-        let tmp = path.with_file_name(format!(".seal.key.tmp-{}", std::process::id()));
+        let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = path.with_file_name(format!(".seal.key.tmp-{}-{n}", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
@@ -524,6 +535,22 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(SealKey::load(&path, false).is_err());
         assert!(SealKey::load_or_create(&path, false).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_rotations_leave_a_matching_key() {
+        let dir = tempdir();
+        let path = dir.join("seal.key");
+        SealKey::load_or_create(&path, false).unwrap();
+        let handles: Vec<_> = (0..8).map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || SealKey::rotate(&path, false).unwrap().fingerprint())
+        }).collect();
+        let returned: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let stored = SealKey::load(&path, false).unwrap().expect("loads").fingerprint();
+        assert!(returned.contains(&stored), "{stored} not among {returned:?}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temp file left behind");
     }
 
     #[cfg(unix)]
