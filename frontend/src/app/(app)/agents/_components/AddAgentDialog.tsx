@@ -234,7 +234,7 @@ export function AddAgentDialog({ open, onClose, agents: agentsProp, agent }: Add
               checked={probeOptIn}
               onChange={(e) => setProbeOptIn(e.target.checked)}
               label="This machine is a probe and may install agents on other hosts"
-              description="Linux only. The probe still needs its own go-ahead on the machine (enable-deploy)."
+              description="Linux only. The installer switches deploying on on this machine (enable-deploy)."
             />
           )}
           {error && <p role="alert" className="text-meta text-down">{error}</p>}

@@ -119,16 +119,18 @@ async def ask_host_key(probe_id: int, request: Request):
         host, port = address
         payload: dict = {"host": host, "port": port}
         credential_id = None
+        details: dict = {"target": f"{host}:{port}"}
         if body.get("sealed_credential_id") is not None:
             sealed = await _sealed(db, probe, body["sealed_credential_id"])
             if isinstance(sealed, JSONResponse):
                 return sealed
             credential_id, payload["sealed_credential"] = sealed[0].id, sealed[1]
+            details["sealed_credential"] = {"id": sealed[0].id, "name": sealed[0].name}
         cmd = await agent_commands.enqueue(db, probe, "ssh_host_key", payload,
                                            created_by=_username(request), target=f"{host}:{port}",
                                            credential_id=credential_id)
         await log_action(db, request, "agent.host_key_query", "agent", probe.id, probe.name,
-                         {"target": f"{host}:{port}", "command_id": cmd.id})
+                         {**details, "command_id": cmd.id})
         await db.commit()
         return JSONResponse({"ok": True, "command_id": cmd.id}, status_code=202)
 

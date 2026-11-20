@@ -83,8 +83,8 @@ async def create_credential(probe_id: int, request: Request):
             return probe
         cap = agent_commands.capability(probe)
         if not cap["sealed"]:
-            return _refuse("This probe does not support sealed logins (update its agent).", 409,
-                           "sealed_not_enabled")
+            return _refuse("This probe does not offer sealed logins. Update its agent or run `nodeglow-agent enable-deploy` on it.",
+                           409, "sealed_not_enabled")
         key_state = seal_keys.state(probe)
         if key_state["state"] == "none":
             return _refuse("The probe has not reported a sealing key yet.", 409, "seal_key_missing")

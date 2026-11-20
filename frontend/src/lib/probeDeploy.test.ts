@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@/types';
-import { EMPTY_PROBE_FORM, deployProbes, parseVmids, probeDeployBody, probeFormProblem, type ProbeForm } from './probeDeploy';
+import { EMPTY_PROBE_FORM, deployProbes, hostKeyBody, parseVmids, probeDeployBody, probeFormProblem, type ProbeForm } from './probeDeploy';
 
 const probe = (id: number, enabled: boolean, credentials = ['lab-root']) =>
   ({ id, name: `p${id}`, is_probe: true, deploy: { enabled, credentials, arch: ['x86_64'] } }) as unknown as Agent;
@@ -74,5 +74,16 @@ describe('probeDeployBody with a sealed login', () => {
     const body = probeDeployBody(form({ credential: 'lab-root' }));
     expect(body.credential).toBe('lab-root');
     expect('sealed_credential_id' in body).toBe(false);
+  });
+});
+
+describe('hostKeyBody', () => {
+  const base: ProbeForm = { ...EMPTY_PROBE_FORM, probeId: '1', host: ' 10.0.0.5 ', credential: 'lab-root' };
+  it('sends only host and port for a login kept on the probe', () => {
+    expect(hostKeyBody(base)).toEqual({ host: '10.0.0.5', port: 22 });
+  });
+  it('names the sealed login so the probe can use it', () => {
+    expect(hostKeyBody({ ...base, port: '2222', credential: 'sealed:7' }))
+      .toEqual({ host: '10.0.0.5', port: 2222, sealed_credential_id: 7 });
   });
 });

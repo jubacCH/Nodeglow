@@ -69,6 +69,14 @@ export function probeFormProblem(form: ProbeForm, opts: { reinstall?: boolean } 
   return null;
 }
 
+/** Body of POST /api/probes/{id}/host-key; names the sealed login when one is selected. */
+export function hostKeyBody(form: ProbeForm): Record<string, unknown> {
+  const body: Record<string, unknown> = { host: form.host.trim(), port: portOf(form) };
+  const sealed = sealedCredentialId(form.credential);
+  if (sealed !== null) body.sealed_credential_id = sealed;
+  return body;
+}
+
 /** Body of POST /api/probes/{id}/deploy. */
 export function probeDeployBody(
   form: ProbeForm,

@@ -424,6 +424,9 @@ async def test_host_key_with_sealed_login(admin_pair):
     assert cmd.target == "10.0.0.5:22" and cmd.credential_id == cred_id
     assert await _payload(sf, cmd) == {"host": "10.0.0.5", "port": 22,
                                        "sealed_credential": _envelope()}
+    from models.audit import AuditLog
+    (audit,) = [a for a in await _rows(sf, AuditLog) if a.action == "agent.host_key_query"]
+    assert json.loads(audit.details)["sealed_credential"] == {"id": cred_id, "name": "lab"}
 
 
 async def test_both_credentials_refused(admin_pair):

@@ -15,7 +15,7 @@ import { useToastStore } from '@/stores/toast';
 import { SealedLoginForm } from './SealedLoginForm';
 import type { HostKeyQuestion } from '@/lib/agentDeploy';
 import {
-  EMPTY_PROBE_FORM, deployProbes, probeDeployBody, probeFormProblem, sealedValue, type ProbeForm,
+  EMPTY_PROBE_FORM, deployProbes, hostKeyBody, probeDeployBody, probeFormProblem, sealedValue, type ProbeForm,
 } from '@/lib/probeDeploy';
 import type { Agent } from '@/types';
 
@@ -129,8 +129,15 @@ export function ProbeDeployForm({
     if (!ok) return;
     setKeyBusy(true);
     try {
-      await post(`/api/probes/${form.probeId}/seal-key/rotate`);
-      toast('The probe will make a new key with its next heartbeat. Then trust it here.', 'success');
+      const { command_id } = await post<{ command_id: number }>(`/api/probes/${form.probeId}/seal-key/rotate`);
+      toast('The probe replaces its key with its next heartbeat. Logins saved for the old key must be entered again.', 'success');
+      const deadline = Date.now() + ASK_TIMEOUT_MS;
+      while (alive.current && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        const cmd = await get<CommandView>(`/api/probes/${form.probeId}/commands/${command_id}`);
+        if (cmd.status === 'ok' || cmd.status === 'failed' || cmd.status === 'expired') break;
+      }
+      await qc.invalidateQueries({ queryKey: ['agents'] });
       await qc.invalidateQueries({ queryKey: credsKey });
     } catch (e) {
       toast(apiErrorMessage(e, 'Could not revoke the sealed logins'), 'error');
@@ -147,10 +154,11 @@ export function ProbeDeployForm({
     cancelled.current = false;
     setAsking(true);
     try {
-      const port = form.port.trim() === '' ? 22 : Number(form.port);
-      const host = form.host.trim();
+      const body = hostKeyBody(form);
+      const host = body.host as string;
+      const port = body.port as number;
       const { command_id } = await post<{ command_id: number }>(
-        `/api/probes/${form.probeId}/host-key`, { host, port });
+        `/api/probes/${form.probeId}/host-key`, body);
       const deadline = Date.now() + ASK_TIMEOUT_MS;
       while (alive.current && !cancelled.current && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, POLL_MS));

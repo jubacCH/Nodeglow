@@ -707,7 +707,8 @@ probe" and "Saved in Nodeglow" in the form's Login select).
 or is readable by others is not used, and no key is reported). The key never
 leaves the machine; the heartbeat reports only the public key. Show the
 fingerprint with `nodeglow-agent seal-key`, or make a new key with
-`nodeglow-agent seal-key --rotate` (as root).
+`nodeglow-agent seal-key --rotate` (as root). Every Linux agent running as root
+creates `seal.key` at start; this is harmless, only probes report or use it.
 
 - The first key a probe reports is trusted automatically (audited as
   `probe.seal_key.trust`). To check it, compare the fingerprint in the form
