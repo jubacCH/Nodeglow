@@ -8,9 +8,6 @@
 //! Nothing here logs or returns secrets in clear: the private key lives in a
 //! `Zeroizing` buffer and decrypted logins are zeroized on drop.
 
-// Wired into command handling by a later step.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -134,16 +131,19 @@ impl SealKey {
             file.write_all(text.as_bytes())?;
             file.sync_all()?;
             std::fs::rename(&tmp, path)?;
-            // Make the rename itself durable.
-            #[cfg(unix)]
-            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-                std::fs::File::open(dir)?.sync_all()?;
-            }
             Ok(())
         })();
         if let Err(e) = written {
             let _ = std::fs::remove_file(&tmp);
             return Err(e).with_context(|| format!("Cannot write {}", path.display()));
+        }
+        // Make the rename itself durable. The new key is already in place, so
+        // a failing directory fsync is a warning, not an error.
+        #[cfg(unix)]
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            if let Err(e) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+                tracing::warn!("Cannot fsync {}: {e}", dir.display());
+            }
         }
         Ok(())
     }
@@ -191,6 +191,8 @@ impl std::error::Error for OpenError {}
 
 /// A decrypted login. Secrets are zeroized on drop.
 pub struct SealedLogin {
+    /// The login's id on the server; only read by tests.
+    #[allow(dead_code)]
     pub id: String,
     pub name: String,
     pub credential: Credential,
@@ -343,6 +345,36 @@ impl Throttle {
             self.blocked_until = Some(now + BLOCK_FOR);
         }
     }
+}
+
+/// Seal `plaintext` to `key` the way the browser does (tests only).
+#[cfg(test)]
+pub(crate) fn seal_for_test(key: &SealKey, plaintext: &Value) -> Value {
+    use hpke::rand_core::{CryptoRng, RngCore};
+    struct Sys;
+    impl RngCore for Sys {
+        fn next_u32(&mut self) -> u32 {
+            let mut b = [0u8; 4];
+            self.fill_bytes(&mut b);
+            u32::from_le_bytes(b)
+        }
+        fn next_u64(&mut self) -> u64 {
+            let mut b = [0u8; 8];
+            self.fill_bytes(&mut b);
+            u64::from_le_bytes(b)
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            getrandom::fill(dest).unwrap();
+        }
+    }
+    impl CryptoRng for Sys {}
+    let pk = <Kem as KemTrait>::PublicKey::from_bytes(&key.public).unwrap();
+    let fp = key.fingerprint();
+    let (enc, ct) = hpke::single_shot_seal::<ChaCha20Poly1305, HkdfSha256, Kem, _>(
+        &hpke::OpModeS::Base, &pk, INFO, &serde_json::to_vec(plaintext).unwrap(), fp.as_bytes(), &mut Sys)
+        .unwrap();
+    json!({"v": 1, "suite": SUITE, "key": fp,
+           "enc": B64.encode(enc.to_bytes()), "ct": B64.encode(ct)})
 }
 
 #[cfg(test)]

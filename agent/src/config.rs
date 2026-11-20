@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::debug;
@@ -28,8 +28,26 @@ struct Cli {
     allow_insecure_tls: Option<bool>,
 
     /// Config file path
-    #[arg(long, short)]
+    #[arg(long, short, global = true)]
     config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+/// One-shot local commands; the agent loop does not start for these.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum CliCommand {
+    /// Allow this probe to deploy agents and accept sealed logins (root only)
+    EnableDeploy,
+    /// Switch deploying and sealed logins off again
+    DisableDeploy,
+    /// Print the probe's seal key fingerprint (creates the key if missing)
+    SealKey {
+        /// Replace the key with a fresh one
+        #[arg(long)]
+        rotate: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +74,9 @@ pub struct Config {
     pub require_release_signature: bool,
     #[serde(skip)]
     pub config_path: PathBuf,
+    /// A local subcommand, if one was given on the command line.
+    #[serde(skip)]
+    pub command: Option<CliCommand>,
 }
 
 fn default_interval() -> u64 {
@@ -90,10 +111,12 @@ impl Config {
                 update_public_key: String::new(),
                 require_release_signature: false,
                 config_path: PathBuf::new(),
+                command: None,
             }
         };
 
         cfg.config_path = config_path;
+        cfg.command = cli.command;
 
         // Override with CLI / env
         if let Some(s) = cli.server {
@@ -112,7 +135,8 @@ impl Config {
             cfg.allow_insecure_tls = insecure;
         }
 
-        if cfg.server.is_empty() {
+        // Local subcommands need neither a server nor a token.
+        if cfg.command.is_none() && cfg.server.is_empty() {
             anyhow::bail!("Server URL is required (--server, NODEGLOW_SERVER, or config.json)");
         }
 
@@ -131,6 +155,7 @@ impl Config {
             update_public_key: String::new(),
             require_release_signature: false,
             config_path: PathBuf::new(),
+            command: None,
         }
     }
 
