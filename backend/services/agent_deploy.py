@@ -51,6 +51,7 @@ class RunTarget:
     job_id: int
     token: str = field(repr=False)
     vmid: int | None = None     # set: a container on the node behind the connection
+    fresh: bool = True          # False: a reinstall, whose seal.key must survive
 
 
 @dataclass
@@ -139,7 +140,7 @@ async def _run_target(run: Run, conn, target: RunTarget, gate: asyncio.Semaphore
     async with gate:
         await _update(run.tenant_id, target.job_id, status="running",
                       started_at=datetime.utcnow())
-        script = render_linux_installer(run.server_url, target.token)
+        script = render_linux_installer(run.server_url, target.token, fresh=target.fresh)
         try:
             if target.vmid is None:
                 rc, out = await ssh_deploy.run_installer(conn, script, run.creds,

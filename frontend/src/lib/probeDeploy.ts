@@ -17,6 +17,18 @@ export const EMPTY_PROBE_FORM: ProbeForm = {
   probeId: '', kind: 'host', host: '', port: '22', vmids: '', credential: '',
 };
 
+const SEALED_PREFIX = 'sealed:';
+
+/** `sealed:<id>` → id; null for a login that lives on the probe. */
+export function sealedCredentialId(value: string): number | null {
+  if (!value.startsWith(SEALED_PREFIX)) return null;
+  const id = Number(value.slice(SEALED_PREFIX.length));
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/** Select value of a sealed login. */
+export const sealedValue = (id: number) => `${SEALED_PREFIX}${id}`;
+
 /** Probes whose local deploy.json switched deploying on. */
 export function deployProbes(agents: Agent[] | undefined): Agent[] {
   return (agents ?? []).filter((a) => a.is_probe && a.deploy?.enabled);
@@ -48,13 +60,21 @@ export function probeFormProblem(form: ProbeForm, opts: { reinstall?: boolean } 
   if (!form.host.trim()) return form.kind === 'lxc' ? 'Enter the Proxmox node (host).' : 'Enter the host to install on.';
   const port = portOf(form);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return 'The port must be between 1 and 65535.';
-  if (!form.credential) return 'Pick a credential of the probe.';
+  if (!form.credential) return 'Pick a login.';
   if (form.kind === 'lxc') {
     const ids = parseVmids(form.vmids);
     if (!ids) return `Enter container ids, e.g. 105, 107 or 110-112 (at most ${MAX_CONTAINERS}).`;
     if (opts.reinstall && ids.length !== 1) return 'A reinstall goes to one container.';
   }
   return null;
+}
+
+/** Body of POST /api/probes/{id}/host-key; names the sealed login when one is selected. */
+export function hostKeyBody(form: ProbeForm): Record<string, unknown> {
+  const body: Record<string, unknown> = { host: form.host.trim(), port: portOf(form) };
+  const sealed = sealedCredentialId(form.credential);
+  if (sealed !== null) body.sealed_credential_id = sealed;
+  return body;
 }
 
 /** Body of POST /api/probes/{id}/deploy. */
@@ -67,7 +87,10 @@ export function probeDeployBody(
   const target = form.kind === 'lxc'
     ? { kind: 'lxc', host, port, vmids: parseVmids(form.vmids) ?? [] }
     : { kind: 'host', host, port };
-  const body: Record<string, unknown> = { target, credential: form.credential };
+  const body: Record<string, unknown> = { target };
+  const sealed = sealedCredentialId(form.credential);
+  if (sealed !== null) body.sealed_credential_id = sealed;
+  else body.credential = form.credential;
   if (opts.agentId !== undefined) body.agent_id = opts.agentId;
   if (opts.fingerprint) body.host_key_fingerprint = opts.fingerprint;
   return body;

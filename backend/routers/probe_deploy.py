@@ -18,9 +18,10 @@ from sqlalchemy import select
 from models import base as models_base
 from models.agent import Agent
 from models.agent_deploy import AgentCommand, AgentDeployJob, SshHostKey
+from models.probe_credential import ProbeCredential
 from ratelimit import rate_limit
 from routers.agent_deploy import _HOST, _refuse, new_run_id
-from services import agent_commands
+from services import agent_commands, seal_keys, tenant_keys
 from services.audit import log_action
 
 router = APIRouter()
@@ -63,6 +64,34 @@ def _address(raw: dict) -> tuple[str, int] | JSONResponse:
     return host, port
 
 
+async def _sealed(db, probe: Agent, raw) -> tuple[ProbeCredential, dict] | JSONResponse:
+    """The sealed login ``raw`` names on this probe and its envelope."""
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return _refuse("The sealed login must be given by its id.", 400, "invalid_credential")
+    if not agent_commands.capability(probe).get("sealed"):
+        return _refuse("Sealed logins are not switched on on this probe.", 409,
+                       "sealed_not_enabled")
+    if seal_keys.state(probe)["state"] == "changed":
+        return _refuse("The probe reported a different sealing key. Trust it first.", 409,
+                       "seal_key_changed")
+    row = (await db.execute(select(ProbeCredential).where(
+        ProbeCredential.id == raw, ProbeCredential.probe_id == probe.id))).scalar_one_or_none()
+    if row is None:
+        return _refuse("The probe has no sealed login with that id.", 400, "unknown_credential")
+    if row.key_fingerprint != seal_keys.fingerprint(probe.seal_public_key):
+        return _refuse("The probe's sealing key changed. Create the login again.", 409,
+                       "credential_stale")
+    unreadable = _refuse("The sealed login cannot be read. Create it again.", 409,
+                         "credential_stale")
+    try:
+        # TenantKeyUnavailable/Destroyed are not ValueErrors: they propagate (fail closed).
+        envelope = json.loads(await tenant_keys.decrypt_secret(db, row.sealed,
+                                                               tenant_id=row.tenant_id))
+    except ValueError:
+        return unreadable
+    return (row, envelope) if isinstance(envelope, dict) else unreadable
+
+
 async def _body(request: Request) -> dict:
     try:
         body = await request.json()
@@ -88,10 +117,20 @@ async def ask_host_key(probe_id: int, request: Request):
         if isinstance(address, JSONResponse):
             return address
         host, port = address
-        cmd = await agent_commands.enqueue(db, probe, "ssh_host_key", {"host": host, "port": port},
-                                           created_by=_username(request), target=f"{host}:{port}")
+        payload: dict = {"host": host, "port": port}
+        credential_id = None
+        details: dict = {"target": f"{host}:{port}"}
+        if body.get("sealed_credential_id") is not None:
+            sealed = await _sealed(db, probe, body["sealed_credential_id"])
+            if isinstance(sealed, JSONResponse):
+                return sealed
+            credential_id, payload["sealed_credential"] = sealed[0].id, sealed[1]
+            details["sealed_credential"] = {"id": sealed[0].id, "name": sealed[0].name}
+        cmd = await agent_commands.enqueue(db, probe, "ssh_host_key", payload,
+                                           created_by=_username(request), target=f"{host}:{port}",
+                                           credential_id=credential_id)
         await log_action(db, request, "agent.host_key_query", "agent", probe.id, probe.name,
-                         {"target": f"{host}:{port}", "command_id": cmd.id})
+                         {**details, "command_id": cmd.id})
         await db.commit()
         return JSONResponse({"ok": True, "command_id": cmd.id}, status_code=202)
 
@@ -219,7 +258,17 @@ async def deploy_through_probe(probe_id: int, request: Request):
         if isinstance(targets, JSONResponse):
             return targets
         credential = str(body.get("credential") or "")
-        if credential not in agent_commands.capability(probe).get("credentials", []):
+        sealed_id = body.get("sealed_credential_id")
+        if bool(credential) == (sealed_id is not None):
+            return _refuse("Give either a probe login or a sealed login.", 400,
+                           "invalid_credential")
+        sealed_row, envelope = None, None
+        if sealed_id is not None:
+            sealed = await _sealed(db, probe, sealed_id)
+            if isinstance(sealed, JSONResponse):
+                return sealed
+            sealed_row, envelope = sealed
+        elif credential not in agent_commands.capability(probe).get("credentials", []):
             return _refuse("The probe has no credential with that name.", 400, "unknown_credential")
         agent = None
         if body.get("agent_id") not in (None, ""):
@@ -248,21 +297,31 @@ async def deploy_through_probe(probe_id: int, request: Request):
                 db, note=(f"reinstall {agent.name}" if agent else f"probe deploy {label}"),
                 ttl_hours=1, created_by=user, site_id=agent.site_id if agent else probe.site_id,
                 agent_id=agent.id if agent else None)
-            cmd = await agent_commands.enqueue(db, probe, "deploy_agent", {
-                "target": target, "credential": credential, "host_key_fingerprint": fingerprint,
+            payload = {
+                "target": target, "host_key_fingerprint": fingerprint,
                 # No server URL: the probe binds the new agent to its own
                 # server, so a command cannot point an agent elsewhere.
                 "enrollment_token": raw,
-            }, created_by=user)
+            }
+            if envelope is not None:
+                payload["sealed_credential"] = envelope
+            else:
+                payload["credential"] = credential
+            cmd = await agent_commands.enqueue(db, probe, "deploy_agent", payload, created_by=user,
+                                               credential_id=sealed_row.id if sealed_row else None)
             job = AgentDeployJob(run_id=run_id, kind=f"probe_{target['kind']}", target=label,
                                  agent_id=agent.id if agent else None, status="queued",
                                  created_by=user, probe_id=probe.id, command_id=cmd.id)
             db.add(job)
             await db.flush()
             views.append(job_view(job))
+        if sealed_row is not None:
+            sealed_row.last_used_at = datetime.utcnow()
         await log_action(db, request, "agent.deploy", "agent", probe.id, probe.name, {
             "run_id": run_id, "kind": f"probe_{targets[0]['kind']}", "probe_id": probe.id,
-            "target": host, "port": port, "credential": credential,
+            "target": host, "port": port,
+            **({"sealed_credential": {"id": sealed_row.id, "name": sealed_row.name}}
+               if sealed_row else {"credential": credential}),
             "containers": [t["vmid"] for t in targets if "vmid" in t] or None,
             "agent_id": agent.id if agent else None,
         })

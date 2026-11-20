@@ -295,11 +295,36 @@ credentials stay on the probe and are named, never sent:
 |--------|----------|-------------|
 | POST | `/api/probes/{id}/host-key` | Body `{host, port=22}`. `202 {command_id}`: the probe reads the host key with its next heartbeat (audited) |
 | GET | `/api/probes/{id}/commands/{command_id}` | `{id, op, status, result}`; for `ssh_host_key` the result is `{key_type, fingerprint, public_key}` |
-| POST | `/api/probes/{id}/deploy` | Body `{target: {kind: "host", host, port} \| {kind: "lxc", host, port, vmids: [...]}, credential, agent_id?, host_key_fingerprint?}`. Unknown host key: `409 host_key_unknown` (ask `/host-key` first, then confirm its fingerprint). Else `202 {run_id, jobs}`, followed by `GET /api/agent-deploy/{run_id}`; one job (and one install token) per host or container |
+| POST | `/api/probes/{id}/deploy` | Body `{target: {kind: "host", host, port} \| {kind: "lxc", host, port, vmids: [...]}, credential \| sealed_credential_id, agent_id?, host_key_fingerprint?}`. Unknown host key: `409 host_key_unknown` (ask `/host-key` first, then confirm its fingerprint). Else `202 {run_id, jobs}`, followed by `GET /api/agent-deploy/{run_id}`; one job (and one install token) per host or container |
+
+Sealed logins (admin session, not through support access, audited). The
+browser encrypts the login to the probe's trusted public key; the server never
+returns the envelope. `deploy` and `host-key` accept `sealed_credential_id`
+(a saved login) instead of `credential`/an implicit local name; give exactly
+one of `credential` and `sealed_credential_id`:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/probes/{id}/credentials` | `{credentials: [{id, name, username, auth, hosts, key_fingerprint, stale, created_at, created_by, last_used_at}]}` |
+| POST | `/api/probes/{id}/credentials` | Body `{name, username, auth: "password"\|"key", hosts: [1-64], sealed: {v, suite, key, enc, ct}}`. `201 {credential}` |
+| DELETE | `/api/probes/{id}/credentials/{credential_id}` | Deletes the login and expires queued commands carrying it. Copies in backups are not recalled; rotate the key to revoke |
+| POST | `/api/probes/{id}/seal-key/trust` | Body `{fingerprint}` (must equal the key the probe reports now). Trusts the reported key |
+| POST | `/api/probes/{id}/seal-key/rotate` | `202 {command_id}`: the probe makes a new key, the server trusts it and every sealed login of the probe becomes stale |
+
+Error codes (`{error, code}`): `sealed_not_enabled` (409, probe has not opted in
+or its agent is too old), `seal_key_missing` / `seal_key_changed` (409, no key
+reported / reported key not trusted yet), `wrong_key` (409, envelope sealed to
+another key), `name_taken` (409, also against local login names),
+`invalid_name`, `invalid_username`, `invalid_auth`, `invalid_hosts`,
+`invalid_envelope` (400), `fingerprint_mismatch` (409),
+`unknown_credential` (400) and `credential_stale` (409, the login's key is not
+the trusted one; enter it again) on `deploy` and `host-key`. Agent responses
+carry `deploy.sealed` (the probe's opt-in) and
+`deploy.seal: {fingerprint, state: "trusted"\|"changed"\|"none"}`.
 
 Probes receive these as `commands` in the heartbeat response and answer with
 `command_results` in the next heartbeat; they report
-`deploy: {enabled, credentials, arch}` in every heartbeat.
+`deploy: {enabled, credentials, arch, sealed, seal}` in every heartbeat (`seal` holds the suite and public key).
 
 ### Sites
 

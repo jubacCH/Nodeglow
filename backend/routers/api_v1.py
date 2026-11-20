@@ -1157,9 +1157,10 @@ async def delete_host(
 
 
 def _deploy_view(agent: Agent) -> dict | None:
+    from services import seal_keys
     from services.agent_commands import capability
 
-    return capability(agent) if agent.is_probe else None
+    return {**capability(agent), "seal": seal_keys.state(agent)} if agent.is_probe else None
 
 
 def _probe_fields(agent: Agent, now: datetime, host_count: int | None = None) -> dict:

@@ -38,6 +38,20 @@ Each release's section becomes its GitHub Release notes. Cut a release with
   on the probe. New table `agent_commands` (migration 057), routes under
   `/api/probes/{id}/…`, agents report `deploy`. See docs/OPERATIONS.md,
   "Deploying agents from a probe".
+- Sealed deploy logins. SSH logins for deploying through a probe can be entered
+  in the UI: the browser seals them to the public key of one probe (HPKE), so
+  Nodeglow stores only ciphertext it cannot open, and the probe enforces the
+  login's own host list and throttles sealed use (20 hosts per hour, 5
+  failures per 15 minutes). The probe makes its own `seal.key`; the first
+  reported key is trusted, a changed one needs "Trust the new key", and
+  "Revoke all sealed logins" rotates it. The Add agent dialog has a checkbox
+  that marks a machine as a probe and switches deploying on at install; for
+  existing probes use `nodeglow-agent enable-deploy`. New commands
+  `enable-deploy`, `disable-deploy`, `seal-key [--rotate]`, new
+  `deploy.json` key `allow_sealed_credentials`, new table
+  `probe_credentials` (migration 058) and routes under
+  `/api/probes/{id}/credentials` and `/seal-key`. Needs the updated agent on
+  the probe. See docs/OPERATIONS.md, "Sealed logins".
 - Install an agent over SSH. "Add agent" and "Reinstall agent" offer
   "Install over SSH": enter the host and a login (or pick an SSH credential
   from the store) and Nodeglow logs in and runs the Linux installer as root

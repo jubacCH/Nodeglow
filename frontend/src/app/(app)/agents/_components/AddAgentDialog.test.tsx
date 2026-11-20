@@ -36,6 +36,8 @@ describe('AddAgentDialog in reinstall mode', () => {
   it('asks the reinstall route of that agent, valid for an hour by default', () => {
     expect(issueRequest(target, 1)).toEqual({ url: '/api/agents/7/reinstall', body: { ttl_hours: 1 } });
     expect(issueRequest(undefined, 24)).toEqual({ url: '/api/agents/install-tokens', body: { ttl_hours: 24 } });
+    expect(issueRequest(undefined, 24, true).body).toEqual({ ttl_hours: 24, probe: true });
+    expect(issueRequest(target, 1, true).body).toEqual({ ttl_hours: 1, probe: true });
   });
 
   it('offers one hour or one day for a reinstall, the longer choices otherwise', () => {

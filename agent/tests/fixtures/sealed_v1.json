@@ -1,0 +1,24 @@
+{
+  "private_key": "MoxojV+Dqj6f4OeuTL6lTrTvZFO/43CMxOVHzOEwxGI=",
+  "public_key": "u063dfKjPvPOcG0XRqaAub6QKa7JafnQqjncnsgJ1iY=",
+  "plaintext": {
+    "v": 1,
+    "id": "c0ffee00-1111-2222-3333-444455556666",
+    "name": "lab-root",
+    "username": "root",
+    "password": "correct horse battery staple",
+    "private_key": null,
+    "passphrase": null,
+    "hosts": [
+      "10.0.20.0/24",
+      "*.lab.example"
+    ]
+  },
+  "envelope": {
+    "v": 1,
+    "suite": "hpke-x25519-sha256-chacha20poly1305",
+    "key": "SHA256:3u1cdSHu5f4zPE8ukcuN/km7rj0RE1URHq1327IA0NM",
+    "enc": "BIKNfq6spPzvylzTGESMV9RBeu04rr2p/WrnD5rssH4=",
+    "ct": "klDgJd4r/R7lU37FNe/2YG4F3ja95JWm56r1DLwhge6GJusJeIklWF66w7ZEaUa4CWMuWgSrQtCpawnT9Qzwjjx2RCDieQk4U6xD5Nfq8lSudRxcg+X0nKdrK/VjPjPFOxKeho6gTVbRYAjRI8vQI/Lcd/8eEV0eADZ5dhcdUhgRMeAZCjWAU5oLtGm1kF7HcH75u3fVLj1zSfULA6cdZwRpw1nK9tJNHej8FkSXvcEVQyQyUORpa5dYz5AHfHh4QvL/P1IAKtT1ciCdaHC5DC3SPI12Vaw0V1bn5eiz0A=="
+  }
+}

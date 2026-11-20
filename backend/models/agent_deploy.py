@@ -88,6 +88,8 @@ class AgentCommand(TenantScoped, Base):
     delivered_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     created_by = Column(String(255), nullable=True)
+    # The sealed credential a command uses; no FK, the row may be deleted.
+    credential_id = Column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_agent_commands_agent", "tenant_id", "agent_id", "status"),

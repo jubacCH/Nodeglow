@@ -32,6 +32,10 @@ beforeEach(() => {
       return json(409, { code: 'host_key_unknown', host: 'web01', port: 22 });
     }
     if (url.endsWith('/api/probes/4/deploy')) return json(202, { run_id: 'r9', jobs: [{ created_at: '2026-11-19T10:00:00Z' }] });
+    if (url.endsWith('/api/probes/4/credentials')) {
+      return json(200, { credentials: [{ id: 7, name: 'sealed-lab', username: 'root', auth: 'password',
+        hosts: [], stale: false, created_at: null, last_used_at: null }] });
+    }
     if (url.endsWith('/api/probes/4/host-key')) return json(202, { command_id: 11 });
     if (url.endsWith('/api/probes/4/commands/11')) {
       return json(200, { status: 'ok', result: { fingerprint: 'SHA256:probe', key_type: 'ssh-ed25519' } });
@@ -89,5 +93,33 @@ describe('ProbeDeployForm', () => {
       host_key_fingerprint: 'SHA256:probe' });
     expect(started).toHaveBeenCalledWith('2026-11-19T10:00:00Z');
     expect(container.textContent).toContain('next heartbeat');
+  });
+
+  it('names the sealed login when it asks the probe for the host key', async () => {
+    const sealedProbe = { ...probe, deploy: { enabled: true, credentials: [], arch: ['x86_64'], sealed: true,
+      seal: { state: 'trusted', fingerprint: 'fp', public_key: 'pk', reported_fingerprint: 'fp' } } } as unknown as Agent;
+    act(() => {
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <ProbeDeployForm agents={[sealedProbe]} onStarted={vi.fn()} />
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+    const host = container.querySelector('input') as HTMLInputElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(host, 'web01');
+      host.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const login = [...container.querySelectorAll('select')].find((el) => el.querySelector('option[value="sealed:7"]'))!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(login, 'sealed:7');
+      login.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { (container.querySelector('button[type="submit"]') as HTMLButtonElement).click(); });
+    await settle(2500);
+
+    expect(calls.find((c) => c.url.endsWith('/host-key'))?.body)
+      .toEqual({ host: 'web01', port: 22, sealed_credential_id: 7 });
   });
 });

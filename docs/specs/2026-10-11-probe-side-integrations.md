@@ -565,6 +565,9 @@ on-demand collects and tests that is too slow, and it carries no payload.
 
 ### Credentials
 
+For SSH logins used to deploy agents through a probe, S2 is specified in
+[2026-11-19-probe-sealed-credentials-design.md](2026-11-19-probe-sealed-credentials-design.md).
+
 Integration secrets are the customer's credentials to systems in the network
 the probe lives in. Three ways to get them there:
 
