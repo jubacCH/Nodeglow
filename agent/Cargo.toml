@@ -28,7 +28,7 @@ ed25519-dalek = "3"
 # no extra C toolchain for the static musl build; ring is already in via rustls.
 # No "rsa": the rsa crate has an unfixed timing advisory (RUSTSEC-2023-0071);
 # deploy logins and host keys use ed25519 or ecdsa.
-russh = { version = "=0.65.1", default-features = false, features = ["ring"] }
+russh = { version = "=0.65.2", default-features = false, features = ["ring"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 sysinfo = "0.32"
