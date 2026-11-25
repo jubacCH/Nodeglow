@@ -8,6 +8,8 @@ results are stored redacted.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import re
@@ -16,10 +18,12 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, update
 
 from models.agent_deploy import AgentCommand, AgentDeployJob
+from services import seal_keys
+from services.audit import log_action
 
 log = logging.getLogger(__name__)
 
-OPS = frozenset({"ssh_host_key", "deploy_agent"})
+OPS = frozenset({"ssh_host_key", "deploy_agent", "rotate_seal_key"})
 TTL = timedelta(minutes=10)
 # A deploy run of many containers goes out five per heartbeat and installs
 # one after another on the probe: give the last of them time.
@@ -41,7 +45,8 @@ def redact(text: str) -> str:
 
 
 async def enqueue(db, probe, op: str, payload: dict, *, created_by: str | None,
-                  target: str | None = None, ttl: timedelta | None = None) -> AgentCommand:
+                  target: str | None = None, ttl: timedelta | None = None,
+                  credential_id: int | None = None) -> AgentCommand:
     """Queue ``op`` for ``probe`` (flushed, not committed)."""
     from services import tenant_keys
 
@@ -54,7 +59,7 @@ async def enqueue(db, probe, op: str, payload: dict, *, created_by: str | None,
     now = datetime.utcnow()
     cmd = AgentCommand(
         agent_id=probe.id, op=op, status="queued", created_at=now, expires_at=now + ttl,
-        created_by=created_by, target=target,
+        created_by=created_by, target=target, credential_id=credential_id,
         payload=await tenant_keys.encrypt_secret(db, json.dumps(payload), tenant_id=probe.tenant_id),
     )
     db.add(cmd)
@@ -82,6 +87,24 @@ async def _fail_jobs(db, cmd_ids: list[int], detail: str, now: datetime) -> None
     for job in await _jobs_of(db, cmd_ids):
         if job.status in ("queued", "running"):
             job.status, job.finished_at, job.detail = "failed", now, detail
+
+
+async def expire_for_credential(db, credential_id: int, probe_id: int, detail: str,
+                                now: datetime | None = None) -> list[int]:
+    """Expire the still-queued commands that carry ``credential_id`` and fail
+    their jobs; returns the expired ids. The conditional update cannot race
+    with ``deliver``: a command already claimed there is left alone."""
+    now = now or datetime.utcnow()
+    rows = await db.execute(
+        update(AgentCommand)
+        .where(AgentCommand.credential_id == credential_id, AgentCommand.agent_id == probe_id,
+               AgentCommand.status == "queued")
+        .values(status="expired", payload=None, finished_at=now)
+        .returning(AgentCommand.id)
+        .execution_options(synchronize_session=False))
+    ids = [r[0] for r in rows.all()]
+    await _fail_jobs(db, ids, detail, now)
+    return ids
 
 
 async def deliver(db, agent, now: datetime | None = None) -> list[dict]:
@@ -164,8 +187,22 @@ async def apply_results(db, agent, results, now: datetime | None = None) -> None
     for cmd in cmds:
         answer = answers[cmd.id]
         result = answer.get("result") if isinstance(answer.get("result"), dict) else {}
+        status = answer["status"]
+        if cmd.op == "rotate_seal_key" and status == "ok":
+            # The answer is the probe's new sealing key: trust it (the admin
+            # asked for the rotation) and keep only its fingerprint.
+            key = seal_keys.parse_report({"suite": seal_keys.SUITE,
+                                          "public_key": result.get("public_key")})
+            if key is None:
+                status, result = "failed", {"detail": "The probe answered without a valid key."}
+            else:
+                seal_keys.trust(agent, key, cmd.created_by)
+                agent.seal_key_reported = key
+                result = {"fingerprint": seal_keys.fingerprint(key)}
+                await log_action(db, None, "probe.seal_key.trust", "agent", agent.id, agent.name,
+                                 {"fingerprint": result["fingerprint"], "rotation": True})
         text = redact(json.dumps(result))[:RESULT_LIMIT]
-        cmd.status, cmd.result, cmd.finished_at = answer["status"], text, now
+        cmd.status, cmd.result, cmd.finished_at = status, text, now
     by_id = {c.id: c for c in cmds}
     for job in await _jobs_of(db, list(by_id)):
         cmd = by_id[job.command_id]
@@ -178,6 +215,40 @@ async def apply_results(db, agent, results, now: datetime | None = None) -> None
         job.finished_at = now
 
 
+_ENVELOPE_KEYS = frozenset({"v", "suite", "key", "enc", "ct"})
+_FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+MAX_ENVELOPE = 32768
+
+
+def validate_envelope(raw) -> dict | None:
+    """Shape check of a sealed envelope (the server cannot open it): the clean
+    five-key dict, or None."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        if len(json.dumps(raw).encode()) > MAX_ENVELOPE:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if set(raw) != _ENVELOPE_KEYS:
+        return None
+    if type(raw["v"]) is not int or raw["v"] != 1 or raw["suite"] != seal_keys.SUITE:
+        return None
+    key, enc, ct = raw["key"], raw["enc"], raw["ct"]
+    if not isinstance(key, str) or not _FINGERPRINT.match(key):
+        return None
+    if not isinstance(enc, str) or not isinstance(ct, str):
+        return None
+    try:
+        if len(base64.b64decode(enc, validate=True)) != 32:
+            return None
+        if not base64.b64decode(ct, validate=True):
+            return None
+    except (binascii.Error, ValueError, TypeError):
+        return None
+    return {"v": 1, "suite": raw["suite"], "key": key, "enc": enc, "ct": ct}
+
+
 def sanitize_capability(raw) -> str | None:
     """The probe's ``deploy`` report as stored JSON: only known keys, names
     that look like names, ``enabled`` true only when it says ``true``."""
@@ -186,7 +257,7 @@ def sanitize_capability(raw) -> str | None:
     names = [n for n in raw.get("credentials") or [] if isinstance(n, str) and _NAME.match(n)]
     arch = [a for a in raw.get("arch") or [] if isinstance(a, str) and _NAME.match(a)]
     return json.dumps({"enabled": raw.get("enabled") is True, "credentials": names[:32],
-                       "arch": arch[:8]})
+                       "arch": arch[:8], "sealed": raw.get("sealed") is True})
 
 
 def capability(agent) -> dict:
@@ -194,7 +265,10 @@ def capability(agent) -> dict:
         cap = json.loads(agent.deploy_capability or "null")
     except ValueError:
         cap = None
-    return cap if isinstance(cap, dict) else {"enabled": False, "credentials": [], "arch": []}
+    if not isinstance(cap, dict):
+        cap = {"enabled": False, "credentials": [], "arch": []}
+    # Rows stored before the flag existed read as not sealed.
+    return {**cap, "sealed": cap.get("sealed") is True}
 
 
 async def handle_heartbeat(db, agent, body: dict) -> list[dict] | None:
@@ -204,6 +278,9 @@ async def handle_heartbeat(db, agent, body: dict) -> list[dict] | None:
         return None
     if "deploy" in body:
         agent.deploy_capability = sanitize_capability(body.get("deploy"))
+        deploy = body.get("deploy")
+        await seal_keys.observe(
+            db, agent, seal_keys.parse_report(deploy.get("seal") if isinstance(deploy, dict) else None))
     now = datetime.utcnow()
     await apply_results(db, agent, body.get("command_results"), now)
     return await deliver(db, agent, now)

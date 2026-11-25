@@ -7,6 +7,7 @@ mod services;
 mod syslog_relay;
 mod updater;
 mod deploy;
+mod seal;
 
 #[cfg(target_os = "linux")]
 mod collector_linux;
@@ -41,6 +42,16 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    if let Some(command) = cfg.command.clone() {
+        match run_command(&cfg, command) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     info!(
         server = %cfg.server,
@@ -103,6 +114,18 @@ async fn main() {
     let command_results: deploy::Answers = Default::default();
     let deploy_gate = Arc::new(tokio::sync::Semaphore::new(2));
     let deploys_running = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seal_path = seal::key_path_for(&cfg.config_path);
+    let throttle: Arc<std::sync::Mutex<seal::Throttle>> = Default::default();
+
+    // Sealing key for logins sealed to this probe: created once on Unix when
+    // running as root, never on Windows. A failure only disables sealing.
+    #[cfg(unix)]
+    if deploy::running_as_root() {
+        match seal::SealKey::load_or_create(&seal_path, true) {
+            Ok(key) => info!(fingerprint = %key.fingerprint(), "Seal key ready"),
+            Err(e) => warn!("Seal key unavailable: {e:#}"),
+        }
+    }
 
     // Update trust (spec rule 4): latched from what the server reports, it
     // only ever tightens. See updater.rs.
@@ -152,7 +175,16 @@ async fn main() {
         let delivered = pending_results.len();
         let relay_status = relay.status();
         let deploy_file = deploy::DeployFile::load(&deploy_path, true);
-        let deploy_capability = deploy::capability(deploy_file.as_ref());
+        // Re-read every interval: a key rotated or created meanwhile is reported.
+        let seal_key = if cfg!(unix) {
+            seal::SealKey::load(&seal_path, true).unwrap_or_else(|e| {
+                warn!("Seal key ignored: {e:#}");
+                None
+            })
+        } else {
+            None
+        };
+        let deploy_capability = deploy::capability(deploy_file.as_ref(), seal_key.as_ref());
         let answers: Vec<deploy::CommandResult> =
             std::mem::take(&mut *command_results.lock().expect("command results"));
         match api
@@ -203,6 +235,8 @@ async fn main() {
                         insecure_tls: cfg.allow_insecure_tls,
                         server: cfg.server.clone(),
                         api: deploy_api.clone(),
+                        seal_key_path: seal_path.clone(),
+                        throttle: throttle.clone(),
                     };
                     let results = command_results.clone();
                     let gate = deploy_gate.clone();
@@ -316,6 +350,41 @@ async fn main() {
         }
         pending_results.push_round(results);
     }
+}
+
+/// `enable-deploy`, `disable-deploy` and `seal-key`: local, one-shot.
+fn run_command(cfg: &Config, command: config::CliCommand) -> anyhow::Result<()> {
+    use config::CliCommand::*;
+    let deploy_path = deploy::DeployFile::path_for(&cfg.config_path);
+    let seal_path = seal::key_path_for(&cfg.config_path);
+    let unix = cfg!(unix);
+    if !unix {
+        anyhow::bail!("This command is only available on Linux probes.");
+    }
+    if !deploy::running_as_root() {
+        anyhow::bail!("Run this command as root: deploy.json and seal.key must belong to root.");
+    }
+    match command {
+        EnableDeploy => {
+            let key = seal::SealKey::load_or_create(&seal_path, true)?;
+            deploy::set_deploy_flags(&deploy_path, true)?;
+            println!("Deploying agents and sealed logins are switched on ({}).", deploy_path.display());
+            println!("Seal key fingerprint: {}", key.fingerprint());
+        }
+        DisableDeploy => {
+            deploy::set_deploy_flags(&deploy_path, false)?;
+            println!("Deploying agents and sealed logins are switched off ({}).", deploy_path.display());
+        }
+        SealKey { rotate } => {
+            let key = if rotate {
+                seal::SealKey::rotate(&seal_path, true)?
+            } else {
+                seal::SealKey::load_or_create(&seal_path, true)?
+            };
+            println!("Seal key fingerprint: {}", key.fingerprint());
+        }
+    }
+    Ok(())
 }
 
 /// Execute platform-specific self-uninstall, then exit.

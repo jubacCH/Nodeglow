@@ -77,6 +77,14 @@ describe('AddAgentDialog probe option on a reinstall', () => {
   });
 });
 
+describe('AddAgentDialog probe checkbox', () => {
+  it('says the installer switches deploying on', () => {
+    render({ id: 7, name: 'web01', platform: 'Linux', last_seen: '2026-11-16T12:00:00Z' });
+    expect(document.body.textContent).toContain('The installer switches deploying on');
+    expect(document.body.textContent).not.toContain('still needs its own go-ahead');
+  });
+});
+
 describe('issueMoment', () => {
   it('prefers the server time of the issued command over the browser clock', () => {
     expect(issueMoment({ issued_at: '2026-11-16T12:00:00Z' }, 99)).toBe(Date.parse('2026-11-16T12:00:00Z'));

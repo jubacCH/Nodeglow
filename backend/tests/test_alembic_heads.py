@@ -41,9 +41,9 @@ def test_the_tenancy_revisions_are_linear():
     -> 054 (incident relations) -> 055 (install tokens bound to an agent)
     -> 056 (agent deploy over SSH) -> 057 (agent deploy through a probe)."""
     scripts = _scripts()
-    revs = ("045", "046", "047", "048", "049", "050", "051", "052", "053", "054", "055", "056", "057")
+    revs = ("045", "046", "047", "048", "049", "050", "051", "052", "053", "054", "055", "056", "057", "058")
     chain = {r: scripts.get_revision(r).down_revision for r in revs}
     assert chain == {"045": "044", "046": "045", "047": "046", "048": "047", "049": "048",
                      "050": "049", "051": "050", "052": "051", "053": "052",
-                     "054": "053", "055": "054", "056": "055", "057": "056"}
-    assert list(scripts.get_heads()) == ["057"]
+                     "054": "053", "055": "054", "056": "055", "057": "056", "058": "057"}
+    assert list(scripts.get_heads()) == ["058"]

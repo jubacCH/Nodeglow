@@ -23,9 +23,11 @@ use russh::{client, ChannelMsg};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 use tracing::{info, warn};
 
 use crate::client::ApiClient;
+use crate::seal::{self, SealKey};
 use crate::updater;
 
 /// Targets this probe can install on: the only signed Linux build is x86_64.
@@ -37,6 +39,8 @@ const DETAIL_LIMIT: usize = 1500;
 
 // ── deploy.json ─────────────────────────────────────────────────────────────
 
+/// An SSH login. One taken from a `seal::SealedLogin` carries decrypted
+/// secrets and must not be cloned out of it: the copy would not be zeroized.
 #[derive(Clone, Deserialize)]
 pub struct Credential {
     pub username: String,
@@ -44,6 +48,10 @@ pub struct Credential {
     pub password: Option<String>,
     #[serde(default)]
     pub private_key_file: Option<PathBuf>,
+    /// A pasted private key (PEM text), set only for logins sealed to this
+    /// probe; never read from deploy.json.
+    #[serde(skip)]
+    pub private_key: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,
     /// Where this login may be used: host names, `*.domain`, IP addresses or
@@ -59,6 +67,7 @@ impl std::fmt::Debug for Credential {
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "***"))
             .field("private_key_file", &self.private_key_file)
+            .field("private_key", &self.private_key.as_ref().map(|_| "***"))
             .field("passphrase", &self.passphrase.as_ref().map(|_| "***"))
             .field("hosts", &self.hosts)
             .finish()
@@ -120,6 +129,9 @@ fn reportable_name(name: &str) -> bool {
 pub struct DeployFile {
     #[serde(default)]
     pub allow_deploy_agents: bool,
+    /// Second local switch: logins sealed to this probe's key are accepted.
+    #[serde(default)]
+    pub allow_sealed_credentials: bool,
     #[serde(default)]
     pub credentials: BTreeMap<String, Credential>,
 }
@@ -151,31 +163,100 @@ impl DeployFile {
     pub fn enabled(&self) -> bool {
         self.allow_deploy_agents
     }
+
+    /// Deploying is on and sealed logins are allowed (both local flags).
+    pub fn sealed_enabled(&self) -> bool {
+        self.allow_deploy_agents && self.allow_sealed_credentials
+    }
+}
+
+/// Whether the process runs as root (always false off Unix).
+pub fn running_as_root() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// Root ownership of `deploy.json` and `seal.key` is enforced everywhere but
+/// in tests, which run as an ordinary user.
+const REQUIRE_ROOT: bool = !cfg!(test);
+
+/// Turn deploying (and sealed logins) on or off in `deploy.json`, keeping
+/// every other key. Atomic write (temp file + rename), mode 0600.
+pub fn set_deploy_flags(path: &Path, on: bool) -> anyhow::Result<()> {
+    use std::io::Write;
+    static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut doc: Value = match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text)
+            .with_context(|| format!("{} is not valid JSON; fix or remove it first", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(e) => return Err(e).with_context(|| format!("Cannot read {}", path.display())),
+    };
+    let obj = doc.as_object_mut()
+        .ok_or_else(|| anyhow!("{} must hold a JSON object", path.display()))?;
+    obj.insert("allow_deploy_agents".into(), json!(on));
+    obj.insert("allow_sealed_credentials".into(), json!(on));
+    let text = Zeroizing::new(serde_json::to_string_pretty(&doc)? + "\n");
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".deploy.json.tmp-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let written = (|| -> std::io::Result<()> {
+        let mut file = opts.open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("Cannot write {}", path.display()));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
-fn private_enough(meta: &std::fs::Metadata, require_root: bool) -> bool {
+pub(crate) fn private_enough(meta: &std::fs::Metadata, require_root: bool) -> bool {
     use std::os::unix::fs::MetadataExt;
     meta.is_file() && meta.mode() & 0o077 == 0 && (!require_root || meta.uid() == 0)
 }
 
 #[cfg(not(unix))]
-fn private_enough(_meta: &std::fs::Metadata, _require_root: bool) -> bool {
+pub(crate) fn private_enough(_meta: &std::fs::Metadata, _require_root: bool) -> bool {
     // Not offered on Windows probes yet: no equivalent check is in place.
     false
 }
 
 /// What the heartbeat reports: whether deploying is on, the credential
-/// names (never their contents) and the target architectures.
-pub fn capability(file: Option<&DeployFile>) -> Value {
-    match file {
+/// names (never their contents), the target architectures, whether sealed
+/// logins are accepted and, whenever a key exists, its public half.
+pub fn capability(file: Option<&DeployFile>, seal: Option<&SealKey>) -> Value {
+    let mut cap = match file {
         Some(f) if f.enabled() => json!({
             "enabled": true,
             "credentials": f.credentials.keys().filter(|n| reportable_name(n)).collect::<Vec<_>>(),
             "arch": SUPPORTED_ARCH,
+            "sealed": f.sealed_enabled(),
         }),
-        _ => json!({"enabled": false, "credentials": [], "arch": []}),
+        _ => json!({"enabled": false, "credentials": [], "arch": [], "sealed": false}),
+    };
+    if let Some(key) = seal {
+        cap["seal"] = key.report();
     }
+    cap
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
@@ -231,7 +312,10 @@ impl Target {
 #[derive(Debug, Deserialize)]
 struct DeployPayload {
     target: Target,
-    credential: String,
+    #[serde(default)]
+    credential: Option<String>,
+    #[serde(default)]
+    sealed_credential: Option<Value>,
     host_key_fingerprint: String,
     enrollment_token: String,
 }
@@ -241,6 +325,8 @@ struct HostKeyPayload {
     host: String,
     #[serde(default = "default_port")]
     port: u16,
+    #[serde(default)]
+    sealed_credential: Option<Value>,
 }
 
 /// A host name or address; never something a shell or ssh could read as an
@@ -269,6 +355,30 @@ pub struct ProbeContext {
     /// The probe's own server: the only one a deployed agent is bound to.
     pub server: String,
     pub api: Arc<ApiClient>,
+    /// `seal.key` next to the config.
+    pub seal_key_path: PathBuf,
+    /// Shared by all commands: limits sealed operations.
+    pub throttle: Arc<std::sync::Mutex<seal::Throttle>>,
+}
+
+const SEALED_OFF: &str = "Sealed logins are not switched on on this probe (deploy.json).";
+
+/// Open a sealed envelope with this probe's key.
+fn open_sealed(ctx: &ProbeContext, envelope: &Value) -> Result<seal::SealedLogin, String> {
+    let key = match SealKey::load(&ctx.seal_key_path, REQUIRE_ROOT) {
+        Ok(Some(k)) => k,
+        Ok(None) => return Err("This probe has no seal key.".into()),
+        Err(e) => return Err(format!("{e:#}")),
+    };
+    seal::open(&key, envelope).map_err(|e| e.to_string())
+}
+
+fn admit(ctx: &ProbeContext, host: &str) -> Result<(), String> {
+    ctx.throttle.lock().expect("throttle").admit(host, std::time::Instant::now())
+}
+
+fn note_failure(ctx: &ProbeContext) {
+    ctx.throttle.lock().expect("throttle").failed(std::time::Instant::now());
 }
 
 /// Run one command and say how it went. Never panics, never returns secrets.
@@ -277,20 +387,14 @@ pub async fn handle(ctx: &ProbeContext, cmd: Command) -> CommandResult {
     if expired(&cmd, chrono::Utc::now()) {
         return CommandResult::failed(id, "The command expired before the probe got to it.");
     }
+    if cmd.op == "rotate_seal_key" {
+        return rotate_seal_key(ctx, id);
+    }
     let Some(file) = ctx.deploy_file.as_ref().filter(|f| f.enabled()) else {
         return CommandResult::failed(id, "Deploying agents is not switched on on this probe (deploy.json).");
     };
     match cmd.op.as_str() {
-        "ssh_host_key" => match serde_json::from_value::<HostKeyPayload>(cmd.payload) {
-            Ok(p) if valid_host(&p.host) && !file.credentials.values().any(|c| c.allows(&p.host)) => {
-                CommandResult::failed(id, format!("{} is not allowed by any credential in deploy.json (\"hosts\").", p.host))
-            }
-            Ok(p) if valid_host(&p.host) => match fetch_host_key(&p.host, p.port).await {
-                Ok(key) => CommandResult::ok(id, key),
-                Err(e) => CommandResult::failed(id, format!("{e:#}")),
-            },
-            _ => CommandResult::failed(id, "Invalid host."),
-        },
+        "ssh_host_key" => host_key(ctx, file, id, cmd.payload).await,
         "deploy_agent" => {
             let payload: DeployPayload = match serde_json::from_value(cmd.payload) {
                 Ok(p) => p,
@@ -304,6 +408,59 @@ pub async fn handle(ctx: &ProbeContext, cmd: Command) -> CommandResult {
             }
         }
         other => CommandResult::failed(id, format!("Unknown command {other:?}.")),
+    }
+}
+
+fn rotate_seal_key(ctx: &ProbeContext, id: i64) -> CommandResult {
+    if !ctx.deploy_file.as_ref().is_some_and(|f| f.sealed_enabled()) {
+        return CommandResult::failed(id, SEALED_OFF);
+    }
+    match SealKey::rotate(&ctx.seal_key_path, REQUIRE_ROOT) {
+        Ok(key) => {
+            info!(fingerprint = %key.fingerprint(), "Seal key rotated");
+            CommandResult::ok(id, json!({"public_key": key.public_b64()}))
+        }
+        Err(e) => CommandResult::failed(id, format!("{e:#}")),
+    }
+}
+
+async fn host_key(ctx: &ProbeContext, file: &DeployFile, id: i64, payload: Value) -> CommandResult {
+    let Ok(p) = serde_json::from_value::<HostKeyPayload>(payload) else {
+        return CommandResult::failed(id, "Invalid host.");
+    };
+    if !valid_host(&p.host) {
+        return CommandResult::failed(id, "Invalid host.");
+    }
+    let Some(envelope) = p.sealed_credential.as_ref() else {
+        if !file.credentials.values().any(|c| c.allows(&p.host)) {
+            return CommandResult::failed(
+                id, format!("{} is not allowed by any credential in deploy.json (\"hosts\").", p.host));
+        }
+        return match fetch_host_key(&p.host, p.port).await {
+            Ok(key) => CommandResult::ok(id, key),
+            Err(e) => CommandResult::failed(id, format!("{e:#}")),
+        };
+    };
+    if !file.sealed_enabled() {
+        return CommandResult::failed(id, SEALED_OFF);
+    }
+    let login = match open_sealed(ctx, envelope) {
+        Ok(l) => l,
+        Err(e) => return CommandResult::failed(id, e),
+    };
+    if !login.credential.allows(&p.host) {
+        return CommandResult::failed(
+            id, format!("{} is not allowed for the login {:?}.", p.host, login.name));
+    }
+    if let Err(e) = admit(ctx, &p.host) {
+        return CommandResult::failed(id, e);
+    }
+    match fetch_host_key(&p.host, p.port).await {
+        Ok(key) => CommandResult::ok(id, key),
+        Err(e) => {
+            note_failure(ctx);
+            CommandResult::failed(id, format!("{e:#}"))
+        }
     }
 }
 
@@ -386,6 +543,12 @@ pub struct Session {
     sudo: &'static str,
 }
 
+/// A pasted key as the SSH parser wants it: LF line endings, no trailing
+/// whitespace on any line, no blank lines around it.
+pub fn normalize_pem(pem: &str) -> String {
+    pem.trim().lines().map(str::trim_end).collect::<Vec<_>>().join("\n")
+}
+
 /// Log in to `host:port`, trusting only the key with `expected_fp`.
 pub async fn connect(host: &str, port: u16, cred: &Credential, expected_fp: &str)
     -> anyhow::Result<Session>
@@ -406,7 +569,13 @@ pub async fn connect(host: &str, port: u16, cred: &Credential, expected_fp: &str
             bail!("Cannot connect to {host}:{port}: {e}");
         }
     };
-    let auth = if let Some(path) = &cred.private_key_file {
+    let auth = if let Some(pem) = &cred.private_key {
+        let key = russh::keys::decode_secret_key(&zeroize::Zeroizing::new(normalize_pem(pem)), cred.passphrase.as_deref())
+            .context("Cannot read the private key")?;
+        let hash = handle.best_supported_rsa_hash().await?.flatten();
+        handle.authenticate_publickey(&cred.username,
+                                      PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?
+    } else if let Some(path) = &cred.private_key_file {
         let key = russh::keys::load_secret_key(path, cred.passphrase.as_deref())
             .with_context(|| format!("Cannot read the private key {}", path.display()))?;
         let hash = handle.best_supported_rsa_hash().await?.flatten();
@@ -606,14 +775,55 @@ fn enrolled_anew(config_json: &str, before: Option<&str>) -> bool {
 }
 
 async fn deploy(ctx: &ProbeContext, file: &DeployFile, p: &DeployPayload) -> anyhow::Result<String> {
-    let cred = file.credentials.get(&p.credential)
-        .ok_or_else(|| anyhow!("This probe has no credential named {:?}.", p.credential))?;
+    match (&p.credential, &p.sealed_credential) {
+        (Some(name), None) => {
+            let cred = file.credentials.get(name)
+                .ok_or_else(|| anyhow!("This probe has no credential named {:?}.", name))?;
+            run_deploy(ctx, p, cred, name, false).await
+        }
+        (None, Some(envelope)) => {
+            if !file.sealed_enabled() {
+                bail!(SEALED_OFF);
+            }
+            let login = open_sealed(ctx, envelope).map_err(|e| anyhow!(e))?;
+            let name = login.name.clone();
+            // The login is zeroized when it drops at the end of this arm.
+            run_deploy(ctx, p, &login.credential, &name, true).await
+                .map(|d| format!("{d} (login {name:?})"))
+                .map_err(|e| anyhow!("{e:#} (login {name:?})"))
+        }
+        _ => bail!("Invalid deploy command."),
+    }
+}
+
+/// Log in to the target. For a sealed login a failed connect or login counts
+/// towards the throttle's pause.
+async fn login(ctx: &ProbeContext, p: &DeployPayload, cred: &Credential, sealed: bool)
+    -> anyhow::Result<Session>
+{
     let (host, port) = p.target.address();
+    let session = connect(host, port, cred, &p.host_key_fingerprint).await;
+    if sealed && session.is_err() {
+        note_failure(ctx);
+    }
+    session
+}
+
+async fn run_deploy(ctx: &ProbeContext, p: &DeployPayload, cred: &Credential, label: &str, sealed: bool)
+    -> anyhow::Result<String>
+{
+    let (host, _) = p.target.address();
     if !valid_host(host) {
         bail!("Invalid host.");
     }
     if !cred.allows(host) {
-        bail!("{host} is not allowed for the credential {:?} (\"hosts\" in deploy.json).", p.credential);
+        if sealed {
+            bail!("{host} is not allowed for this login (its host list).");
+        }
+        bail!("{host} is not allowed for the credential {label:?} (\"hosts\" in deploy.json).");
+    }
+    if sealed {
+        admit(ctx, host).map_err(|e| anyhow!(e))?;
     }
     if ctx.insecure_tls {
         bail!("This probe accepts an invalid TLS certificate from its server (allow_insecure_tls); \
@@ -621,7 +831,7 @@ async fn deploy(ctx: &ProbeContext, file: &DeployFile, p: &DeployPayload) -> any
     }
     let binary = verified_binary(&ctx.api).await?;
     let config = target_config(&ctx.server, &p.enrollment_token);
-    let session = connect(host, port, cred, &p.host_key_fingerprint).await?;
+    let session = login(ctx, p, cred, sealed).await?;
     let result = install(&session, &p.target, &binary, &config).await;
     session.close().await;
     let where_ = match &p.target {
@@ -745,7 +955,8 @@ mod tests {
         let cfg = crate::config::Config::for_test();
         let file: DeployFile = serde_json::from_str(ALLOW).unwrap();
         let ctx = ProbeContext { deploy_file: Some(file), server: cfg.server.clone(), insecure_tls: false,
-                                 api: Arc::new(ApiClient::new(&cfg)) };
+                                 api: Arc::new(ApiClient::new(&cfg)),
+                                 seal_key_path: PathBuf::new(), throttle: Default::default() };
         let deploy = Command { id: 1, op: "deploy_agent".into(), expires_at: None, payload: json!({
             "target": {"kind": "host", "host": "evil.example", "port": 22}, "credential": "lab",
             "host_key_fingerprint": "SHA256:x", "enrollment_token": "nt_0123456789"})};
@@ -770,7 +981,7 @@ mod tests {
     fn capability_skips_names_the_server_would_drop() {
         let file: DeployFile = serde_json::from_str(r#"{"allow_deploy_agents": true, "credentials": {
             "ok-name": {"username": "root"}, "bad name": {"username": "root"}}}"#).unwrap();
-        assert_eq!(capability(Some(&file))["credentials"], json!(["ok-name"]));
+        assert_eq!(capability(Some(&file), None)["credentials"], json!(["ok-name"]));
     }
 
     #[test]
@@ -829,12 +1040,12 @@ mod tests {
     #[test]
     fn capability_names_credentials_but_never_their_contents() {
         let file: DeployFile = serde_json::from_str(FILE).unwrap();
-        let cap = capability(Some(&file));
-        assert_eq!(cap, json!({"enabled": true, "credentials": ["lab-root", "pve"], "arch": ["x86_64"]}));
+        let cap = capability(Some(&file), None);
+        assert_eq!(cap, json!({"enabled": true, "credentials": ["lab-root", "pve"], "arch": ["x86_64"], "sealed": false}));
         assert!(!cap.to_string().contains("secret-pw"));
         let off = DeployFile { allow_deploy_agents: false, ..file };
-        assert_eq!(capability(Some(&off))["enabled"], json!(false));
-        assert_eq!(capability(None)["credentials"], json!([]));
+        assert_eq!(capability(Some(&off), None)["enabled"], json!(false));
+        assert_eq!(capability(None, None)["credentials"], json!([]));
     }
 
     #[test]
@@ -912,11 +1123,207 @@ mod tests {
     async fn nothing_runs_without_the_local_opt_in() {
         let cfg = crate::config::Config::for_test();
         let ctx = ProbeContext { deploy_file: None, server: cfg.server.clone(), insecure_tls: false,
-                                 api: Arc::new(ApiClient::new(&cfg)) };
+                                 api: Arc::new(ApiClient::new(&cfg)),
+                                 seal_key_path: PathBuf::new(), throttle: Default::default() };
         let cmd = Command { id: 7, op: "deploy_agent".into(), payload: json!({}), expires_at: None };
         let res = handle(&ctx, cmd).await;
         assert_eq!(res.status, "failed");
         assert!(res.result["detail"].as_str().unwrap().contains("not switched on"));
+    }
+
+    // ── sealed logins ───────────────────────────────────────────────────────
+
+    const SEALED_ON: &str = r#"{"allow_deploy_agents": true, "allow_sealed_credentials": true}"#;
+
+    fn sealed_ctx(file: &str) -> (ProbeContext, SealKey) {
+        let dir = tempdir();
+        let path = dir.join("seal.key");
+        let key = SealKey::load_or_create(&path, false).unwrap();
+        let cfg = crate::config::Config::for_test();
+        let ctx = ProbeContext { deploy_file: Some(serde_json::from_str(file).unwrap()),
+                                 server: cfg.server.clone(), insecure_tls: false,
+                                 api: Arc::new(ApiClient::new(&cfg)), seal_key_path: path,
+                                 throttle: Default::default() };
+        (ctx, key)
+    }
+
+    fn login_for(key: &SealKey, hosts: &[&str]) -> Value {
+        seal::seal_for_test(key, &json!({"v": 1, "id": "i1", "name": "lab-root", "username": "root",
+            "password": "pw", "private_key": null, "passphrase": null, "hosts": hosts}))
+    }
+
+    fn deploy_cmd(extra: Value) -> Command {
+        let mut payload = json!({"target": {"kind": "host", "host": "127.0.0.1", "port": 1},
+            "host_key_fingerprint": "SHA256:x", "enrollment_token": "nt_0123456789"});
+        for (k, v) in extra.as_object().unwrap() {
+            payload[k] = v.clone();
+        }
+        Command { id: 1, op: "deploy_agent".into(), payload, expires_at: None }
+    }
+
+    #[tokio::test]
+    async fn sealed_refused_without_flag() {
+        let (ctx, key) = sealed_ctx(r#"{"allow_deploy_agents": true}"#);
+        let env = login_for(&key, &["127.0.0.1"]);
+        let res = handle(&ctx, deploy_cmd(json!({"sealed_credential": env.clone()}))).await;
+        assert_eq!(res.status, "failed");
+        assert_eq!(res.result["detail"], json!("Sealed logins are not switched on on this probe (deploy.json)."));
+        let ask = Command { id: 2, op: "ssh_host_key".into(), expires_at: None,
+                            payload: json!({"host": "127.0.0.1", "port": 1, "sealed_credential": env})};
+        let res = handle(&ctx, ask).await;
+        assert_eq!(res.result["detail"], json!("Sealed logins are not switched on on this probe (deploy.json)."));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sealed_host_not_in_list_refused() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let env = login_for(&key, &["10.9.9.9"]);
+        let res = handle(&ctx, deploy_cmd(json!({"sealed_credential": env.clone()}))).await;
+        assert_eq!(res.status, "failed");
+        assert!(res.result["detail"].as_str().unwrap().contains("not allowed"), "{:?}", res.result);
+        let ask = Command { id: 2, op: "ssh_host_key".into(), expires_at: None,
+                            payload: json!({"host": "127.0.0.1", "port": 1, "sealed_credential": env})};
+        let res = handle(&ctx, ask).await;
+        assert!(res.result["detail"].as_str().unwrap().contains("not allowed"), "{:?}", res.result);
+    }
+
+    #[tokio::test]
+    async fn both_credentials_refused() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let env = login_for(&key, &["127.0.0.1"]);
+        let res = handle(&ctx, deploy_cmd(json!({"credential": "lab", "sealed_credential": env}))).await;
+        assert_eq!(res.status, "failed");
+        assert_eq!(res.result["detail"], json!("Invalid deploy command."));
+        let res = handle(&ctx, deploy_cmd(json!({}))).await;
+        assert_eq!(res.result["detail"], json!("Invalid deploy command."));
+    }
+
+    #[test]
+    fn capability_reports_seal_and_sealed_flag() {
+        let dir = tempdir();
+        let key = SealKey::load_or_create(&dir.join("seal.key"), false).unwrap();
+        let on: DeployFile = serde_json::from_str(SEALED_ON).unwrap();
+        let cap = capability(Some(&on), Some(&key));
+        assert_eq!(cap["sealed"], json!(true));
+        assert_eq!(cap["seal"], key.report());
+        let half: DeployFile = serde_json::from_str(r#"{"allow_deploy_agents": true}"#).unwrap();
+        assert_eq!(capability(Some(&half), Some(&key))["sealed"], json!(false));
+        // The key is reported even while deploying is off.
+        let off = capability(None, Some(&key));
+        assert_eq!(off["enabled"], json!(false));
+        assert_eq!(off["seal"], key.report());
+        assert!(capability(None, None).get("seal").is_none());
+        let only_sealed: DeployFile = serde_json::from_str(r#"{"allow_sealed_credentials": true}"#).unwrap();
+        assert_eq!(capability(Some(&only_sealed), None)["sealed"], json!(false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enable_deploy_keeps_local_credentials() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir();
+        let path = write_file(&dir, FILE, 0o600);
+        set_deploy_flags(&path, true).unwrap();
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc["allow_deploy_agents"], json!(true));
+        assert_eq!(doc["allow_sealed_credentials"], json!(true));
+        assert_eq!(doc["credentials"]["pve"]["password"], json!("secret-pw"));
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let file = DeployFile::load(&path, false).unwrap();
+        assert!(file.sealed_enabled());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temp file left behind");
+        // A missing file is created.
+        let fresh = dir.join("sub");
+        std::fs::create_dir_all(&fresh).unwrap();
+        let new = fresh.join("deploy.json");
+        set_deploy_flags(&new, true).unwrap();
+        assert!(DeployFile::load(&new, false).unwrap().sealed_enabled());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disable_deploy_turns_both_off() {
+        let dir = tempdir();
+        let path = write_file(&dir, FILE, 0o600);
+        set_deploy_flags(&path, true).unwrap();
+        set_deploy_flags(&path, false).unwrap();
+        let file = DeployFile::load(&path, false).unwrap();
+        assert!(!file.enabled() && !file.sealed_enabled());
+        assert!(file.credentials.contains_key("pve"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rotate_refused_without_flag() {
+        let (ctx, key) = sealed_ctx(r#"{"allow_deploy_agents": true}"#);
+        let cmd = Command { id: 3, op: "rotate_seal_key".into(), payload: json!({}), expires_at: None };
+        let res = handle(&ctx, cmd).await;
+        assert_eq!(res.status, "failed");
+        let after = SealKey::load(&ctx.seal_key_path, false).unwrap().unwrap();
+        assert_eq!(after.fingerprint(), key.fingerprint(), "key untouched");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rotate_replaces_the_key() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let cmd = Command { id: 3, op: "rotate_seal_key".into(), payload: json!({}), expires_at: None };
+        let res = handle(&ctx, cmd).await;
+        assert_eq!(res.status, "ok");
+        let after = SealKey::load(&ctx.seal_key_path, false).unwrap().unwrap();
+        assert_ne!(after.fingerprint(), key.fingerprint());
+        assert_eq!(res.result["public_key"], json!(after.public_b64()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn throttle_counts_failed_sealed_connect() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let env = login_for(&key, &["127.0.0.1"]);
+        let login_ = seal::open(&key, &env).unwrap();
+        let payload: DeployPayload = serde_json::from_value(json!({
+            "target": {"kind": "host", "host": "127.0.0.1", "port": 1},
+            "sealed_credential": env, "host_key_fingerprint": "SHA256:x",
+            "enrollment_token": "nt_0123456789"})).unwrap();
+        for _ in 0..5 {
+            admit(&ctx, "127.0.0.1").expect("admitted");
+            let err = login(&ctx, &payload, &login_.credential, true).await.err().expect("refused");
+            assert!(!format!("{err:#}").contains("paused"), "{err:#}");
+        }
+        assert!(admit(&ctx, "127.0.0.1").unwrap_err().contains("paused"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_connect_failures_are_not_throttled() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let env = login_for(&key, &["127.0.0.1"]);
+        let login_ = seal::open(&key, &env).unwrap();
+        let payload: DeployPayload = serde_json::from_value(json!({
+            "target": {"kind": "host", "host": "127.0.0.1", "port": 1},
+            "credential": "lab", "host_key_fingerprint": "SHA256:x",
+            "enrollment_token": "nt_0123456789"})).unwrap();
+        for _ in 0..6 {
+            login(&ctx, &payload, &login_.credential, false).await.err().expect("refused");
+        }
+        admit(&ctx, "127.0.0.1").expect("not paused");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sealed_host_key_failures_are_throttled() {
+        let (ctx, key) = sealed_ctx(SEALED_ON);
+        let env = login_for(&key, &["127.0.0.1"]);
+        let ask = |id| Command { id, op: "ssh_host_key".into(), expires_at: None,
+                                 payload: json!({"host": "127.0.0.1", "port": 1, "sealed_credential": env.clone()}) };
+        for i in 0..5 {
+            let res = handle(&ctx, ask(i)).await;
+            assert_eq!(res.status, "failed");
+            assert!(!res.result["detail"].as_str().unwrap().contains("paused"), "{:?}", res.result);
+        }
+        let res = handle(&ctx, ask(6)).await;
+        assert!(res.result["detail"].as_str().unwrap().contains("paused"), "{:?}", res.result);
     }
 
     #[tokio::test]
@@ -924,7 +1331,8 @@ mod tests {
         let cfg = crate::config::Config::for_test();
         let file: DeployFile = serde_json::from_str(FILE).unwrap();
         let ctx = ProbeContext { deploy_file: Some(file), server: cfg.server.clone(), insecure_tls: false,
-                                 api: Arc::new(ApiClient::new(&cfg)) };
+                                 api: Arc::new(ApiClient::new(&cfg)),
+                                 seal_key_path: PathBuf::new(), throttle: Default::default() };
         let cmd = Command { id: 8, op: "run_shell".into(), payload: json!({"cmd": "id"}), expires_at: None };
         assert_eq!(handle(&ctx, cmd).await.status, "failed");
     }
@@ -1033,7 +1441,7 @@ mod ssh_tests {
     }
 
     fn root() -> Credential {
-        Credential { username: "root".into(), password: Some("pw".into()), private_key_file: None,
+        Credential { username: "root".into(), password: Some("pw".into()), private_key_file: None, private_key: None,
                      passphrase: None, hosts: vec!["127.0.0.1".into()] }
     }
 

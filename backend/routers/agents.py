@@ -259,11 +259,13 @@ async def agent_enroll(request: Request):
         )
         bound_agent_id = None
         bound_prefix = None
+        token_probe = False
         if token_ok:
             # The token decides where the agent lands — never the request body.
             tenant_id, site_id = token_row.tenant_id, token_row.site_id
             bound_agent_id = token_row.agent_id
             bound_prefix = token_row.prefix
+            token_probe = bool(token_row.probe)
             with tenant_scope(tenant_id):
                 await token_db.commit()
         else:
@@ -309,13 +311,14 @@ async def agent_enroll(request: Request):
 
     with tenant_scope(tenant_id):
         return await _enroll_in_tenant(request, body, hostname, plat, arch, client_ip, site_id,
-                                       bound_agent_id=bound_agent_id, bound_prefix=bound_prefix)
+                                       bound_agent_id=bound_agent_id, bound_prefix=bound_prefix,
+                                       probe=token_probe)
 
 
 async def _enroll_in_tenant(
     request: Request, body: dict, hostname: str, plat: str, arch: str,
     client_ip: str | None, site_id: int | None, bound_agent_id: int | None = None,
-    bound_prefix: str | None = None,
+    bound_prefix: str | None = None, probe: bool = False,
 ):
     """Create or re-enrol the agent inside the token's tenant (and site).
 
@@ -337,6 +340,8 @@ async def _enroll_in_tenant(
             existing.token = _hash_agent_token(raw_token)
             existing.platform = plat or existing.platform
             existing.arch = arch or existing.arch
+            if probe:
+                existing.is_probe = True  # a plain token never clears it
             # last_seen is left to the first report: enrolling is not running.
             await log_action(db, request, "agent.reinstalled", "agent", existing.id, existing.name,
                              {"via": "bound_install_token", "token_prefix": bound_prefix,
@@ -374,6 +379,8 @@ async def _enroll_in_tenant(
             existing.token = _hash_agent_token(raw_token)
             existing.platform = plat or existing.platform
             existing.arch = arch or existing.arch
+            if probe:
+                existing.is_probe = True  # a plain token never clears it
             existing.last_seen = datetime.utcnow()
             await db.commit()
             logger.info("Agent re-enrolled successfully: hostname=%s, id=%d", hostname, existing.id)
@@ -383,7 +390,7 @@ async def _enroll_in_tenant(
         raw_token = secrets.token_hex(24)
         token_hash = _hash_agent_token(raw_token)
         agent = Agent(name=hostname, hostname=hostname, token=token_hash, platform=plat, arch=arch,
-                      site_id=site_id)
+                      site_id=site_id, is_probe=probe)
         db.add(agent)
 
         # Auto-create PingHost — try reverse DNS for FQDN, store IP separately
@@ -881,7 +888,7 @@ def _username(request: Request) -> str | None:
 async def issue_install_token(
     db, *, note: str | None, ttl_hours: int, created_by: str | None,
     site_id: int | None = None, agent_id: int | None = None,
-    hostname_pattern: str | None = None,
+    hostname_pattern: str | None = None, probe: bool = False,
 ) -> tuple[AgentInstallToken, str]:
     """Add a new install token to ``db`` (flushed, not committed) and return
     it with its plaintext, which exists only in the caller's hands from here
@@ -897,6 +904,7 @@ async def issue_install_token(
         created_by=created_by,
         site_id=site_id,
         agent_id=agent_id,
+        probe=probe,
     )
     db.add(row)
     await db.flush()
@@ -921,13 +929,15 @@ async def create_install_token(request: Request):
     except (TypeError, ValueError):
         ttl_hours = 24
     ttl_hours = max(1, min(ttl_hours, 24 * 30))  # clamp 1h..30d
+    probe = body.get("probe") is True
 
     async with AsyncSessionLocal() as db:
         token_row, raw = await issue_install_token(
             db, note=note or None, ttl_hours=ttl_hours, created_by=_username(request),
-            hostname_pattern=hostname_pattern)
+            hostname_pattern=hostname_pattern, probe=probe)
         await log_action(db, request, "install_token.create", "install_token", token_row.id,
-                         token_row.prefix, {"ttl_hours": ttl_hours, "note": note or None})
+                         token_row.prefix,
+                         {"ttl_hours": ttl_hours, "note": note or None, "probe": probe})
         await db.commit()
         await db.refresh(token_row)
 
@@ -942,6 +952,7 @@ def _install_token_response(row: AgentInstallToken, raw: str, server_url: str) -
         "id": row.id,
         "token": raw,
         "prefix": row.prefix,
+        "probe": bool(row.probe),
         "expires_at": iso(row.expires_at),
         "install_linux": f"curl -sSL '{server_url}/install/linux?token={raw}' | sudo bash",
         "install_windows": f"irm '{server_url}/install/windows?token={raw}' | iex",
@@ -967,6 +978,7 @@ async def reinstall_agent(agent_id: int, request: Request):
     except (TypeError, ValueError, AttributeError):
         ttl_hours = 1
     ttl_hours = max(1, min(ttl_hours, 24))
+    probe = body.get("probe") is True
 
     async with AsyncSessionLocal() as db:
         agent = await db.get(Agent, agent_id)
@@ -978,10 +990,12 @@ async def reinstall_agent(agent_id: int, request: Request):
                                  "code": "agent_disabled"}, status_code=409)
         token_row, raw = await issue_install_token(
             db, note=f"reinstall {agent.name}", ttl_hours=ttl_hours,
-            created_by=_username(request), site_id=agent.site_id, agent_id=agent.id)
+            created_by=_username(request), site_id=agent.site_id, agent_id=agent.id,
+            probe=probe)
         await log_action(db, request, "install_token.create", "install_token", token_row.id,
                          token_row.prefix,
-                         {"ttl_hours": ttl_hours, "reinstall": True, "agent_id": agent.id})
+                         {"ttl_hours": ttl_hours, "reinstall": True, "agent_id": agent.id,
+                          "probe": probe})
         await db.commit()
         await db.refresh(token_row)
 
@@ -1098,11 +1112,27 @@ def _install_update_trust_line() -> str:
     return f'"update_public_key": "{agent_signing.public_key_hex()}"'
 
 
-def render_linux_installer(server_url: str, enrollment_key: str) -> str:
+def render_linux_installer(
+    server_url: str, enrollment_key: str, *, probe: bool = False, fresh: bool = True,
+) -> str:
     """The Linux installer script for ``server_url`` with ``enrollment_key``
     (an install token). Served by ``/install/linux`` and written to stdin by
-    the SSH deploy, so both run the same bytes."""
+    the SSH deploy, so both run the same bytes.
+
+    ``fresh``: the token is not bound to an agent, so this is a new install
+    and a stale ``seal.key`` from an earlier one must not survive. ``probe``:
+    the machine opts in to deploying through sealed logins.
+    """
     update_trust = _install_update_trust_line()
+    fresh_block = (
+        '# New install: drop a sealing key left over from an earlier one.\n'
+        'rm -f "$INSTALL_DIR/seal.key"\n\n' if fresh else "")
+    probe_block = (
+        'if [ -x "$INSTALL_DIR/nodeglow-agent" ]; then '
+        '"$INSTALL_DIR/nodeglow-agent" --config "$CONFIG_FILE" enable-deploy '
+        '|| echo "  Warning: could not enable agent deploys on this probe"; '
+        'else echo "  Warning: could not enable agent deploys on this probe"; fi\n\n'
+        if probe else "")
 
     script = f'''#!/bin/bash
 set -e
@@ -1222,7 +1252,7 @@ else
     echo "  The agent will retry when the service starts."
 fi
 
-systemctl daemon-reload
+{fresh_block}{probe_block}systemctl daemon-reload
 systemctl enable ${{SERVICE_NAME}} --quiet
 systemctl restart ${{SERVICE_NAME}}
 
@@ -1252,7 +1282,17 @@ async def install_linux(request: Request):
     # without a token query-param we emit a placeholder that will visibly
     # fail at enrollment time instead of silently using something valid.
     enrollment_key = install_token or "NO_INSTALL_TOKEN_PROVIDED"
-    script = render_linux_installer(server_url, enrollment_key)
+    probe, fresh = False, True
+    if install_token:
+        async with AsyncSessionLocal() as db:
+            with system_scope("agent installer: read install token options"):
+                row = (await db.execute(
+                    select(AgentInstallToken).where(
+                        AgentInstallToken.token_hash == _hash_install_token(install_token))
+                )).scalar_one_or_none()
+        if row is not None:
+            probe, fresh = bool(row.probe), row.agent_id is None
+    script = render_linux_installer(server_url, enrollment_key, probe=probe, fresh=fresh)
 
     from fastapi.responses import Response
     return Response(content=script, media_type="text/plain")

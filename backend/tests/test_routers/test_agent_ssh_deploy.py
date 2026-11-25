@@ -44,7 +44,8 @@ async def test_install_route_serves_the_rendered_installer(admin_pair):
     resp = await client.get(f"/install/linux?token={raw}")
     assert resp.status_code == 200
     server = resp.text.split('SERVER="', 1)[1].split('"', 1)[0]
-    assert resp.text == render_linux_installer(server, raw)
+    assert resp.text == render_linux_installer(server, raw, probe=_row.probe,
+                                               fresh=_row.agent_id is None)
 
 
 async def test_issue_install_token_stores_only_a_hash(admin_pair):
@@ -193,6 +194,37 @@ async def test_reinstall_uses_a_token_bound_to_the_agent(admin_pair, ssh_server)
     assert token.agent_id == agent_id
     (job,) = (await client.get(f"/api/agent-deploy/{resp.json()['run_id']}")).json()["jobs"]
     assert job["agent_id"] == agent_id and job["status"] == "ok"
+
+
+@pytest.mark.parametrize("reinstall", [True, False])
+async def test_ssh_deploy_keeps_seal_key_only_on_reinstall(admin_pair, ssh_server, monkeypatch,
+                                                           reinstall):
+    import routers.agents as agents_mod
+    from models.agent import Agent
+    client, sf = admin_pair
+    seen = []
+    real = agents_mod.render_linux_installer
+
+    def spy(*args, **kwargs):
+        script = real(*args, **kwargs)
+        seen.append(script)
+        return script
+
+    monkeypatch.setattr(agents_mod, "render_linux_installer", spy)
+    extra = {}
+    if reinstall:
+        async with sf() as db:
+            agent = Agent(name="web01", hostname="web01", token="x" * 64)
+            db.add(agent)
+            await db.commit()
+            extra["agent_id"] = agent.id
+    fp = await _trust(client, ssh_server)
+    resp = await client.post("/api/agent-deploy",
+                             json=_body(ssh_server, host_key_fingerprint=fp, **extra))
+    assert resp.status_code == 202
+    await _drain()
+    (script,) = seen
+    assert ('rm -f "$INSTALL_DIR/seal.key"' in script) is (not reinstall)
 
 
 @pytest.mark.parametrize("enabled, status", [(True, 202), (False, 409)])
