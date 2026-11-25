@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
-import { Sparkles, X, Send, AlertCircle, ShieldOff } from 'lucide-react';
+import { MessageSquareText, X, Send, AlertCircle, ShieldOff } from 'lucide-react';
 import { useGlowStore } from '@/stores/glow';
 import { useAuthStore } from '@/stores/auth';
 import { sanitizeHtml } from '@/lib/sanitize';
@@ -22,7 +22,7 @@ interface Message {
 function renderMarkdown(text: string): string {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/^### (.+)$/gm, '<strong class="glow-heading text-meta uppercase tracking-wide">$1</strong>')
+    .replace(/^### (.+)$/gm, '<strong class="glow-heading text-meta font-medium">$1</strong>')
     .replace(/^## (.+)$/gm, '<strong class="glow-heading text-ui">$1</strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong class="glow-bold">$1</strong>')
     .replace(/`([^`]+)`/g, '<code class="glow-code px-1 py-0.5 rounded-sm text-meta">$1</code>')
@@ -187,7 +187,7 @@ export function GlowPanel() {
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
-          <Sparkles size={16} className="text-accent" aria-hidden="true" />
+          <MessageSquareText size={16} className="text-fg-2" aria-hidden="true" />
           <span className="text-body font-semibold text-fg">Glow</span>
         </div>
         <IconButton aria-label="Close Glow" size="sm" onClick={close}>
@@ -215,7 +215,6 @@ export function GlowPanel() {
         )}
         {!aiUnavailable && messages.length === 0 && !error && (
           <div className="flex h-full flex-col items-center justify-center text-center">
-            <Sparkles size={32} className="mb-3 text-accent/40" aria-hidden="true" />
             <p className="mb-4 text-ui text-fg-3">Ask about your infrastructure</p>
             <div className="flex flex-wrap justify-center gap-2">
               {SUGGESTIONS.map((s) => (
@@ -247,9 +246,9 @@ export function GlowPanel() {
               )}
               {msg.role === 'assistant' && isStreaming && i === messages.length - 1 && (
                 <span className="ml-1 inline-flex gap-0.5" aria-hidden="true">
-                  <span className="h-1 w-1 animate-bounce rounded-full bg-fg-3 [animation-delay:0ms]" />
-                  <span className="h-1 w-1 animate-bounce rounded-full bg-fg-3 [animation-delay:150ms]" />
-                  <span className="h-1 w-1 animate-bounce rounded-full bg-fg-3 [animation-delay:300ms]" />
+                  <span className="h-1 w-1 animate-pulse rounded-full bg-fg-3 [animation-delay:0ms]" />
+                  <span className="h-1 w-1 animate-pulse rounded-full bg-fg-3 [animation-delay:150ms]" />
+                  <span className="h-1 w-1 animate-pulse rounded-full bg-fg-3 [animation-delay:300ms]" />
                 </span>
               )}
             </div>

@@ -59,7 +59,7 @@ export function AppShell({ children }: AppShellProps) {
   if (isLoading || !user) {
     return (
       <div className="grid h-screen place-items-center bg-bg" aria-busy="true" aria-label="Loading">
-        <NodeglowMark size={40} className="animate-pulse text-fg-3" />
+        <NodeglowMark size={40} className="text-fg-3" />
       </div>
     );
   }

@@ -348,7 +348,7 @@ export function MaintenanceWindowsPanel() {
 
   return (
     <Card as="section" padding="none" aria-labelledby="maint-windows-heading" className="mb-4">
-      <div className="px-[20px] pt-[18px] max-[759px]:px-[16px]">
+      <div className="px-5 pt-5 max-[759px]:px-4">
         <CardHeader
           title="Scheduled windows"
           titleId="maint-windows-heading"

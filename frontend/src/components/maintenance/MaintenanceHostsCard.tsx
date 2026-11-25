@@ -89,7 +89,7 @@ export function MaintenanceHostsCard() {
 
   return (
     <Card as="section" padding="none" aria-labelledby="maint-hosts-heading">
-      <div className="px-[20px] pt-[18px] max-[759px]:px-[16px]">
+      <div className="px-5 pt-5 max-[759px]:px-4">
         <CardHeader title="Hosts in maintenance" titleId="maint-hosts-heading" meta={query.data ? `${query.data.length}` : undefined} />
       </div>
       <QueryState

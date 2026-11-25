@@ -15,7 +15,7 @@ export default function NotFound() {
             secondary button look is spelled out here. */}
         <Link
           href="/"
-          className="mt-6 inline-flex h-[36px] items-center justify-center rounded-ctl border border-border-2 bg-surface-2 px-[14px] text-ui font-medium text-fg transition-colors duration-150 hover:bg-surface-3"
+          className="mt-6 inline-flex h-[36px] items-center justify-center rounded-ctl border border-border-2 bg-surface-2 px-4 text-ui font-medium text-fg transition-colors duration-150 hover:bg-surface-3"
         >
           Back to the dashboard
         </Link>

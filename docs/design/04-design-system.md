@@ -129,6 +129,7 @@ Zahlen: `.num` bzw. `tabular-nums` (Tabellenziffern; der `body` hat `tnum` berei
 | `radius-lg` | 24 px | `rounded-ng-lg` | Dialog, Command Palette |
 | `radius-ctl` | 12 px | `rounded-ctl` | Felder, Einträge der Leiste, Icon-Flächen |
 | `radius-sm` | 10 px | `rounded-ng-sm` | Menüzeilen, Tooltip |
+| `radius-tile` | 16 px | `rounded-tile` | Kacheln und Zeilen innerhalb einer Karte (kleiner als `radius`, damit die Radien verschachtelt aufgehen) |
 | `radius-chip` | 8 px | `rounded-chip` | Badge, Tag, Kbd |
 | `radius-pill` | 9999 px | `rounded-pill` | **Buttons** (alle Grössen, auch Icon-Buttons), Segmented Control, Pills, Zähler |
 | `rail-w` / `rail-w-wide` / `topbar-h` / `tabbar-h` | 60 / 228 / 60 / 58 px | `w-rail`, `h-topbar`, `h-tabbar`, `pl-rail` | Shell; `--ng-rail-w` wird ab 1100 px auf `rail-w-wide` umgestellt, ausser `data-rail="narrow"` auf `<html>` |
