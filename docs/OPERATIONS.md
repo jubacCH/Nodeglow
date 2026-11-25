@@ -258,7 +258,11 @@ running new code against an old schema is what it exists to prevent.
 
 Every 5 minutes an agent compares its own SHA-256 with
 `GET /api/agent/version/<platform>`, downloads the new binary, checks the
-hash and then requires a signature according to its **trust mode**:
+hash and then requires a signature according to its **trust mode**. The
+platform is fixed in the build: `linux` (x86_64), `linux-arm64` (aarch64) or
+`windows`, served from `backend/static/nodeglow-agent-linux`,
+`nodeglow-agent-linux-arm64` and `nodeglow-agent.exe`. The release signature
+covers the platform name, so an agent only accepts a build for its own CPU.
 
 | Mode | When | Accepted |
 |---|---|---|
@@ -666,8 +670,8 @@ sudo install -m 600 -o root -g root deploy.json /opt/nodeglow/deploy.json
 - The probe re-reads the file every interval; removing it (or setting
   `allow_deploy_agents` to false) switches the feature off.
 - What runs on a target is fixed in the agent: it checks `uname -m` (x86_64
-  only for now), copies the agent binary it downloaded from its server and
-  verified against the release key, writes `/opt/nodeglow/config.json`
+  or aarch64), copies the agent binary for that architecture it downloaded
+  from its server and verified against the release key, writes `/opt/nodeglow/config.json`
   (bound to the probe's server, release-signed updates only) and the systemd
   unit, and starts the service; for a container through `pct push` and
   `pct exec`. It then waits up to 45 s for the new agent to enrol.

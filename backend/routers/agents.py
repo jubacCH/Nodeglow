@@ -1132,6 +1132,16 @@ if ! command -v curl &>/dev/null; then
     exit 1
 fi
 
+# The agent build for this CPU (the platform names of /agents/download).
+case "$(uname -m)" in
+    x86_64|amd64)  AGENT_PLATFORM="linux" ;;
+    aarch64|arm64) AGENT_PLATFORM="linux-arm64" ;;
+    *)
+        echo "  Error: unsupported architecture $(uname -m) (supported: x86_64, aarch64)"
+        exit 1
+        ;;
+esac
+
 HOSTNAME=$(hostname)
 
 echo "  [1/5] Creating install directory..."
@@ -1162,7 +1172,7 @@ fi
 echo "  Enrolled successfully."
 
 echo "  [3/5] Downloading agent..."
-curl -sSL "$SERVER/agents/download/linux" -o "$INSTALL_DIR/nodeglow-agent.tmp"
+curl -fsSL "$SERVER/agents/download/$AGENT_PLATFORM" -o "$INSTALL_DIR/nodeglow-agent.tmp"
 # Detect if binary or Python script
 if head -c 2 "$INSTALL_DIR/nodeglow-agent.tmp" | grep -q '#!'; then
   mv "$INSTALL_DIR/nodeglow-agent.tmp" "$INSTALL_DIR/nodeglow-agent.py"
@@ -1479,37 +1489,44 @@ Write-Host ""
 
 # ── Download: Agent files (used by install scripts) ──────────────────────────
 
+# Platform name (what agents and installers ask for, and what the release
+# signature binds) -> the file served for it. "linux" is x86_64: the name
+# predates arm64 and every installed agent asks for it.
+AGENT_BINARIES: dict[str, str] = {
+    "linux": "static/nodeglow-agent-linux",
+    "linux-arm64": "static/nodeglow-agent-linux-arm64",
+    "windows": "static/nodeglow-agent.exe",
+}
+# Old Python agent, served for "linux" when no Rust binary is present.
+_LINUX_PY_FALLBACK = "static/nodeglow-agent-linux.py"
+
+
+def _agent_binary_path(platform: str) -> Path | None:
+    """The file served for a platform, or None (unknown platform, or no file)."""
+    name = AGENT_BINARIES.get(platform)
+    if name is None:
+        return None
+    path = Path(name)
+    if not path.exists() and platform == "linux":
+        path = Path(_LINUX_PY_FALLBACK)
+    return path if path.exists() else None
+
+
 @router.get("/agents/download/{platform}")
 async def agent_download(request: Request, platform: str):
-    """Download agent binary for the given platform."""
-    if platform == "windows":
-        return FileResponse("static/nodeglow-agent.exe",
-                            filename="nodeglow-agent.exe", media_type="application/octet-stream")
-    # Rust binary for Linux (fallback to old Python script if not available)
-    rust_path = Path("static/nodeglow-agent-linux")
-    if rust_path.exists():
-        return FileResponse(str(rust_path),
-                            filename="nodeglow-agent-linux", media_type="application/octet-stream")
-    return FileResponse("static/nodeglow-agent-linux.py",
-                        filename="nodeglow-agent-linux.py", media_type="text/x-python")
+    """Download the agent binary for a platform (see AGENT_BINARIES)."""
+    path = _agent_binary_path(platform)
+    if path is None:
+        return JSONResponse({"error": f"No agent binary for platform {platform!r}"},
+                            status_code=404)
+    media = "text/x-python" if path.suffix == ".py" else "application/octet-stream"
+    return FileResponse(str(path), filename=path.name, media_type=media)
 
 
 # ── API: Agent version check (for auto-update) ────────────────────────────────
 
 _agent_file_cache: dict[str, tuple[str, float]] = {}  # platform -> (hash, mtime)
 _agent_sig_cache: dict[str, tuple[str, float]] = {}    # platform -> (signature, mtime)
-
-
-def _agent_binary_path(platform: str) -> Path | None:
-    """Resolve the file served by agent_download for a platform, or None."""
-    if platform == "windows":
-        path = Path("static/nodeglow-agent.exe")
-    else:
-        # Prefer Rust binary, fall back to Python script
-        path = Path("static/nodeglow-agent-linux")
-        if not path.exists():
-            path = Path("static/nodeglow-agent-linux.py")
-    return path if path.exists() else None
 
 
 def _get_agent_hash(platform: str) -> str:
@@ -1563,7 +1580,7 @@ async def agent_version(platform: str):
       build; P2a agents in multi-tenant mode ignore it.
     * ``multi_tenant``: agents latch it and then accept release signatures only.
     """
-    if platform not in ("windows", "linux"):
+    if platform not in AGENT_BINARIES:
         return JSONResponse({"error": "Invalid platform"}, status_code=400)
     sha = _get_agent_hash(platform)
     release = None
