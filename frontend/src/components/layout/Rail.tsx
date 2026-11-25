@@ -27,7 +27,7 @@ export function NavCountBadge({ count, className }: { count: number; className?:
     <span
       aria-hidden="true"
       className={cn(
-        'num h-[17px] min-w-[17px] rounded-pill bg-down-soft px-1.5 text-center text-[10px] font-semibold leading-[17px] text-down shadow-glow-dot-crit',
+        'num h-4 min-w-4 rounded-pill bg-down-soft px-1.5 text-center text-micro font-semibold leading-4 text-down shadow-glow-dot-crit',
         className,
       )}
     >

@@ -21,7 +21,7 @@ function TenantBadge({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' }
       aria-hidden="true"
       className={cn(
         'grid shrink-0 place-items-center rounded-pill bg-surface-3 font-semibold text-fg-2',
-        size === 'md' ? 'h-6 w-6 text-micro' : 'h-[22px] w-[22px] text-[10px]',
+        size === 'md' ? 'h-6 w-6 text-micro' : 'h-5 w-5 text-micro',
       )}
     >
       {tenantInitials(name)}

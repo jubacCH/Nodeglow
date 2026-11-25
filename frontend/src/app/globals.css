@@ -132,6 +132,7 @@
 
   --radius-card: var(--ng-radius);
   --radius-ctl: var(--ng-radius-ctl);
+  --radius-tile: var(--ng-radius-tile);
   --radius-chip: var(--ng-radius-chip);
   --radius-ng-sm: var(--ng-radius-sm);
   --radius-ng-lg: var(--ng-radius-lg);
@@ -440,7 +441,7 @@
   }
 
   /* Glow (AI) panel markdown */
-  .glow-heading { color: var(--ng-accent-text); }
+  .glow-heading { color: var(--ng-text); }
   .glow-bold { color: var(--ng-text); }
   .glow-code { background: var(--ng-surface-2); color: var(--ng-accent-text); }
   .glow-bullet { color: var(--ng-text-3); }

@@ -84,7 +84,7 @@ function Spark({ values, label, highlightLast = true }: { values: number[]; labe
 
 function Tile({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-[86px] flex-col justify-between rounded-[18px] bg-surface-2 p-3.5">
+    <div className="flex min-h-[86px] flex-col justify-between rounded-tile bg-surface-2 p-4">
       <span className="text-meta text-fg-2">{label}</span>
       {children}
     </div>
@@ -158,7 +158,7 @@ export function AtAGlance({ incidents, syslog, availability, health, loading, er
 const GROUP_CAP = 6;
 
 /** Row layout shared by the checker and the site view. */
-const ROW = 'grid w-full grid-cols-[minmax(0,170px)_minmax(0,1fr)_auto] items-center gap-4 rounded-[14px] px-3 py-2.5 text-left hover:bg-surface-2 max-[759px]:grid-cols-[minmax(0,1fr)_auto] max-[759px]:gap-y-1.5';
+const ROW = 'grid w-full grid-cols-[minmax(0,170px)_minmax(0,1fr)_auto] items-center gap-4 rounded-tile px-3 py-2.5 text-left hover:bg-surface-2 max-[759px]:grid-cols-[minmax(0,1fr)_auto] max-[759px]:gap-y-1.5';
 const BAR = 'h-3.5 rounded-pill max-[759px]:col-span-2 max-[759px]:row-start-2';
 
 function StateLegend() {

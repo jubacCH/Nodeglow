@@ -18,7 +18,7 @@ export function Tag({ planned, className, children, ...props }: TagProps) {
   return (
     <span
       className={cn(
-        'inline-flex h-[20px] items-center whitespace-nowrap rounded-chip border border-border-2 px-[7px] text-micro font-medium text-fg-2',
+        'inline-flex h-[20px] items-center whitespace-nowrap rounded-chip border border-border-2 px-2 text-micro font-medium text-fg-2',
         planned && 'border-dashed',
         className,
       )}

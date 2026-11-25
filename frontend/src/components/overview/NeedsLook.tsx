@@ -27,8 +27,8 @@ const TONE: Record<NeedTone, string> = {
 function Row({ item }: { item: NeedItem }) {
   const Icon = ICON[item.icon];
   return (
-    <li className="flex items-center gap-3 rounded-[16px] bg-surface-2 p-2.5">
-      <span aria-hidden="true" className={cn('grid h-[34px] w-[34px] shrink-0 place-items-center rounded-pill', TONE[item.tone])}>
+    <li className="flex items-center gap-3 rounded-tile bg-surface-2 p-2.5">
+      <span aria-hidden="true" className={cn('grid h-8 w-8 shrink-0 place-items-center rounded-pill', TONE[item.tone])}>
         <Icon size={16} />
       </span>
       <span className="min-w-0 flex-1">
@@ -111,8 +111,8 @@ export function ComingUp({ upcoming, loading, error, className }: {
             const pct = w.phase === 'active' && Number.isFinite(start) && Number.isFinite(end) && end > start
               ? Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100)) : null;
             return (
-              <li key={`${w.object.id ?? i}-${w.starts_at}`} className="flex items-center gap-3 rounded-[16px] bg-surface-2 p-2.5">
-                <span aria-hidden="true" className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-pill bg-maint-soft text-maint">
+              <li key={`${w.object.id ?? i}-${w.starts_at}`} className="flex items-center gap-3 rounded-tile bg-surface-2 p-2.5">
+                <span aria-hidden="true" className="grid h-8 w-8 shrink-0 place-items-center rounded-pill bg-maint-soft text-maint">
                   <Wrench size={16} />
                 </span>
                 <span className="min-w-0 flex-1">

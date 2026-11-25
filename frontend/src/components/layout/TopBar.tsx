@@ -2,7 +2,7 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { Keyboard, LogOut, Moon, Search, Sparkles, Sun, UserCog } from 'lucide-react';
+import { Keyboard, LogOut, MessageSquareText, Moon, Search, Sun, UserCog } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ColorMode } from '@/lib/theme';
 import { useResolvedTheme } from '@/lib/useResolvedTheme';
@@ -112,7 +112,7 @@ function GlowToggle() {
   return (
     <Tooltip content="Glow assistant" side="bottom">
       <IconButton aria-label="Glow assistant" aria-pressed={isOpen} onClick={toggle} className={isOpen ? 'bg-accent-soft text-accent' : 'text-fg-2'}>
-        <Sparkles size={18} aria-hidden="true" />
+        <MessageSquareText size={18} aria-hidden="true" />
       </IconButton>
     </Tooltip>
   );

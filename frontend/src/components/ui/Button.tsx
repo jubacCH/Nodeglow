@@ -19,7 +19,7 @@ const variants: Record<ButtonVariant, string> = {
 const sizes: Record<ButtonSize, string> = {
   sm: 'h-[28px] px-[12px] text-meta gap-1.5 rounded-pill',
   md: 'h-[36px] px-[16px] text-ui gap-2 rounded-pill',
-  lg: 'h-[40px] px-[18px] text-body gap-2 rounded-pill',
+  lg: 'h-[40px] px-[20px] text-body gap-2 rounded-pill',
 };
 
 const iconSizes: Record<ButtonSize, string> = {

@@ -96,13 +96,13 @@ function IncidentItem({ inc, topology, latency, defaultOpen }: {
   const acked = inc.acknowledged || (act.isSuccess && act.variables?.action === 'acknowledge');
 
   return (
-    <li className="rounded-[20px] bg-surface-2">
+    <li className="rounded-tile bg-surface-2">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-3 rounded-[20px] p-3 text-left"
+        className="flex w-full items-center gap-3 rounded-tile p-3 text-left"
       >
         <SeverityIcon severity={inc.severity} acknowledged={acked} />
         <span className="min-w-0 flex-1">

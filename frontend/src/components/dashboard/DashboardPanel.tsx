@@ -100,7 +100,7 @@ function IncidentPanelBody({ id, item }: { id: number; item: DashboardIncident |
                   <button
                     type="button"
                     onClick={() => open({ kind: 'host', id: h.id, hint: { name: h.name ?? undefined, state: h.state, state_reason: h.state_reason } })}
-                    className="-mx-2 grid w-[calc(100%+16px)] grid-cols-[8px_1fr_auto] items-center gap-2.5 rounded-[6px] px-2 py-[7px] text-left text-ui hover:bg-surface-2"
+                    className="-mx-2 grid w-[calc(100%+16px)] grid-cols-[8px_1fr_auto] items-center gap-2.5 rounded-chip px-2 py-2 text-left text-ui hover:bg-surface-2"
                   >
                     <StatusDot status={st} label="" />
                     <span className="min-w-0">
