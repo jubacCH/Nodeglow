@@ -436,7 +436,7 @@ jobs:
             *) echo "::error::no digest for $TAG"; exit 1 ;;
           esac
 
-      - uses: sigstore/cosign-installer@v4.1.3
+      - uses: sigstore/cosign-installer@v4.1.4
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
 
@@ -497,7 +497,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: sigstore/cosign-installer@v4.1.3
+      - uses: sigstore/cosign-installer@v4.1.4
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
 
@@ -595,7 +595,7 @@ jobs:
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
 
-      - uses: sigstore/cosign-installer@v4.1.3
+      - uses: sigstore/cosign-installer@v4.1.4
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
 
